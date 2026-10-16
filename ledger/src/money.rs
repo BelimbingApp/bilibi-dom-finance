@@ -55,7 +55,7 @@ pub enum MoneyError {
 impl Money {
     pub const ZERO: Money = Money(Decimal::ZERO);
     /// Sixteen digits before the point: the column is `numeric(20,4)`.
-    const LIMIT: Decimal = Decimal::from_parts(0x6FC1_0000, 0x2386_F2, 0, false, 0);
+    const LIMIT: Decimal = Decimal::from_parts(0x6FC1_0000, 0x0023_86F2, 0, false, 0);
 
     /// An amount of this book: refused when its magnitude reaches 1E+16 or
     /// it carries more decimal places than the book's minor units.
