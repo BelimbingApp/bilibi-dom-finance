@@ -1,0 +1,24 @@
+# Example-only fixture of the Finance Domain: the ledger records the slice
+# proofs act on, created through the facade in a disposable database. Never a
+# product dependency; `ledger`'s dev-dependency makes it a workspace member.
+[package]
+name = "bilibi-finance-walkthrough-fixture"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+bilibi-authz.workspace = true
+bilibi-base.workspace = true
+bilibi-core.workspace = true
+bilibi-database.workspace = true
+bilibi-domains.workspace = true
+bilibi-extensions.workspace = true
+bilibi-finance-ledger = { path = "../../ledger" }
+bilibi-module-registry.workspace = true
+bilibi-tenancy.workspace = true
+bilibi-walkthrough-fixture = { path = "../../../../../fixtures/walkthrough" }
+inventory.workspace = true
+tokio.workspace = true
