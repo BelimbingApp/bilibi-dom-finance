@@ -54,7 +54,8 @@ Preflight and duplicate refusals create no attempt. Other accounting refusals ro
 On an empty disposable PostgreSQL 18 database, from the mounted Platform root:
 
 ```sh
-DATABASE_URL=postgres://…/disposable cargo run -p bilibi-finance-walkthrough-fixture
+DATABASE_URL=postgres://…/disposable BILIBI_SETTINGS_KEY=$(openssl rand -hex 32) \
+  cargo run -p bilibi-finance-walkthrough-fixture
 ```
 
 The Payroll section asserts configuration/no-op histories, account roles, isolation and withheld writes, source `unavailable` without attempts, Ledger owner rollback and independent grants, an explicitly labelled historical posting's reasoned reversal, earlier-date failure and retry, concurrent reversal, mirrored lines, all five evidence cursors, audited affected rows, and PostgreSQL retention/uniqueness/event-shape refusals. No unit tests, provider stubs or production seeds.
