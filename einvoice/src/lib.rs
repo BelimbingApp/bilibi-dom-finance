@@ -1,12 +1,14 @@
 //! E-invoicing, module `finance/einvoice` (Bilimbi
 //! `Bilimbi.Finance.Einvoice`): the fiscal documents a company issues through
 //! a clearance authority. This version holds the schema, the company's setup
-//! (settings, credentials, signing certificate and supplier profile, read here
-//! without any secret), the [`Authority`] contract with the one authority this
-//! release clears documents with (MyInvois), and the authority's code lists
-//! with each company's overrides. Issuing, signing, submitting and posting
-//! documents follow in later versions of this module. Other modules never read
-//! its tables.
+//! (settings, credentials, signing certificate with its facts, and supplier
+//! profile, read here without any secret), the [`Authority`] contract with
+//! the one authority this release clears documents with (MyInvois) and its
+//! rules: the [`Draft`] a caller asks to issue and its validation, the UBL
+//! 2.1 JSON builder with its byte-exact writer, the JSON XAdES signer, and
+//! the authority's code lists with each company's overrides. Issuing,
+//! submitting and posting documents follow in later versions of this module.
+//! Other modules never read its tables.
 //!
 //! Every function takes the sealed [`Scope`] it was handed and an explicit
 //! company id. Reads authorize their capability and writes theirs for the
@@ -21,14 +23,23 @@ mod certificate;
 mod code_lists;
 mod configuration;
 mod contributions;
-mod myinvois;
+mod document;
+mod draft;
+pub mod myinvois;
 
 pub use authority::{
     Authority, CertificateIdentity, CertificateSubject, ConsolidationWindow, DocumentVersion,
-    FormatKind, PostingAccount, PostingRule, Side, Supplier, SupplierField,
+    FormatKind, Original, Payload, PayloadError, PayloadOptions, PostingAccount, PostingRule, Side,
+    Supplier, SupplierField, ValidationContext,
 };
+pub use certificate::{Certificate, CertificateError, PrivateKey};
 pub use code_lists::Codes;
 pub use contributions::{CANCEL, CAPABILITIES, ISSUE, SETTINGS, SUBMIT, VIEW};
+pub use document::{AddressSnapshot, Details, Document, DocumentLine, PartySnapshot};
+pub use draft::{
+    Draft, DraftAddress, DraftLine, DraftParty, ValidAddress, ValidDraft, ValidLine, ValidParty,
+};
+pub use myinvois::signer::SigningKey;
 
 use bilibi_company::{organisation, WriteError};
 use bilibi_database::{Change, Db, Error, MutationBoundary, MutationTransaction};
@@ -36,7 +47,7 @@ use bilibi_module_registry::{Layer, Module, Service};
 use bilibi_party_ids::OrganisationId;
 use bilibi_settings::{Resolved, Settings, Target};
 use bilibi_tenancy::Scope;
-use jiff::civil::Date;
+use jiff::{civil::Date, Timestamp};
 use serde::Serialize;
 use serde_json::Value;
 use std::sync::Arc;
@@ -91,16 +102,17 @@ pub enum EinvoiceError {
     Failed(#[from] Error),
 }
 
-/// One refusal of a submitted value.
+/// One refusal of a submitted value, at the field's path (`code`,
+/// `buyer.address.state_code`, `lines[2].tax_rate`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct FieldError {
-    pub field: &'static str,
+    pub field: String,
     pub message: String,
 }
 impl FieldError {
-    pub fn new(field: &'static str, message: impl Into<String>) -> Self {
+    pub fn new(field: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
-            field,
+            field: field.into(),
             message: message.into(),
         }
     }
@@ -171,13 +183,49 @@ pub struct Setup {
     pub client_secret_days_left: Option<i64>,
     pub certificate_set: bool,
     pub private_key_set: bool,
+    /// The stored certificate's facts, never its bytes.
+    pub certificate: CertificateSetup,
     /// Warn this many days before the certificate or a client secret expires.
     pub expiry_alert_days: i64,
+    /// What expires within the alert window, or already has: `certificate`
+    /// and `client_secret`.
+    pub expiring: Vec<&'static str>,
+    /// Whether the supplier profile's tax ID is the one the certificate's
+    /// subject carries.
+    pub tax_id_matches_certificate: bool,
     /// The supplier profile, with the company's name for a blank `name` and
     /// `BRN` for a blank registration type.
     pub supplier: Supplier,
     /// The supplier fields every document carries that the profile leaves blank.
     pub supplier_missing: Vec<&'static str>,
+}
+
+/// The stored signing certificate as the setup reports it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub enum CertificateSetup {
+    /// No certificate is stored.
+    Missing,
+    /// One is stored but cannot be read now: it does not parse, or the
+    /// settings key is unavailable.
+    Unreadable,
+    Facts(CertificateFacts),
+}
+
+/// What the setup page shows of the signing certificate.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct CertificateFacts {
+    pub issuer_name: String,
+    pub subject_name: String,
+    pub serial_number: String,
+    /// The tax ID the certificate's subject carries, as the authority writes it.
+    pub tax_id: Option<String>,
+    pub registration_number: Option<String>,
+    pub not_before: Timestamp,
+    pub not_after: Timestamp,
+    /// Whole days until it expires; negative once expired.
+    pub days_until_expiry: i64,
+    /// Whether the stored private key belongs to it.
+    pub private_key_matches: bool,
 }
 
 /// The facade, resolved from the registry as [`SERVICE`].
@@ -340,6 +388,47 @@ impl Einvoice {
             Some(date) => Some(days_until(&**client, date).await?),
             None => None,
         };
+        let now = Timestamp::now();
+        let certificate_key = "finance.einvoice.certificate_pem";
+        let private_key_key = "finance.einvoice.private_key_pem";
+        // The PEMs are read here, inside the facade, and only their facts
+        // leave it.
+        let certificate = if !is_set(certificate_key) {
+            CertificateSetup::Missing
+        } else if !self.settings.encryption_available() {
+            CertificateSetup::Unreadable
+        } else {
+            let pem = self
+                .settings
+                .get(&**client, scope, target, certificate_key)
+                .await?;
+            match text(&pem.value).as_deref().map(Certificate::parse) {
+                Some(Ok(certificate)) => {
+                    let key = if is_set(private_key_key) {
+                        let pem = self
+                            .settings
+                            .get(&**client, scope, target, private_key_key)
+                            .await?;
+                        text(&pem.value).and_then(|pem| PrivateKey::parse(&pem).ok())
+                    } else {
+                        None
+                    };
+                    let identity = Self::authority().certificate_identity(&certificate.subject);
+                    CertificateSetup::Facts(CertificateFacts {
+                        issuer_name: certificate.issuer_name.clone(),
+                        subject_name: certificate.subject_name.clone(),
+                        serial_number: certificate.serial_number.clone(),
+                        tax_id: identity.tax_id,
+                        registration_number: identity.registration_number,
+                        not_before: certificate.not_before,
+                        not_after: certificate.not_after,
+                        days_until_expiry: certificate.days_until_expiry(now),
+                        private_key_matches: key.is_some_and(|key| certificate.key_matches(&key)),
+                    })
+                }
+                _ => CertificateSetup::Unreadable,
+            }
+        };
         let mut profile = Supplier {
             name: value(&configuration::supplier_key("name")),
             tax_id: value(&configuration::supplier_key("tax_id")),
@@ -368,6 +457,23 @@ impl Einvoice {
         let posting_value = |account: PostingAccount| {
             value(&format!("finance.einvoice.posting.{}", account.field()))
         };
+        let expiry_alert_days = values
+            .get("finance.einvoice.expiry_alert_days")
+            .and_then(|resolved| resolved.value.as_i64())
+            .unwrap_or(30);
+        let facts = match &certificate {
+            CertificateSetup::Facts(facts) => Some(facts),
+            _ => None,
+        };
+        let mut expiring = Vec::new();
+        if facts.is_some_and(|facts| facts.days_until_expiry <= expiry_alert_days) {
+            expiring.push("certificate");
+        }
+        if days_left.is_some_and(|days| days <= expiry_alert_days) {
+            expiring.push("client_secret");
+        }
+        let tax_id_matches_certificate =
+            profile.tax_id.is_some() && facts.is_some_and(|facts| facts.tax_id == profile.tax_id);
         Ok(Setup {
             environment,
             document_version: value("finance.einvoice.document_version")
@@ -385,12 +491,12 @@ impl Einvoice {
             client_secret_set: is_set(&client_secret),
             client_secret_expires_on: expires_on,
             client_secret_days_left: days_left,
-            certificate_set: is_set("finance.einvoice.certificate_pem"),
-            private_key_set: is_set("finance.einvoice.private_key_pem"),
-            expiry_alert_days: values
-                .get("finance.einvoice.expiry_alert_days")
-                .and_then(|resolved| resolved.value.as_i64())
-                .unwrap_or(30),
+            certificate_set: is_set(certificate_key),
+            private_key_set: is_set(private_key_key),
+            certificate,
+            expiry_alert_days,
+            expiring,
+            tax_id_matches_certificate,
             supplier_missing: Self::authority()
                 .supplier_missing(&profile)
                 .into_iter()

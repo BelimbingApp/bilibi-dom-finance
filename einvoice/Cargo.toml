@@ -14,10 +14,15 @@ bilibi-party-ids.workspace = true
 bilibi-settings.workspace = true
 bilibi-tenancy.workspace = true
 inventory.workspace = true
-jiff = "0.2.38"
-# Reads the company's signing certificate and RSA key (PEM); the signer and the
-# certificate facts of later slices use the same two crates.
-rsa = "0.9.10"
+jiff = { version = "0.2.38", features = ["serde"] }
+# The signature's base64 digests and certificate.
+base64 = "0.23.1"
+# Reads the company's signing certificate and RSA key (PEM) and signs with
+# RSA PKCS#1 v1.5; `sha2` comes through rsa's feature because rsa 0.9 hashes
+# with the digest crate generation it is built on (sha2 0.10), not the newer
+# sha2 0.11.
+rsa = { version = "0.9.10", features = ["sha2"] }
+rust_decimal.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
