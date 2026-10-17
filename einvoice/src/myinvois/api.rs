@@ -129,6 +129,11 @@ pub(crate) async fn login(connection: &Connection<'_>) -> LoginOutcome {
     match client::login(connection).await {
         Ok(_) => LoginOutcome::Succeeded,
         Err(CallError::MissingCredentials) => LoginOutcome::MissingCredentials,
+        Err(CallError::Http {
+            status,
+            retry_after: Some(seconds),
+            ..
+        }) => LoginOutcome::RateLimited { status, seconds },
         Err(CallError::Http { status, .. }) => LoginOutcome::Refused(status),
         Err(CallError::Transport(_)) => LoginOutcome::Unreachable,
         Err(_) => LoginOutcome::Failed,

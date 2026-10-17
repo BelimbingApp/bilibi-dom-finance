@@ -400,3 +400,6 @@ macro_rules! walkthrough_reports_roles {
         }) }
     };
 }
+
+// NE6: executable page and browser proof on disposable data.
+pub mod einvoice_pages;

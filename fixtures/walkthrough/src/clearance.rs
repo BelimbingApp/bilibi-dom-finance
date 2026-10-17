@@ -124,7 +124,7 @@ struct Held {
 
 /// The stand-in authority's state for the run.
 #[derive(Default)]
-struct StandIn {
+pub(crate) struct StandIn {
     logins: AtomicUsize,
     token: Mutex<String>,
     /// The next authorized call answers 401, as an expired token does.
@@ -460,7 +460,7 @@ async fn cancel(
 }
 
 /// Serves the stand-in on a free loopback port and answers its base URL.
-async fn serve(standin: Arc<StandIn>) -> Outcome<String> {
+pub(crate) async fn serve(standin: Arc<StandIn>) -> Outcome<String> {
     let app = Router::new()
         .route("/connect/token", post(token))
         .route("/api/v1.0/documentsubmissions/", post(submit))
@@ -512,7 +512,7 @@ pub(crate) async fn save(
 
 /// A throwaway RSA certificate whose subject carries the company's tax and
 /// registration numbers, and its key, as PEM; the files are removed on return.
-fn certificate() -> Outcome<(String, String)> {
+pub(crate) fn certificate() -> Outcome<(String, String)> {
     let dir = std::env::temp_dir().join(format!("einvoice-clearance-{}", std::process::id()));
     std::fs::create_dir_all(&dir)?;
     let (cert, key) = (dir.join("cert.pem"), dir.join("key.pem"));

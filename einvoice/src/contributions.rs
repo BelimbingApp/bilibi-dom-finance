@@ -45,3 +45,43 @@ inventory::submit! { Contribution::new(VOCABULARY, "finance/einvoice", provenanc
     }],
     system_principals: &[],
 }) }
+
+// Bilimbi Einvoice priv/web_routes.exs and Contributions.menu/0.
+use bilibi_module_registry::contributions::{Access, Method, Route, ROUTES};
+macro_rules! page {
+    ($operation:literal, $path:literal, $label:literal, $capability:expr, $icon:literal, $order:expr) => {
+        inventory::submit! { Contribution::new(ROUTES, concat!("finance/einvoice.", $operation), provenance!(), &Route {
+            method: Method::Get, path: $path, service: crate::web::SERVICE,
+            operation: $operation, access: Access::Capability($capability), framed: true,
+        }) }
+        bilibi_menu::contribute!("finance/einvoice",
+            bilibi_menu::MenuItem::page(concat!("finance.einvoice.", $operation), $label, $path)
+                .under("finance").icon($icon)
+                .requires(bilibi_menu::Requirement::Capability($capability)).order($order)
+        );
+    };
+}
+page!(
+    "consolidation",
+    "/finance/einvoice/consolidation",
+    "E-invoice Consolidation",
+    VIEW,
+    "squares-2x2",
+    9
+);
+page!(
+    "reconciliation",
+    "/finance/einvoice/reconciliation",
+    "E-invoice Reconciliation",
+    VIEW,
+    "chart-bar",
+    10
+);
+page!(
+    "setup",
+    "/finance/einvoice/setup",
+    "E-invoice Setup",
+    SETTINGS,
+    "clipboard-document-list",
+    11
+);

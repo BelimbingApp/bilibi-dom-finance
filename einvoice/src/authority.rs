@@ -394,6 +394,11 @@ pub enum LoginOutcome {
     MissingCredentials,
     /// The authority refused it with this HTTP status.
     Refused(u16),
+    /// The authority asks the operator to wait this many seconds before login.
+    RateLimited {
+        status: u16,
+        seconds: u64,
+    },
     Unreachable,
     Failed,
 }
@@ -404,7 +409,7 @@ impl LoginOutcome {
         match self {
             Self::Succeeded => "succeeded".into(),
             Self::MissingCredentials => "missing_credentials".into(),
-            Self::Refused(status) => format!("refused_{status}"),
+            Self::Refused(status) | Self::RateLimited { status, .. } => format!("refused_{status}"),
             Self::Unreachable => "unreachable".into(),
             Self::Failed => "failed".into(),
         }
