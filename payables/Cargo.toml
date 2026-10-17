@@ -9,6 +9,7 @@ license.workspace = true
 bilibi-authz.workspace = true
 bilibi-company.workspace = true
 bilibi-database.workspace = true
+bilibi-events.workspace = true
 bilibi-finance-attachments = { path = "../attachments" }
 bilibi-finance-ledger = { path = "../ledger" }
 bilibi-module-registry.workspace = true

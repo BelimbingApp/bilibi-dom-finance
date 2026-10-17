@@ -17,10 +17,20 @@ pub(crate) enum Table {
     Requests,
     RequestAllocations,
     RequestEvents,
+    MatchEvents,
+    MatchLines,
+    MatchExceptions,
+    OrderLines,
+    OrderReceipts,
 }
 impl Table {
     pub(crate) fn name(self) -> &'static str {
         match self {
+            Self::MatchEvents => "finance_payables_match_events",
+            Self::MatchLines => "finance_payables_match_lines",
+            Self::MatchExceptions => "finance_payables_match_exceptions",
+            Self::OrderLines => "finance_payables_order_lines",
+            Self::OrderReceipts => "finance_payables_order_receipts",
             Self::Settings => "finance_payables_settings",
             Self::TaxCodes => "finance_payables_tax_codes",
             Self::SettingsChanges => "finance_payables_settings_changes",
@@ -47,6 +57,11 @@ impl Table {
             Self::Requests => "finance.payables.payment_request",
             Self::RequestAllocations => "finance.payables.payment_request_allocation",
             Self::RequestEvents => "finance.payables.payment_request_event",
+            Self::MatchEvents => "finance.payables.match_event",
+            Self::MatchLines => "finance.payables.match_line",
+            Self::MatchExceptions => "finance.payables.match_exception",
+            Self::OrderLines => "finance.payables.order_line",
+            Self::OrderReceipts => "finance.payables.order_receipt",
         }
     }
 }
@@ -225,9 +240,78 @@ pub(crate) async fn document(
         tax_lines,
         debit_note_ids,
         outstanding,
+        match_status: None,
+        match_events: match_events(c, tenant, company, id).await?,
+    })
+    .map(|mut d| {
+        d.match_status = matching::status(&d);
+        d
     }))
 }
 /// Current balance uses the same temporal calculation as reports and writes.
+/// A document's match events oldest first, with their lines in line order
+/// and each line's exceptions in recording order.
+async fn match_events(
+    c: &impl GenericClient,
+    tenant: i64,
+    company: i64,
+    document: i64,
+) -> DbResult<Vec<MatchEvent>> {
+    let mut events = Vec::new();
+    for r in c.query("SELECT id,event,reason,held_event_id,actor_user_id,actor_impersonator_id,to_char(occurred_at,'YYYY-MM-DD\"T\"HH24:MI:SS.US') FROM finance_payables_match_events WHERE tenant_id=$1 AND company_id=$2 AND document_id=$3 ORDER BY id",&[&tenant,&company,&document]).await? {
+        events.push(MatchEvent {id:r.get(0),event:r.get(1),reason:r.get(2),held_event_id:r.get(3),actor_user_id:r.get(4),actor_impersonator_id:r.get(5),occurred_at:r.get(6),lines:Vec::new()});
+    }
+    let ids: Vec<i64> = events.iter().map(|e| e.id).collect();
+    if ids.is_empty() {
+        return Ok(events);
+    }
+    let mut lines: Vec<(i64, i64, MatchLine)> = Vec::new();
+    for r in c.query("SELECT event_id,id,line_number,order_line_id,order_number,billed_quantity,billed_unit_price,previously_billed_quantity,ordered_quantity,ordered_unit_price,received_quantity,quantity_tolerance_kind,quantity_tolerance,price_tolerance_kind,price_tolerance FROM finance_payables_match_lines WHERE tenant_id=$1 AND company_id=$2 AND event_id=ANY($3) ORDER BY event_id,line_number",&[&tenant,&company,&ids]).await? {
+        lines.push((r.get(0), r.get(1), MatchLine {line_number:r.get(2),order_line_id:r.get(3),order_number:r.get(4),billed_quantity:r.get(5),billed_unit_price:r.get(6),previously_billed_quantity:r.get(7),ordered_quantity:r.get(8),ordered_unit_price:r.get(9),received_quantity:r.get(10),quantity_tolerance:tolerance(&r,11,12),price_tolerance:tolerance(&r,13,14),exceptions:Vec::new()}));
+    }
+    let line_ids: Vec<i64> = lines.iter().map(|l| l.1).collect();
+    for r in c.query("SELECT match_line_id,code,detail FROM finance_payables_match_exceptions WHERE tenant_id=$1 AND company_id=$2 AND match_line_id=ANY($3) ORDER BY id",&[&tenant,&company,&line_ids]).await? {
+        let id: i64 = r.get(0);
+        if let Some(line) = lines.iter_mut().find(|l| l.1 == id) {
+            line.2.exceptions.push(MatchException {code:r.get(1),detail:r.get(2)});
+        }
+    }
+    for (event, _, line) in lines {
+        if let Some(e) = events.iter_mut().find(|e| e.id == event) {
+            e.lines.push(line);
+        }
+    }
+    Ok(events)
+}
+/// Records one match event with its lines and their exceptions, in the
+/// transaction that decides it; the database stamps the time and checks the
+/// document's status. Returns every inserted row as a change.
+pub(crate) async fn record_match(
+    sql: &impl GenericClient,
+    document: &Document,
+    (tenant, company): (i64, i64),
+    actor: (i64, Option<i64>),
+    event: &str,
+    approval: Option<(&str, i64)>,
+    lines: &[MatchLine],
+) -> DbResult<Vec<Change>> {
+    let (row, change) = insert(sql, Table::MatchEvents, json!({"tenant_id":tenant,"company_id":company,"document_id":document.id,"event":event,"reason":approval.map(|a|a.0),"held_event_id":approval.map(|a|a.1),"actor_user_id":actor.0,"actor_impersonator_id":actor.1})).await?;
+    let event_id = int(&row, "id")?;
+    let mut changes = vec![change];
+    for l in lines {
+        let kind = |t: &Option<Tolerance>| t.as_ref().map(|t| t.kind);
+        let value = |t: &Option<Tolerance>| t.as_ref().map(|t| t.value);
+        let (row, change) = insert(sql, Table::MatchLines, json!({"tenant_id":tenant,"company_id":company,"event_id":event_id,"document_id":document.id,"line_number":l.line_number,"order_line_id":l.order_line_id,"order_number":l.order_number,"billed_quantity":l.billed_quantity,"billed_unit_price":l.billed_unit_price,"previously_billed_quantity":l.previously_billed_quantity,"ordered_quantity":l.ordered_quantity,"ordered_unit_price":l.ordered_unit_price,"received_quantity":l.received_quantity,"quantity_tolerance_kind":kind(&l.quantity_tolerance),"quantity_tolerance":value(&l.quantity_tolerance),"price_tolerance_kind":kind(&l.price_tolerance),"price_tolerance":value(&l.price_tolerance)})).await?;
+        let line_id = int(&row, "id")?;
+        changes.push(change);
+        for x in &l.exceptions {
+            changes.push(insert(sql, Table::MatchExceptions, json!({"tenant_id":tenant,"company_id":company,"match_line_id":line_id,"code":x.code,"detail":x.detail})).await?.1);
+        }
+    }
+    Ok(changes)
+}
+/// With only documents in NP1, debit notes are the reductions. NP3 extends
+/// this date-window minimum with allocations and reversal events.
 pub(crate) async fn outstanding(
     c: &impl GenericClient,
     tenant: i64,
