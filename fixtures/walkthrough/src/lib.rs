@@ -33,6 +33,7 @@ mod payroll_ui;
 pub mod periods;
 pub mod receivables;
 pub mod receivables_documents;
+pub mod reports;
 pub mod totals;
 
 /// Every fixture account's password.
@@ -366,6 +367,27 @@ macro_rules! walkthrough_einvoice_roles {
                 ] },
                 $crate::authz::RoleDefinition { code: "viewer", name: "viewer", description: "Walkthrough fixture role", grant_all: false, capabilities: &[
                     "finance.einvoice.view",
+                ] },
+            ],
+            system_principals: &[],
+        }) }
+    };
+}
+
+/// What the Platform fixture's roles hold in the reports module, declared
+/// beside [`walkthrough_ledger_roles!`]: the manager issues reports and
+/// exports the auditor pack; staff and the viewer read reports through the
+/// ledger's view capability only.
+#[macro_export]
+macro_rules! walkthrough_reports_roles {
+    () => {
+        $crate::inventory::submit! { $crate::registry::Contribution::new($crate::authz::VOCABULARY, "walkthrough.fixture.finance.reports", $crate::registry::Provenance { module: "finance/reports", source: file!(), line: line!() }, &$crate::authz::VocabularyContribution {
+            domains: &[],
+            verbs: &[],
+            capabilities: &[],
+            roles: &[
+                $crate::authz::RoleDefinition { code: "manager", name: "manager", description: "Walkthrough fixture role", grant_all: false, capabilities: &[
+                    "finance.reports.issue", "finance.reports.reports-export",
                 ] },
             ],
             system_principals: &[],

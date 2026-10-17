@@ -15,8 +15,9 @@ Bilibi checkout; it does not build on its own.
 | [`payroll/`](payroll/README.md) | `finance/payroll` | the Payroll and claims Postings page and posting-account Setup page, component/claim mappings with their change logs, owned ledger posting and correction, attempts and five evidence datasets. People is absent: the page states this and source posting returns `unavailable`, with a `TODO(domain events)` seam. |
 | [`receivables/`](receivables/README.md) | `finance/receivables` | setup, series, tax codes and customers; invoice/credit-note drafts and numbered issuance with frozen party and owned posting; fully allocated receipts and owned reversals; dated/pinned aging, tax and received-tax totals, control-account tie-out, attachment sources and eleven evidence datasets. Like Bilimbi this module has no pages. |
 | [`fixed_assets/`](fixed_assets/README.md) | `finance/fixed_assets` | immutable category revisions, acquisition from posted bill or entry debit lines, frozen assumptions and straight-line/reducing-balance schedules with full first-month and month-end recognition. Runs/corrections and pages follow in NX2/NX3. |
+| [`reports/`](reports/README.md) | `finance/reports` | a company's management reports read through the ledger's facade: profit and loss, the balance sheet and the cash position with up to four comparative columns, the overview against the previous period, the entries behind any figure, all at one pinned entry number; the `finance.reports.sections` layout setting with its validator; the ledger's posting notices for live reports; and immutable issued snapshots. Its pages and the auditor pack follow in later versions of the module. |
 
-Every other Finance module of Bilimbi (reconciliation, SST, reports) lands beside
+Every other Finance module of Bilimbi (reconciliation, SST) lands beside
 the ledger as a sibling module folder, in later slices of the port.
 
 The ledger also contributes 21 agent operations through Bilibi's shared `/api/v1` and `/mcp`: seven reads and fourteen reviewed writes for books, accounts, journals, reversals and fiscal closing. The [ledger contract](ledger/README.md#agent-operations) and [agent guide](ledger/guide.md) describe their inputs and controls. There are no ledger pages in Bilimbi or this port.
@@ -96,7 +97,13 @@ trial balance (balanced, refused out of reach), posts a backdated entry and
 reproduces the earlier figures from the pinned entry number, compares an
 account's PostgreSQL totals with its listed lines, splits totals by owner,
 shows Company 002's closed year with and without its closing entries, and
-pages every evidence dataset.
+pages every evidence dataset. Its reports section configures Company
+001's report sections (refused shapes first), reads profit and loss, the
+balance sheet, the cash position and the overview with comparative columns,
+follows a figure to the entries behind it, reproduces a report from its pinned
+entry number after a later post its posting subscription hears, issues and
+reads back immutable snapshots (refused without the capability and for an
+archived company), and ends with the facade's and the database's refusals.
 
 The Payroll section proves the People-absent `unavailable` result without any entry or attempt, posting account/mapping validation and no-op histories, scope isolation, atomic owner-posting rollback, correction of explicitly historical fixture entries (including a race and a failed-date attempt), all five evidence datasets, audited rows and the database's retention/uniqueness refusals. It does not claim People-backed recognition while that publisher is absent.
 

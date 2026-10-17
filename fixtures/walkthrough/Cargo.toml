@@ -25,6 +25,7 @@ bilibi-finance-fixed-assets = { path = "../../fixed_assets" }
 bilibi-finance-ledger = { path = "../../ledger" }
 bilibi-finance-payroll = { path = "../../payroll" }
 bilibi-finance-receivables = { path = "../../receivables" }
+bilibi-finance-reports = { path = "../../reports" }
 bilibi-module-registry.workspace = true
 bilibi-party-ids.workspace = true
 bilibi-queue.workspace = true

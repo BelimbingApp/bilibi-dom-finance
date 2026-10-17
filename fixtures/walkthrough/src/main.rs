@@ -25,6 +25,7 @@ bilibi_finance_walkthrough_fixture::walkthrough_payables_roles!();
 bilibi_finance_walkthrough_fixture::walkthrough_einvoice_roles!();
 bilibi_finance_walkthrough_fixture::walkthrough_payroll_roles!();
 bilibi_finance_walkthrough_fixture::walkthrough_receivables_roles!();
+bilibi_finance_walkthrough_fixture::walkthrough_reports_roles!();
 
 /// An entry on one line: number, date, description, owner and `account:amount`
 /// per line (debits positive, credits negative).
@@ -1110,6 +1111,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     bilibi_finance_walkthrough_fixture::periods::run(&db, &services).await?;
     bilibi_finance_walkthrough_fixture::controls::run(&db, &services).await?;
     bilibi_finance_walkthrough_fixture::totals::run(&db, &services).await?;
+    bilibi_finance_walkthrough_fixture::reports::run(&db, &services).await?;
 
     einvoice::prove(
         &db,

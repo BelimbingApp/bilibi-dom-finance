@@ -105,6 +105,13 @@ they govern this code and are not copied here.
   so it reproduces. Tie a control account out with
   `account_totals_by_owner`: a row of another owner is a difference to show,
   never to net away.
+- Show a profit and loss, balance sheet, cash position, overview or a
+  figure's entries through `Reports` (`reports/src/lib.rs`), never by
+  arranging `account_totals` yourself: the facade reads every column at one
+  entry number, leaves closing entries out of flows (and their drill-down)
+  and groups by `finance.reports.sections` with its nearest-listed-account
+  rule. Freeze a report with `Reports::issue_report`, not a stored entry
+  number, which pins postings but not the chart or the layout.
 - Export a module's auditor evidence as the ledger does
   (`ledger/src/evidence.rs`): `evidence_datasets` and an authorized
   `evidence_page` on the facade, one dataset per own table with a frozen,
