@@ -612,6 +612,10 @@ impl Index {
         let clock = self.clock(s).await?;
         if let Some(outcome) = self.period.as_mut().and_then(|p| p.event(event, v, &clock)) {
             if let Outcome::Applied(p) = outcome {
+                self.period
+                    .as_mut()
+                    .expect("period initialized")
+                    .set(p, &clock);
                 self.query.extend(p.params().map(|(k, v)| (k.into(), v)));
                 self.list.put_page(Some("1"));
             }

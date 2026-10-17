@@ -208,6 +208,28 @@ async fn main() -> Outcome<()> {
         ("to".into(), "2026-12-31".into()),
     ]);
     let mut register = mount(services, &manager, "register", None, &query).await?;
+    let opened = event(
+        &mut register,
+        &manager,
+        json!({"type":"period_select","period_filter[period]":"custom"}),
+    )
+    .await?;
+    has(&opened, "assets-report-period-range");
+    let invalid = event(
+        &mut register,
+        &manager,
+        json!({"type":"period_apply","range[from]":"2026-02-01","range[to]":"2026-01-01"}),
+    )
+    .await?;
+    has(&invalid, "Start date must be on or before end date.");
+    let applied = event(
+        &mut register,
+        &manager,
+        json!({"type":"period_apply","range[from]":"2026-01-01","range[to]":"2026-12-31"}),
+    )
+    .await?;
+    assert_eq!(applied.query["to"], "2026-12-31");
+    has(&applied, "Ledger reconciliation as of 2026-12-31");
     let mut ids = Vec::new();
     let mut entries = Vec::new();
     for label in [
@@ -257,7 +279,8 @@ async fn main() -> Outcome<()> {
             entries[1].id,
             &Reversal {
                 entry_date: date(2026, 1, 31),
-                reason: "Source correction".into(),
+                description: "Source correction".into(),
+                reference: None,
             },
         )
         .await?;
@@ -283,7 +306,8 @@ async fn main() -> Outcome<()> {
             entries[2].id,
             &Reversal {
                 entry_date: date(2026, 2, 1),
-                reason: "Source correction".into(),
+                description: "Source correction".into(),
+                reference: None,
             },
         )
         .await?;
