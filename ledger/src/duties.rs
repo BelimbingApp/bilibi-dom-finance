@@ -148,6 +148,7 @@ fn change_from_row(row: &Row) -> Result<DutySeparationChange> {
 // Approvals
 
 /// An approval exception to append: what [`decide`] found the approval to be.
+#[derive(serde::Serialize)]
 pub(crate) struct NewException {
     source: String,
     action: String,
