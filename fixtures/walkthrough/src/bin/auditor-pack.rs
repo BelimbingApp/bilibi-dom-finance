@@ -265,7 +265,7 @@ async fn main() -> Outcome<()> {
     assert_eq!(manifest["through_entry_number"], pin + 1);
     for (name, count) in [
         ("ledger-entry.csv", 503),
-        ("ledger-entry_line.csv", 1006),
+        ("ledger-line.csv", 1006),
         ("issued-reports.csv", 1),
         ("attachments-attachment.csv", 1),
     ] {
