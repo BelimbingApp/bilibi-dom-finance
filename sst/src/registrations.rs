@@ -106,9 +106,11 @@ pub(crate) async fn latest(
     tenant: i64,
     company: i64,
 ) -> bilibi_database::Result<Option<Registration>> {
-    Ok(read(c, "ORDER BY version DESC LIMIT 1", &[&tenant, &company])
-        .await?
-        .pop())
+    Ok(
+        read(c, "ORDER BY version DESC LIMIT 1", &[&tenant, &company])
+            .await?
+            .pop(),
+    )
 }
 
 /// The latest version whose cycle starts on or before `date`.

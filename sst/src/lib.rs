@@ -34,9 +34,9 @@ pub use contributions::{
 };
 pub use figures::{AccountReconciliation, Figures, SourceRow, UnmappedRow};
 pub use form::{BoxFigure, BoxKind, FormBox, MappableBox};
+use jiff::civil::Date;
 pub use mappings::{Mapping, MappingInput, TaxCodeMapping};
 pub use registrations::{Registration, RegistrationInput};
-use jiff::civil::Date;
 use serde::Serialize;
 use std::{fmt, str::FromStr, sync::Arc};
 use tokio_postgres::GenericClient;
@@ -304,8 +304,7 @@ impl Sst {
             period_start: start,
             period_end: end,
         };
-        self.compute(s, company, &period, &registration, pins)
-            .await
+        self.compute(s, company, &period, &registration, pins).await
     }
 
     async fn write<'c>(

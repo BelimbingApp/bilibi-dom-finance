@@ -68,7 +68,11 @@ impl Cycle {
             let offset = (months_between(self.first, date) - self.months) / self.months
                 * self.months
                 + self.months;
-            let start = self.first.first_of_month().checked_add(offset.months()).ok()?;
+            let start = self
+                .first
+                .first_of_month()
+                .checked_add(offset.months())
+                .ok()?;
             self.period(start)
         }
     }
@@ -76,9 +80,7 @@ impl Cycle {
     /// Up to `count` periods, newest first, ending with the one that contains
     /// `date` (or the cycle's first, when `date` precedes it).
     pub fn recent(self, date: Date, count: usize) -> Vec<(Date, Date)> {
-        let mut current = self
-            .containing(date)
-            .or_else(|| self.period(self.first));
+        let mut current = self.containing(date).or_else(|| self.period(self.first));
         let mut periods = Vec::new();
         while let Some((start, finish)) = current {
             if periods.len() == count {

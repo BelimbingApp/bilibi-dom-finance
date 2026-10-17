@@ -56,10 +56,7 @@ fn row(r: &tokio_postgres::Row) -> bilibi_database::Result<Mapping> {
     Ok(Mapping {
         id: r.get(0),
         mapping_number: r.get(1),
-        source: r
-            .get::<_, &str>(2)
-            .parse()
-            .map_err(|_| Error::Invalid)?,
+        source: r.get::<_, &str>(2).parse().map_err(|_| Error::Invalid)?,
         tax_code_id: r.get(3),
         tax_code: r.get(4),
         box_key: r.get(5),
@@ -142,7 +139,12 @@ impl Sst {
     /// code's current mapping alone when nothing changes. Refusals:
     /// `InvalidSource`, `TaxCodeNotFound`, and `Invalid` on `box` or
     /// `reason`. Also needs the source module's view capability.
-    pub async fn map_tax_code(&self, s: &Scope, company: i64, input: &MappingInput) -> Result<Mapping> {
+    pub async fn map_tax_code(
+        &self,
+        s: &Scope,
+        company: i64,
+        input: &MappingInput,
+    ) -> Result<Mapping> {
         {
             let c = self.db.get().await.map_err(Error::from)?;
             authorize(&**c, s, company, MANAGE_SETTINGS).await?;
@@ -173,7 +175,13 @@ impl Sst {
         let reason = reason(input.reason.as_deref(), &mut errors);
         let mut c = self.db.get().await.map_err(Error::from)?;
         let mut tx = self
-            .write(&mut c, s, company, MANAGE_SETTINGS, "finance.sst.map-tax-code")
+            .write(
+                &mut c,
+                s,
+                company,
+                MANAGE_SETTINGS,
+                "finance.sst.map-tax-code",
+            )
             .await?;
         let tenant = s.tenant();
         if let Some(current) = at(tx.sql(), tenant, company, i64::MAX)
@@ -232,12 +240,22 @@ impl Sst {
             "SELECT {COLUMNS},{} FROM finance_sst_mappings WHERE tenant_id=$1 AND company_id=$2 AND id>$3 ORDER BY id LIMIT $4",
             store::stamp("recorded_at")
         );
-        let rows = c.query(&sql, &[&s.tenant(), &company, &after, &limit]).await?;
-        Ok(rows.iter().map(row).collect::<bilibi_database::Result<_>>()?)
+        let rows = c
+            .query(&sql, &[&s.tenant(), &company, &after, &limit])
+            .await?;
+        Ok(rows
+            .iter()
+            .map(row)
+            .collect::<bilibi_database::Result<_>>()?)
     }
 
     /// One source's tax codes through its owner's facade, in its order.
-    async fn source_codes(&self, s: &Scope, company: i64, source: TaxSource) -> Result<Vec<SourceCode>> {
+    async fn source_codes(
+        &self,
+        s: &Scope,
+        company: i64,
+        source: TaxSource,
+    ) -> Result<Vec<SourceCode>> {
         Ok(match source {
             TaxSource::Receivables => self
                 .receivables

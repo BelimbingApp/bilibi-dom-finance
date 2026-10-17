@@ -32,7 +32,11 @@ pub(crate) fn identity(s: &Scope, company: i64) -> Value {
 
 /// Inserts `value` into `t` and returns the row as stored, numbered and
 /// stamped by the database, with its audit `Change`.
-pub(crate) async fn insert(c: &impl GenericClient, t: Table, value: Value) -> Result<(i64, Change)> {
+pub(crate) async fn insert(
+    c: &impl GenericClient,
+    t: Table,
+    value: Value,
+) -> Result<(i64, Change)> {
     let name = t.name();
     let r = c.query_one(&format!("INSERT INTO {name} SELECT (jsonb_populate_record(NULL::{name}, $1::jsonb || jsonb_build_object('id',nextval(pg_get_serial_sequence('{name}','id'))))).* RETURNING id,to_jsonb({name})"), &[&value]).await?;
     let id: i64 = r.get(0);

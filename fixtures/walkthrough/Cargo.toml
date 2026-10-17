@@ -57,3 +57,6 @@ sha2 = "0.11.1"
 # NT3: construct an independent, affiliated page reviewer through Core facades.
 bilibi-affiliation.workspace = true
 bilibi-user.workspace = true
+
+# NS1: the SST running proof (src/bin/sst.rs).
+bilibi-finance-sst = { path = "../../sst" }

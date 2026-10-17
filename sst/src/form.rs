@@ -86,12 +86,66 @@ const fn b(
 use BoxKind::{Rated, Specific, Tax, Total, Value};
 
 const SALES_TAX: [FormBox; 19] = [
-    b("11a", "11(a)", "B2", Rated, Some(5), "Taxable goods at 5%", R, true),
-    b("11b", "11(b)", "B2", Rated, Some(10), "Taxable goods at 10%", R, true),
-    b("12", "12", "B2", Total, None, "Total tax payable", NONE, false),
-    b("13a", "13(a)", "B2", Tax, None, "Deduction from credit notes", NONE, true),
-    b("13b", "13(b)", "B2", Tax, None, "Sales tax deduction", NONE, true),
-    b("13d", "13(d)", "B2", Tax, None, "Bad debt relief", NONE, true),
+    b(
+        "11a",
+        "11(a)",
+        "B2",
+        Rated,
+        Some(5),
+        "Taxable goods at 5%",
+        R,
+        true,
+    ),
+    b(
+        "11b",
+        "11(b)",
+        "B2",
+        Rated,
+        Some(10),
+        "Taxable goods at 10%",
+        R,
+        true,
+    ),
+    b(
+        "12",
+        "12",
+        "B2",
+        Total,
+        None,
+        "Total tax payable",
+        NONE,
+        false,
+    ),
+    b(
+        "13a",
+        "13(a)",
+        "B2",
+        Tax,
+        None,
+        "Deduction from credit notes",
+        NONE,
+        true,
+    ),
+    b(
+        "13b",
+        "13(b)",
+        "B2",
+        Tax,
+        None,
+        "Sales tax deduction",
+        NONE,
+        true,
+    ),
+    b(
+        "13d",
+        "13(d)",
+        "B2",
+        Tax,
+        None,
+        "Bad debt relief",
+        NONE,
+        true,
+    ),
     b(
         "13aa",
         "13A",
@@ -102,7 +156,16 @@ const SALES_TAX: [FormBox; 19] = [
         NONE,
         true,
     ),
-    b("14", "14", "B2", Total, None, "Tax payable before penalty", NONE, false),
+    b(
+        "14",
+        "14",
+        "B2",
+        Total,
+        None,
+        "Tax payable before penalty",
+        NONE,
+        false,
+    ),
     b(
         "17",
         "17",
@@ -216,8 +279,26 @@ const SALES_TAX: [FormBox; 19] = [
 ];
 
 const SERVICE_TAX: [FormBox; 12] = [
-    b("11c", "11(c)", "B2", Rated, Some(6), "Taxable services at 6%", RP, true),
-    b("11d", "11(d)", "B2", Rated, Some(8), "Taxable services at 8%", RP, true),
+    b(
+        "11c",
+        "11(c)",
+        "B2",
+        Rated,
+        Some(6),
+        "Taxable services at 6%",
+        RP,
+        true,
+    ),
+    b(
+        "11d",
+        "11(d)",
+        "B2",
+        Rated,
+        Some(8),
+        "Taxable services at 8%",
+        RP,
+        true,
+    ),
     b(
         "11e",
         "11(e)",
@@ -228,11 +309,56 @@ const SERVICE_TAX: [FormBox; 12] = [
         NONE,
         true,
     ),
-    b("12", "12", "B2", Total, None, "Total tax payable", NONE, false),
-    b("13a", "13(a)", "B2", Tax, None, "Deduction from credit notes", NONE, true),
-    b("13c", "13(c)", "B2", Tax, None, "Service tax deduction", NONE, true),
-    b("13d", "13(d)", "B2", Tax, None, "Bad debt relief", NONE, true),
-    b("14", "14", "B2", Total, None, "Tax payable before penalty", NONE, false),
+    b(
+        "12",
+        "12",
+        "B2",
+        Total,
+        None,
+        "Total tax payable",
+        NONE,
+        false,
+    ),
+    b(
+        "13a",
+        "13(a)",
+        "B2",
+        Tax,
+        None,
+        "Deduction from credit notes",
+        NONE,
+        true,
+    ),
+    b(
+        "13c",
+        "13(c)",
+        "B2",
+        Tax,
+        None,
+        "Service tax deduction",
+        NONE,
+        true,
+    ),
+    b(
+        "13d",
+        "13(d)",
+        "B2",
+        Tax,
+        None,
+        "Bad debt relief",
+        NONE,
+        true,
+    ),
+    b(
+        "14",
+        "14",
+        "B2",
+        Total,
+        None,
+        "Tax payable before penalty",
+        NONE,
+        false,
+    ),
     b(
         "18c1",
         "18(c)(1)",
@@ -282,7 +408,13 @@ pub const CREDIT_NOTE_BOX: &str = "13a";
 
 /// Item 12 sums the taxed boxes; item 14 deducts item 13 from it, as the
 /// completion guide gives the formula for each tax.
-fn totals(tax_type: TaxType) -> [(&'static str, &'static [&'static str], &'static [&'static str]); 2] {
+fn totals(
+    tax_type: TaxType,
+) -> [(
+    &'static str,
+    &'static [&'static str],
+    &'static [&'static str],
+); 2] {
     match tax_type {
         TaxType::SalesTax => [
             ("12", &["11a", "11b", "17"], &[]),
@@ -310,9 +442,11 @@ pub fn find(tax_type: TaxType, key: &str) -> Option<&'static FormBox> {
 
 /// The tax whose form holds a box a tax code can be mapped to.
 pub fn mapped_tax_type(key: &str) -> Option<TaxType> {
-    TaxType::ALL
-        .into_iter()
-        .find(|t| boxes(*t).iter().any(|b| b.key == key && !b.sources.is_empty()))
+    TaxType::ALL.into_iter().find(|t| {
+        boxes(*t)
+            .iter()
+            .any(|b| b.key == key && !b.sources.is_empty())
+    })
 }
 
 /// The boxes a tax code of `source` may be mapped to, across both forms.
@@ -375,7 +509,10 @@ pub(crate) fn figures(
         .filter(|b| b.kind != Total)
         .map(|b| {
             let (taxable, tax) = sums.get(b.key).copied().unwrap_or_default();
-            (b.key, (round(taxable, minor_units), round(tax, minor_units)))
+            (
+                b.key,
+                (round(taxable, minor_units), round(tax, minor_units)),
+            )
         })
         .collect();
     for (key, added, deducted) in totals(tax_type) {

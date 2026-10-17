@@ -148,7 +148,13 @@ impl Row {
             TaxSource::Payables => self.document_kind == "debit_note",
         }
     }
-    fn counted(&self, mapping: &Mapping, box_key: Option<&str>, taxable: Decimal, tax: Decimal) -> SourceRow {
+    fn counted(
+        &self,
+        mapping: &Mapping,
+        box_key: Option<&str>,
+        taxable: Decimal,
+        tax: Decimal,
+    ) -> SourceRow {
         SourceRow {
             line_number: 0,
             source: self.source,
@@ -483,11 +489,7 @@ impl Sst {
             }
         }
         let minor_units = book.minor_units.get();
-        let boxes = form::figures(
-            tax_type,
-            &sums(&sources),
-            u32::from(minor_units),
-        );
+        let boxes = form::figures(tax_type, &sums(&sources), u32::from(minor_units));
         let tax_payable = boxes
             .iter()
             .find(|b| b.key == form::PAYABLE_BOX)
@@ -512,7 +514,11 @@ impl Sst {
             minor_units,
             through_entry_number: through,
             through_mapping_number: mapping_number,
-            rate_mismatches: sources.iter().filter(|r| r.rate_mismatch).cloned().collect(),
+            rate_mismatches: sources
+                .iter()
+                .filter(|r| r.rate_mismatch)
+                .cloned()
+                .collect(),
             accounts: reconcile(&accrual, tax_type, &mappings, &ledger, &accounts),
             boxes,
             tax_payable,
