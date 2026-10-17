@@ -15,14 +15,21 @@ use tokio_postgres::Transaction;
 // Supply Chain Receiving's event contract, version 1 (its receiving/README.md).
 const GOODS_RECEIVED: &str = "supply_chain/receiving.goods_received";
 const RECEIPT_REVERSED: &str = "supply_chain/receiving.receipt_reversed";
+// Supply Chain Purchasing's order event contract, version 1 (its
+// purchasing/README.md, "Order events v1").
+const ORDER_STATUS_CHANGED: &str = "supply_chain/purchasing.order_status_changed";
+const ORDER_APPROVED: &str = "supply_chain/purchasing.order_approved";
+const ORDER_AMENDED: &str = "supply_chain/purchasing.order_amended";
 /// Every event the copy reads. The order source is available only while all
 /// of them are mounted event types: a line cannot name an order line before,
 /// and a bill naming one is held as `order_source_unavailable`.
-// TODO(domain events): add Purchasing's order_status_changed, order_approved
-// and order_amended (unit price, currency, status, supersession) once the
-// pinned Supply Chain declares them; until then a copied line has no order
-// facts and matches as `order_line_not_found`.
-const SOURCE_EVENTS: [&str; 2] = [GOODS_RECEIVED, RECEIPT_REVERSED];
+const SOURCE_EVENTS: [&str; 5] = [
+    GOODS_RECEIVED,
+    RECEIPT_REVERSED,
+    ORDER_STATUS_CHANGED,
+    ORDER_APPROVED,
+    ORDER_AMENDED,
+];
 
 pub(crate) fn available(events: &Events) -> bool {
     SOURCE_EVENTS
@@ -34,6 +41,99 @@ inventory::submit! { Contribution::new(SUBSCRIBERS, "finance/payables.goods_rece
     events: &[On { event: GOODS_RECEIVED, versions: &[1] }, On { event: RECEIPT_REVERSED, versions: &[1] }],
     handler: &GoodsReceipts,
 }) }
+
+inventory::submit! { Contribution::new(SUBSCRIBERS, "finance/payables.purchase_orders", Provenance { module: MODULE, source: file!(), line: line!() }, &Subscriber {
+    events: &[
+        On { event: ORDER_STATUS_CHANGED, versions: &[1] },
+        On { event: ORDER_APPROVED, versions: &[1] },
+        On { event: ORDER_AMENDED, versions: &[1] },
+    ],
+    handler: &PurchaseOrders,
+}) }
+
+#[derive(Deserialize)]
+struct OrderSnapshot {
+    company_id: i64,
+    order_id: i64,
+    order_number: i64,
+    lines: Vec<OrderLineFacts>,
+}
+#[derive(Deserialize)]
+struct OrderLineFacts {
+    id: i64,
+    quantity: String,
+    unit_price: String,
+    currency_code: String,
+    order_status: String,
+    superseded_by_amendment_id: Option<i64>,
+    unit: Option<String>,
+}
+
+/// One part of an order snapshot: an order line (current or superseded) as
+/// the order stands after a transition, approval or amendment. Each part
+/// describes the final state and delivery keeps an order's parts in order,
+/// so the latest part's facts replace what the copy held; an empty part (an
+/// empty draft cancelled) changes nothing.
+struct PurchaseOrders;
+impl Subscribe for PurchaseOrders {
+    fn handle<'a>(
+        &'a self,
+        tx: &'a Transaction<'_>,
+        scope: &'a SystemScope,
+        event: &'a Event,
+    ) -> SubscriberFuture<'a> {
+        Box::pin(async move {
+            let order: OrderSnapshot =
+                serde_json::from_value(event.payload.clone()).map_err(|_| Error::Invalid)?;
+            let tenant = scope.tenant();
+            let mut changes = Vec::new();
+            for line in &order.lines {
+                let facts = json!({"order_id": order.order_id, "order_number": order.order_number,
+                    "quantity": quantity(&line.quantity)?, "unit_price": quantity(&line.unit_price)?,
+                    "currency_code": line.currency_code, "order_status": line.order_status,
+                    "superseded_by_amendment_id": line.superseded_by_amendment_id,
+                    "unit": line.unit, "order_event_key": event.key});
+                keep_order_facts(tx, tenant, order.company_id, line.id, facts, &mut changes)
+                    .await?;
+            }
+            Ok(changes)
+        })
+    }
+}
+
+/// Creates the copy of an order line with the order's facts, or replaces the
+/// order facts it held; what only receipts carry (line number, description)
+/// stays.
+async fn keep_order_facts(
+    tx: &Transaction<'_>,
+    tenant: i64,
+    company: i64,
+    order_line: i64,
+    facts: Value,
+    changes: &mut Vec<Change>,
+) -> DbResult<()> {
+    let existing = tx
+        .query_opt(
+            "SELECT id,to_jsonb(l) FROM finance_payables_order_lines l WHERE tenant_id=$1 AND company_id=$2 AND order_line_id=$3",
+            &[&tenant, &company, &order_line],
+        )
+        .await?;
+    let Some(existing) = existing else {
+        let mut row = facts;
+        row["tenant_id"] = json!(tenant);
+        row["company_id"] = json!(company);
+        row["order_line_id"] = json!(order_line);
+        changes.push(store::insert(tx, Table::OrderLines, row).await?.1);
+        return Ok(());
+    };
+    let (id, before): (i64, Value) = (existing.get(0), existing.get(1));
+    let after: Value = tx.query_one(
+        "UPDATE finance_payables_order_lines SET order_number=($4::jsonb->>'order_number')::bigint, quantity=($4::jsonb->>'quantity')::numeric, unit_price=($4::jsonb->>'unit_price')::numeric, currency_code=$4::jsonb->>'currency_code', order_status=$4::jsonb->>'order_status', superseded_by_amendment_id=($4::jsonb->>'superseded_by_amendment_id')::bigint, unit=COALESCE(unit,$4::jsonb->>'unit'), order_event_key=$4::jsonb->>'order_event_key', updated_at=timezone('UTC',clock_timestamp()) WHERE tenant_id=$1 AND company_id=$2 AND id=$3 AND order_id=($4::jsonb->>'order_id')::bigint RETURNING to_jsonb(finance_payables_order_lines)",
+        &[&tenant, &company, &id, &facts],
+    ).await?.get(0);
+    changes.push(store::update_change(Table::OrderLines, id, before, after));
+    Ok(())
+}
 
 #[derive(Deserialize)]
 struct ReceiptPosted {
