@@ -120,6 +120,21 @@ async fn main() -> Outcome<()> {
     let ledger = services.get::<Ledger>(bilibi_finance_ledger::SERVICE)?;
     let reports = services.get::<Reports>(bilibi_finance_reports::SERVICE)?;
     let grants = services.get::<Grants>("base/authz.grants")?;
+    if let Some(mode) = std::env::args()
+        .nth(1)
+        .filter(|s| s == "deny-source" || s == "restore-source")
+    {
+        grants
+            .set_direct(
+                &admin,
+                1,
+                bilibi_finance_einvoice::VIEW,
+                (mode == "deny-source").then_some(false),
+            )
+            .await?;
+        println!("Browser source-grant steering applied: {mode}");
+        return Ok(());
+    }
     let root = std::env::var("AUDITOR_PACK_PROOF_DIR")?;
     std::fs::create_dir_all(&root)?;
     std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))?;
@@ -193,6 +208,15 @@ async fn main() -> Outcome<()> {
             },
         )
         .await?;
+    let reconciliation = services.get::<bilibi_finance_reconciliation::Reconciliation>(
+        bilibi_finance_reconciliation::SERVICE,
+    )?;
+    let bank = reconciliation.create_bank_account(&manager, COMPANY, &bilibi_finance_reconciliation::NewBankAccount {
+        name: "Auditor bank account".into(), ledger_account_id: debit,
+        import_mapping: json!({"date":"Date","description":"Details","reference":"Ref","amount":"Amount","balance":"Balance"}),
+        charges_account_id: None, interest_account_id: None, match_window_days: None, active: None, reason: None,
+    }).await?;
+    reconciliation.import_statement(&manager, COMPANY, bank.id, &NewFile { file_name: "statement.csv".into(), content: b"Date,Details,Ref,Amount,Balance\n2026-03-15,Overdrawn account,REF,-1.23,-1.23\n".to_vec(), content_type: Some("text/csv".into()) }).await?;
     reports
         .issue_report(
             &manager,
@@ -255,6 +279,14 @@ async fn main() -> Outcome<()> {
     snapshot.commit().await?;
     drop(client);
     println!("Snapshot pages exclude a concurrent committed backdated entry");
+    // An auditor needs only source views and export, not source-write or issue grants.
+    for cap in [
+        bilibi_finance_reports::ISSUE,
+        bilibi_finance_ledger::POST_ENTRIES,
+        bilibi_finance_attachments::CREATE,
+    ] {
+        grants.set_direct(&admin, 1, cap, Some(false)).await?;
+    }
     let artifact = reports
         .export_auditor_pack(&manager, COMPANY, date(2026, 3, 31))
         .await?;
@@ -267,11 +299,16 @@ async fn main() -> Outcome<()> {
         ("ledger-entry.csv", 503),
         ("ledger-line.csv", 1006),
         ("issued-reports.csv", 1),
-        ("attachments-attachment.csv", 1),
+        ("attachments-attachment.csv", 2),
     ] {
         assert_eq!(manifest["files"][name]["row_count"], count);
     }
+    assert_eq!(manifest["files"]["source-file-index.csv"]["row_count"], 1);
+    let statements = String::from_utf8(files["reconciliation-statement.csv"].clone())?;
+    assert!(statements.contains("-1.2300"));
+    assert!(!statements.contains("'-1.2300"));
     let index = String::from_utf8(files["attachments-attachment.csv"].clone())?;
+    assert!(index.contains("reconciliation-statement.csv#"));
     assert!(index.contains(&attachment.sha256));
     assert!(index.contains("'=supporting.csv"));
     assert!(String::from_utf8(files["general-ledger.csv"].clone())?.contains("' \t=auditor"));
@@ -281,6 +318,13 @@ async fn main() -> Outcome<()> {
         serde_json::to_vec_pretty(&manifest)?,
     )?;
     std::fs::write(format!("{root}/artifact-id"), &artifact.id)?;
+    for cap in [
+        bilibi_finance_reports::ISSUE,
+        bilibi_finance_ledger::POST_ENTRIES,
+        bilibi_finance_attachments::CREATE,
+    ] {
+        grants.set_direct(&admin, 1, cap, None).await?;
+    }
     println!(
         "{} archive members; hashes, GL totals, multi-page evidence and formula text checked",
         files.len()
