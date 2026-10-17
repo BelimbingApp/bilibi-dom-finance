@@ -8,7 +8,9 @@
 //!
 //! Company 001 (tenant 1's primary company) gets a book in [`CURRENCY`] with
 //! [`MINOR_UNITS`] decimal places and the chart in [`CHART`], created by the
-//! fixture's `manager@example.test`, who is affiliated with that company. The
+//! fixture's `manager@example.test`, who is affiliated with that company, and
+//! its first fiscal year, [`FISCAL_YEAR_START`] for twelve months, since a new
+//! book is controlled and posts only into a period it has opened. The
 //! fixture's roles hold ledger capabilities only through
 //! [`walkthrough_ledger_roles!`], which the expanding example declares beside
 //! the Platform fixture's two macros: the manager holds every ledger
@@ -16,12 +18,15 @@
 use bilibi_authz::grants::Grants;
 use bilibi_database::{Db, Error};
 use bilibi_finance_ledger::{
-    Account, AccountType, Book, Ledger, LedgerError, NewAccount, NewBook, Result, SERVICE,
+    Account, AccountType, Book, Ledger, LedgerError, NewAccount, NewBook, NewFiscalYear, Result,
+    SERVICE,
 };
 use bilibi_module_registry::Services;
 use bilibi_tenancy::{Authentication, Scope};
+use jiff::civil::{date, Date};
 
 pub mod attachments;
+pub mod periods;
 
 /// Every fixture account's password.
 pub use bilibi_walkthrough_fixture::PASSWORD;
@@ -34,6 +39,8 @@ pub const COMPANY: i64 = 1;
 /// Company 001.
 pub const MANAGER: i64 = 1;
 pub const CURRENCY: &str = "MYR";
+/// The first day of Company 001's first fiscal year.
+pub const FISCAL_YEAR_START: Date = date(2026, 1, 1);
 pub const MINOR_UNITS: i64 = 2;
 /// Code, name, type and whether the account is the retained-earnings one.
 pub const CHART: [(&str, &str, AccountType, bool); 9] = [
@@ -91,6 +98,22 @@ pub async fn install(db: &Db, services: &Services) -> Result<Installed> {
         ledger.create_account(&manager, COMPANY, &new).await?;
     }
     let accounts = ledger.list_accounts(&manager, COMPANY).await?;
+    if ledger
+        .list_fiscal_years(&manager, COMPANY)
+        .await?
+        .is_empty()
+    {
+        ledger
+            .open_fiscal_year(
+                &manager,
+                COMPANY,
+                &NewFiscalYear {
+                    start_date: Some(FISCAL_YEAR_START),
+                    end_date: None,
+                },
+            )
+            .await?;
+    }
     records::install(db).await?;
     Ok(Installed { book, accounts })
 }

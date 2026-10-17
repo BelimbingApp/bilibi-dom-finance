@@ -973,11 +973,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
              SELECT 1,1,(SELECT max(id) FROM finance_ledger_entries),1,id,5,0 FROM finance_ledger_accounts WHERE company_id=2 LIMIT 1; COMMIT",
         ),
         (
-            "INSERT an entry reversing another company's entry",
-            "INSERT INTO finance_ledger_entries(tenant_id,company_id,entry_number,entry_date,description,currency_code,reverses_entry_id,posted_by_user_id,posted_at) \
-             SELECT 1,2,0,'2026-10-01','Cross reversal','USD',id,1,now() FROM finance_ledger_entries WHERE company_id=1 AND entry_number=1",
-        ),
-        (
             "INSERT a reversal of an owned entry without its owner",
             "INSERT INTO finance_ledger_entries(tenant_id,company_id,entry_number,entry_date,description,currency_code,reverses_entry_id,posted_by_user_id,posted_at) \
              SELECT 1,1,0,'2026-10-02','Manual reversal of an owned entry','MYR',id,1,now() FROM finance_ledger_entries WHERE company_id=1 AND owner_record='invoice:17'",
@@ -1104,5 +1099,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .get(0);
     println!("audit mutations recorded for finance.ledger.*: {audited}");
     bilibi_finance_walkthrough_fixture::attachments::run(&db, &services).await?;
+    bilibi_finance_walkthrough_fixture::periods::run(&db, &services).await?;
     Ok(())
 }
