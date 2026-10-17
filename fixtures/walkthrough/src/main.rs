@@ -1107,6 +1107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("audit mutations recorded for finance.ledger.*: {audited}");
     bilibi_finance_walkthrough_fixture::attachments::run(&db, &services).await?;
     bilibi_finance_walkthrough_fixture::payables::run(&db, &services).await?;
+    bilibi_finance_walkthrough_fixture::payments::run(&db, &services).await?;
     bilibi_finance_walkthrough_fixture::periods::run(&db, &services).await?;
     bilibi_finance_walkthrough_fixture::controls::run(&db, &services).await?;
     bilibi_finance_walkthrough_fixture::totals::run(&db, &services).await?;

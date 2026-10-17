@@ -4,9 +4,15 @@
 mod contributions;
 mod documents;
 mod payments;
-pub use payments::{Allocation, AllocationInput, NewPayment, Payment, PaymentDecision, PaymentQuery, PaymentRequest, PaymentRequestQuery};
+pub use payments::{
+    Allocation, AllocationInput, NewPayment, Payment, PaymentDecision, PaymentQuery,
+    PaymentRequest, PaymentRequestQuery,
+};
 mod balances;
-pub use balances::{AgedDocument, AgedParty, AgedPayables, AgingQuery, ControlAccount, OtherPosting, TaxQuery, TaxTotal, TieOut};
+pub use balances::{
+    AgedDocument, AgedParty, AgedPayables, AgingQuery, ControlAccount, OtherPosting, TaxQuery,
+    TaxTotal, TieOut,
+};
 mod evidence;
 pub use evidence::EvidencePage;
 mod settings;
@@ -19,7 +25,8 @@ use bilibi_finance_ledger::{FieldError, Ledger, LedgerError, Money};
 use bilibi_module_registry::{Layer, Module, Service};
 use bilibi_tenancy::Scope;
 pub use contributions::{
-    APPROVE_DOCUMENTS, CAPABILITIES, CREATE_DOCUMENTS, MANAGE_SETTINGS, POST_DOCUMENTS, POST_PAYMENTS, SUBMIT_PAYMENTS, VIEW,
+    APPROVE_DOCUMENTS, CAPABILITIES, CREATE_DOCUMENTS, MANAGE_SETTINGS, POST_DOCUMENTS,
+    POST_PAYMENTS, SUBMIT_PAYMENTS, VIEW,
 };
 use jiff::civil::Date;
 use rust_decimal::Decimal;

@@ -218,7 +218,9 @@ impl Payables {
         }
         let total = checked(net + tax_total, book.minor_units, "total", true)?;
         if let Some(b) = &original {
-            if total > balances::lowest(tx.sql(), tenant, company, b.id, input.document_date).await? {
+            if total
+                > balances::lowest(tx.sql(), tenant, company, b.id, input.document_date).await?
+            {
                 return Err(PayablesError::ExceedsOutstanding);
             }
         }
@@ -337,7 +339,9 @@ impl Payables {
             let b = store::document(tx.sql(), s.tenant(), company, bill)
                 .await?
                 .ok_or(PayablesError::DocumentNotFound)?;
-            if d.total > balances::lowest(tx.sql(), s.tenant(), company, bill, d.document_date).await? {
+            if d.total
+                > balances::lowest(tx.sql(), s.tenant(), company, bill, d.document_date).await?
+            {
                 return Err(PayablesError::ExceedsOutstanding);
             }
             b.payable_account_id.ok_or(PayablesError::NotPostedBill)?

@@ -17,7 +17,6 @@ pub(crate) enum Table {
     Requests,
     RequestAllocations,
     RequestEvents,
-
 }
 impl Table {
     pub(crate) fn name(self) -> &'static str {
@@ -33,7 +32,6 @@ impl Table {
             Self::Requests => "finance_payables_payment_requests",
             Self::RequestAllocations => "finance_payables_payment_request_allocations",
             Self::RequestEvents => "finance_payables_payment_request_events",
-
         }
     }
     fn kind(self) -> &'static str {
@@ -49,7 +47,6 @@ impl Table {
             Self::Requests => "finance.payables.payment_request",
             Self::RequestAllocations => "finance.payables.payment_request_allocation",
             Self::RequestEvents => "finance.payables.payment_request_event",
-
         }
     }
 }
@@ -231,6 +228,19 @@ pub(crate) async fn document(
     }))
 }
 /// Current balance uses the same temporal calculation as reports and writes.
-pub(crate) async fn outstanding(c: &impl GenericClient, tenant: i64, company: i64, bill: i64) -> DbResult<Money> {
-    crate::balances::owed(c, tenant, company, bill, jiff::civil::date(9999,12,31), i64::MAX).await
+pub(crate) async fn outstanding(
+    c: &impl GenericClient,
+    tenant: i64,
+    company: i64,
+    bill: i64,
+) -> DbResult<Money> {
+    crate::balances::owed(
+        c,
+        tenant,
+        company,
+        bill,
+        jiff::civil::date(9999, 12, 31),
+        i64::MAX,
+    )
+    .await
 }
