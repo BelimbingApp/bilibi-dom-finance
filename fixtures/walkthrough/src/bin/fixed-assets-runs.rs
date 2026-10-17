@@ -67,8 +67,7 @@ async fn acquire(
     l: &Ledger,
     s: &Scope,
     revision: i64,
-    cost: i64,
-    capital: i64,
+    source_accounts: (i64, i64),
     amount: &str,
     service: Date,
 ) -> Outcome<bilibi_finance_fixed_assets::Asset> {
@@ -81,8 +80,8 @@ async fn acquire(
                 description: "NX2 acquisition".into(),
                 reference: None,
                 lines: vec![
-                    NewLine::debit(cost, m(amount)),
-                    NewLine::credit(capital, m(amount)),
+                    NewLine::debit(source_accounts.0, m(amount)),
+                    NewLine::credit(source_accounts.1, m(amount)),
                 ],
             },
             &PostOptions::default(),
@@ -200,8 +199,7 @@ async fn run(db: &Db, services: &Services) -> Outcome<()> {
         &l,
         &s,
         category.id,
-        accounts[0],
-        capital,
+        (accounts[0], capital),
         "1200",
         date(2026, 1, 17),
     )
@@ -211,8 +209,7 @@ async fn run(db: &Db, services: &Services) -> Outcome<()> {
         &l,
         &s,
         category.id,
-        accounts[0],
-        capital,
+        (accounts[0], capital),
         "600",
         date(2026, 1, 17),
     )
@@ -375,8 +372,7 @@ async fn run(db: &Db, services: &Services) -> Outcome<()> {
         &l,
         &s,
         category.id,
-        accounts[0],
-        capital,
+        (accounts[0], capital),
         "120",
         date(2027, 1, 1),
     )
@@ -424,8 +420,7 @@ async fn run(db: &Db, services: &Services) -> Outcome<()> {
         &l,
         &s,
         category.id,
-        accounts[0],
-        capital,
+        (accounts[0], capital),
         "120",
         date(2027, 1, 1),
     )
@@ -508,8 +503,7 @@ async fn run(db: &Db, services: &Services) -> Outcome<()> {
         &l,
         &s,
         category.id,
-        accounts[0],
-        capital,
+        (accounts[0], capital),
         "12",
         date(2027, 1, 1),
     )

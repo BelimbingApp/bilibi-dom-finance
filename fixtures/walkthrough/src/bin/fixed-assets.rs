@@ -684,7 +684,12 @@ async fn run(db: &Db, services: &Services) -> Outcome<()> {
                 break;
             }
         }
-        assert!(count > 0);
+        if matches!(dataset, "asset" | "category" | "category_revision") {
+            assert!(count > 0);
+        } else {
+            // This acquisition-only proof has no runs or lifecycle events.
+            assert_eq!(count, 0);
+        }
         println!("evidence {dataset}: {count} ID-ordered rows");
     }
     refused(
