@@ -1104,6 +1104,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     bilibi_finance_walkthrough_fixture::attachments::run(&db, &services).await?;
     bilibi_finance_walkthrough_fixture::periods::run(&db, &services).await?;
     bilibi_finance_walkthrough_fixture::controls::run(&db, &services).await?;
+    bilibi_finance_walkthrough_fixture::totals::run(&db, &services).await?;
 
     einvoice::prove(
         &db,

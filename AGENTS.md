@@ -95,6 +95,17 @@ they govern this code and are not copied here.
   only. On `PostingEvent::Refresh` read again instead of trusting the stream.
   `TODO(platform)`: the relay opens its connection from `DATABASE_URL` because
   `base/database` exposes only the pool.
+- Read a ledger figure with `Ledger::account_totals` or `trial_balance`
+  (PostgreSQL sums the lines), never by adding up `list_entries` lines, and
+  read every column of one report at the first read's `through_entry_number`
+  so it reproduces. Tie a control account out with
+  `account_totals_by_owner`: a row of another owner is a difference to show,
+  never to net away.
+- Export a module's auditor evidence as the ledger does
+  (`ledger/src/evidence.rs`): `evidence_datasets` and an authorized
+  `evidence_page` on the facade, one dataset per own table with a frozen,
+  explicit field list (never a credential), ID-ordered pages of 1 to 500.
+  The auditor pack reads each module through its facade, never its tables.
 
 - Keep a record's source documents through `Attachments` (`attach`, or
   `capture_file` then `attach_capture` inside your own transaction), never
