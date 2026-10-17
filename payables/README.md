@@ -1,6 +1,6 @@
 # Payables
 
-`finance/payables` owns a company's supplier documents. It mirrors Bilimbi.Finance.Payables settings, tax codes, bills, debit notes, document approvals, payment requests and payments, including aging, tax totals and control-account tie-out. It has no pages or agent operations; the bills pages land in NP4 and matching in NP2.
+`finance/payables` owns a company's supplier documents. It mirrors Bilimbi.Finance.Payables settings, tax codes, bills, debit notes, document approvals, payment requests and payments, including aging, tax totals and control-account tie-out. Reviewed agent operations expose the facade-only workflows; the bills pages land in NP4 and matching in NP2.
 
 ## Facade
 
@@ -56,3 +56,27 @@ Run the mounted disposable database walkthrough: `DATABASE_URL=… cargo run -p 
 `tie_out_control_accounts` first reads `Ledger::account_totals_by_owner`, then reads the subledger at that exact posting number. It includes every historical/configured payable account, shows credits less debits, and lists other owners' postings as differences. No ledger table is read. Pass its `through_entry_number` to other report columns.
 
 The `finance/payables/payment` attachment source describes a payment request from submission onward, so pre-approval remittance evidence stays linked to its posted payment. Its attachments can be replaced or removed while submitted and become final when posted or rejected. `evidence_datasets` and authorized `evidence_page` export all twelve owned tables through frozen field lists, ID-ordered pages of 1–500, with exact numeric text and UTC timestamps. Matching tables will be added by their owner slice. The NP3 walkthrough exercises the workflow, refusals, temporal balances, pinned reports, tie-out, evidence, attachments and database immutability.
+
+## Reviewed agent operations (H3)
+
+The `finance.payables` guide is contributed to Base Agent API. Eight reads expose settings, tax codes and document/request/payment get/list. Twelve safe writes expose settings put, tax-code create/update, bill and debit-note create, document approve/post/void and payment submit/approve/reject/reverse. Prefix each with `finance.payables.`. Authentication and single-use consent plans belong to the host; an agent cannot call a write directly. Capability keys remain those of the facade, including additional Ledger checks. See [guide.md](guide.md) for exact fields, omissions, clear flags and the workflow.
+
+Reads use stable `after_id` cursors and `page_size` 1–100, not the facade's date/request-number cursors. Document reads omit the potentially unbounded `debit_note_ids` collection; traverse `document.list` with `corrects_document_id` instead. Immutable document lines/tax groups and payment allocations are bounded by their recording contracts. Agent operations add no pages or assets.
+
+The private transaction-joining methods repeat company authorization and the writable-company lock, and never commit independently of the plan. Previews share facade validation and Ledger's authorized posting/approval/reversal previews. They retain normalized amounts, tax snapshots, original control accounts, dated minimum balances and approval exceptions, but allocate no business IDs or numbers. A transaction-local FIFO review fence handles the pinned host's preview-all-then-execute lifecycle: if an earlier step changes any later review, the whole plan rolls back. Separate plans are required for dependent steps. Chart/period context is intentionally conservative; unrelated chart or period edits can also require another review. No Platform changes are needed.
+
+### Real HTTP and MCP proof
+
+Use a fresh disposable PostgreSQL database and the composed app, never production. In the Platform root:
+
+```sh
+export DATABASE_URL=postgres://…/disposable_h3
+export BILIBI_AGENT_PROOF=disposable
+export BILIBI_AGENT_CREDENTIALS=/tmp/h3-credentials.json
+export APP_ORIGIN=http://localhost:3100
+cargo run -p bilibi-finance-walkthrough-fixture --bin agent-operations
+# Run bilibi-web on 3100 with the same DATABASE_URL and APP_ORIGIN.
+python3 apps/domains/finance/fixtures/walkthrough/payables-operations.py
+```
+
+The bootstrap creates real OAuth API and resource-bound PKCE MCP credentials in a new private 0600 file. The proof never prints tokens or plan codes, and SQL only observes effects. The existing facade walkthrough and H1 wire walkthrough run on separate fresh databases. No unit tests or mocks are introduced.

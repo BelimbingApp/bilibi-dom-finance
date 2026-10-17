@@ -6,12 +6,14 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+bilibi-agent-api.workspace = true
 bilibi-authz.workspace = true
 bilibi-company.workspace = true
 bilibi-database.workspace = true
 bilibi-finance-attachments = { path = "../attachments" }
 bilibi-finance-ledger = { path = "../ledger" }
 bilibi-module-registry.workspace = true
+bilibi-party-ids.workspace = true
 bilibi-tenancy.workspace = true
 inventory.workspace = true
 jiff = "0.2.38"

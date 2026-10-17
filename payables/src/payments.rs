@@ -10,12 +10,12 @@ use bilibi_finance_ledger::{
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct AllocationInput {
     pub document_id: i64,
     pub amount: Money,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Allocation {
     pub line_number: i32,
     pub document_id: i64,
@@ -30,10 +30,11 @@ pub struct NewPayment {
     pub description: Option<String>,
     pub allocations: Vec<AllocationInput>,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct PaymentRequest {
     pub id: i64,
     pub request_number: i64,
+    #[serde(serialize_with = "as_text")]
     pub payment_date: Date,
     pub party_key: String,
     pub party_name: String,
@@ -49,7 +50,7 @@ pub struct PaymentRequest {
     pub status: String,
     pub decision: Option<PaymentDecision>,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct PaymentDecision {
     pub event: String,
     pub reason: Option<String>,
@@ -58,10 +59,11 @@ pub struct PaymentDecision {
     pub actor_impersonator_id: Option<i64>,
     pub occurred_at: String,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Payment {
     pub id: i64,
     pub payment_number: i64,
+    #[serde(serialize_with = "as_text")]
     pub payment_date: Date,
     pub party_key: String,
     pub party_name: String,
@@ -122,6 +124,18 @@ impl Payables {
                 "finance.payables.submit_payment",
             )
             .await?;
+        let result = self.submit_payment_on(&mut tx, s, company, input).await?;
+        tx.commit().await?;
+        Ok(result)
+    }
+    pub(super) async fn submit_payment_on(
+        &self,
+        tx: &mut MutationTransaction<'_>,
+        s: &Scope,
+        company: i64,
+        input: &NewPayment,
+    ) -> Result<PaymentRequest> {
+        join(tx, s, company, SUBMIT_PAYMENTS).await?;
         let (mut value, _) = self.validate_payment(tx.sql(), s, company, input).await?;
         value["submitted_by_user_id"] = json!(s.user());
         value["submitted_by_impersonator_id"] = json!(s.impersonator().map(|p| p.user()));
@@ -138,7 +152,6 @@ impl Payables {
             Ok((id,changes))
         })).await?;
         let result = request(tx.sql(), tenant, company, id).await?;
-        tx.commit().await?;
         Ok(result)
     }
     pub async fn approve_payment(&self, s: &Scope, company: i64, id: i64) -> Result<Payment> {
@@ -162,50 +175,29 @@ impl Payables {
                 "finance.payables.approve_payment",
             )
             .await?;
+        let result = self
+            .approve_payment_on(&mut tx, s, company, id, override_reason)
+            .await?;
+        tx.commit().await?;
+        Ok(result)
+    }
+    pub(super) async fn approve_payment_on(
+        &self,
+        tx: &mut MutationTransaction<'_>,
+        s: &Scope,
+        company: i64,
+        id: i64,
+        override_reason: Option<String>,
+    ) -> Result<Payment> {
+        join(tx, s, company, POST_PAYMENTS).await?;
         let r = request(tx.sql(), s.tenant(), company, id).await?;
         if r.status != "submitted" {
             return Err(PayablesError::PaymentRequestDecided);
         }
         self.ledger
-            .check_approval(
-                &mut tx,
-                s,
-                company,
-                &Approval {
-                    source: MODULE.into(),
-                    action: "payment_approval".into(),
-                    subject_type: "payment_request".into(),
-                    subject_id: id,
-                    subject: format!(
-                        "Payment request {} to {}, {} {}",
-                        r.request_number, r.party_name, r.amount, r.currency_code
-                    )
-                    .chars()
-                    .take(200)
-                    .collect(),
-                    prepared_by: vec![Preparer {
-                        user_id: r.submitted_by_user_id,
-                        impersonator_id: r.submitted_by_impersonator_id,
-                    }],
-                    override_reason,
-                },
-            )
+            .check_approval(tx, s, company, &approval(&r, override_reason))
             .await?;
-        let input = NewPayment {
-            payment_date: r.payment_date,
-            party_key: r.party_key,
-            paid_from_account_id: r.paid_from_account_id,
-            reference: r.reference,
-            description: r.description,
-            allocations: r
-                .allocations
-                .iter()
-                .map(|a| AllocationInput {
-                    document_id: a.document_id,
-                    amount: a.amount,
-                })
-                .collect(),
-        };
+        let input = requested(&r);
         let (mut value, groups) = self.validate_payment(tx.sql(), s, company, &input).await?;
         // Reserve only the record ID; the database assigns the payment number.
         let payment_id: i64 = tx
@@ -216,43 +208,19 @@ impl Payables {
             )
             .await?
             .get(0);
-        let name = value["party_name"]
-            .as_str()
-            .ok_or(PayablesError::InvalidOption)?;
-        let amount = store::money(input.allocations.iter().map(|a| a.amount.amount()).sum())?;
-        let mut lines: Vec<_> = groups
-            .iter()
-            .map(|(id, a)| NewLine::debit(*id, *a).described(name))
-            .collect();
-        lines.push(NewLine::credit(input.paid_from_account_id, amount).described(name));
+        let (new, mut options) = posting(&input, &value, &groups)?;
+        options.owner = Some(owner(payment_id));
         let entry = self
             .ledger
-            .post_entry_in(
-                &mut tx,
-                s,
-                company,
-                &NewEntry {
-                    entry_date: input.payment_date,
-                    description: input.description.clone().unwrap_or_else(|| {
-                        format!("Payment to {name}").chars().take(500).collect()
-                    }),
-                    reference: input.reference.clone(),
-                    lines,
-                },
-                &PostOptions {
-                    owner: Some(owner(payment_id)),
-                    settlement_account_ids: groups.keys().copied().collect(),
-                },
-            )
+            .post_entry_in(tx, s, company, &new, &options)
             .await?;
         value["entry_id"] = json!(entry.id);
         value["entry_number"] = json!(entry.entry_number);
         value["posted_by_user_id"] = json!(s.user());
         value["posted_by_impersonator_id"] = json!(s.impersonator().map(|p| p.user()));
-        insert_payment(&mut tx, s, company, payment_id, value, input.allocations).await?;
-        decide(&mut tx, s, company, id, "posted", None, Some(payment_id)).await?;
+        insert_payment(tx, s, company, payment_id, value, input.allocations).await?;
+        decide(tx, s, company, id, "posted", None, Some(payment_id)).await?;
         let result = payment(tx.sql(), s.tenant(), company, payment_id).await?;
-        tx.commit().await?;
         Ok(result)
     }
     pub async fn reject_payment(
@@ -272,14 +240,28 @@ impl Payables {
                 "finance.payables.reject_payment",
             )
             .await?;
+        let result = self
+            .reject_payment_on(&mut tx, s, company, id, reason)
+            .await?;
+        tx.commit().await?;
+        Ok(result)
+    }
+    pub(super) async fn reject_payment_on(
+        &self,
+        tx: &mut MutationTransaction<'_>,
+        s: &Scope,
+        company: i64,
+        id: i64,
+        reason: &str,
+    ) -> Result<PaymentRequest> {
+        join(tx, s, company, POST_PAYMENTS).await?;
         let r = request(tx.sql(), s.tenant(), company, id).await?;
         if r.status != "submitted" {
             return Err(PayablesError::PaymentRequestDecided);
         }
         let reason = string(reason, "reason", 500, true)?;
-        decide(&mut tx, s, company, id, "rejected", reason, None).await?;
+        decide(tx, s, company, id, "rejected", reason, None).await?;
         let result = request(tx.sql(), s.tenant(), company, id).await?;
-        tx.commit().await?;
         Ok(result)
     }
     pub async fn reverse_payment(
@@ -300,7 +282,22 @@ impl Payables {
                 "finance.payables.reverse_payment",
             )
             .await?;
-        let p = payment(tx.sql(), s.tenant(), company, id).await?;
+        let result = self
+            .reverse_payment_on(&mut tx, s, company, id, date, description)
+            .await?;
+        tx.commit().await?;
+        Ok(result)
+    }
+    pub(super) async fn prepare_payment_reversal(
+        &self,
+        c: &dyn OperationClient,
+        s: &Scope,
+        company: i64,
+        id: i64,
+        date: Date,
+        description: Option<String>,
+    ) -> Result<(Payment, Reversal)> {
+        let p = payment(c, s.tenant(), company, id).await?;
         if p.reverses_payment_id.is_some() {
             return Err(PayablesError::ReversalNotReversible);
         }
@@ -315,20 +312,32 @@ impl Payables {
         }
         let description = optional(&description, "description", 500)?
             .unwrap_or_else(|| format!("Reversal of payment {}", p.payment_number));
+        Ok((
+            p,
+            Reversal {
+                entry_date: date,
+                description,
+                reference: None,
+            },
+        ))
+    }
+    pub(super) async fn reverse_payment_on(
+        &self,
+        tx: &mut MutationTransaction<'_>,
+        s: &Scope,
+        company: i64,
+        id: i64,
+        date: Date,
+        description: Option<String>,
+    ) -> Result<Payment> {
+        join(tx, s, company, POST_PAYMENTS).await?;
+        let (p, reversal) = self
+            .prepare_payment_reversal(tx.sql(), s, company, id, date, description)
+            .await?;
+        let description = reversal.description.clone();
         let entry = self
             .ledger
-            .reverse_owned_entry(
-                &mut tx,
-                s,
-                company,
-                p.entry_id,
-                &owner(id),
-                &Reversal {
-                    entry_date: date,
-                    description: description.clone(),
-                    reference: None,
-                },
-            )
+            .reverse_owned_entry(tx, s, company, p.entry_id, &owner(id), &reversal)
             .await?;
         let payment_id = tx
             .sql()
@@ -338,14 +347,13 @@ impl Payables {
             )
             .await?
             .get(0);
-        insert_payment(&mut tx,s,company,payment_id,json!({"tenant_id":s.tenant(),"company_id":company,"payment_date":date.to_string(),"party_key":p.party_key,"party_name":p.party_name,"paid_from_account_id":p.paid_from_account_id,"amount":p.amount,"currency_code":p.currency_code,"reference":p.reference,"description":description,"reverses_payment_id":id,"entry_id":entry.id,"entry_number":entry.entry_number,"posted_by_user_id":s.user(),"posted_by_impersonator_id":s.impersonator().map(|p|p.user())}),vec![]).await?;
+        insert_payment(tx,s,company,payment_id,json!({"tenant_id":s.tenant(),"company_id":company,"payment_date":date.to_string(),"party_key":p.party_key,"party_name":p.party_name,"paid_from_account_id":p.paid_from_account_id,"amount":p.amount,"currency_code":p.currency_code,"reference":p.reference,"description":description,"reverses_payment_id":id,"entry_id":entry.id,"entry_number":entry.entry_number,"posted_by_user_id":s.user(),"posted_by_impersonator_id":s.impersonator().map(|p|p.user())}),vec![]).await?;
         let result = payment(tx.sql(), s.tenant(), company, payment_id).await?;
-        tx.commit().await?;
         Ok(result)
     }
-    async fn validate_payment(
+    pub(super) async fn validate_payment(
         &self,
-        c: &(impl GenericClient + Sync),
+        c: &dyn OperationClient,
         s: &Scope,
         company: i64,
         input: &NewPayment,
@@ -493,7 +501,74 @@ impl Payables {
         Ok(result)
     }
 }
-fn owner(id: i64) -> EntryOwner {
+pub(super) fn approval(r: &PaymentRequest, override_reason: Option<String>) -> Approval {
+    Approval {
+        source: MODULE.into(),
+        action: "payment_approval".into(),
+        subject_type: "payment_request".into(),
+        subject_id: r.id,
+        subject: format!(
+            "Payment request {} to {}, {} {}",
+            r.request_number, r.party_name, r.amount, r.currency_code
+        )
+        .chars()
+        .take(200)
+        .collect(),
+        prepared_by: vec![Preparer {
+            user_id: r.submitted_by_user_id,
+            impersonator_id: r.submitted_by_impersonator_id,
+        }],
+        override_reason,
+    }
+}
+pub(super) fn requested(r: &PaymentRequest) -> NewPayment {
+    NewPayment {
+        payment_date: r.payment_date,
+        party_key: r.party_key.clone(),
+        paid_from_account_id: r.paid_from_account_id,
+        reference: r.reference.clone(),
+        description: r.description.clone(),
+        allocations: r
+            .allocations
+            .iter()
+            .map(|a| AllocationInput {
+                document_id: a.document_id,
+                amount: a.amount,
+            })
+            .collect(),
+    }
+}
+pub(super) fn posting(
+    input: &NewPayment,
+    value: &Value,
+    groups: &BTreeMap<i64, Money>,
+) -> Result<(NewEntry, PostOptions)> {
+    let name = value["party_name"]
+        .as_str()
+        .ok_or(PayablesError::InvalidOption)?;
+    let amount = store::money(input.allocations.iter().map(|a| a.amount.amount()).sum())?;
+    let mut lines: Vec<_> = groups
+        .iter()
+        .map(|(id, a)| NewLine::debit(*id, *a).described(name))
+        .collect();
+    lines.push(NewLine::credit(input.paid_from_account_id, amount).described(name));
+    Ok((
+        NewEntry {
+            entry_date: input.payment_date,
+            description: input
+                .description
+                .clone()
+                .unwrap_or_else(|| format!("Payment to {name}").chars().take(500).collect()),
+            reference: input.reference.clone(),
+            lines,
+        },
+        PostOptions {
+            owner: None,
+            settlement_account_ids: groups.keys().copied().collect(),
+        },
+    ))
+}
+pub(super) fn owner(id: i64) -> EntryOwner {
     EntryOwner {
         module: MODULE.into(),
         record: format!("payment:{id}"),
@@ -539,7 +614,7 @@ async fn decide(
     Ok(())
 }
 async fn allocations(
-    c: &impl GenericClient,
+    c: &dyn OperationClient,
     tenant: i64,
     company: i64,
     id: i64,
@@ -562,7 +637,7 @@ async fn allocations(
         .collect()
 }
 pub(crate) async fn request(
-    c: &impl GenericClient,
+    c: &dyn OperationClient,
     tenant: i64,
     company: i64,
     id: i64,
@@ -589,7 +664,7 @@ pub(crate) async fn request(
     })
 }
 pub(crate) async fn payment(
-    c: &impl GenericClient,
+    c: &dyn OperationClient,
     tenant: i64,
     company: i64,
     id: i64,

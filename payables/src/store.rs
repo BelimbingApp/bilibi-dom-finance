@@ -95,7 +95,7 @@ pub(crate) async fn raw(
     .get(0))
 }
 pub(crate) async fn settings(
-    c: &impl GenericClient,
+    c: &dyn OperationClient,
     tenant: i64,
     company: i64,
 ) -> DbResult<Option<(i64, Settings)>> {
@@ -127,7 +127,7 @@ pub(crate) fn settings_json(s: &Settings) -> Value {
         "price_tolerance_kind":s.price_tolerance.as_ref().map(|t|t.kind),"price_tolerance":s.price_tolerance.as_ref().map(|t|t.value)})
 }
 pub(crate) async fn taxes(
-    c: &impl GenericClient,
+    c: &dyn OperationClient,
     tenant: i64,
     company: i64,
 ) -> DbResult<Vec<TaxCode>> {
@@ -159,7 +159,21 @@ fn amount(r: &Value, k: &str) -> DbResult<Money> {
     money(d)
 }
 pub(crate) async fn document(
-    c: &impl GenericClient,
+    c: &dyn OperationClient,
+    tenant: i64,
+    company: i64,
+    id: i64,
+) -> DbResult<Option<Document>> {
+    let Some(mut document) = document_record(c, tenant, company, id).await? else {
+        return Ok(None);
+    };
+    document.debit_note_ids = c.query("SELECT id FROM finance_payables_documents WHERE tenant_id=$1 AND company_id=$2 AND corrects_document_id=$3 ORDER BY id",&[&tenant,&company,&id]).await?.iter().map(|r|r.get(0)).collect();
+    Ok(Some(document))
+}
+// The immutable record has at most 500 lines and 500 tax groups. Corrections
+// are a separate collection, paged by document.list in the agent contract.
+pub(crate) async fn document_record(
+    c: &dyn OperationClient,
     tenant: i64,
     company: i64,
     id: i64,
@@ -174,7 +188,6 @@ pub(crate) async fn document(
     for r in c.query("SELECT id,line_number,tax_code_id,tax_code,rate,account_id,taxable_amount,tax_amount FROM finance_payables_document_tax_lines WHERE tenant_id=$1 AND company_id=$2 AND document_id=$3 ORDER BY line_number",&[&tenant,&company,&id]).await? {
         tax_lines.push(TaxLine {id:r.get(0),line_number:r.get(1),tax_code_id:r.get(2),tax_code:r.get(3),rate:r.get(4),account_id:r.get(5),taxable_amount:money(r.get(6))?,tax_amount:money(r.get(7))?});
     }
-    let debit_note_ids=c.query("SELECT id FROM finance_payables_documents WHERE tenant_id=$1 AND company_id=$2 AND corrects_document_id=$3 ORDER BY id",&[&tenant,&company,&id]).await?.iter().map(|r|r.get(0)).collect();
     let status = text(&v, "status")?;
     let kind = text(&v, "document_type")?;
     let outstanding = if kind == "bill" && status == "posted" {
@@ -223,13 +236,13 @@ pub(crate) async fn document(
         entry_number: opt_int(&v, "entry_number"),
         lines,
         tax_lines,
-        debit_note_ids,
+        debit_note_ids: Vec::new(),
         outstanding,
     }))
 }
 /// Current balance uses the same temporal calculation as reports and writes.
 pub(crate) async fn outstanding(
-    c: &impl GenericClient,
+    c: &dyn OperationClient,
     tenant: i64,
     company: i64,
     bill: i64,

@@ -106,7 +106,7 @@ SELECT b.id,b.total
 FROM finance_payables_documents b WHERE b.tenant_id=$1 AND b.company_id=$2 AND b.document_type='bill' AND b.status='posted' AND b.document_date<=$3::text::date AND b.entry_number<=$4
 "#;
 pub(crate) async fn owed(
-    c: &impl GenericClient,
+    c: &dyn OperationClient,
     tenant: i64,
     company: i64,
     bill: i64,
@@ -114,16 +114,17 @@ pub(crate) async fn owed(
     through: i64,
 ) -> bilibi_database::Result<Money> {
     let r = c
-        .query_one(
+        .query_opt(
             &format!("SELECT owed FROM ({OWED}) o WHERE id=$5"),
             &[&tenant, &company, &date.to_string(), &through, &bill],
         )
-        .await?;
+        .await?
+        .ok_or(Error::NotFound)?;
     store::money(r.get(0))
 }
 /// Minimum at the proposed date and every future balance-changing date.
 pub(crate) async fn lowest(
-    c: &impl GenericClient,
+    c: &dyn OperationClient,
     tenant: i64,
     company: i64,
     bill: i64,

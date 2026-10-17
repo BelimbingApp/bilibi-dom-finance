@@ -96,7 +96,18 @@ impl Payables {
                 "finance.payables.put_settings",
             )
             .await?;
-        let accounts = self.ledger.list_accounts_on(tx.sql(), s, company).await?;
+        let result = self.put_settings_on(&mut tx, s, company, input).await?;
+        tx.commit().await?;
+        Ok(result)
+    }
+    pub(super) async fn validate_settings(
+        &self,
+        c: &dyn OperationClient,
+        s: &Scope,
+        company: i64,
+        input: &SettingsInput,
+    ) -> Result<(Option<(i64, Settings)>, Option<String>)> {
+        let accounts = self.ledger.list_accounts_on(c, s, company).await?;
         account(
             &accounts,
             input.settings.payable_account_id,
@@ -106,7 +117,18 @@ impl Payables {
         tolerance(&input.settings.quantity_tolerance, "quantity_tolerance")?;
         tolerance(&input.settings.price_tolerance, "price_tolerance")?;
         let reason = optional(&input.reason, "reason", 500)?;
-        let previous = store::settings(tx.sql(), s.tenant(), company).await?;
+        let previous = store::settings(c, s.tenant(), company).await?;
+        Ok((previous, reason))
+    }
+    pub(super) async fn put_settings_on(
+        &self,
+        tx: &mut MutationTransaction<'_>,
+        s: &Scope,
+        company: i64,
+        input: &SettingsInput,
+    ) -> Result<Settings> {
+        join(tx, s, company, MANAGE_SETTINGS).await?;
+        let (previous, reason) = self.validate_settings(tx.sql(), s, company, input).await?;
         if previous.as_ref().is_some_and(|(_, p)| p == &input.settings) {
             return Ok(input.settings.clone());
         }
@@ -134,7 +156,6 @@ impl Payables {
             changes.push(store::insert(sql,Table::SettingsChanges,history).await?.1);
             Ok(((),changes))
         })).await?;
-        tx.commit().await?;
         Ok(input.settings.clone())
     }
     pub async fn list_tax_codes(&self, s: &Scope, company: i64) -> Result<Vec<TaxCode>> {
@@ -178,9 +199,24 @@ impl Payables {
                 "finance.payables.tax_code",
             )
             .await?;
-        let accounts = self.ledger.list_accounts_on(tx.sql(), s, company).await?;
+        let result = self
+            .save_tax_on(&mut tx, s, company, id, code, input)
+            .await?;
+        tx.commit().await?;
+        Ok(result)
+    }
+    pub(super) async fn prepare_tax(
+        &self,
+        c: &dyn OperationClient,
+        s: &Scope,
+        company: i64,
+        id: Option<i64>,
+        code: Option<&str>,
+        input: &TaxCodeDetails,
+    ) -> Result<(Option<TaxCode>, TaxCode, Option<String>)> {
+        let accounts = self.ledger.list_accounts_on(c, s, company).await?;
         account(&accounts, input.account_id, "account_id", &[])?;
-        let codes = store::taxes(tx.sql(), s.tenant(), company).await?;
+        let codes = store::taxes(c, s.tenant(), company).await?;
         let previous = match id {
             Some(id) => Some(
                 codes
@@ -220,6 +256,21 @@ impl Payables {
             account_id: input.account_id,
             active: input.active,
         };
+        Ok((previous, next, reason))
+    }
+    pub(super) async fn save_tax_on(
+        &self,
+        tx: &mut MutationTransaction<'_>,
+        s: &Scope,
+        company: i64,
+        id: Option<i64>,
+        code: Option<&str>,
+        input: &TaxCodeDetails,
+    ) -> Result<TaxCode> {
+        join(tx, s, company, MANAGE_SETTINGS).await?;
+        let (previous, next, reason) = self
+            .prepare_tax(tx.sql(), s, company, id, code, input)
+            .await?;
         if previous.as_ref() == Some(&next) {
             return Ok(next);
         }
@@ -243,7 +294,6 @@ impl Payables {
             changes.push(store::insert(sql,Table::TaxCodeChanges,h).await?.1);
             Ok((TaxCode {id,..next},changes))
         })).await?;
-        tx.commit().await?;
         Ok(result)
     }
     pub async fn list_settings_changes(
