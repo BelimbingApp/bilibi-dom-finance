@@ -11,7 +11,9 @@ Bilibi checkout; it does not build on its own.
 | [`ledger/`](ledger/README.md) | `finance/ledger` | each company's book and currency, its chart of accounts, its journal entries (append-only, numbered without gaps, balanced at commit, optionally owned by another module's record) with posting notices that announce only committed entries, its fiscal years of monthly periods with the closing log (close, reopen, lock, year-end close and reopen with closing entries), controlled bookkeeping and its changes, the late-recording report with its reviews, reversals (an owned entry only through its owner), the separation of duties (impersonation counted) with the approval exceptions log and its independent reviews, and manual journals that post only once someone else approves them. |
 | [`attachments/`](attachments/README.md) | `finance/attachments` | source documents kept with the records they support: records-grade files in Base Artifacts, the company's retention years and their history, replace and remove while a record is a draft, legal holds, and the retention refresh job that follows a record's final date. The `Source` contract each record owner implements is here. |
 
-Every other Finance module of Bilimbi (receivables, payables,
+| [`payables/`](payables/README.md) | `finance/payables` | settings and tax codes with change histories; immutable bills and debit notes; independent approval, void, and atomic owned ledger posting; source documents. Matching, payments and pages follow in NP2–NP4. |
+
+Every other Finance module of Bilimbi (receivables,
 e-invoice, fixed assets, payroll, reconciliation, SST, reports) lands beside
 the ledger as a sibling module folder, in later slices of the port.
 

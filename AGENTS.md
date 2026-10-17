@@ -67,7 +67,9 @@ they govern this code and are not copied here.
   Bilimbi); a Finance module with pages uses only `bilibi_ui` components and
   `FlexTable` for every list, per `apps/base/ui/AGENTS.md`.
 
-- Post an entry only through `Ledger::post_entry` and read it through
+- Post an entry only through `Ledger::post_entry` (or `post_entry_in` on
+  the record owner's audited transaction, so its record and entry commit
+  together) and read it through
   `get_entry`/`list_entries`; never insert into or select from
   `finance_ledger_entries`/`_entry_lines` from a sibling. Pass `owner` for an
   entry a module's record recognises (the database allows one original entry

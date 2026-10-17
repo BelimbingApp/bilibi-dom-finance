@@ -1073,6 +1073,34 @@ impl Ledger {
                 "finance.ledger.post_entry",
             )
             .await?;
+        let entry = self
+            .post_entry_in(&mut tx, scope, company_id, new, options)
+            .await?;
+        tx.commit().await?;
+        Ok(entry)
+    }
+
+    /// Posts through the ledger on the record owner's audited transaction.
+    /// The same authorization, company lock, validation, ownership, audit and
+    /// numbering rules as `post_entry` apply. The caller commits the entry and
+    /// its own record together; dropping the transaction rolls both back.
+    pub async fn post_entry_in(
+        &self,
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company_id: i64,
+        new: &NewEntry,
+        options: &PostOptions,
+    ) -> Result<Entry> {
+        join(tx, scope, company_id, POST_ENTRIES).await?;
+        if options
+            .owner
+            .as_ref()
+            .is_some_and(|owner| !entries::owner_valid(owner))
+            || options.settlement_account_ids.iter().any(|id| *id < 1)
+        {
+            return Err(LedgerError::InvalidOption);
+        }
         let tenant = scope.tenant();
         let book = books::find(tx.sql(), tenant, company_id)
             .await?
@@ -1108,7 +1136,6 @@ impl Ledger {
                 })
             })
             .await?;
-        tx.commit().await?;
         Ok(entry)
     }
 

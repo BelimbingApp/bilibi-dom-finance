@@ -343,3 +343,7 @@ approve it unless the company has turned separation off, and every such
 approval and every override is listed for an independent reviewer; a manual
 journal posts only once someone else approves it; every write is attributed to the signed-in actor and any
 impersonator through the Platform's audit capture.
+
+## Posting inside an owner transaction
+
+`post_entry_in(tx, scope, company_id, new, options)` applies the same checks and captures the same changes as `post_entry`, on the caller's `MutationTransaction`. A record owner uses it while holding the company lock, then records its posting and commits once. Calling `post_entry` while holding that lock on another connection would wait on itself; committing separately would orphan an entry if the owner's update failed. Rollback discards both rows and posting notices.

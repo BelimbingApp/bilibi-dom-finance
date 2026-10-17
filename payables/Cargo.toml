@@ -1,0 +1,22 @@
+[package]
+name = "bilibi-finance-payables"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+bilibi-authz.workspace = true
+bilibi-company.workspace = true
+bilibi-database.workspace = true
+bilibi-finance-attachments = { path = "../attachments" }
+bilibi-finance-ledger = { path = "../ledger" }
+bilibi-module-registry.workspace = true
+bilibi-tenancy.workspace = true
+inventory.workspace = true
+jiff = "0.2.38"
+rust_decimal.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio-postgres.workspace = true

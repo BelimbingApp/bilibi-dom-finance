@@ -22,7 +22,7 @@ concurrency:
 
 env:
   CONTAINER_ROLE: domains # domains, or extensions for an Extension
-  CONTAINER_ID: finance # snake_case; the folder name and bilibi.container.toml id
+  CONTAINER_ID: container_id # snake_case; the folder name and bilibi.container.toml id
 
 jobs:
   mounted:
