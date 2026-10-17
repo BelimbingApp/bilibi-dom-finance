@@ -1257,7 +1257,7 @@ impl Ledger {
         }
         let reason = periods::reason(reason, None).map_err(LedgerError::Invalid)?;
         let period = period.clone();
-        self.change_period(
+        Self::change_period(
             scope,
             company_id,
             tx,
@@ -1319,7 +1319,7 @@ impl Ledger {
             period.start_date,
             period.end_date,
         );
-        self.change_period(
+        Self::change_period(
             scope,
             company_id,
             tx,
@@ -1364,7 +1364,7 @@ impl Ledger {
         }
         let reason = periods::reason(reason, None).map_err(LedgerError::Invalid)?;
         let period = period.clone();
-        self.change_period(
+        Self::change_period(
             scope,
             company_id,
             tx,
@@ -1677,7 +1677,6 @@ impl Ledger {
     /// Records the period's event (and, for a reopen, its approval
     /// exception) and returns the period with the status it now has.
     async fn change_period(
-        &self,
         scope: &Scope,
         company_id: i64,
         mut tx: MutationTransaction<'_>,

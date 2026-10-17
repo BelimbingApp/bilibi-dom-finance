@@ -178,12 +178,12 @@ pub(crate) fn validate_year(
             "start_date",
             "must be the first day of a month",
         ));
-    } else if end.tomorrow().map_or(true, |next| next.day() != 1) {
+    } else if !end.tomorrow().is_ok_and(|next| next.day() == 1) {
         errors.push(FieldError::new(
             "end_date",
             "must be the last day of a month",
         ));
-    } else if end <= start || latest.map_or(true, |latest| end >= latest) {
+    } else if end <= start || latest.is_none_or(|latest| end >= latest) {
         errors.push(FieldError::new(
             "end_date",
             format!("must end one to {MAX_MONTHS} months after the start"),
