@@ -27,7 +27,7 @@ pub(super) struct Detail {
 struct View<'a> {
     document: Option<&'a DocumentView>,
     title: String,
-    subtitle: Html,
+    header_subtitle: Html,
     actions: Html,
     supplier: Vec<String>,
     buyer: Vec<String>,
@@ -374,7 +374,7 @@ impl Detail {
         let mut view = View {
             document: self.document.as_ref(),
             title: self.title().unwrap_or_default(),
-            subtitle: Html::EMPTY,
+            header_subtitle: Html::EMPTY,
             actions: Html::EMPTY,
             supplier: vec![],
             buyer: vec![],
@@ -391,7 +391,7 @@ impl Detail {
         if let Some(d) = &self.document {
             let can_submit = self.pages.allowed(scope, SUBMIT).await?;
             let can_cancel = self.pages.allowed(scope, CANCEL).await?;
-            view.subtitle = render(Subtitle {
+            view.header_subtitle = render(Subtitle {
                 d,
                 status: status_badge(&d.status)?,
             })?;
