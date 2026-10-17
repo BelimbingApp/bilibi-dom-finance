@@ -22,7 +22,7 @@ it with a sealed `Scope` and an explicit company id. Results are plain records
 | Function | Capability | Does |
 | --- | --- | --- |
 | `get_retention` | `view` | The company's retention years (7 until it lengthens them) and the latest change |
-| `set_retention` | `retention.manage` | Lengthens the years (1 to 100) with a reason; fewer or equal is `RetentionNotLengthened` |
+| `set_retention` | `retention.manage` | Lengthens the years (1 to 100) with a reason; fewer or equal is `RetentionNotLengthened`, asked before the reason and range errors (listed reason first), as in Bilimbi |
 | `list_retention_changes` | `view` | Every change, oldest first |
 | `retain_until` | `view` + `finance.ledger.view` | What a document dated `date` would be kept until |
 | `attach` | `create` | Stores the file as a records-grade artifact and links it to a record |
@@ -107,12 +107,16 @@ history names that person; the module's own events name the principal.
 
 **Source documents** shows the company's retention (the years in force and the
 latest change; holders of `finance.attachments.retention.manage` get the
-Lengthen retention form, which re-asks the capability, and the change history)
+Lengthen retention form, which re-asks the capability, and the change history;
+a recorded change reads the page again, and a blank or non-numeric years is
+refused with the reason's error first, as Bilimbi's changeset words it)
 and every attachment by number in a FlexTable (column settings, compact rows)
 with the record it supports, file and size, SHA-256, kept-until date and legal
 hold, capture time and standing. The kind-of-record and standing selects
-(`source`, `status` in the URL; standing by default) keep to the address, and
-"Show more" reads the next 200 after the last attachment number. Attaching a
+(`filter[source]`, `filter[status]` in the form; `source`, `status` in the
+URL; standing by default) keep to the address, and "Show more" reads the next
+200 after the last attachment number. The page's message stays until the
+browser dismisses it (`clear-flash`), across form changes and filter patches. Attaching a
 file happens on the record's own page.
 
 **Panel.** A record's page mounts it as a panel (`LiveState::panels`):

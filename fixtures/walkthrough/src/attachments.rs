@@ -239,6 +239,11 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
             .set_retention(&manager, COMPANY, 101, "Too long")
             .await,
     );
+    // Bilimbi lists the changeset's errors by field: reason, then years.
+    show(
+        "manager sets 101 years and a blank reason",
+        attachments.set_retention(&manager, COMPANY, 101, " ").await,
+    );
     show(
         "manager lengthens to 8 years",
         attachments
