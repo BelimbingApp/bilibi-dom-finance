@@ -96,7 +96,7 @@ impl Payables {
                 "finance.payables.put_settings",
             )
             .await?;
-        let accounts = self.ledger.list_accounts(s, company).await?;
+        let accounts = self.ledger.list_accounts_on(tx.sql(), s, company).await?;
         account(
             &accounts,
             input.settings.payable_account_id,
@@ -178,7 +178,7 @@ impl Payables {
                 "finance.payables.tax_code",
             )
             .await?;
-        let accounts = self.ledger.list_accounts(s, company).await?;
+        let accounts = self.ledger.list_accounts_on(tx.sql(), s, company).await?;
         account(&accounts, input.account_id, "account_id", &[])?;
         let codes = store::taxes(tx.sql(), s.tenant(), company).await?;
         let previous = match id {

@@ -951,8 +951,19 @@ impl Ledger {
     /// [`Ledger::open_book`].
     pub async fn get_book(&self, scope: &Scope, company_id: i64) -> Result<Book> {
         let client = self.db.get().await.map_err(Error::from)?;
-        authorize(&**client, scope, company_id, VIEW).await?;
-        books::find(&**client, scope.tenant(), company_id)
+        self.get_book_on(&**client, scope, company_id).await
+    }
+
+    /// The same authorized book read on the caller's connection, so an owner
+    /// holding the company lock never needs a second pool connection.
+    pub async fn get_book_on(
+        &self,
+        client: &(impl GenericClient + Sync),
+        scope: &Scope,
+        company_id: i64,
+    ) -> Result<Book> {
+        authorize(client, scope, company_id, VIEW).await?;
+        books::find(client, scope.tenant(), company_id)
             .await?
             .ok_or(LedgerError::BookNotOpen)
     }
@@ -1018,8 +1029,19 @@ impl Ledger {
     /// The company's accounts, ordered by code (`finance.ledger.view`).
     pub async fn list_accounts(&self, scope: &Scope, company_id: i64) -> Result<Vec<Account>> {
         let client = self.db.get().await.map_err(Error::from)?;
-        authorize(&**client, scope, company_id, VIEW).await?;
-        Ok(accounts::list(&**client, scope.tenant(), company_id).await?)
+        self.list_accounts_on(&**client, scope, company_id).await
+    }
+
+    /// The same authorized chart read on the caller's connection. A record
+    /// owner validates account choices while holding its company write lock.
+    pub async fn list_accounts_on(
+        &self,
+        client: &(impl GenericClient + Sync),
+        scope: &Scope,
+        company_id: i64,
+    ) -> Result<Vec<Account>> {
+        authorize(client, scope, company_id, VIEW).await?;
+        Ok(accounts::list(client, scope.tenant(), company_id).await?)
     }
 
     /// Adds an account (`finance.ledger.accounts.manage`). `retained_earnings`
@@ -1148,14 +1170,6 @@ impl Ledger {
         new: &NewEntry,
         options: &PostOptions,
     ) -> Result<Entry> {
-        if options
-            .owner
-            .as_ref()
-            .is_some_and(|owner| !entries::owner_valid(owner))
-            || options.settlement_account_ids.iter().any(|id| *id < 1)
-        {
-            return Err(LedgerError::InvalidOption);
-        }
         let mut client = self.db.get().await.map_err(Error::from)?;
         let mut tx = self
             .write(
@@ -1173,10 +1187,11 @@ impl Ledger {
         Ok(entry)
     }
 
-    /// Posts through the ledger on the record owner's audited transaction.
-    /// The same authorization, company lock, validation, ownership, audit and
-    /// numbering rules as `post_entry` apply. The caller commits the entry and
-    /// its own record together; dropping the transaction rolls both back.
+    /// Posts inside the record owner's audited transaction, leaving commit
+    /// to that owner so its record and the entry stand or fall together.
+    /// Applies the same authorization, company lock and validation as
+    /// [`Ledger::post_entry`]; never call the standalone method while holding
+    /// the company lock on another connection.
     pub async fn post_entry_in(
         &self,
         tx: &mut MutationTransaction<'_>,
@@ -2740,10 +2755,11 @@ impl Ledger {
         Ok(changed)
     }
 
-    /// Every write: each capability and company reach now, then the audited
-    /// transaction holding the company's row lock (Bilimbi `write/4` with
-    /// `lock_writable_company/2`).
-    async fn write<'c>(
+    /// Opens a Finance record owner's audited write, holding the company's
+    /// row lock and rechecking its capabilities inside the transaction.
+    /// The owner records every changed row and owns commit/rollback; ledger
+    /// posting and reversal independently check their own capabilities.
+    pub async fn write<'c>(
         &self,
         client: &'c mut tokio_postgres::Client,
         scope: &Scope,
@@ -2759,6 +2775,9 @@ impl Ledger {
             .begin(client, scope.mutation_context(action))
             .await?;
         lock(&tx, scope, company_id).await?;
+        for capability in capabilities {
+            authorize(tx.sql(), scope, company_id, capability).await?;
+        }
         Ok(tx)
     }
 }

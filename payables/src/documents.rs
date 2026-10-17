@@ -113,8 +113,8 @@ impl Payables {
         if bill.is_none() && tx.sql().query_opt("SELECT id FROM finance_payables_documents WHERE tenant_id=$1 AND company_id=$2 AND party_key=$3 AND party_document_number=$4 AND document_type='bill' AND status<>'voided'",&[&tenant,&company,&key,&number]).await?.is_some() {
             return Err(invalid("party_document_number","is already recorded for this party"));
         }
-        let book = self.ledger.get_book(s, company).await?;
-        let accounts = self.ledger.list_accounts(s, company).await?;
+        let book = self.ledger.get_book_on(tx.sql(), s, company).await?;
+        let accounts = self.ledger.list_accounts_on(tx.sql(), s, company).await?;
         let codes = store::taxes(tx.sql(), tenant, company).await?;
         if input.lines.is_empty() {
             return Err(invalid("lines", "needs at least one line"));

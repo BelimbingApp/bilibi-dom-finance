@@ -67,9 +67,7 @@ they govern this code and are not copied here.
   Bilimbi); a Finance module with pages uses only `bilibi_ui` components and
   `FlexTable` for every list, per `apps/base/ui/AGENTS.md`.
 
-- Post an entry only through `Ledger::post_entry` (or `post_entry_in` on
-  the record owner's audited transaction, so its record and entry commit
-  together) and read it through
+- Post an entry only through `Ledger::post_entry` and read it through
   `get_entry`/`list_entries`; never insert into or select from
   `finance_ledger_entries`/`_entry_lines` from a sibling. Pass `owner` for an
   entry a module's record recognises (the database allows one original entry
@@ -77,6 +75,9 @@ they govern this code and are not copied here.
   `settlement_account_ids` only to settle a document posted earlier on an
   account deactivated since. The database numbers entries, so never send or
   compute an `entry_number`.
+- Use `Ledger::post_entry_in` inside `Ledger::write` when your record must
+  commit with its entry; never call standalone `post_entry` while holding
+  that company's lock on another connection, which would wait on itself.
 - A new book is controlled, so it posts only into a fiscal period opened with
   `Ledger::open_fiscal_year`: a fixture opens one before posting, and a sibling
   reports the ledger's `entry_date` refusal instead of picking another date. A
@@ -139,6 +140,12 @@ they govern this code and are not copied here.
 - Declare a setting with the `define!` macros in `configuration.rs`, with the
   editor `capability` set; a validator must accept `null` for a nullable value,
   because Base Settings runs it on cleared values too.
+- Read ledger context inside a sibling write with `Ledger::get_book_on` and
+  `list_accounts_on`, not the pooled methods: acquiring another connection
+  while holding the company lock can exhaust the pool behind waiting writers.
+- Change receivable drafts through `Receivables`, not its tables: null/missing
+  lines preserve snapshots, an array replaces them atomically, and discard
+  keeps them. Issuing, payments and attachment sources belong to NR2.
 
 ## Maintaining this file
 

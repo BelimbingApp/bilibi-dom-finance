@@ -4,7 +4,7 @@
 
 ## Facade
 
-Resolve `Payables` through `finance/payables.payables`. Every call takes the sealed scope and an explicit company ID; every call authorizes through Core Company. Writes hold the company lock on an audited `MutationTransaction`, refusing an archived company. Actor and impersonator always come from the scope.
+Resolve `Payables` through `finance/payables.payables`. Every call takes the sealed scope and an explicit company ID; every call authorizes through Core Company. Writes open through `Ledger::write`, holding the company lock on an audited `MutationTransaction` and refusing an archived company. Book and account validation use the ledger's authorized `get_book_on`/`list_accounts_on` on that same connection. Actor and impersonator always come from the scope.
 
 | Calls | Capability |
 | --- | --- |

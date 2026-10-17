@@ -7,8 +7,8 @@ mod settings;
 mod source;
 mod store;
 
-use bilibi_company::{organisation, WriteError};
-use bilibi_database::{Db, Error, MutationBoundary, MutationTransaction};
+use bilibi_company::organisation;
+use bilibi_database::{Db, Error, MutationTransaction};
 use bilibi_finance_ledger::{FieldError, Ledger, LedgerError, Money};
 use bilibi_module_registry::{Layer, Module, Service};
 use bilibi_tenancy::Scope;
@@ -31,7 +31,6 @@ inventory::submit! { Module {
     migrations: &[("finance-payables-001-documents", include_str!("../migrations/001-documents.sql"))],
     services: &[Service { id: SERVICE, factory: |s| Ok(Arc::new(Payables {
         db: s.get::<Db>("base/database.pool")?.as_ref().clone(),
-        mutations: s.get("base/database.mutations")?,
         ledger: s.get(bilibi_finance_ledger::SERVICE)?,
     })) }],
 } }
@@ -287,7 +286,6 @@ pub struct DocumentPage {
 
 pub struct Payables {
     db: Db,
-    mutations: Arc<MutationBoundary>,
     ledger: Arc<Ledger>,
 }
 impl Payables {
@@ -299,21 +297,15 @@ impl Payables {
         capability: &str,
         action: &str,
     ) -> Result<MutationTransaction<'c>> {
-        authorize(client, scope, company, capability).await?;
-        let tx = self
-            .mutations
-            .begin(client, scope.mutation_context(action))
-            .await?;
-        organisation::require_writable(tx.sql(), scope, company, true)
+        self.ledger
+            .write(client, scope, company, &[capability], action)
             .await
             .map_err(|e| match e {
-                WriteError::NotFound => PayablesError::CompanyNotFound,
-                WriteError::Archived => PayablesError::CompanyArchived,
-                WriteError::Access(e) => refusal(e),
-                _ => PayablesError::Failed(Error::Internal),
-            })?;
-        authorize(tx.sql(), scope, company, capability).await?;
-        Ok(tx)
+                LedgerError::Unauthorized => PayablesError::Unauthorized,
+                LedgerError::CompanyNotFound => PayablesError::CompanyNotFound,
+                LedgerError::CompanyArchived => PayablesError::CompanyArchived,
+                e => PayablesError::Ledger(e),
+            })
     }
 }
 async fn authorize(c: &impl GenericClient, s: &Scope, company: i64, cap: &str) -> Result<()> {
