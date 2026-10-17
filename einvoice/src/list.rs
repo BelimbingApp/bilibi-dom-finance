@@ -100,7 +100,8 @@ impl Einvoice {
                     &page,
                 ],
             )
-            .await?;
+            .await
+            .map_err(Error::from)?;
         let total_entries = row.get::<_, i64>(0) as u64;
         let total_pages = total_entries.div_ceil(q.page_size);
         let ids: Vec<i64> = row.get(1);

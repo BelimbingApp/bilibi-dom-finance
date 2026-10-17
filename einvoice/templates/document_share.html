@@ -1,0 +1,12 @@
+{% import "components.html" as ui %}
+{% if let Some(link) = url %}
+<div id="einvoice-document-share" data-hook="ClipboardCopy" data-copy-event="link-copied" class="mt-4 space-y-2">
+  <div id="einvoice-document-qr" class="w-40" aria-label="QR code of the validation link">{{ qr }}</div>
+  <a id="einvoice-document-validation-link" href="{{ link }}" target="_blank" rel="noopener noreferrer" class="break-all text-sm text-action hover:underline">{{ link }}</a>
+  <div class="flex items-center gap-2">
+    <span data-copy-text="{{ link }}">{% call ui::button(id="einvoice-document-copy-link", button_type="button") %}Copy share link{% endcall %}</span>
+    {% if copied == Some(true) %}<span id="einvoice-document-copied" class="text-xs text-ink-muted">Copied</span>{% endif %}
+    {% if copied == Some(false) %}<span id="einvoice-document-copy-failed" class="text-xs text-danger">The browser refused the copy; select the link instead.</span>{% endif %}
+  </div>
+</div>
+{% else %}<p id="einvoice-document-no-link" class="mt-4 text-sm text-ink-muted">The validation link and its QR code appear once the authority validates the document.</p>{% endif %}

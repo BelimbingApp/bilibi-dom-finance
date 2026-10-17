@@ -1,0 +1,9 @@
+{% import "components.html" as ui %}
+{% import "forms.html" as form %}
+<form id="einvoice-document-cancel-form" data-event="cancel_reason" data-change data-submit-event="review_cancel">
+  {% call form::input(field=reason) %}{% endcall %}
+  <div class="mt-4 flex justify-end gap-2">
+    {% call ui::button(id="einvoice-document-cancel-close", button_type="button", event="close_cancel") %}Keep document{% endcall %}
+    {% call ui::button(id="einvoice-document-cancel-confirm", button_type="submit", variant=bilibi_ui::ButtonVariant::Danger, working="Cancelling…") %}Cancel document{% endcall %}
+  </div>
+</form>

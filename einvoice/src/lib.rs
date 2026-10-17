@@ -38,6 +38,7 @@ mod list;
 pub mod myinvois;
 mod pdf;
 mod posting;
+mod web;
 mod workers;
 
 pub use authority::{
@@ -95,6 +96,7 @@ inventory::submit! {
         id: MODULE, layer: Layer::Domains,
         dependencies: &[
             "base/artifacts", "base/audit", "base/authz", "base/database", "base/integration",
+            "base/datetime", "base/locale", "base/menu", "base/ui",
             "base/party_ids", "base/queue", "base/settings", "base/tenancy", "core/company",
             "finance/ledger",
         ],
@@ -113,6 +115,18 @@ inventory::submit! {
                 ledger: services.get(bilibi_finance_ledger::SERVICE)?,
                 artifacts: services.get("base/artifacts.store")?,
             })) },
+            Service { id: web::PAGES, factory: |services| Ok(Arc::new(
+                bilibi_ui::page::PageService::<Scope, Error>(Arc::new(web::Pages {
+                    einvoice: services.get(SERVICE)?,
+                    display: services.get("base/datetime.display")?,
+                    locales: services.get("base/locale.locales")?,
+                }))
+            )) },
+            Service { id: web::FILES, factory: |services| Ok(Arc::new(
+                bilibi_ui::download::DownloadService::<Scope, Error>(Arc::new(web::Downloads {
+                    einvoice: services.get(SERVICE)?,
+                }))
+            )) },
             Service { id: workers::SUBMIT_SERVICE, factory: |services| workers::handler(services, workers::Job::Submit) },
             Service { id: workers::POLL_SERVICE, factory: |services| workers::handler(services, workers::Job::Poll) },
         ],
