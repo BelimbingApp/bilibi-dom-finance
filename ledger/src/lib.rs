@@ -1380,8 +1380,22 @@ impl Ledger {
         query: &EntryQuery,
     ) -> Result<Vec<Entry>> {
         let client = self.db.get().await.map_err(Error::from)?;
-        authorize(&**client, scope, company_id, VIEW).await?;
-        entries::list(&**client, scope.tenant(), company_id, query).await
+        self.list_entries_on(&**client, scope, company_id, query)
+            .await
+    }
+
+    /// Authorized [`Ledger::list_entries`] on the caller's connection,
+    /// including inside a sibling write holding the company lock. Never
+    /// acquire a second pool slot.
+    pub async fn list_entries_on(
+        &self,
+        client: &(impl GenericClient + Sync),
+        scope: &Scope,
+        company_id: i64,
+        query: &EntryQuery,
+    ) -> Result<Vec<Entry>> {
+        authorize(client, scope, company_id, VIEW).await?;
+        entries::list(client, scope.tenant(), company_id, query).await
     }
 
     /// Subscribes to the company's postings (`finance.ledger.view`). After

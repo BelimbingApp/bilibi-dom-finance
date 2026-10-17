@@ -5,7 +5,7 @@ use super::{
     render, Pages, DENIED,
 };
 use crate::{
-    BankAccount, NewReconciliation, PageOptions, ReconciliationRecord, Statement,
+    BankAccount, BankReconciliation, NewReconciliation, PageOptions, ReconciliationStatus, Statement,
     IMPORT_STATEMENTS, MANAGE_RECONCILIATIONS, STATEMENT_SOURCE,
 };
 use askama::Template;
@@ -141,7 +141,7 @@ impl Account {
     async fn data(
         &self,
         scope: &Scope,
-    ) -> Result<(Vec<Statement>, Vec<ReconciliationRecord>, HashMap<i64, i64>)> {
+    ) -> Result<(Vec<Statement>, Vec<BankReconciliation>, HashMap<i64, i64>)> {
         let company = company(scope)?;
         let mut statements = vec![];
         loop {
@@ -256,7 +256,9 @@ impl Account {
             Err(_) => 2,
         };
         if self.draft.get("end_date").is_none_or(String::is_empty)
-            && !reconciliations.iter().any(|r| r.status == "open")
+            && !reconciliations
+                .iter()
+                .any(|r| r.status == ReconciliationStatus::Open)
         {
             if let Some(s) = statements.last() {
                 self.draft.insert("end_date".into(), s.end_date.to_string());
@@ -347,7 +349,7 @@ impl Account {
                             },
                             dot: false,
                             class: "",
-                            body: Html::text(&r.status),
+                            body: Html::text(r.status.as_str()),
                         })?,
                     );
                 row.dom_id = Some(format!("reconciliation-{}", r.id));
