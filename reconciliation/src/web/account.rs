@@ -36,7 +36,13 @@ const MAX_BYTES: u64 = 5 * 1024 * 1024;
 fn columns(values: &[(&str, &str)]) -> Vec<BuiltinColumn> {
     values
         .iter()
-        .map(|(k, l)| BuiltinColumn::new(k, l))
+        .map(|(k, l)| {
+            if ["lines", "opening", "closing", "balance"].contains(k) {
+                BuiltinColumn::new(k, l).right()
+            } else {
+                BuiltinColumn::new(k, l)
+            }
+        })
         .collect()
 }
 pub(super) struct Account {
@@ -58,6 +64,9 @@ struct View<'a> {
     account: Option<BankAccount>,
     refusal: Html,
     mapping: String,
+    matching: Html,
+    statement_count: Option<usize>,
+    reconciliation_count: Option<usize>,
     upload: Option<FileInput<'a>>,
     import_forbidden: Html,
     open_forbidden: Html,
@@ -83,7 +92,12 @@ fn column_text(column: &Option<crate::Column>) -> String {
     }
 }
 impl Account {
-    pub(super) fn new(pages: &Pages, id: i64, query: &HashMap<String, String>) -> Result<Self> {
+    pub(super) fn new(
+        pages: &Pages,
+        id: i64,
+        query: &HashMap<String, String>,
+        workspace: bool,
+    ) -> Result<Self> {
         Ok(Self {
             pages: pages.clone(),
             id,
@@ -121,7 +135,7 @@ impl Account {
             draft: HashMap::new(),
             errors: vec![],
             flash: None,
-            workspace: false,
+            workspace,
         })
     }
     async fn data(
@@ -210,6 +224,9 @@ impl Account {
             account: None,
             refusal: Html::EMPTY,
             mapping: String::new(),
+            matching: Html::EMPTY,
+            statement_count: None,
+            reconciliation_count: None,
             upload: None,
             import_forbidden: Html::EMPTY,
             open_forbidden: Html::EMPTY,
@@ -228,6 +245,11 @@ impl Account {
             }
         };
         let (statements, reconciliations, files) = self.data(scope).await?;
+        view.statement_count = Some(statements.len());
+        view.reconciliation_count = Some(reconciliations.len());
+        view.matching = render(Matching {
+            href: format!("/finance/reconciliation/accounts/{}/matching", account.id),
+        })?;
         let units = match self.pages.ledger.get_book(scope, company(scope)?).await {
             Ok(book) => book.minor_units.get(),
             Err(LedgerError::Failed(e)) => return Err(e),
@@ -517,4 +539,13 @@ impl LiveState<Scope, Error> for Account {
             })
         })
     }
+}
+
+#[derive(Template)]
+#[template(
+    source = r#"{% import "components.html" as ui %}{% call ui::button(id="bank-account-matching", href=href) %}Match statement lines{% endcall %}"#,
+    ext = "html"
+)]
+struct Matching {
+    href: String,
 }

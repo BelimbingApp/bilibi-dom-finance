@@ -96,7 +96,11 @@ impl Pages {
     }
     fn state(&self, request: &PageRequest<'_, Scope>) -> Result<Box<dyn LiveState<Scope, Error>>> {
         match request.operation {
-            "index" => Ok(Box::new(index::Index::new(self, request.query)?)),
+            "index" => Ok(Box::new(index::Index::new(
+                self,
+                request.query,
+                request.framed,
+            )?)),
             "account" => {
                 let id = request
                     .path
@@ -104,7 +108,12 @@ impl Pages {
                     .and_then(|s| s.parse::<i64>().ok())
                     .filter(|id| *id > 0)
                     .ok_or(Error::NotFound)?;
-                Ok(Box::new(account::Account::new(self, id, request.query)?))
+                Ok(Box::new(account::Account::new(
+                    self,
+                    id,
+                    request.query,
+                    request.framed,
+                )?))
             }
             _ => Err(Error::NotFound),
         }
