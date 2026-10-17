@@ -6,8 +6,7 @@ bank statements imported for them, immutable once imported; and, in later
 slices, the matches between statement lines and the ledger's postings and the
 reconciliations of an account as of a statement end date. This version is the
 whole schema (eleven tables, fourteen trigger functions) with the facade for
-bank accounts and statement import; matching, reconciling, posting charges and
-interest, and the pages follow (`NC2`, `NC3`, `NC4`).
+bank accounts, statement import, and reconciliation opening, plus the bank account and import pages. Matching, figures, finalisation and posting charges and interest follow (`NC2`, `NC4`).
 
 Depends on `finance/ledger` (the chart a bank account maps and the book a
 statement's amounts are held to) and `finance/attachments` (the bank's own
@@ -179,7 +178,14 @@ for those).
 
 ## Not ported yet
 
-- Matching, reconciliations and posting charges and interest (`NC2`); the pages, with live upload of the statement file and the
-  download of the bank's file (`NC3`, `NC4`).
-- `TODO(menu)`: the `finance.reconciliation` menu item (Bank reconciliation,
-  `/finance/reconciliation`) lands with the bank accounts page.
+- Matching, reconciliation figures/finalisation and posting charges and interest (`NC2`); the matching and reconciliation detail pages (`NC4`).
+
+## Bank account pages (NC3)
+
+`/finance/reconciliation` contributes the **Bank reconciliation** menu item and shows the company's accounts in a FlexTable. Its add/change form keeps the ledger mapping fixed after creation, selects active accounts of the appropriate type, and edits the bank's CSV mapping. Edit and activation events recheck `finance.reconciliation.bank-accounts.manage`; the facade checks it again in `Ledger::write`. Reads of the chart inside that write use `Ledger::list_accounts_on` on the handed transaction.
+
+`/finance/reconciliation/accounts/{id}` shows statements newest first, their bank files through the authorized Attachments download route, and reconciliations newest first. The live upload accepts one CSV/text file up to 5 MiB and consumes its bytes once in the import event. A successful import reports the dates, line count and skipped zero rows. The next reconciliation form suggests the latest statement's end date and closing balance while preserving an entered draft. Withheld controls name the missing permission; facade refusals preserve the live page and form.
+
+The account page's `list_reconciliations` and `open_reconciliation` facade calls are implemented in private `src/opening.rs`: openings use the book's `Money`, refuse a second open reconciliation or a date at/before the last finalised date before mutation, and audit both the record and its opening event in one company-locked write. Matching links and the successful opening's destination are the NC4 routes; that slice supplies those pages.
+
+The bank account, statement and reconciliation lists all use Base UI's FlexTable and ListColumns for column arrangement and compact rows. Bilimbi enables no list filter, sort or pager on these pages, so the source ordering and facade bounds are retained. Statement reads traverse every 500-row facade page; attachment lookups use batches of at most 100 statement IDs.

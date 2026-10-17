@@ -58,8 +58,8 @@ pub use mapping::{
 pub use opening::{NewReconciliation, ReconciliationRecord};
 pub use source::STATEMENT_SOURCE;
 
-use bilibi_company::{organisation, WriteError};
-use bilibi_database::{Db, Error, MutationBoundary, MutationTransaction};
+use bilibi_company::organisation;
+use bilibi_database::{Db, Error, MutationTransaction};
 use bilibi_finance_attachments::{AttachmentError, Attachments, NewFile};
 use bilibi_finance_ledger::{Ledger, LedgerError, Money};
 use bilibi_module_registry::{Layer, Module, Service};
@@ -84,7 +84,6 @@ inventory::submit! {
         migrations: &[("finance-reconciliation-001-reconciliation", include_str!("../migrations/001-reconciliation.sql"))],
         services: &[Service { id: SERVICE, factory: |services| Ok(Arc::new(Reconciliation {
             db: services.get::<Db>("base/database.pool")?.as_ref().clone(),
-            mutations: services.get("base/database.mutations")?,
             ledger: services.get(bilibi_finance_ledger::SERVICE)?,
             attachments: services.get(bilibi_finance_attachments::SERVICE)?,
         })) }, Service { id: web::PAGES, factory: |services| Ok(Arc::new(PageService::<Scope, Error>(Arc::new(web::Pages {
@@ -374,7 +373,6 @@ pub struct MappingChoices {
 /// The facade, resolved from the registry as [`SERVICE`].
 pub struct Reconciliation {
     db: Db,
-    mutations: Arc<MutationBoundary>,
     ledger: Arc<Ledger>,
     attachments: Arc<Attachments>,
 }
@@ -435,7 +433,13 @@ impl Reconciliation {
                 "finance.reconciliation.create_bank_account",
             )
             .await?;
-        let chart = self.chart(scope, company_id).await?;
+        let chart = self
+            .ledger
+            .list_accounts_on(tx.sql(), scope, company_id)
+            .await?
+            .into_iter()
+            .map(|account| (account.id, account))
+            .collect();
         let valid = bank_accounts::validate_new(tx.sql(), scope.tenant(), company_id, &chart, new)
             .await?
             .map_err(ReconciliationError::Invalid)?;
@@ -480,7 +484,13 @@ impl Reconciliation {
         let current = bank_accounts::find(tx.sql(), tenant, company_id, bank_account_id)
             .await?
             .ok_or(ReconciliationError::BankAccountNotFound)?;
-        let chart = self.chart(scope, company_id).await?;
+        let chart = self
+            .ledger
+            .list_accounts_on(tx.sql(), scope, company_id)
+            .await?
+            .into_iter()
+            .map(|account| (account.id, account))
+            .collect();
         let Some(next) =
             bank_accounts::validate_change(tx.sql(), tenant, company_id, &chart, &current, change)
                 .await?
@@ -705,21 +715,6 @@ impl Reconciliation {
         }
     }
 
-    /// The company's chart as the ledger shows it to this scope.
-    async fn chart(
-        &self,
-        scope: &Scope,
-        company_id: i64,
-    ) -> Result<std::collections::HashMap<i64, bilibi_finance_ledger::Account>> {
-        Ok(self
-            .ledger
-            .list_accounts(scope, company_id)
-            .await?
-            .into_iter()
-            .map(|account| (account.id, account))
-            .collect())
-    }
-
     /// Every write: each capability and company reach now, then the audited
     /// transaction holding the company's row lock (Bilimbi `write/4` with
     /// `lock_writable_company/2`).
@@ -731,15 +726,10 @@ impl Reconciliation {
         capabilities: &[&str],
         action: &str,
     ) -> Result<MutationTransaction<'c>> {
-        for capability in capabilities {
-            authorize(&*client, scope, company_id, capability).await?;
-        }
-        let tx = self
-            .mutations
-            .begin(client, scope.mutation_context(action))
-            .await?;
-        lock(&tx, scope, company_id).await?;
-        Ok(tx)
+        Ok(self
+            .ledger
+            .write(client, scope, company_id, capabilities, action)
+            .await?)
     }
 }
 
@@ -754,22 +744,6 @@ async fn authorize(
         .await
         .map(|_| ())
         .map_err(refusal)
-}
-
-/// Holds the company's row lock for the transaction (Bilimbi
-/// `lock_writable_company/2`): an archived company is refused.
-async fn lock(tx: &MutationTransaction<'_>, scope: &Scope, company_id: i64) -> Result<()> {
-    organisation::require_writable(tx.sql(), scope, company_id, true)
-        .await
-        .map(|_| ())
-        .map_err(|error| match error {
-            WriteError::NotFound => ReconciliationError::CompanyNotFound,
-            WriteError::Archived => ReconciliationError::CompanyArchived,
-            WriteError::Access(error) => refusal(error),
-            WriteError::InUse | WriteError::Stale | WriteError::Invalid(_) => {
-                ReconciliationError::Failed(Error::Internal)
-            }
-        })
 }
 
 fn refusal(error: Error) -> ReconciliationError {

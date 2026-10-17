@@ -101,12 +101,14 @@ struct View<'a> {
 }
 #[derive(Template)]
 #[template(
-    source = r#"{% import "components.html" as ui %}<a id="bank-account-{{ account.id }}-matching" href="/finance/reconciliation/accounts/{{ account.id }}/matching">Matching</a>{% if manage %}{% call ui::button(id=format!("bank-account-{}-edit", account.id), event="edit", name="id", value=account.id.to_string()) %}Edit{% endcall %}{% call ui::button(id=format!("bank-account-{}-toggle", account.id), event="toggle_active", name="id", value=account.id.to_string()) %}{% if account.active %}Deactivate{% else %}Activate{% endif %}{% endcall %}{% endif %}"#,
+    source = r#"{% import "components.html" as ui %}<a id="bank-account-{{ account.id }}-matching" href="/finance/reconciliation/accounts/{{ account.id }}/matching">Matching</a>{% if manage %}{% call ui::button(id=edit_id, event="edit", name="id", value=account.id.to_string()) %}Edit{% endcall %}{% call ui::button(id=toggle_id, event="toggle_active", name="id", value=account.id.to_string()) %}{% if account.active %}Deactivate{% else %}Activate{% endif %}{% endcall %}{% endif %}"#,
     ext = "html"
 )]
 struct Actions<'a> {
     account: &'a BankAccount,
     manage: bool,
+    edit_id: String,
+    toggle_id: String,
 }
 
 impl Index {
@@ -248,7 +250,12 @@ impl Index {
                         })?,
                     );
                 row.dom_id = Some(format!("bank-account-{}", a.id));
-                row.actions = render(Actions { account: a, manage })?;
+                row.actions = render(Actions {
+                    account: a,
+                    manage,
+                    edit_id: format!("bank-account-{}-edit", a.id),
+                    toggle_id: format!("bank-account-{}-toggle", a.id),
+                })?;
                 rows.push(row);
             }
             let mut table =

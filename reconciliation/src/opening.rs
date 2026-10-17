@@ -120,11 +120,8 @@ impl Reconciliation {
         } else {
             match Money::parse(new.statement_balance.trim(), book.minor_units) {
                 Ok(v) => Some(v),
-                Err(_) => {
-                    errors.push(FieldError::new(
-                        "statement_balance",
-                        "has more decimal places than the book's currency or is invalid",
-                    ));
+                Err(error) => {
+                    errors.push(FieldError::new("statement_balance", error.to_string()));
                     None
                 }
             }
