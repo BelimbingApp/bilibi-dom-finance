@@ -1,10 +1,17 @@
-//! Controlled bookkeeping (Bilimbi `Ledger.Bookkeeping`): the company's
-//! append-only setting changes, the latest deciding. A new company's book
-//! opens controlled; the facade's `set_controlled_bookkeeping` and the
-//! change log's reads follow in a later version of this module.
+//! Controlled bookkeeping (Bilimbi `Ledger.Bookkeeping` and
+//! `Ledger.BookkeepingChange`): the company's append-only setting changes,
+//! the latest deciding; with none, a company is not controlled. A new
+//! company's book opens controlled. The facade authorizes and holds the
+//! company lock; these run inside it.
+use crate::{BookkeepingChange, FieldError};
 use bilibi_database::Result;
 use serde_json::{json, Value};
-use tokio_postgres::GenericClient;
+use tokio_postgres::{GenericClient, Row};
+
+const REASON_LIMIT: usize = 500;
+const COLUMNS: &str =
+    "id,change_number,controlled,reason,changed_by_user_id,changed_by_impersonator_id,\
+     to_char(changed_at,'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')";
 
 /// Whether the company is controlled by its latest change (`false` with none).
 pub(crate) async fn controlled(
@@ -12,13 +19,64 @@ pub(crate) async fn controlled(
     tenant: i64,
     company_id: i64,
 ) -> Result<bool> {
+    Ok(latest(client, tenant, company_id)
+        .await?
+        .is_some_and(|change| change.controlled))
+}
+
+/// The company's latest change, or `None` before any.
+pub(crate) async fn latest(
+    client: &impl GenericClient,
+    tenant: i64,
+    company_id: i64,
+) -> Result<Option<BookkeepingChange>> {
     let row = client
         .query_opt(
-            "SELECT controlled FROM finance_ledger_bookkeeping_changes WHERE tenant_id=$1 AND company_id=$2 ORDER BY change_number DESC LIMIT 1",
+            &format!("SELECT {COLUMNS} FROM finance_ledger_bookkeeping_changes WHERE tenant_id=$1 AND company_id=$2 ORDER BY change_number DESC LIMIT 1"),
             &[&tenant, &company_id],
         )
         .await?;
-    Ok(row.is_some_and(|row| row.get(0)))
+    row.as_ref().map(from_row).transpose()
+}
+
+/// Every change of the company, oldest first.
+pub(crate) async fn changes(
+    client: &impl GenericClient,
+    tenant: i64,
+    company_id: i64,
+) -> Result<Vec<BookkeepingChange>> {
+    client
+        .query(
+            &format!("SELECT {COLUMNS} FROM finance_ledger_bookkeeping_changes WHERE tenant_id=$1 AND company_id=$2 ORDER BY change_number"),
+            &[&tenant, &company_id],
+        )
+        .await?
+        .iter()
+        .map(from_row)
+        .collect()
+}
+
+/// `BookkeepingChange.changeset/2`'s `reason`: trimmed, blank as none, at
+/// most 500 characters, and required to turn controlled bookkeeping off.
+pub(crate) fn validate(
+    controlled: bool,
+    reason: Option<&str>,
+) -> std::result::Result<Option<String>, Vec<FieldError>> {
+    let reason = reason
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(str::to_owned);
+    match &reason {
+        Some(text) if text.chars().count() > REASON_LIMIT => Err(vec![FieldError::new(
+            "reason",
+            format!("should be at most {REASON_LIMIT} character(s)"),
+        )]),
+        None if !controlled => Err(vec![FieldError::new(
+            "reason",
+            "is required to turn this off",
+        )]),
+        _ => Ok(reason),
+    }
 }
 
 /// Appends a change of the setting. The database numbers and stamps it and
@@ -51,6 +109,23 @@ pub(crate) async fn record(
             "change_number": number,
             "controlled": controlled,
             "reason": reason,
+            "changed_by_user_id": actor,
+            "changed_by_impersonator_id": impersonator,
         }),
     ))
+}
+
+fn from_row(row: &Row) -> Result<BookkeepingChange> {
+    Ok(BookkeepingChange {
+        id: row.get(0),
+        change_number: row.get(1),
+        controlled: row.get(2),
+        reason: row.get(3),
+        changed_by_user_id: row.get(4),
+        changed_by_impersonator_id: row.get(5),
+        changed_at: row
+            .get::<_, String>(6)
+            .parse()
+            .map_err(|_| bilibi_database::Error::Internal)?,
+    })
 }

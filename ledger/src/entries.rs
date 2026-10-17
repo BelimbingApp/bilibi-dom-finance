@@ -4,7 +4,8 @@
 //! validation, insertion and reading here; the facade authorizes and holds
 //! the company lock, and these run inside it.
 use crate::{
-    Entry, EntryLine, EntryOwner, EntryQuery, FieldError, LedgerError, Money, NewEntry, PostOptions,
+    periods, Entry, EntryLine, EntryOwner, EntryQuery, FieldError, LedgerError, Money, NewEntry,
+    NewLine,
 };
 use bilibi_database::Result;
 use jiff::{civil::Date, Timestamp};
@@ -30,7 +31,46 @@ pub(crate) struct ValidEntry {
     description: String,
     reference: Option<String>,
     owner: Option<EntryOwner>,
+    reverses_entry_id: Option<i64>,
     lines: Vec<ValidLine>,
+}
+
+/// Which inactive accounts a new entry may name.
+#[derive(Clone, Copy)]
+pub(crate) enum Inactive<'a> {
+    /// Only these (the settlement exception of [`crate::PostOptions`]).
+    Listed(&'a [i64]),
+    /// Any: a reversal or a year-end closing entry.
+    Any,
+}
+
+impl ValidEntry {
+    /// Marks the entry as the reversal of `original`, carrying its owner.
+    pub(crate) fn reversing(mut self, original: &Entry) -> Self {
+        self.reverses_entry_id = Some(original.id);
+        self.owner = original.owner.clone();
+        self
+    }
+}
+
+/// The mirror image of `original`: each line's debit becomes a credit and
+/// the other way round, with its description.
+pub(crate) fn mirror(original: &Entry, entry_date: Date, description: String) -> NewEntry {
+    NewEntry {
+        entry_date,
+        description,
+        reference: None,
+        lines: original
+            .lines
+            .iter()
+            .map(|line| NewLine {
+                account_id: line.account_id,
+                debit: line.credit,
+                credit: line.debit,
+                description: line.description.clone(),
+            })
+            .collect(),
+    }
 }
 struct ValidLine {
     account_id: i64,
@@ -62,18 +102,23 @@ pub(crate) fn owner_valid(owner: &EntryOwner) -> bool {
         })
 }
 
-/// `Entry.changeset/2`, `Line.changeset/3` and the facade's balance and
-/// account rules, in one pass: every refusal comes back, not only the first.
-/// The owner's record must also have no original entry yet.
+/// `Entry.changeset/2`, `Line.changeset/3` and the facade's balance,
+/// account and open-period rules, in one pass: every refusal comes back, not
+/// only the first. The owner's record must also have no original entry yet.
 pub(crate) async fn validate(
     client: &impl GenericClient,
     tenant: i64,
     company_id: i64,
     units: crate::MinorUnits,
     new: &NewEntry,
-    options: &PostOptions,
+    owner: Option<&EntryOwner>,
+    inactive: Inactive<'_>,
 ) -> Result<std::result::Result<ValidEntry, Vec<FieldError>>> {
     let mut errors = Vec::new();
+    if let Some(message) = periods::date_refusal(client, tenant, company_id, new.entry_date).await?
+    {
+        errors.push(FieldError::new("entry_date", message));
+    }
     let description = new.description.trim().to_owned();
     if description.is_empty() {
         errors.push(FieldError::new("description", "can't be blank"));
@@ -176,14 +221,14 @@ pub(crate) async fn validate(
                 FieldError::new("account_id", "is not an account of this company")
                     .on_line(index + 1),
             ),
-            Some(false) if !options.settlement_account_ids.contains(&line.account_id) => {
+            Some(false) if matches!(inactive, Inactive::Listed(ids) if !ids.contains(&line.account_id)) => {
                 errors.push(FieldError::new("account_id", "is inactive").on_line(index + 1))
             }
             Some(_) => {}
         }
     }
 
-    if let Some(owner) = &options.owner {
+    if let Some(owner) = owner {
         let taken = client
             .query_opt(
                 "SELECT 1 FROM finance_ledger_entries WHERE company_id=$1 AND owner_module=$2 \
@@ -201,7 +246,8 @@ pub(crate) async fn validate(
             entry_date: new.entry_date,
             description,
             reference,
-            owner: options.owner.clone(),
+            owner: owner.cloned(),
+            reverses_entry_id: None,
             lines,
         })
     } else {
@@ -235,8 +281,9 @@ pub(crate) async fn insert(
     let row = client
         .query_one(
             "INSERT INTO finance_ledger_entries(tenant_id,company_id,entry_number,entry_date,description,\
-             reference,currency_code,owner_module,owner_record,posted_by_user_id,posted_by_impersonator_id,posted_at) \
-             VALUES($1,$2,0,$3::text::date,$4,$5,$6,$7,$8,$9,$10,now() AT TIME ZONE 'UTC') RETURNING id",
+             reference,currency_code,owner_module,owner_record,posted_by_user_id,posted_by_impersonator_id,posted_at,\
+             reverses_entry_id) \
+             VALUES($1,$2,0,$3::text::date,$4,$5,$6,$7,$8,$9,$10,now() AT TIME ZONE 'UTC',$11) RETURNING id",
             &[
                 &tenant,
                 &company_id,
@@ -248,6 +295,7 @@ pub(crate) async fn insert(
                 &owner_record,
                 &actor,
                 &impersonator,
+                &entry.reverses_entry_id,
             ],
         )
         .await?;
@@ -344,7 +392,9 @@ pub(crate) async fn list(
                       WHERE company_id=$2 AND account_id=$6)) \
                  AND ($7::text IS NULL OR e.entry_date > $7::text::date \
                       OR (e.entry_date = $7::text::date AND e.id > $8)) \
-                 ORDER BY e.entry_date, e.id LIMIT $9"
+                 AND (NOT $10 OR ({not_closing})) \
+                 ORDER BY e.entry_date, e.id LIMIT $9",
+                not_closing = periods::NOT_CLOSING,
             ),
             &[
                 &tenant,
@@ -356,6 +406,7 @@ pub(crate) async fn list(
                 &after_date,
                 &after_id,
                 &i64::from(limit),
+                &query.exclude_closing,
             ],
         )
         .await
