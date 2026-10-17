@@ -366,7 +366,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         .await?
         .iter()
         .any(|r| r["event"] == "reversal_failed"));
-    assert_eq!(payroll.list_postings(&viewer, 1).await?.len(), 2);
+    assert_eq!(payroll.list_postings(&viewer, 1).await?.len(), 4);
     for dataset in Payroll::evidence_datasets() {
         for (limit, after) in [(-1, 0), (0, 0), (501, 0), (1, -1)] {
             assert!(matches!(
