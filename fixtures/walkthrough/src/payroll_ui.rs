@@ -119,6 +119,18 @@ pub async fn run(db: &Db, services: &Services, historical: i64) -> Outcome<()> {
         .into_iter()
         .find(|m| m.code == "ui-deduction")
         .unwrap();
+    let before = payroll.list_mapping_changes(&manager, 1).await?.len();
+    mapping["mapping[liability_account_id]"] =
+        json!(settings.claims_payable_account_id.to_string());
+    mapping["mapping[reason]"] = json!("界".repeat(501));
+    assert!(event(setup.as_mut(), &manager, mapping.clone())
+        .await?
+        .contains("should be at most 500 character(s)"));
+    assert_eq!(
+        payroll.list_mapping_changes(&manager, 1).await?.len(),
+        before
+    );
+    mapping["mapping[reason]"] = json!("");
     assert!(event(
         setup.as_mut(),
         &manager,

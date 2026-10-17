@@ -245,8 +245,9 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
     ));
     tx.rollback().await?;
     let mut ids = Vec::new();
-    // The third historical original exercises the UI confirmation flow below.
-    for source in [9001_i64, 9002, 9003] {
+    // The third exercises page confirmation; the fourth stays available for
+    // the browser walkthrough. Neither is a recognition of People facts.
+    for source in [9001_i64, 9002, 9003, 9004] {
         let mut tx = ledger
             .write(
                 &mut client,
