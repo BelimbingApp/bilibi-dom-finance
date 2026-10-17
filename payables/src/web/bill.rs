@@ -406,7 +406,13 @@ impl Bill {
         let event = v["type"].as_str().ok_or(Error::Invalid)?;
         match event {
             "clear-flash" => {
-                self.flash = None;
+                if self
+                    .flash
+                    .as_ref()
+                    .is_some_and(|(kind, _)| v["key"].as_str() == Some(kind.name()))
+                {
+                    self.flash = None;
+                }
                 return Ok(false);
             }
             "lines_grid" | "matches_grid" | "events_grid" => {

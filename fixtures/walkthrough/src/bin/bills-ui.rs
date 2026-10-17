@@ -332,6 +332,17 @@ async fn main() -> Outcome<()> {
     assert!(body
         .html
         .contains("You do not have permission to approve documents."));
+    let expired_success = serde_json::json!({"type":"clear-flash", "key":"success"});
+    let body = state
+        .update(LiveRequest {
+            scope: &viewer,
+            credential: "",
+            input: LiveInput::Event(&expired_success),
+        })
+        .await?;
+    assert!(body
+        .html
+        .contains("You do not have permission to approve documents."));
     let dismiss = serde_json::json!({"type":"clear-flash", "key":"error"});
     let body = state
         .update(LiveRequest {
@@ -345,7 +356,9 @@ async fn main() -> Outcome<()> {
         .contains("You do not have permission to approve documents."));
     assert_eq!(p.get_document(&manager, COMPANY, 1).await?.status, before);
     println!("read-only page: controls absent; forged approval refused; bill unchanged");
-    println!("refusal survives background refresh; shared flash dismissal succeeds");
+    println!(
+        "refusal survives refresh and an old success dismissal; matching error dismissal succeeds"
+    );
     println!("Fixture accounts: manager@example.test (recorder), admin@example.test (independent reviewer), viewer@example.test (read only); the walkthrough fixture's password applies");
     // The real queue executor delivers mounted Supply Chain events into
     // Payables' own copy; the fixture never writes order or receipt facts.
