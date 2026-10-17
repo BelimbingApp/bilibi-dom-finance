@@ -11,7 +11,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
 /// A recorded document with its lines.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Document {
     pub id: i64,
     /// `sandbox` or `production`.
@@ -37,7 +37,7 @@ pub struct Document {
 }
 
 /// One recorded line (`finance_einvoice_document_lines`).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct DocumentLine {
     pub line_number: i32,
     pub description: String,

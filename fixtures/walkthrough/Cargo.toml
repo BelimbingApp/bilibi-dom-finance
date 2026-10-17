@@ -61,3 +61,6 @@ bilibi-user.workspace = true
 
 # NS1: the SST running proof (src/bin/sst.rs).
 bilibi-finance-sst = { path = "../../sst" }
+
+# H4: exercise the Settings checkout bound with the real operation handler.
+bilibi-agent-api.workspace = true

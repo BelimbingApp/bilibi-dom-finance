@@ -1357,12 +1357,12 @@ impl Ledger {
     /// sibling write holding the company lock. Never acquire a second pool slot.
     pub async fn get_entry_on(
         &self,
-        client: &(impl GenericClient + Sync),
+        client: &dyn bilibi_agent_api::OperationClient,
         scope: &Scope,
         company_id: i64,
         entry_id: i64,
     ) -> Result<Entry> {
-        authorize(client, scope, company_id, VIEW).await?;
+        agent_operations::authorize_on(client, scope, company_id, VIEW).await?;
         entries::find(client, scope.tenant(), company_id, entry_id)
             .await?
             .ok_or(LedgerError::EntryNotFound)
