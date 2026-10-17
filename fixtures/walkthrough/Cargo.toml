@@ -64,3 +64,8 @@ bilibi-finance-sst = { path = "../../sst" }
 
 # H4: exercise the Settings checkout bound with the real operation handler.
 bilibi-agent-api.workspace = true
+
+# NC3: disposable browser proof of bank accounts, uploads and opening.
+[[bin]]
+name = "bilibi-finance-reconciliation-ui"
+path = "src/bin/reconciliation-ui.rs"

@@ -55,7 +55,6 @@ pub(super) struct Account {
 #[template(path = "account.html")]
 struct View<'a> {
     flash: FlashMap<'a>,
-    id: i64,
     account: Option<BankAccount>,
     refusal: Html,
     mapping: String,
@@ -208,7 +207,6 @@ impl Account {
         )?;
         let mut view = View {
             flash: flash_map(&self.flash),
-            id: self.id,
             account: None,
             refusal: Html::EMPTY,
             mapping: String::new(),
