@@ -20,9 +20,10 @@ use crate::FieldError;
 use jiff::civil::Date;
 use jiff::Timestamp;
 use rust_decimal::{Decimal, RoundingStrategy};
+use serde::{Deserialize, Serialize};
 
 /// What a caller sends. A blank string is the same as `None`.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
 pub struct Draft {
     pub document_type: Option<String>,
     pub code_number: Option<String>,
@@ -51,14 +52,14 @@ pub struct Draft {
 /// A source a caller names: the module that recognised the transaction (its
 /// descriptor ID, `finance/receivables`), its record in that module's terms
 /// (`document:17`), and the ledger entry that record posted.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
 pub struct DraftSource {
     pub module: Option<String>,
     pub record: Option<String>,
     pub ledger_entry_id: Option<i64>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
 pub struct DraftParty {
     pub name: Option<String>,
     pub tax_id: Option<String>,
@@ -73,7 +74,7 @@ pub struct DraftParty {
     pub address: Option<DraftAddress>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
 pub struct DraftAddress {
     /// One to three lines; blank ones are dropped.
     pub lines: Vec<String>,
@@ -83,7 +84,7 @@ pub struct DraftAddress {
     pub country_code: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
 pub struct DraftLine {
     pub description: Option<String>,
     pub classification_code: Option<String>,
@@ -106,7 +107,7 @@ pub struct DraftLine {
 
 /// A draft that passed every check, with its derived amounts: what the
 /// facade records.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ValidDraft {
     pub document_type: String,
     pub code_number: String,
@@ -130,7 +131,7 @@ pub struct ValidDraft {
     pub tax_amount: Decimal,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ValidParty {
     pub name: String,
     pub tax_id: String,
@@ -144,7 +145,7 @@ pub struct ValidParty {
     pub address: ValidAddress,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ValidAddress {
     pub lines: Vec<String>,
     pub city: String,
@@ -156,7 +157,7 @@ pub struct ValidAddress {
 /// A line with its derived amounts: the subtotal is quantity times unit
 /// price, the amount is the subtotal less the discount plus the charge, and
 /// the tax is the amount times the rate, each rounded half up to two places.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ValidLine {
     pub description: String,
     pub classification_code: String,
@@ -420,6 +421,14 @@ impl Draft {
                 .iter()
                 .fold(Decimal::new(0, 2), |total, line| total + f(line))
         };
+        let line_extension_amount = sum(|line| line.line_extension_amount);
+        let tax_amount = sum(|line| line.tax_amount);
+        if line_extension_amount + tax_amount > max_amount() {
+            return Err(vec![FieldError::new(
+                "lines",
+                "makes the document amount too large",
+            )]);
+        }
         let (buyer, supplier) = if self_billed {
             (None, counterparty)
         } else {
@@ -439,8 +448,8 @@ impl Draft {
             original_document_id: self.original_document_id,
             buyer,
             supplier,
-            line_extension_amount: sum(|line| line.line_extension_amount),
-            tax_amount: sum(|line| line.tax_amount),
+            line_extension_amount,
+            tax_amount,
             lines,
         })
     }
@@ -595,6 +604,12 @@ impl DraftLine {
         }
         scale(&mut errors, "quantity", quantity, 6);
         scale(&mut errors, "unit_price", unit_price, 6);
+        // Both operands are numeric(20,6), not the amounts' numeric(20,2).
+        for (field, value) in [("quantity", quantity), ("unit_price", unit_price)] {
+            if value.is_some_and(|v| v >= Decimal::from(100_000_000_000_000_i64)) {
+                errors.add(field, "must be less than 100000000000000");
+            }
+        }
         scale(&mut errors, "discount_amount", Some(discount), 2);
         scale(&mut errors, "charge_amount", Some(charge), 2);
         scale(&mut errors, "tax_rate", tax_rate, 4);
@@ -617,18 +632,29 @@ impl DraftLine {
             // subtotal = quantity x unit price; line amount = subtotal -
             // discount + charge; tax = line amount x rate. Each rounds half up
             // to two places.
-            let subtotal = money(quantity * unit_price);
-            let line_amount = subtotal - discount + charge;
-            let tax = match source_tax_amount {
-                Some(tax) => tax,
-                None => money(line_amount * tax_rate / Decimal::ONE_HUNDRED),
-            };
-            if line_amount.is_sign_negative() && !line_amount.is_zero() {
-                errors.add("discount_amount", "exceeds the line's amount");
-            } else if line_amount > max_amount() {
-                errors.add("quantity", "makes the line amount too large");
+            match quantity.checked_mul(unit_price).map(money) {
+                Some(subtotal) if subtotal <= max_amount() => {
+                    let line_amount = subtotal - discount + charge;
+                    if line_amount.is_sign_negative() && !line_amount.is_zero() {
+                        errors.add("discount_amount", "exceeds the line's amount");
+                        None
+                    } else if line_amount > max_amount() {
+                        errors.add("quantity", "makes the line amount too large");
+                        None
+                    } else {
+                        // The stored subtotal and line amount are bounded
+                        // before tax arithmetic, so multiplication is safe.
+                        let tax = source_tax_amount.unwrap_or_else(|| {
+                            money(line_amount * tax_rate / Decimal::ONE_HUNDRED)
+                        });
+                        Some((subtotal, line_amount, tax))
+                    }
+                }
+                _ => {
+                    errors.add("quantity", "makes the line amount too large");
+                    None
+                }
             }
-            Some((subtotal, line_amount, tax))
         } else {
             None
         };

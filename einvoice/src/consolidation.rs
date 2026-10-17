@@ -203,7 +203,7 @@ fn group(sources: &[Recorded]) -> Vec<ConsolidatedLine> {
 /// A consolidated document's sources (each with the lines carrying it), and
 /// the consolidated document that holds a covered document now.
 pub(crate) async fn view(
-    client: &impl GenericClient,
+    client: &dyn bilibi_agent_api::OperationClient,
     tenant: i64,
     company_id: i64,
     document_id: i64,
@@ -216,8 +216,7 @@ pub(crate) async fn view(
              GROUP BY source_document_id",
             &[&tenant, &company_id, &document_id],
         )
-        .await
-        .map_err(Error::from)?;
+        .await?;
     let holders: Vec<i64> = client
         .query(
             "SELECT DISTINCT document_id FROM finance_einvoice_consolidated_sources \
@@ -225,8 +224,7 @@ pub(crate) async fn view(
              ORDER BY document_id",
             &[&tenant, &company_id, &document_id],
         )
-        .await
-        .map_err(Error::from)?
+        .await?
         .iter()
         .map(|row| row.get(0))
         .collect();

@@ -31,6 +31,7 @@ use crate::{
     authorize, configuration, refusal, supplier_profile, text, Certificate, DraftSource, Einvoice,
     EinvoiceError, FieldError, PrivateKey, Result, CANCEL, ISSUE, SUBMIT,
 };
+use bilibi_agent_api::OperationClient;
 use bilibi_audit::Attribution;
 use bilibi_company::{organisation, WriteError};
 use bilibi_database::{Error, MutationTransaction};
@@ -85,6 +86,17 @@ struct Prepared {
     signing_key: Option<SigningKey>,
 }
 
+/// The exact immutable snapshots reviewed and then recorded by issuance.
+#[derive(serde::Serialize)]
+pub(crate) struct PreparedIssue {
+    environment: String,
+    valid: crate::ValidDraft,
+    supplier: PartySnapshot,
+    buyer: PartySnapshot,
+    details: Details,
+    source: Option<SourceLink>,
+}
+
 /// What a submission attempt leads to, before it is recorded.
 enum Decided {
     Submit(SubmitOutcome),
@@ -129,7 +141,6 @@ impl Einvoice {
         company_id: i64,
         draft: &Draft,
     ) -> Result<DocumentView> {
-        let authority = Self::authority();
         let mut client = self.db.get().await.map_err(Error::from)?;
         let mut tx = self
             .write(
@@ -140,32 +151,70 @@ impl Einvoice {
                 "finance.einvoice.issue_document",
             )
             .await?;
-        let tenant = scope.tenant();
         let name = organisation::identity(tx.sql(), scope, company_id)
             .await?
             .ok_or(EinvoiceError::CompanyNotFound)?
             .display_name;
+        let (profile, environment) = self
+            .issue_settings(tx.sql(), scope, company_id, name)
+            .await?;
+        let prepared = self
+            .prepare_issue(tx.sql(), scope, company_id, draft, profile, environment)
+            .await?;
+        let document_id = self
+            .record_issue(&mut tx, scope, company_id, prepared)
+            .await?;
+        tx.commit().await?;
+        self.view(scope, company_id, document_id).await
+    }
+
+    /// Profile and environment in one settings read; never a credential.
+    pub(crate) async fn issue_settings(
+        &self,
+        client: &(impl GenericClient + Sync),
+        scope: &Scope,
+        company_id: i64,
+        name: String,
+    ) -> Result<(crate::Supplier, String)> {
         let target = company_target(company_id)?;
-        let keys: Vec<String> = configuration::SUPPLIER_FIELDS
+        let mut keys: Vec<String> = configuration::SUPPLIER_FIELDS
             .iter()
             .map(|field| configuration::supplier_key(field))
             .collect();
+        keys.push("finance.einvoice.environment".into());
         let keys: Vec<&str> = keys.iter().map(String::as_str).collect();
         let values = self
             .settings
-            .resolve_many(tx.sql(), scope, target, &keys)
+            .resolve_many(client, scope, target, &keys)
             .await?;
-        let profile = supplier_profile(&values, name);
+        let environment = values
+            .get("finance.einvoice.environment")
+            .and_then(|v| text(&v.value))
+            .unwrap_or_else(|| "sandbox".into());
+        Ok((supplier_profile(&values, name), environment))
+    }
+
+    pub(crate) async fn prepare_issue(
+        &self,
+        client: &dyn OperationClient,
+        scope: &Scope,
+        company_id: i64,
+        draft: &Draft,
+        profile: crate::Supplier,
+        environment: String,
+    ) -> Result<PreparedIssue> {
+        let authority = Self::authority();
+        let tenant = scope.tenant();
         // Every list once per issue, so each rule reads the same snapshot.
         let mut codes: BTreeMap<String, Codes> = BTreeMap::new();
         for list in code_lists::lists(authority.id()) {
             codes.insert(
                 list.to_owned(),
-                code_lists::codes(tx.sql(), tenant, company_id, authority.id(), list).await?,
+                code_lists::codes(client, tenant, company_id, authority.id(), list).await?,
             );
         }
         let original = match draft.original_document_id {
-            Some(id) if id > 0 => documents::fetch(tx.sql(), tenant, company_id, id).await?,
+            Some(id) if id > 0 => documents::fetch(client, tenant, company_id, id).await?,
             _ => None,
         };
         let original_rules = original.as_ref().map(|original| Original {
@@ -183,15 +232,14 @@ impl Einvoice {
         let valid = draft
             .validate(Timestamp::now(), &authority, &context)
             .map_err(EinvoiceError::Invalid)?;
-        let environment = self.environment(tx.sql(), scope, company_id).await?;
-        if documents::code_number_taken(tx.sql(), company_id, &environment, &valid.code_number)
+        if documents::code_number_taken(client, company_id, &environment, &valid.code_number)
             .await?
         {
             return Err(EinvoiceError::CodeNumberTaken);
         }
         let source = match &draft.source {
             Some(source) => Some(
-                self.source_link(tx.sql(), scope, company_id, source, &valid)
+                self.source_link(client, scope, company_id, source, &valid)
                     .await?
                     .map_err(|message| {
                         EinvoiceError::Invalid(vec![FieldError::new("source", message)])
@@ -245,10 +293,41 @@ impl Einvoice {
                 .and_then(|original| original.document_uuid().map(str::to_owned)),
             consolidation_month: None,
         };
+        Ok(PreparedIssue {
+            environment,
+            valid,
+            supplier,
+            buyer,
+            details,
+            source,
+        })
+    }
+
+    /// Joins the caller's audited transaction; never opens or commits one.
+    pub(crate) async fn record_issue(
+        &self,
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company_id: i64,
+        prepared: PreparedIssue,
+    ) -> Result<i64> {
+        authorize(tx.sql(), scope, company_id, ISSUE).await?;
+        organisation::require_writable(tx.sql(), scope, company_id, true)
+            .await
+            .map_err(write_refusal)?;
+        let PreparedIssue {
+            environment,
+            valid,
+            supplier,
+            buyer,
+            details,
+            source,
+        } = prepared;
+        let authority = Self::authority();
         let (document_type, code_number) = (valid.document_type.clone(), valid.code_number.clone());
         let original_document_id = valid.original_document_id;
         let document_id = documents::insert_document(
-            &mut tx,
+            tx,
             scope,
             company_id,
             authority.id(),
@@ -268,10 +347,10 @@ impl Einvoice {
             None => (None, None, None),
         };
         if let Some(link) = source {
-            documents::record_source_link(&mut tx, scope, company_id, document_id, link).await?;
+            documents::record_source_link(tx, scope, company_id, document_id, link).await?;
         }
         action(
-            &tx,
+            tx,
             "finance.einvoice.document.issued",
             json!({
                 "document_id": document_id, "document_type": document_type,
@@ -282,8 +361,7 @@ impl Einvoice {
             }),
         )
         .await?;
-        tx.commit().await?;
-        self.view(scope, company_id, document_id).await
+        Ok(document_id)
     }
 
     /// One document with its lines, its status events in order, its current
@@ -1261,7 +1339,7 @@ impl Einvoice {
     /// the `source` field's message.
     async fn source_link(
         &self,
-        client: &(impl GenericClient + Sync),
+        client: &dyn OperationClient,
         scope: &Scope,
         company_id: i64,
         source: &DraftSource,
@@ -1602,14 +1680,29 @@ impl Einvoice {
                 ),
             )
             .await?;
-        let queued = submission_queued(&**client, scope.tenant(), company_id, document_id).await?;
-        let (sources, consolidated_by) =
-            crate::consolidation::view(&**client, scope.tenant(), company_id, document_id).await?;
-        let mut view = recorded.view(
-            &Self::authority(),
+        self.view_on(
+            &**client,
+            scope,
+            company_id,
+            recorded,
             portal.as_str().unwrap_or_default(),
-            queued,
-        );
+        )
+        .await
+    }
+
+    pub(crate) async fn view_on(
+        &self,
+        client: &dyn OperationClient,
+        scope: &Scope,
+        company_id: i64,
+        recorded: Recorded,
+        portal: &str,
+    ) -> Result<DocumentView> {
+        let document_id = recorded.document.id;
+        let queued = submission_queued(client, scope.tenant(), company_id, document_id).await?;
+        let (sources, consolidated_by) =
+            crate::consolidation::view(client, scope.tenant(), company_id, document_id).await?;
+        let mut view = recorded.view(&Self::authority(), portal, queued);
         view.sources = sources;
         view.consolidated_by = consolidated_by;
         Ok(view)
@@ -1730,7 +1823,7 @@ fn job_args(company_id: i64, document_id: i64) -> Value {
 
 /// Whether a submit job for the document is waiting or running.
 async fn submission_queued(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     tenant: i64,
     company_id: i64,
     document_id: i64,
@@ -1738,14 +1831,14 @@ async fn submission_queued(
     // TODO(platform): Base Queue reads a job by its ID only; this asks its
     // table for a waiting job by worker and arguments, as Bilimbi asks Oban's.
     Ok(client
-        .query_one(
+        .query_opt(
             "SELECT EXISTS (SELECT 1 FROM base_queue_jobs WHERE tenant_id = $1 \
              AND worker_id = $2 AND state IN ('available', 'scheduled', 'executing', 'retryable') \
              AND args = $3)",
             &[&tenant, &SUBMIT_WORKER, &job_args(company_id, document_id)],
         )
-        .await
-        .map_err(Error::from)?
+        .await?
+        .ok_or(Error::Internal)?
         .get(0))
 }
 

@@ -23,6 +23,7 @@
 //! scope cannot see is [`EinvoiceError::CompanyNotFound`]. A write then holds
 //! the company's row lock inside an audited mutation transaction, so an
 //! archived company is [`EinvoiceError::CompanyArchived`].
+mod agent_operations;
 mod authority;
 mod certificate;
 mod clearance;
@@ -95,7 +96,7 @@ inventory::submit! {
     Module {
         id: MODULE, layer: Layer::Domains,
         dependencies: &[
-            "base/artifacts", "base/audit", "base/authz", "base/database", "base/integration",
+            "base/agent_api", "base/artifacts", "base/audit", "base/authz", "base/database", "base/integration",
             "base/datetime", "base/locale", "base/menu", "base/ui",
             "base/party_ids", "base/queue", "base/settings", "base/tenancy", "core/company",
             "finance/ledger",
@@ -106,7 +107,8 @@ inventory::submit! {
             ("finance-einvoice-003-source-links", include_str!("../migrations/003-source-links.sql")),
         ],
         services: &[
-            Service { id: SERVICE, factory: |services| Ok(Arc::new(Einvoice {
+            Service { id: SERVICE, factory: |services| {
+                let owner = Arc::new(Einvoice {
                 db: services.get::<Db>("base/database.pool")?.as_ref().clone(),
                 mutations: services.get("base/database.mutations")?,
                 settings: services.get("base/settings.store")?,
@@ -114,7 +116,11 @@ inventory::submit! {
                 queue: services.get("base/queue.store")?,
                 ledger: services.get(bilibi_finance_ledger::SERVICE)?,
                 artifacts: services.get("base/artifacts.store")?,
-            })) },
+                parties: services.get("base/tenancy.parties")?,
+                });
+                agent_operations::bind(owner.clone())?;
+                Ok(owner)
+            } },
             Service { id: web::PAGES, factory: |services| Ok(Arc::new(
                 bilibi_ui::page::PageService::<Scope, Error>(Arc::new(web::Pages {
                     einvoice: services.get(SERVICE)?,
@@ -378,6 +384,7 @@ pub struct Einvoice {
     queue: Arc<Queue>,
     ledger: Arc<Ledger>,
     artifacts: Arc<Artifacts>,
+    parties: Arc<bilibi_tenancy::PartyProofs>,
 }
 
 impl Einvoice {

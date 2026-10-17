@@ -11,6 +11,7 @@
 //! company only, so a list change the authority announces need not wait for a
 //! release.
 use crate::{CodeOverride, CodeOverrideChange, FieldError};
+use bilibi_agent_api::OperationClient;
 use bilibi_database::Result;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -81,7 +82,7 @@ fn from_row(row: &Row) -> CodeOverride {
 }
 
 async fn overrides(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     tenant: i64,
     company_id: i64,
     authority: &str,
@@ -118,7 +119,7 @@ fn apply(overrides: &[CodeOverride], mut codes: Codes) -> Codes {
 /// The company's active codes in one list: the shipped list with the
 /// company's overrides applied.
 pub(crate) async fn codes(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     tenant: i64,
     company_id: i64,
     authority: &str,
@@ -143,7 +144,7 @@ pub(crate) struct ValidOverride {
     pub next: CodeOverride,
 }
 pub(crate) async fn validate(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     tenant: i64,
     company_id: i64,
     authority: &str,

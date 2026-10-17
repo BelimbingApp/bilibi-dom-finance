@@ -6,6 +6,7 @@
 use crate::authority::{Authority, Payload};
 use crate::document::{Details, Document, DocumentLine, PartySnapshot};
 use crate::draft::ValidDraft;
+use bilibi_agent_api::OperationClient;
 use bilibi_database::{Change, Error, MutationTransaction, Result};
 use bilibi_tenancy::Scope;
 use jiff::{SignedDuration, Timestamp};
@@ -151,7 +152,7 @@ pub struct ReconciliationRow {
 /// A recorded document as the facade returns it: the document with its lines,
 /// its status events, its current `status` (the latest status-moving event)
 /// and what the events say about it.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct DocumentView {
     pub document: Document,
     /// The authority it is cleared with.
@@ -402,7 +403,7 @@ fn json_into<T: serde::de::DeserializeOwned>(value: Value) -> Result<T> {
 
 /// A document with its ordered lines and events, or `None`.
 pub(crate) async fn fetch(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     tenant: i64,
     company_id: i64,
     document_id: i64,
@@ -487,7 +488,7 @@ pub(crate) async fn fetch(
 
 /// Each document's source links, as `(document, link)` in link order.
 pub(crate) async fn source_links_of(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     tenant: i64,
     company_id: i64,
     document_ids: &[i64],
@@ -523,19 +524,20 @@ pub(crate) async fn source_links_of(
 /// authority may hold). The database's own rule, asked for a document not
 /// recorded yet.
 pub(crate) async fn standing_source_document(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     tenant: i64,
     company_id: i64,
     module: &str,
     record: &str,
 ) -> Result<Option<i64>> {
     Ok(client
-        .query_one(
+        .query_opt(
             "SELECT finance_einvoice_standing_source_link(\
              ROW(0, $1, $2, 0, $3, $4, 1)::finance_einvoice_source_links, 0)",
             &[&tenant, &company_id, &module, &record],
         )
         .await?
+        .ok_or(Error::Internal)?
         .get(0))
 }
 
@@ -585,7 +587,7 @@ pub(crate) async fn record_source_link(
 /// The documents' summaries with their current status, in the order of
 /// `document_ids`; an ID the company lacks is left out.
 pub(crate) async fn summaries(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     authority: &impl Authority,
     tenant: i64,
     company_id: i64,
@@ -662,7 +664,7 @@ pub(crate) async fn summaries(
 /// posting or reversal failed. A document linked to its source never posts,
 /// so it is never listed.
 pub(crate) async fn reconciliation(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     authority: &impl Authority,
     tenant: i64,
     company_id: i64,
@@ -722,7 +724,7 @@ pub(crate) async fn reconciliation(
 
 /// A document's events in recording order.
 pub(crate) async fn events(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     tenant: i64,
     company_id: i64,
     document_id: i64,
@@ -802,18 +804,19 @@ pub(crate) async fn status(
 
 /// Whether the company already issued `code_number` in the environment.
 pub(crate) async fn code_number_taken(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     company_id: i64,
     environment: &str,
     code_number: &str,
 ) -> Result<bool> {
     Ok(client
-        .query_one(
+        .query_opt(
             "SELECT EXISTS (SELECT 1 FROM finance_einvoice_documents \
              WHERE company_id = $1 AND environment = $2 AND code_number = $3)",
             &[&company_id, &environment, &code_number],
         )
         .await?
+        .ok_or(Error::Internal)?
         .get(0))
 }
 
