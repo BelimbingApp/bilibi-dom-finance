@@ -1,4 +1,4 @@
-//! Bilimbi.Finance.Sst.Contributions. The menu items and pages land in NS3.
+//! Bilimbi.Finance.Sst.Contributions (routes and menu live in `web`).
 use crate::MODULE;
 use bilibi_authz::{CapabilityDefinition as C, RoleDefinition, VocabularyContribution, VOCABULARY};
 use bilibi_module_registry::{Contribution, Provenance};
