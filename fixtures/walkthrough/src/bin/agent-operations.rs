@@ -57,6 +57,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         grants.set_direct(&admin, 7, key, Some(true)).await?;
     }
+    // H3: both real people can exercise Payables; this changes only the
+    // explicitly disposable walkthrough database, never production seeds.
+    for user in [1, 7] {
+        for key in bilibi_finance_payables::CAPABILITIES {
+            grants.set_direct(&admin, user, key, Some(true)).await?;
+        }
+    }
     let manager = sign_in(&db, &services, 1, 1).await?;
     let settings = services.get::<Settings>("base/settings.store")?;
     let boundary = services.get::<MutationBoundary>("base/database.mutations")?;
