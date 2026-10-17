@@ -1,7 +1,9 @@
 //! The general ledger, module `finance/ledger` (Bilimbi
-//! `Bilimbi.Finance.Ledger`): a company's book and chart of accounts, and in
-//! later versions its journal entries, periods, journals and controls. Other
-//! Finance modules post and read through this facade; none reads its tables.
+//! `Bilimbi.Finance.Ledger`): a company's book, chart of accounts, journal
+//! entries, fiscal years and their closing, controlled bookkeeping and late
+//! recordings, reversals, the separation of duties with its approval
+//! exceptions, and manual journals. Other Finance modules post, reverse and
+//! ask for approvals through this facade; none reads its tables.
 //!
 //! Every function takes the sealed [`Scope`] it was handed and an explicit
 //! company id. Reads authorize `finance.ledger.view` and writes their own
@@ -21,13 +23,47 @@
 //! and keep their code and type; the one equity account designated for
 //! retained earnings receives the year-end close.
 //!
+//! A company divides its time into fiscal years of monthly periods. Periods
+//! close in date order and reopen in reverse; a reopen needs a reason and the
+//! reopen capability, and a locked period never reopens.
+//! [`Ledger::close_fiscal_year`] posts the entry that moves the year's income
+//! and expense balances into retained earnings and closes the year with its
+//! periods. Every close, reopen and lock is an append-only closing event, and
+//! a status is the latest event's. A controlled company posts only into a
+//! period it has opened and left open; an entry is never refused for being
+//! old, but one recorded 45 or more days after its date is listed for an
+//! independent review. A reopen, and turning controlled bookkeeping off,
+//! override a control and are recorded as approval exceptions.
+//!
+//! A posted entry is never edited or deleted: [`Ledger::reverse_entry`] posts
+//! its mirror image, once. An entry another module owns is corrected only
+//! through that module, which calls [`Ledger::reverse_owned_entry`] inside the
+//! transaction that records its own reversal. The owner is a seam between
+//! modules, not an authorization boundary: the ledger cannot tell which module
+//! is calling, so a caller holding `finance.ledger.entries.post` that passes an
+//! entry's owner from anywhere else reverses it without the owner's record, and
+//! the owner's control-account tie-out then shows the difference.
+//!
+//! A company requires separation of duties unless it turns it off: the person
+//! who approves a record, or whoever impersonated them, is not the person who
+//! prepared it, nor anyone they impersonated. [`Ledger::check_approval`] is how
+//! every Finance approval asks, inside the approving transaction, and it
+//! records what an independent reviewer reads: a same-person approval while
+//! separation is off, and an override of a control. A manual journal is
+//! submitted and posts only once someone approves it
+//! ([`Ledger::submit_journal`], [`Ledger::approve_journal`]).
+//!
 //! Results are plain records; the schema, SQL and validation stay private.
 mod accounts;
 mod bookkeeping;
 mod books;
 mod contributions;
+mod duties;
 mod entries;
+mod journals;
+mod late_recordings;
 mod money;
+mod periods;
 mod postings;
 
 pub use contributions::{
@@ -59,6 +95,8 @@ inventory::submit! {
             ("finance-ledger-001-books-and-accounts", include_str!("../migrations/001-books-and-accounts.sql")),
             ("finance-ledger-002-entries", include_str!("../migrations/002-entries.sql")),
             ("finance-ledger-003-posting-notices", include_str!("../migrations/003-posting-notices.sql")),
+            ("finance-ledger-004-periods", include_str!("../migrations/004-periods.sql")),
+            ("finance-ledger-005-journals", include_str!("../migrations/005-journals.sql")),
         ],
         services: &[Service { id: SERVICE, factory: |services| Ok(Arc::new(Ledger {
             db: services.get::<Db>("base/database.pool")?.as_ref().clone(),
@@ -90,6 +128,80 @@ pub enum LedgerError {
     AccountNotFound,
     #[error("Not found")]
     EntryNotFound,
+    #[error("Not found")]
+    FiscalYearNotFound,
+    #[error("Not found")]
+    PeriodNotFound,
+    /// Closing a period that is closed or locked.
+    #[error("The period is not open")]
+    PeriodNotOpen,
+    /// Reopening or locking a period that is open.
+    #[error("The period is not closed")]
+    PeriodNotClosed,
+    /// Reopening a locked period, or a fiscal year whose last period is.
+    #[error("The period is locked and never reopens")]
+    PeriodLocked,
+    /// Periods close in date order; so does a fiscal year after the previous one.
+    #[error("An earlier period is still open")]
+    EarlierPeriodOpen,
+    /// A year's last period closes only with the year.
+    #[error("The period closes with its fiscal year")]
+    ClosesWithFiscalYear,
+    /// Periods reopen in reverse date order.
+    #[error("A later period is closed")]
+    LaterPeriodClosed,
+    /// Periods lock in date order.
+    #[error("An earlier period is not locked")]
+    EarlierPeriodUnlocked,
+    /// A closed fiscal year's periods reopen only after the year.
+    #[error("The fiscal year is closed")]
+    FiscalYearClosed,
+    #[error("The fiscal year is not closed")]
+    FiscalYearNotClosed,
+    /// The year-end close needs an active equity account designated for
+    /// retained earnings.
+    #[error("No retained-earnings account is designated")]
+    NoRetainedEarningsAccount,
+    #[error("That entry was not recorded late")]
+    NotLateRecorded,
+    /// A late entry or an approval exception already has its one review.
+    #[error("It has already been reviewed")]
+    AlreadyReviewed,
+    /// The reviewer posted the late entry, or approved or prepared what an
+    /// approval exception records, or impersonated (or was impersonated by)
+    /// whoever did.
+    #[error("The reviewer is not independent of what is reviewed")]
+    ReviewerNotIndependent,
+    /// The entry already has its one reversal.
+    #[error("The entry is already reversed")]
+    AlreadyReversed,
+    /// A reversal is not reversed in turn: post a new entry instead.
+    #[error("A reversal is not reversed")]
+    ReversalNotReversible,
+    /// A year-end closing entry is reversed only by reopening its year.
+    #[error("A year-end closing entry is reversed by reopening its fiscal year")]
+    ClosingEntry,
+    /// The entry belongs to another module's record: correct it through that
+    /// module.
+    #[error("The entry is owned by {} ({})", .0.module, .0.record)]
+    OwnedBy(EntryOwner),
+    /// [`Ledger::reverse_owned_entry`] for an entry another module or record owns.
+    #[error("The entry is owned by another record")]
+    NotTheOwner,
+    /// [`Ledger::reverse_owned_entry`] for a manual entry.
+    #[error("The entry has no owner")]
+    NotOwned,
+    /// The approver prepared the record, impersonated whoever did, or was
+    /// impersonated by them, while the company requires separation of duties.
+    #[error("The person who prepared it cannot approve it")]
+    SamePerson,
+    #[error("Not found")]
+    ExceptionNotFound,
+    #[error("Not found")]
+    JournalNotFound,
+    /// Anything but a submitted journal.
+    #[error("The journal is already decided")]
+    JournalDecided,
     /// An option the call does not accept: an `owner` or settlement account
     /// of another shape, or a limit, cursor or bound out of range.
     #[error("Invalid option")]
@@ -337,6 +449,379 @@ pub struct EntryQuery {
     pub account_id: Option<i64>,
     /// Entries numbered up to this one, to reproduce an earlier read.
     pub through_entry_number: Option<i64>,
+    /// Leaves out year-end closing entries and their reversals.
+    pub exclude_closing: bool,
+}
+
+/// A fiscal year's status, its latest closing event's (open with none).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum YearStatus {
+    Open,
+    Closed,
+}
+impl YearStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Closed => "closed",
+        }
+    }
+}
+/// A period's status, its latest closing event's (open with none).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PeriodStatus {
+    Open,
+    Closed,
+    Locked,
+}
+impl PeriodStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Closed => "closed",
+            Self::Locked => "locked",
+        }
+    }
+}
+/// What a closing event does to its period, or (with no period) its year.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ClosingAction {
+    Close,
+    Reopen,
+    Lock,
+}
+impl ClosingAction {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Close => "close",
+            Self::Reopen => "reopen",
+            Self::Lock => "lock",
+        }
+    }
+    fn parse(value: &str) -> Option<Self> {
+        [Self::Close, Self::Reopen, Self::Lock]
+            .into_iter()
+            .find(|action| action.as_str() == value)
+    }
+    /// The status the action leaves a period in.
+    pub fn status_after(self) -> PeriodStatus {
+        match self {
+            Self::Close => PeriodStatus::Closed,
+            Self::Reopen => PeriodStatus::Open,
+            Self::Lock => PeriodStatus::Locked,
+        }
+    }
+}
+
+/// What opens a fiscal year: the first day of a month and the last day of a
+/// month, one to 24 months on. The start defaults to the day after the
+/// previous year ends (the first year needs one), the end to twelve months
+/// on.
+#[derive(Clone, Debug, Default)]
+pub struct NewFiscalYear {
+    pub start_date: Option<Date>,
+    pub end_date: Option<Date>,
+}
+/// One calendar month of a fiscal year.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Period {
+    pub id: i64,
+    pub fiscal_year_id: i64,
+    pub period_number: i16,
+    #[serde(serialize_with = "as_text")]
+    pub start_date: Date,
+    #[serde(serialize_with = "as_text")]
+    pub end_date: Date,
+    pub status: PeriodStatus,
+}
+/// A fiscal year with its periods in date order; `closing_entry_id` names the
+/// year-end closing entry while the year is closed by one.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct FiscalYear {
+    pub id: i64,
+    #[serde(serialize_with = "as_text")]
+    pub start_date: Date,
+    #[serde(serialize_with = "as_text")]
+    pub end_date: Date,
+    pub opened_by_user_id: i64,
+    pub opened_by_impersonator_id: Option<i64>,
+    #[serde(serialize_with = "as_text")]
+    pub opened_at: Timestamp,
+    pub status: YearStatus,
+    pub closing_entry_id: Option<i64>,
+    pub periods: Vec<Period>,
+}
+/// One event of a fiscal year's closing log; `period_id` is `None` for an
+/// event on the year itself, whose close names the closing entry and the
+/// retained-earnings account.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ClosingEvent {
+    pub event_number: i64,
+    pub fiscal_year_id: i64,
+    pub period_id: Option<i64>,
+    pub action: ClosingAction,
+    pub reason: Option<String>,
+    pub entry_id: Option<i64>,
+    pub retained_earnings_account_id: Option<i64>,
+    pub recorded_by_user_id: i64,
+    pub recorded_by_impersonator_id: Option<i64>,
+    #[serde(serialize_with = "as_text")]
+    pub recorded_at: Timestamp,
+}
+/// What the year-end close may say about its entry: the description
+/// defaults to `Close fiscal year <start> to <end>`.
+#[derive(Clone, Debug, Default)]
+pub struct YearClose {
+    pub description: Option<String>,
+    pub reference: Option<String>,
+}
+
+/// One change of the company's controlled bookkeeping.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct BookkeepingChange {
+    pub id: i64,
+    pub change_number: i64,
+    pub controlled: bool,
+    pub reason: Option<String>,
+    pub changed_by_user_id: i64,
+    pub changed_by_impersonator_id: Option<i64>,
+    #[serde(serialize_with = "as_text")]
+    pub changed_at: Timestamp,
+}
+/// The company's controlled bookkeeping: the setting, its latest change and
+/// how many fiscal years the company has opened. A controlled company with
+/// no fiscal year has no period to post into until one is opened.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ControlledBookkeeping {
+    pub controlled: bool,
+    pub change: Option<BookkeepingChange>,
+    pub fiscal_years: usize,
+}
+
+/// The late-recording report's thresholds, in days from an entry's date to
+/// its recording: listed from `approaching_days`, late past `late_days`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct LateRecordingThresholds {
+    pub approaching_days: i32,
+    pub late_days: i32,
+}
+/// Where a listed entry stands against the thresholds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LateStatus {
+    Approaching,
+    Late,
+}
+/// An independent reviewer's reason for a late entry.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct LateRecordingReview {
+    pub id: i64,
+    pub entry_id: i64,
+    pub reason: String,
+    pub reviewed_by_user_id: i64,
+    pub reviewed_by_impersonator_id: Option<i64>,
+    #[serde(serialize_with = "as_text")]
+    pub reviewed_at: Timestamp,
+}
+/// A posted entry recorded late: `days` are whole UTC days from its
+/// `entry_date` (its transaction date) to `posted_at` (its recording).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct LateRecording {
+    pub entry_id: i64,
+    pub entry_number: i64,
+    #[serde(serialize_with = "as_text")]
+    pub entry_date: Date,
+    #[serde(serialize_with = "as_text")]
+    pub posted_at: Timestamp,
+    pub days: i32,
+    pub status: LateStatus,
+    pub description: String,
+    pub reference: Option<String>,
+    pub posted_by_user_id: i64,
+    pub posted_by_impersonator_id: Option<i64>,
+    pub review: Option<LateRecordingReview>,
+}
+/// Bounds of [`Ledger::list_late_recordings`]; `Default` lists the first 100
+/// of both statuses, reviewed or not.
+#[derive(Clone, Debug, Default)]
+pub struct LateRecordingQuery {
+    pub status: Option<LateStatus>,
+    pub reviewed: Option<bool>,
+    /// 1 to 500, 100 when absent.
+    pub limit: Option<u32>,
+    /// The last `entry_number` of the previous page.
+    pub after: Option<i64>,
+}
+
+/// What a reversal says about itself: its `entry_date` (not before the
+/// original's), `description` (1 to 500 characters) and an optional
+/// `reference` (at most 100). Its lines are the original's, sides swapped.
+#[derive(Clone, Debug)]
+pub struct Reversal {
+    pub entry_date: Date,
+    pub description: String,
+    pub reference: Option<String>,
+}
+
+/// One change of the company's separation of duties.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct DutySeparationChange {
+    pub id: i64,
+    pub change_number: i64,
+    pub required: bool,
+    pub reason: Option<String>,
+    pub changed_by_user_id: i64,
+    pub changed_by_impersonator_id: Option<i64>,
+    #[serde(serialize_with = "as_text")]
+    pub changed_at: Timestamp,
+}
+/// The company's separation of duties: the setting and its latest change. A
+/// company that never changed it requires separation.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct DutySeparation {
+    pub required: bool,
+    pub change: Option<DutySeparationChange>,
+}
+
+/// Someone whose work an approval approves: an account and, when they acted
+/// as it through impersonation, the operator who did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct Preparer {
+    pub user_id: i64,
+    pub impersonator_id: Option<i64>,
+}
+/// What [`Ledger::check_approval`] decides: `source` (the approving module's
+/// descriptor id, such as `finance/payables`), `action` and `subject_type`
+/// (lower-case codes), `subject_id`, `subject` (a label a reviewer reads, kept
+/// to 200 characters), `prepared_by` (everyone whose work is approved) and,
+/// for an approval that overrides a control, `override_reason`: the
+/// approver's reason, which records the override whoever approves.
+#[derive(Clone, Debug)]
+pub struct Approval {
+    pub source: String,
+    pub action: String,
+    pub subject_type: String,
+    pub subject_id: i64,
+    pub subject: String,
+    pub prepared_by: Vec<Preparer>,
+    pub override_reason: Option<String>,
+}
+
+/// An independent reviewer's reading of an approval exception.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ApprovalExceptionReview {
+    pub note: Option<String>,
+    pub reviewed_by_user_id: i64,
+    pub reviewed_by_impersonator_id: Option<i64>,
+    #[serde(serialize_with = "as_text")]
+    pub reviewed_at: Timestamp,
+}
+/// An approval an independent reviewer should read: a same-person approval
+/// while separation is off (naming the change that turned it off) or an
+/// override of a control. `overrides` is Bilimbi's `override`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ApprovalException {
+    pub id: i64,
+    pub exception_number: i64,
+    pub source: String,
+    pub action: String,
+    pub subject_type: String,
+    pub subject_id: i64,
+    pub subject: String,
+    pub same_person: bool,
+    #[serde(rename = "override")]
+    pub overrides: bool,
+    pub prepared_by_user_id: Option<i64>,
+    pub prepared_by_impersonator_id: Option<i64>,
+    pub approved_by_user_id: i64,
+    pub approved_by_impersonator_id: Option<i64>,
+    pub reason: String,
+    pub separation_change_id: Option<i64>,
+    #[serde(serialize_with = "as_text")]
+    pub recorded_at: Timestamp,
+    pub review: Option<ApprovalExceptionReview>,
+}
+/// Bounds of [`Ledger::list_approval_exceptions`]; `Default` lists the first
+/// 100, reviewed or not.
+#[derive(Clone, Debug, Default)]
+pub struct ApprovalExceptionQuery {
+    /// Recorded at or after this instant.
+    pub recorded_from: Option<Timestamp>,
+    /// Recorded before this instant, so a period's bounds in any time zone
+    /// select it exactly.
+    pub recorded_before: Option<Timestamp>,
+    pub reviewed: Option<bool>,
+    /// 1 to 500, 100 when absent.
+    pub limit: Option<u32>,
+    /// The last `exception_number` of the previous page.
+    pub after: Option<i64>,
+}
+
+/// The statuses a journal moves through: submitted until its one decision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum JournalStatus {
+    Submitted,
+    Approved,
+    Rejected,
+}
+impl JournalStatus {
+    pub const ALL: [JournalStatus; 3] = [Self::Submitted, Self::Approved, Self::Rejected];
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Submitted => "submitted",
+            Self::Approved => "approved",
+            Self::Rejected => "rejected",
+        }
+    }
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|status| status.as_str() == value)
+    }
+}
+/// A journal's decision: who approved or rejected it and when, any `reason`,
+/// and the `entry_id` an approval posted.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct JournalDecision {
+    pub event: JournalStatus,
+    pub reason: Option<String>,
+    pub entry_id: Option<i64>,
+    pub actor_user_id: i64,
+    pub actor_impersonator_id: Option<i64>,
+    #[serde(serialize_with = "as_text")]
+    pub occurred_at: Timestamp,
+}
+/// A manual journal with its lines; the number and time are the database's.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Journal {
+    pub id: i64,
+    pub journal_number: i64,
+    #[serde(serialize_with = "as_text")]
+    pub entry_date: Date,
+    pub description: String,
+    pub reference: Option<String>,
+    pub currency_code: String,
+    pub submitted_by_user_id: i64,
+    pub submitted_by_impersonator_id: Option<i64>,
+    #[serde(serialize_with = "as_text")]
+    pub submitted_at: Timestamp,
+    pub status: JournalStatus,
+    pub decision: Option<JournalDecision>,
+    pub lines: Vec<EntryLine>,
+}
+/// Bounds of [`Ledger::list_journals`]; `Default` lists the first 100 of
+/// every status.
+#[derive(Clone, Debug, Default)]
+pub struct JournalQuery {
+    pub status: Option<JournalStatus>,
+    /// 1 to 500, 100 when absent.
+    pub limit: Option<u32>,
+    /// The last `journal_number` of the previous page.
+    pub after: Option<i64>,
 }
 
 /// What a [`PostingSubscription`] hears.
@@ -389,7 +874,7 @@ impl Ledger {
                 &mut client,
                 scope,
                 company_id,
-                MANAGE_ACCOUNTS,
+                &[MANAGE_ACCOUNTS],
                 "finance.ledger.open_book",
             )
             .await?;
@@ -459,7 +944,7 @@ impl Ledger {
                 &mut client,
                 scope,
                 company_id,
-                MANAGE_ACCOUNTS,
+                &[MANAGE_ACCOUNTS],
                 "finance.ledger.create_account",
             )
             .await?;
@@ -509,7 +994,7 @@ impl Ledger {
                 &mut client,
                 scope,
                 company_id,
-                MANAGE_ACCOUNTS,
+                &[MANAGE_ACCOUNTS],
                 "finance.ledger.update_account",
             )
             .await?;
@@ -559,10 +1044,10 @@ impl Ledger {
     /// `options.owner` marks the entry as the one a module's record
     /// recognises, and `settlement_account_ids` is the settlement exception to
     /// the active-account rule; an `owner` or id of another shape is
-    /// `InvalidOption`.
-    // TODO(finance/ledger periods): refuse an entry dated in a closed or
-    // locked period, before the first fiscal year, or (for a controlled
-    // company) in no fiscal period, once periods land.
+    /// `InvalidOption`. The entry's date must fall in an open period: never
+    /// in a closed or locked one (`entry_date falls in a closed period`),
+    /// never before the first fiscal year (`is before the first fiscal
+    /// year`), and, for a controlled company, never where no period exists.
     pub async fn post_entry(
         &self,
         scope: &Scope,
@@ -584,7 +1069,7 @@ impl Ledger {
                 &mut client,
                 scope,
                 company_id,
-                POST_ENTRIES,
+                &[POST_ENTRIES],
                 "finance.ledger.post_entry",
             )
             .await?;
@@ -592,9 +1077,17 @@ impl Ledger {
         let book = books::find(tx.sql(), tenant, company_id)
             .await?
             .ok_or(LedgerError::BookNotOpen)?;
-        let valid = entries::validate(tx.sql(), tenant, company_id, book.minor_units, new, options)
-            .await?
-            .map_err(LedgerError::Invalid)?;
+        let valid = entries::validate(
+            tx.sql(),
+            tenant,
+            company_id,
+            book.minor_units,
+            new,
+            options.owner.as_ref(),
+            entries::Inactive::Listed(&options.settlement_account_ids),
+        )
+        .await?
+        .map_err(LedgerError::Invalid)?;
         let actor = scope.user();
         let impersonator = scope.impersonator().map(|operator| operator.user());
         let entry = tx
@@ -610,19 +1103,8 @@ impl Ledger {
                         &valid,
                     )
                     .await?;
-                    let mut changes = vec![Change {
-                        kind: "finance.ledger.entry".into(),
-                        id: posted.entry.id,
-                        old: serde_json::Value::Null,
-                        new: posted.entry_json,
-                    }];
-                    changes.extend(posted.lines.into_iter().map(|(id, json)| Change {
-                        kind: "finance.ledger.entry_line".into(),
-                        id,
-                        old: serde_json::Value::Null,
-                        new: json,
-                    }));
-                    Ok((posted.entry, changes))
+                    let entry = posted.entry.clone();
+                    Ok((entry, entry_changes(posted)))
                 })
             })
             .await?;
@@ -642,8 +1124,9 @@ impl Ledger {
 
     /// Posted entries with their lines, ordered by entry date and then id
     /// (`finance.ledger.view`). A caller pages by passing the last returned
-    /// entry's date and id as `after` until fewer than `limit` come back. An
-    /// out-of-range option is `InvalidOption`.
+    /// entry's date and id as `after` until fewer than `limit` come back;
+    /// `exclude_closing` leaves out year-end closing entries and their
+    /// reversals. An out-of-range option is `InvalidOption`.
     pub async fn list_entries(
         &self,
         scope: &Scope,
@@ -678,7 +1161,1314 @@ impl Ledger {
             .ok_or(LedgerError::NoticesUnavailable)
     }
 
-    /// Every write: the capability and company reach now, then the audited
+    // Reversals
+
+    /// Posts the reversal of a manual entry (`finance.ledger.entries.post`):
+    /// the same accounts and amounts with debits and credits swapped, dated
+    /// `reversal.entry_date`, not before the original's (`entry_date cannot be
+    /// before the reversed entry's date`). An entry is reversed at most once
+    /// (`AlreadyReversed`), and a reversal is not itself reversed
+    /// (`ReversalNotReversible`): post a new entry instead. Accounts
+    /// deactivated since the original still take its reversal, but its date
+    /// must fall in an open period, as a new entry's does. A year-end closing
+    /// entry is reversed only by [`Ledger::reopen_fiscal_year`]
+    /// (`ClosingEntry`). An entry another module owns is
+    /// [`LedgerError::OwnedBy`]: correct it through that module, which records
+    /// its own reversal and calls [`Ledger::reverse_owned_entry`].
+    pub async fn reverse_entry(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        entry_id: i64,
+        reversal: &Reversal,
+    ) -> Result<Entry> {
+        let mut client = self.db.get().await.map_err(Error::from)?;
+        let mut tx = self
+            .write(
+                &mut client,
+                scope,
+                company_id,
+                &[POST_ENTRIES],
+                "finance.ledger.reverse_entry",
+            )
+            .await?;
+        let entry = reverse(&mut tx, scope, company_id, entry_id, None, reversal).await?;
+        tx.commit().await?;
+        Ok(entry)
+    }
+
+    /// The owner's correction path (`finance.ledger.entries.post`): posts the
+    /// reversal of an entry the calling module posted with `owner` (the same
+    /// module and record as [`PostOptions::owner`]), as
+    /// [`Ledger::reverse_entry`] does for a manual entry and with the same
+    /// refusals. The owner calls it inside the transaction that records its own
+    /// reversal (a payment reversal, a cancellation), so both stand or
+    /// neither; it authorizes and takes the company lock on that transaction,
+    /// and leaves the commit to the owner. The reversal carries the same owner.
+    /// An entry owned by another module or record is `NotTheOwner`, a manual
+    /// entry `NotOwned`, and an `owner` of another shape `InvalidOption`.
+    ///
+    /// Only the owning module calls this, from its own correction path; use
+    /// [`Ledger::reverse_entry`] for a manual entry.
+    pub async fn reverse_owned_entry(
+        &self,
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company_id: i64,
+        entry_id: i64,
+        owner: &EntryOwner,
+        reversal: &Reversal,
+    ) -> Result<Entry> {
+        if !entries::owner_valid(owner) {
+            return Err(LedgerError::InvalidOption);
+        }
+        join(tx, scope, company_id, POST_ENTRIES).await?;
+        reverse(tx, scope, company_id, entry_id, Some(owner), reversal).await
+    }
+
+    // Separation of duties
+
+    /// The company's separation of duties (`finance.ledger.view`): the
+    /// setting and its latest change. A company that never changed it
+    /// requires separation.
+    pub async fn get_duty_separation(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+    ) -> Result<DutySeparation> {
+        let client = self.db.get().await.map_err(Error::from)?;
+        authorize(&**client, scope, company_id, VIEW).await?;
+        separation_view(&**client, scope.tenant(), company_id).await
+    }
+
+    /// Turns the company's separation of duties on or off
+    /// (`finance.ledger.duty-separation.manage`); turning it off needs a
+    /// `reason` (`reason is required to turn separation off`). The change is
+    /// appended with the actor, any impersonator and the database's time; a
+    /// call that changes nothing records nothing. While separation is off, an
+    /// approval by the person who prepared the record is allowed and listed
+    /// in the approval exceptions with this change's reason.
+    pub async fn set_duty_separation(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        required: bool,
+        reason: Option<&str>,
+    ) -> Result<DutySeparation> {
+        let mut client = self.db.get().await.map_err(Error::from)?;
+        let mut tx = self
+            .write(
+                &mut client,
+                scope,
+                company_id,
+                &[MANAGE_DUTY_SEPARATION],
+                "finance.ledger.set_duty_separation",
+            )
+            .await?;
+        let tenant = scope.tenant();
+        let reason = duties::validate_change(required, reason).map_err(LedgerError::Invalid)?;
+        let latest = duties::latest_change(tx.sql(), tenant, company_id).await?;
+        if duties::required(latest.as_ref()) == required {
+            tx.rollback().await?;
+            return Ok(DutySeparation {
+                required,
+                change: latest,
+            });
+        }
+        let (actor, impersonator) = people(scope);
+        tx.mutate(move |sql| {
+            Box::pin(async move {
+                let change = duties::record_change(
+                    sql,
+                    tenant,
+                    company_id,
+                    actor,
+                    impersonator,
+                    required,
+                    reason.as_deref(),
+                )
+                .await?;
+                Ok(((), vec![change]))
+            })
+        })
+        .await?;
+        let view = separation_view(tx.sql(), tenant, company_id).await?;
+        tx.commit().await?;
+        Ok(view)
+    }
+
+    /// Every change of the company's separation of duties, oldest first
+    /// (`finance.ledger.view`).
+    pub async fn list_duty_separation_changes(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+    ) -> Result<Vec<DutySeparationChange>> {
+        let client = self.db.get().await.map_err(Error::from)?;
+        authorize(&**client, scope, company_id, VIEW).await?;
+        Ok(duties::changes(&**client, scope.tenant(), company_id).await?)
+    }
+
+    /// Whether the scope's actor may approve what `approval` describes, for
+    /// the Finance modules that approve: called inside the transaction that
+    /// records the approval, which it authorizes (`finance.ledger.view`, which
+    /// the exceptions are read with) and locks the company on, so a refusal
+    /// rolls the approval back. When the approver, or whoever impersonated
+    /// them, is someone in `prepared_by` or impersonated someone there, the
+    /// approval is `SamePerson` while the company requires separation; while
+    /// it does not, it is allowed and recorded as a same-person approval
+    /// exception with the reason separation was turned off. An override is
+    /// always recorded with its `override_reason`. Anything else records
+    /// nothing. A malformed `source`, code, subject or reason is
+    /// [`LedgerError::Invalid`].
+    pub async fn check_approval(
+        &self,
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company_id: i64,
+        approval: &Approval,
+    ) -> Result<()> {
+        join(tx, scope, company_id, VIEW).await?;
+        let (tenant, approver) = (scope.tenant(), people(scope));
+        if let Some(exception) =
+            duties::decide(tx.sql(), tenant, company_id, approver, approval).await?
+        {
+            tx.mutate(move |sql| {
+                Box::pin(async move {
+                    let change =
+                        duties::record_exception(sql, tenant, company_id, approver, &exception)
+                            .await?;
+                    Ok(((), vec![change]))
+                })
+            })
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// The company's approval exceptions, oldest first, each with its review
+    /// (`finance.ledger.view`). An out-of-range option is `InvalidOption`.
+    pub async fn list_approval_exceptions(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        query: &ApprovalExceptionQuery,
+    ) -> Result<Vec<ApprovalException>> {
+        let client = self.db.get().await.map_err(Error::from)?;
+        authorize(&**client, scope, company_id, VIEW).await?;
+        duties::exceptions(&**client, scope.tenant(), company_id, query).await
+    }
+
+    /// One approval exception, as [`Ledger::list_approval_exceptions`] shows
+    /// it (`finance.ledger.view`), or `ExceptionNotFound`.
+    pub async fn get_approval_exception(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        exception_id: i64,
+    ) -> Result<ApprovalException> {
+        let client = self.db.get().await.map_err(Error::from)?;
+        authorize(&**client, scope, company_id, VIEW).await?;
+        duties::exception(&**client, scope.tenant(), company_id, exception_id)
+            .await?
+            .ok_or(LedgerError::ExceptionNotFound)
+    }
+
+    /// Records an independent review of an approval exception with an
+    /// optional `note` (`finance.ledger.approval-exceptions.review`): the
+    /// reviewer, any impersonator and the database's time. An exception is
+    /// reviewed once (`AlreadyReviewed`), and never by whoever approved or
+    /// prepared what it records, nor anyone impersonating them or impersonated
+    /// by them (`ReviewerNotIndependent`), whatever the company's separation
+    /// setting.
+    pub async fn review_approval_exception(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        exception_id: i64,
+        note: Option<&str>,
+    ) -> Result<ApprovalException> {
+        let mut client = self.db.get().await.map_err(Error::from)?;
+        let mut tx = self
+            .write(
+                &mut client,
+                scope,
+                company_id,
+                &[REVIEW_EXCEPTIONS],
+                "finance.ledger.review_approval_exception",
+            )
+            .await?;
+        let tenant = scope.tenant();
+        let exception = duties::exception(tx.sql(), tenant, company_id, exception_id)
+            .await?
+            .ok_or(LedgerError::ExceptionNotFound)?;
+        let reviewer = people(scope);
+        if exception.review.is_some() {
+            return Err(LedgerError::AlreadyReviewed);
+        }
+        let approver = (
+            exception.approved_by_user_id,
+            exception.approved_by_impersonator_id,
+        );
+        let preparer = exception
+            .prepared_by_user_id
+            .map(|user| (user, exception.prepared_by_impersonator_id));
+        if same_person(reviewer, approver)
+            || preparer.is_some_and(|preparer| same_person(reviewer, preparer))
+        {
+            return Err(LedgerError::ReviewerNotIndependent);
+        }
+        let note = duties::validate_note(note).map_err(LedgerError::Invalid)?;
+        tx.mutate(move |sql| {
+            Box::pin(async move {
+                let change = duties::record_review(
+                    sql,
+                    tenant,
+                    company_id,
+                    exception_id,
+                    reviewer,
+                    note.as_deref(),
+                )
+                .await?;
+                Ok(((), vec![change]))
+            })
+        })
+        .await?;
+        let reviewed = duties::exception(tx.sql(), tenant, company_id, exception_id)
+            .await?
+            .ok_or(Error::Internal)?;
+        tx.commit().await?;
+        Ok(reviewed)
+    }
+
+    // Manual journals
+
+    /// Submits a manual journal for approval (`finance.ledger.journals.submit`):
+    /// `entry_date`, `description`, an optional `reference` and `lines`, as
+    /// [`Ledger::post_entry`] takes them. It is checked as an entry would be
+    /// (balanced, active accounts of the company, an open period) and kept,
+    /// numbered per company, with the submitter and the database's time;
+    /// nothing posts until [`Ledger::approve_journal`]. `BookNotOpen` before
+    /// the book is opened.
+    pub async fn submit_journal(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        new: &NewEntry,
+    ) -> Result<Journal> {
+        let mut client = self.db.get().await.map_err(Error::from)?;
+        let mut tx = self
+            .write(
+                &mut client,
+                scope,
+                company_id,
+                &[SUBMIT_JOURNALS],
+                "finance.ledger.submit_journal",
+            )
+            .await?;
+        let tenant = scope.tenant();
+        let book = books::find(tx.sql(), tenant, company_id)
+            .await?
+            .ok_or(LedgerError::BookNotOpen)?;
+        let valid = entries::validate(
+            tx.sql(),
+            tenant,
+            company_id,
+            book.minor_units,
+            new,
+            None,
+            entries::Inactive::Listed(&[]),
+        )
+        .await?
+        .map_err(LedgerError::Invalid)?;
+        let submitter = people(scope);
+        let journal = tx
+            .mutate(move |sql| {
+                Box::pin(async move {
+                    journals::insert(
+                        sql,
+                        tenant,
+                        company_id,
+                        &book.currency_code,
+                        submitter,
+                        &valid,
+                    )
+                    .await
+                })
+            })
+            .await?;
+        tx.commit().await?;
+        Ok(journal)
+    }
+
+    /// Approves a submitted journal (`finance.ledger.journals.approve`), which
+    /// posts it as an entry on its date with its lines, by the approver, and
+    /// records the `approved` decision naming the entry. The entry is checked
+    /// as [`Ledger::post_entry`] checks one, now: a period closed or an
+    /// account deactivated since submission is [`LedgerError::Invalid`], and
+    /// the journal stays submitted. The approver differs from the submitter
+    /// (`SamePerson`) unless the company has turned separation of duties off,
+    /// when the approval is recorded as an approval exception (see
+    /// [`Ledger::check_approval`]). Anything but a submitted journal is
+    /// `JournalDecided`.
+    pub async fn approve_journal(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        journal_id: i64,
+    ) -> Result<Journal> {
+        let mut client = self.db.get().await.map_err(Error::from)?;
+        let mut tx = self
+            .write(
+                &mut client,
+                scope,
+                company_id,
+                &[APPROVE_JOURNALS],
+                "finance.ledger.approve_journal",
+            )
+            .await?;
+        let tenant = scope.tenant();
+        let book = books::find(tx.sql(), tenant, company_id)
+            .await?
+            .ok_or(LedgerError::BookNotOpen)?;
+        let journal = submitted_journal(tx.sql(), tenant, company_id, journal_id).await?;
+        let approver = people(scope);
+        let exception = duties::decide(
+            tx.sql(),
+            tenant,
+            company_id,
+            approver,
+            &journals::approval(&journal),
+        )
+        .await?;
+        let valid = entries::validate(
+            tx.sql(),
+            tenant,
+            company_id,
+            book.minor_units,
+            &journals::entry(&journal),
+            None,
+            entries::Inactive::Listed(&[]),
+        )
+        .await?
+        .map_err(LedgerError::Invalid)?;
+        tx.mutate(move |sql| {
+            Box::pin(async move {
+                let mut changes = Vec::new();
+                if let Some(exception) = exception {
+                    changes.push(
+                        duties::record_exception(sql, tenant, company_id, approver, &exception)
+                            .await?,
+                    );
+                }
+                let posted = entries::insert(
+                    sql,
+                    tenant,
+                    company_id,
+                    &book.currency_code,
+                    approver.0,
+                    approver.1,
+                    &valid,
+                )
+                .await?;
+                let entry_id = posted.entry.id;
+                changes.extend(entry_changes(posted));
+                changes.push(
+                    journals::decide(
+                        sql,
+                        tenant,
+                        company_id,
+                        journal_id,
+                        approver,
+                        JournalStatus::Approved,
+                        None,
+                        Some(entry_id),
+                    )
+                    .await?,
+                );
+                Ok(((), changes))
+            })
+        })
+        .await?;
+        let journal = journals::find(tx.sql(), tenant, company_id, journal_id)
+            .await?
+            .ok_or(Error::Internal)?;
+        tx.commit().await?;
+        Ok(journal)
+    }
+
+    /// Rejects a submitted journal with a `reason`
+    /// (`finance.ledger.journals.approve`; `reason is required to reject a
+    /// journal`): it never posts. Anything but a submitted journal is
+    /// `JournalDecided`.
+    pub async fn reject_journal(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        journal_id: i64,
+        reason: &str,
+    ) -> Result<Journal> {
+        let mut client = self.db.get().await.map_err(Error::from)?;
+        let mut tx = self
+            .write(
+                &mut client,
+                scope,
+                company_id,
+                &[APPROVE_JOURNALS],
+                "finance.ledger.reject_journal",
+            )
+            .await?;
+        let tenant = scope.tenant();
+        submitted_journal(tx.sql(), tenant, company_id, journal_id).await?;
+        let reason = journals::validate_reason(reason).map_err(LedgerError::Invalid)?;
+        let actor = people(scope);
+        tx.mutate(move |sql| {
+            Box::pin(async move {
+                let change = journals::decide(
+                    sql,
+                    tenant,
+                    company_id,
+                    journal_id,
+                    actor,
+                    JournalStatus::Rejected,
+                    Some(&reason),
+                    None,
+                )
+                .await?;
+                Ok(((), vec![change]))
+            })
+        })
+        .await?;
+        let journal = journals::find(tx.sql(), tenant, company_id, journal_id)
+            .await?
+            .ok_or(Error::Internal)?;
+        tx.commit().await?;
+        Ok(journal)
+    }
+
+    /// One journal with its lines, status and decision
+    /// (`finance.ledger.view`), or `JournalNotFound`.
+    pub async fn get_journal(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        journal_id: i64,
+    ) -> Result<Journal> {
+        let client = self.db.get().await.map_err(Error::from)?;
+        authorize(&**client, scope, company_id, VIEW).await?;
+        journals::find(&**client, scope.tenant(), company_id, journal_id)
+            .await?
+            .ok_or(LedgerError::JournalNotFound)
+    }
+
+    /// The company's journals by number, as [`Ledger::get_journal`] shows
+    /// them (`finance.ledger.view`). An out-of-range option is
+    /// `InvalidOption`.
+    pub async fn list_journals(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        query: &JournalQuery,
+    ) -> Result<Vec<Journal>> {
+        let client = self.db.get().await.map_err(Error::from)?;
+        authorize(&**client, scope, company_id, VIEW).await?;
+        journals::list(&**client, scope.tenant(), company_id, query).await
+    }
+
+    /// The statuses a journal moves through.
+    pub fn journal_statuses() -> &'static [JournalStatus] {
+        &JournalStatus::ALL
+    }
+
+    // Controlled bookkeeping
+
+    /// The company's controlled bookkeeping (`finance.ledger.view`). A company
+    /// with no change is not controlled; a new company's book opens
+    /// controlled.
+    pub async fn get_controlled_bookkeeping(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+    ) -> Result<ControlledBookkeeping> {
+        let client = self.db.get().await.map_err(Error::from)?;
+        authorize(&**client, scope, company_id, VIEW).await?;
+        controlled_view(&**client, scope.tenant(), company_id).await
+    }
+
+    /// Turns the company's controlled bookkeeping on or off
+    /// (`finance.ledger.controlled-bookkeeping.manage`); turning it off needs
+    /// a `reason` (`reason is required to turn this off`). The change is
+    /// appended with the actor, any impersonator and the database's time; a
+    /// call that changes nothing records nothing. Turning it off overrides a
+    /// control, so it is also recorded as an approval exception with its
+    /// reason.
+    pub async fn set_controlled_bookkeeping(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        controlled: bool,
+        reason: Option<&str>,
+    ) -> Result<ControlledBookkeeping> {
+        let mut client = self.db.get().await.map_err(Error::from)?;
+        let mut tx = self
+            .write(
+                &mut client,
+                scope,
+                company_id,
+                &[MANAGE_CONTROLLED_BOOKKEEPING],
+                "finance.ledger.set_controlled_bookkeeping",
+            )
+            .await?;
+        let tenant = scope.tenant();
+        let reason = bookkeeping::validate(controlled, reason).map_err(LedgerError::Invalid)?;
+        if bookkeeping::controlled(tx.sql(), tenant, company_id).await? == controlled {
+            let view = controlled_view(tx.sql(), tenant, company_id).await?;
+            tx.rollback().await?;
+            return Ok(view);
+        }
+        let (actor, impersonator) = people(scope);
+        tx.mutate(move |sql| {
+            Box::pin(async move {
+                let (id, recorded) = bookkeeping::record(
+                    sql,
+                    tenant,
+                    company_id,
+                    actor,
+                    impersonator,
+                    controlled,
+                    reason.as_deref(),
+                )
+                .await?;
+                let mut changes = vec![Change {
+                    kind: "finance.ledger.bookkeeping_change".into(),
+                    id,
+                    old: serde_json::Value::Null,
+                    new: recorded,
+                }];
+                if let (false, Some(reason)) = (controlled, reason.as_deref()) {
+                    changes.push(
+                        duties::record_override(
+                            sql,
+                            tenant,
+                            company_id,
+                            actor,
+                            impersonator,
+                            &duties::Override {
+                                action: "controlled_bookkeeping_off",
+                                subject_type: "bookkeeping",
+                                subject_id: id,
+                                subject: "Controlled bookkeeping of the company".into(),
+                                reason,
+                            },
+                        )
+                        .await?,
+                    );
+                }
+                Ok(((), changes))
+            })
+        })
+        .await?;
+        let view = controlled_view(tx.sql(), tenant, company_id).await?;
+        tx.commit().await?;
+        Ok(view)
+    }
+
+    /// Every change of the company's controlled bookkeeping, oldest first
+    /// (`finance.ledger.view`).
+    pub async fn list_controlled_bookkeeping_changes(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+    ) -> Result<Vec<BookkeepingChange>> {
+        let client = self.db.get().await.map_err(Error::from)?;
+        authorize(&**client, scope, company_id, VIEW).await?;
+        Ok(bookkeeping::changes(&**client, scope.tenant(), company_id).await?)
+    }
+
+    // Late recordings
+
+    /// The late-recording report's thresholds: listed from 45 days, late
+    /// past 60.
+    pub fn late_recording_thresholds() -> LateRecordingThresholds {
+        LateRecordingThresholds {
+            approaching_days: late_recordings::APPROACHING_DAYS,
+            late_days: late_recordings::LATE_DAYS,
+        }
+    }
+
+    /// Posted entries recorded 45 or more days after their date, oldest entry
+    /// number first, each with its review (`finance.ledger.view`); year-end
+    /// closing entries and their reversals are never listed. An out-of-range
+    /// option is `InvalidOption`.
+    pub async fn list_late_recordings(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        query: &LateRecordingQuery,
+    ) -> Result<Vec<LateRecording>> {
+        let client = self.db.get().await.map_err(Error::from)?;
+        authorize(&**client, scope, company_id, VIEW).await?;
+        late_recordings::list(&**client, scope.tenant(), company_id, query).await
+    }
+
+    /// Records an independent review of a late entry with its `reason`
+    /// (`finance.ledger.late-recordings.review`). The entry must be listed
+    /// (`NotLateRecorded`), is reviewed once (`AlreadyReviewed`), and never by
+    /// whoever posted it or impersonated its poster (`ReviewerNotIndependent`).
+    pub async fn record_late_recording_review(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        entry_id: i64,
+        reason: &str,
+    ) -> Result<LateRecordingReview> {
+        let mut client = self.db.get().await.map_err(Error::from)?;
+        let mut tx = self
+            .write(
+                &mut client,
+                scope,
+                company_id,
+                &[REVIEW_LATE_RECORDINGS],
+                "finance.ledger.record_late_recording_review",
+            )
+            .await?;
+        let tenant = scope.tenant();
+        let entry = late_recordings::entry(tx.sql(), tenant, company_id, entry_id)
+            .await?
+            .ok_or(LedgerError::EntryNotFound)?;
+        let (actor, impersonator) = people(scope);
+        if entry.days < late_recordings::APPROACHING_DAYS {
+            return Err(LedgerError::NotLateRecorded);
+        }
+        if entry.reviewed {
+            return Err(LedgerError::AlreadyReviewed);
+        }
+        if same_person(
+            (actor, impersonator),
+            (entry.posted_by_user_id, entry.posted_by_impersonator_id),
+        ) {
+            return Err(LedgerError::ReviewerNotIndependent);
+        }
+        let reason = late_recordings::validate(reason).map_err(LedgerError::Invalid)?;
+        let review = tx
+            .mutate(move |sql| {
+                Box::pin(async move {
+                    let (review, change) = late_recordings::insert_review(
+                        sql,
+                        tenant,
+                        company_id,
+                        entry_id,
+                        actor,
+                        impersonator,
+                        &reason,
+                    )
+                    .await?;
+                    Ok((review, vec![change]))
+                })
+            })
+            .await?;
+        tx.commit().await?;
+        Ok(review)
+    }
+
+    // Fiscal years and periods
+
+    /// Opens the company's next fiscal year (`finance.ledger.periods.manage`)
+    /// and divides it into calendar-month periods, all open. The first year
+    /// may start on any month; each later year starts the day after the
+    /// previous one ends. Once a company has a fiscal year, no entry is posted
+    /// before the first. `BookNotOpen` before the book is opened.
+    pub async fn open_fiscal_year(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        new: &NewFiscalYear,
+    ) -> Result<FiscalYear> {
+        let mut client = self.db.get().await.map_err(Error::from)?;
+        let mut tx = self
+            .write(
+                &mut client,
+                scope,
+                company_id,
+                &[MANAGE_PERIODS],
+                "finance.ledger.open_fiscal_year",
+            )
+            .await?;
+        let tenant = scope.tenant();
+        books::find(tx.sql(), tenant, company_id)
+            .await?
+            .ok_or(LedgerError::BookNotOpen)?;
+        let state = periods::state(tx.sql(), tenant, company_id).await?;
+        let dates =
+            periods::validate_year(state.years.last(), new).map_err(LedgerError::Invalid)?;
+        let (actor, impersonator) = people(scope);
+        let year_id = tx
+            .mutate(move |sql| {
+                Box::pin(async move {
+                    periods::insert_year(sql, tenant, company_id, actor, impersonator, dates).await
+                })
+            })
+            .await?;
+        let year = fiscal_year(tx.sql(), tenant, company_id, year_id).await?;
+        tx.commit().await?;
+        Ok(year)
+    }
+
+    /// The company's fiscal years in date order, each with its status, its
+    /// closing entry while closed, and its periods with theirs
+    /// (`finance.ledger.view`).
+    pub async fn list_fiscal_years(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+    ) -> Result<Vec<FiscalYear>> {
+        let client = self.db.get().await.map_err(Error::from)?;
+        authorize(&**client, scope, company_id, VIEW).await?;
+        Ok(periods::state(&**client, scope.tenant(), company_id)
+            .await?
+            .years)
+    }
+
+    /// One fiscal year, as [`Ledger::list_fiscal_years`] shows it
+    /// (`finance.ledger.view`), or `FiscalYearNotFound`.
+    pub async fn get_fiscal_year(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        fiscal_year_id: i64,
+    ) -> Result<FiscalYear> {
+        let client = self.db.get().await.map_err(Error::from)?;
+        authorize(&**client, scope, company_id, VIEW).await?;
+        fiscal_year(&**client, scope.tenant(), company_id, fiscal_year_id).await
+    }
+
+    /// The fiscal year's closing log, oldest first: every close, reopen and
+    /// lock of the year and of its periods, with its reason, who recorded it
+    /// and when (`finance.ledger.view`). The company's events are numbered
+    /// 1, 2, 3, ... without gaps.
+    pub async fn list_closing_events(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        fiscal_year_id: i64,
+    ) -> Result<Vec<ClosingEvent>> {
+        let client = self.db.get().await.map_err(Error::from)?;
+        authorize(&**client, scope, company_id, VIEW).await?;
+        let tenant = scope.tenant();
+        fiscal_year(&**client, tenant, company_id, fiscal_year_id).await?;
+        Ok(periods::events(&**client, tenant, company_id, fiscal_year_id).await?)
+    }
+
+    /// Closes an open period with an optional `reason`
+    /// (`finance.ledger.periods.manage`): no entry is posted into it until it
+    /// reopens. Periods close in date order (`EarlierPeriodOpen`), and a
+    /// year's last period closes only with the year (`ClosesWithFiscalYear`).
+    pub async fn close_period(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        period_id: i64,
+        reason: Option<&str>,
+    ) -> Result<Period> {
+        let mut client = self.db.get().await.map_err(Error::from)?;
+        let tx = self
+            .write(
+                &mut client,
+                scope,
+                company_id,
+                &[MANAGE_PERIODS],
+                "finance.ledger.close_period",
+            )
+            .await?;
+        let state = periods::state(tx.sql(), scope.tenant(), company_id).await?;
+        let period = state.period(period_id).ok_or(LedgerError::PeriodNotFound)?;
+        let (previous, _) = state.neighbours(period_id);
+        if period.status != PeriodStatus::Open {
+            return Err(LedgerError::PeriodNotOpen);
+        }
+        if previous.is_some_and(|previous| previous.status == PeriodStatus::Open) {
+            return Err(LedgerError::EarlierPeriodOpen);
+        }
+        if state.year(period.fiscal_year_id).is_some_and(|year| {
+            year.end_date == period.end_date && year.status != YearStatus::Closed
+        }) {
+            return Err(LedgerError::ClosesWithFiscalYear);
+        }
+        let reason = periods::reason(reason, None).map_err(LedgerError::Invalid)?;
+        let period = period.clone();
+        Self::change_period(
+            scope,
+            company_id,
+            tx,
+            period,
+            ClosingAction::Close,
+            reason,
+            None,
+        )
+        .await
+    }
+
+    /// Reopens a closed period with a `reason` (`finance.ledger.periods.reopen`),
+    /// so entries post into it again. Periods reopen in reverse date order
+    /// (`LaterPeriodClosed`); a locked period never reopens (`PeriodLocked`),
+    /// and a closed fiscal year's periods reopen only after
+    /// [`Ledger::reopen_fiscal_year`] (`FiscalYearClosed`). The reopen
+    /// overrides a close, so it is also recorded as an approval exception.
+    pub async fn reopen_period(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        period_id: i64,
+        reason: &str,
+    ) -> Result<Period> {
+        let mut client = self.db.get().await.map_err(Error::from)?;
+        let tx = self
+            .write(
+                &mut client,
+                scope,
+                company_id,
+                &[REOPEN_PERIODS],
+                "finance.ledger.reopen_period",
+            )
+            .await?;
+        let state = periods::state(tx.sql(), scope.tenant(), company_id).await?;
+        let period = state.period(period_id).ok_or(LedgerError::PeriodNotFound)?;
+        let (_, next) = state.neighbours(period_id);
+        match period.status {
+            PeriodStatus::Locked => return Err(LedgerError::PeriodLocked),
+            PeriodStatus::Open => return Err(LedgerError::PeriodNotClosed),
+            PeriodStatus::Closed => {}
+        }
+        if state
+            .year(period.fiscal_year_id)
+            .is_some_and(|year| year.status == YearStatus::Closed)
+        {
+            return Err(LedgerError::FiscalYearClosed);
+        }
+        if next.is_some_and(|next| next.status != PeriodStatus::Open) {
+            return Err(LedgerError::LaterPeriodClosed);
+        }
+        let reason = periods::reason(Some(reason), Some("is required to reopen"))
+            .map_err(LedgerError::Invalid)?;
+        let period = period.clone();
+        let exception = duties_reopen(
+            "period",
+            "Period",
+            period.id,
+            period.start_date,
+            period.end_date,
+        );
+        Self::change_period(
+            scope,
+            company_id,
+            tx,
+            period,
+            ClosingAction::Reopen,
+            reason,
+            Some(exception),
+        )
+        .await
+    }
+
+    /// Locks a closed period for good with an optional `reason`
+    /// (`finance.ledger.periods.lock`): it never reopens. Periods lock in date
+    /// order (`EarlierPeriodUnlocked`).
+    pub async fn lock_period(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        period_id: i64,
+        reason: Option<&str>,
+    ) -> Result<Period> {
+        let mut client = self.db.get().await.map_err(Error::from)?;
+        let tx = self
+            .write(
+                &mut client,
+                scope,
+                company_id,
+                &[LOCK_PERIODS],
+                "finance.ledger.lock_period",
+            )
+            .await?;
+        let state = periods::state(tx.sql(), scope.tenant(), company_id).await?;
+        let period = state.period(period_id).ok_or(LedgerError::PeriodNotFound)?;
+        let (previous, _) = state.neighbours(period_id);
+        match period.status {
+            PeriodStatus::Locked => return Err(LedgerError::PeriodLocked),
+            PeriodStatus::Open => return Err(LedgerError::PeriodNotClosed),
+            PeriodStatus::Closed => {}
+        }
+        if previous.is_some_and(|previous| previous.status != PeriodStatus::Locked) {
+            return Err(LedgerError::EarlierPeriodUnlocked);
+        }
+        let reason = periods::reason(reason, None).map_err(LedgerError::Invalid)?;
+        let period = period.clone();
+        Self::change_period(
+            scope,
+            company_id,
+            tx,
+            period,
+            ClosingAction::Lock,
+            reason,
+            None,
+        )
+        .await
+    }
+
+    /// Closes a fiscal year (`finance.ledger.periods.manage` and
+    /// `finance.ledger.entries.post`). It posts the closing entry, dated the
+    /// year's last day, that brings every income and expense account's
+    /// balance for the year to zero against the company's retained-earnings
+    /// account (`NoRetainedEarningsAccount` until an active equity account is
+    /// designated), then closes the year and every period of it still open.
+    /// A year with no income or expense balance closes with no entry. The
+    /// previous year must be closed first (`EarlierPeriodOpen`). Closing a
+    /// closed year again returns it unchanged; only
+    /// [`Ledger::reopen_fiscal_year`] undoes it.
+    pub async fn close_fiscal_year(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        fiscal_year_id: i64,
+        close: &YearClose,
+    ) -> Result<FiscalYear> {
+        let mut client = self.db.get().await.map_err(Error::from)?;
+        let mut tx = self
+            .write(
+                &mut client,
+                scope,
+                company_id,
+                &[MANAGE_PERIODS, POST_ENTRIES],
+                "finance.ledger.close_fiscal_year",
+            )
+            .await?;
+        let tenant = scope.tenant();
+        let book = books::find(tx.sql(), tenant, company_id)
+            .await?
+            .ok_or(LedgerError::BookNotOpen)?;
+        let state = periods::state(tx.sql(), tenant, company_id).await?;
+        let year = state
+            .year(fiscal_year_id)
+            .ok_or(LedgerError::FiscalYearNotFound)?
+            .clone();
+        if year.status == YearStatus::Closed {
+            tx.rollback().await?;
+            return Ok(year);
+        }
+        let open: Vec<Period> = year
+            .periods
+            .iter()
+            .filter(|period| period.status == PeriodStatus::Open)
+            .cloned()
+            .collect();
+        let first_open = open
+            .first()
+            .map(|period| period.id)
+            .ok_or(Error::Internal)?;
+        if state
+            .neighbours(first_open)
+            .0
+            .is_some_and(|previous| previous.status == PeriodStatus::Open)
+        {
+            return Err(LedgerError::EarlierPeriodOpen);
+        }
+        let account = accounts::list(tx.sql(), tenant, company_id)
+            .await?
+            .into_iter()
+            .find(|account| account.retained_earnings && account.active)
+            .ok_or(LedgerError::NoRetainedEarningsAccount)?;
+        let balances = periods::closing_balances(tx.sql(), tenant, company_id, &year).await?;
+        let closing = if balances.is_empty() {
+            None
+        } else {
+            let profit_or_loss: rust_decimal::Decimal = balances.iter().map(|(_, net)| *net).sum();
+            let mut lines: Vec<NewLine> =
+                balances.iter().map(|(id, net)| side(*id, -*net)).collect();
+            if !profit_or_loss.is_zero() {
+                lines.push(side(account.id, profit_or_loss));
+            }
+            let new = NewEntry {
+                entry_date: year.end_date,
+                description: close.description.clone().unwrap_or_else(|| {
+                    format!("Close fiscal year {} to {}", year.start_date, year.end_date)
+                }),
+                reference: close.reference.clone(),
+                lines,
+            };
+            Some(
+                entries::validate(
+                    tx.sql(),
+                    tenant,
+                    company_id,
+                    book.minor_units,
+                    &new,
+                    None,
+                    entries::Inactive::Any,
+                )
+                .await?
+                .map_err(LedgerError::Invalid)?,
+            )
+        };
+        let (actor, impersonator) = people(scope);
+        let currency = book.currency_code.clone();
+        let account_id = account.id;
+        tx.mutate(move |sql| {
+            Box::pin(async move {
+                let mut changes = Vec::new();
+                let mut entry_id = None;
+                if let Some(closing) = closing {
+                    let posted = entries::insert(
+                        sql,
+                        tenant,
+                        company_id,
+                        &currency,
+                        actor,
+                        impersonator,
+                        &closing,
+                    )
+                    .await?;
+                    entry_id = Some(posted.entry.id);
+                    changes.extend(entry_changes(posted));
+                }
+                let mut events = vec![periods::NewEvent {
+                    fiscal_year_id,
+                    period_id: None,
+                    action: ClosingAction::Close,
+                    reason: None,
+                    entry_id,
+                    retained_earnings_account_id: Some(account_id),
+                }];
+                events.extend(open.iter().map(|period| periods::NewEvent {
+                    fiscal_year_id,
+                    period_id: Some(period.id),
+                    action: ClosingAction::Close,
+                    reason: None,
+                    entry_id: None,
+                    retained_earnings_account_id: None,
+                }));
+                for event in &events {
+                    changes.push(
+                        periods::record_event(sql, tenant, company_id, actor, impersonator, event)
+                            .await?,
+                    );
+                }
+                Ok(((), changes))
+            })
+        })
+        .await?;
+        let year = fiscal_year(tx.sql(), tenant, company_id, fiscal_year_id).await?;
+        tx.commit().await?;
+        Ok(year)
+    }
+
+    /// Reopens a closed fiscal year with a `reason` (`finance.ledger.periods.reopen`
+    /// and `finance.ledger.entries.post`): it reopens the year and its last
+    /// period and reverses the closing entry on the year's last day; the
+    /// year's other periods stay closed until each is reopened. A year whose
+    /// last period is locked never reopens (`PeriodLocked`), and a year
+    /// reopens only while the next year's periods are all open
+    /// (`LaterPeriodClosed`). The reopen is recorded as an approval exception.
+    pub async fn reopen_fiscal_year(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        fiscal_year_id: i64,
+        reason: &str,
+    ) -> Result<FiscalYear> {
+        let mut client = self.db.get().await.map_err(Error::from)?;
+        let mut tx = self
+            .write(
+                &mut client,
+                scope,
+                company_id,
+                &[REOPEN_PERIODS, POST_ENTRIES],
+                "finance.ledger.reopen_fiscal_year",
+            )
+            .await?;
+        let tenant = scope.tenant();
+        let book = books::find(tx.sql(), tenant, company_id)
+            .await?
+            .ok_or(LedgerError::BookNotOpen)?;
+        let state = periods::state(tx.sql(), tenant, company_id).await?;
+        let year = state
+            .year(fiscal_year_id)
+            .ok_or(LedgerError::FiscalYearNotFound)?
+            .clone();
+        let last = year.periods.last().cloned().ok_or(Error::Internal)?;
+        let (_, next) = state.neighbours(last.id);
+        if year.status == YearStatus::Open {
+            return Err(LedgerError::FiscalYearNotClosed);
+        }
+        if last.status == PeriodStatus::Locked {
+            return Err(LedgerError::PeriodLocked);
+        }
+        if next.is_some_and(|next| next.status != PeriodStatus::Open) {
+            return Err(LedgerError::LaterPeriodClosed);
+        }
+        let reason = periods::reason(Some(reason), Some("is required to reopen"))
+            .map_err(LedgerError::Invalid)?
+            .unwrap_or_default();
+        let (actor, impersonator) = people(scope);
+        let events_reason = reason.clone();
+        tx.mutate(move |sql| {
+            Box::pin(async move {
+                let mut changes = Vec::new();
+                for period_id in [None, Some(last.id)] {
+                    changes.push(
+                        periods::record_event(
+                            sql,
+                            tenant,
+                            company_id,
+                            actor,
+                            impersonator,
+                            &periods::NewEvent {
+                                fiscal_year_id,
+                                period_id,
+                                action: ClosingAction::Reopen,
+                                reason: Some(events_reason.clone()),
+                                entry_id: None,
+                                retained_earnings_account_id: None,
+                            },
+                        )
+                        .await?,
+                    );
+                }
+                Ok(((), changes))
+            })
+        })
+        .await?;
+        // The year's last period is open again, so its reversal is checked
+        // against the closing rules as they now stand.
+        let reversal = match year.closing_entry_id {
+            Some(entry_id) => {
+                let original = entries::find(tx.sql(), tenant, company_id, entry_id)
+                    .await?
+                    .ok_or(Error::Internal)?;
+                let new = entries::mirror(
+                    &original,
+                    year.end_date,
+                    format!(
+                        "Reopen fiscal year {} to {}",
+                        year.start_date, year.end_date
+                    ),
+                );
+                Some(
+                    entries::validate(
+                        tx.sql(),
+                        tenant,
+                        company_id,
+                        book.minor_units,
+                        &new,
+                        None,
+                        entries::Inactive::Any,
+                    )
+                    .await?
+                    .map_err(LedgerError::Invalid)?
+                    .reversing(&original),
+                )
+            }
+            None => None,
+        };
+        let exception = duties_reopen(
+            "fiscal_year",
+            "Fiscal year",
+            year.id,
+            year.start_date,
+            year.end_date,
+        );
+        let currency = book.currency_code.clone();
+        tx.mutate(move |sql| {
+            Box::pin(async move {
+                let mut changes = Vec::new();
+                if let Some(reversal) = reversal {
+                    let posted = entries::insert(
+                        sql,
+                        tenant,
+                        company_id,
+                        &currency,
+                        actor,
+                        impersonator,
+                        &reversal,
+                    )
+                    .await?;
+                    changes.extend(entry_changes(posted));
+                }
+                changes.push(
+                    duties::record_override(
+                        sql,
+                        tenant,
+                        company_id,
+                        actor,
+                        impersonator,
+                        &exception.with_reason(&reason),
+                    )
+                    .await?,
+                );
+                Ok(((), changes))
+            })
+        })
+        .await?;
+        let year = fiscal_year(tx.sql(), tenant, company_id, fiscal_year_id).await?;
+        tx.commit().await?;
+        Ok(year)
+    }
+
+    /// Records the period's event (and, for a reopen, its approval
+    /// exception) and returns the period with the status it now has.
+    async fn change_period(
+        scope: &Scope,
+        company_id: i64,
+        mut tx: MutationTransaction<'_>,
+        period: Period,
+        action: ClosingAction,
+        reason: Option<String>,
+        exception: Option<Reopen>,
+    ) -> Result<Period> {
+        let tenant = scope.tenant();
+        let (actor, impersonator) = people(scope);
+        let event = periods::NewEvent {
+            fiscal_year_id: period.fiscal_year_id,
+            period_id: Some(period.id),
+            action,
+            reason,
+            entry_id: None,
+            retained_earnings_account_id: None,
+        };
+        let changed = tx
+            .mutate(move |sql| {
+                Box::pin(async move {
+                    let mut changes = vec![
+                        periods::record_event(sql, tenant, company_id, actor, impersonator, &event)
+                            .await?,
+                    ];
+                    if let (Some(exception), Some(reason)) = (exception, event.reason.as_deref()) {
+                        changes.push(
+                            duties::record_override(
+                                sql,
+                                tenant,
+                                company_id,
+                                actor,
+                                impersonator,
+                                &exception.with_reason(reason),
+                            )
+                            .await?,
+                        );
+                    }
+                    Ok((
+                        Period {
+                            status: action.status_after(),
+                            ..period
+                        },
+                        changes,
+                    ))
+                })
+            })
+            .await?;
+        tx.commit().await?;
+        Ok(changed)
+    }
+
+    /// Every write: each capability and company reach now, then the audited
     /// transaction holding the company's row lock (Bilimbi `write/4` with
     /// `lock_writable_company/2`).
     async fn write<'c>(
@@ -686,26 +2476,154 @@ impl Ledger {
         client: &'c mut tokio_postgres::Client,
         scope: &Scope,
         company_id: i64,
-        capability: &str,
+        capabilities: &[&str],
         action: &str,
     ) -> Result<MutationTransaction<'c>> {
-        authorize(&*client, scope, company_id, capability).await?;
+        for capability in capabilities {
+            authorize(&*client, scope, company_id, capability).await?;
+        }
         let tx = self
             .mutations
             .begin(client, scope.mutation_context(action))
             .await?;
-        organisation::require_writable(tx.sql(), scope, company_id, true)
-            .await
-            .map_err(|error| match error {
-                WriteError::NotFound => LedgerError::CompanyNotFound,
-                WriteError::Archived => LedgerError::CompanyArchived,
-                WriteError::Access(error) => refusal(error),
-                WriteError::InUse | WriteError::Stale | WriteError::Invalid(_) => {
-                    LedgerError::Failed(Error::Internal)
-                }
-            })?;
+        lock(&tx, scope, company_id).await?;
         Ok(tx)
     }
+}
+
+/// A write inside a caller's own transaction: the capability and company
+/// reach now, then the company's row lock on that transaction.
+async fn join(
+    tx: &MutationTransaction<'_>,
+    scope: &Scope,
+    company_id: i64,
+    capability: &str,
+) -> Result<()> {
+    authorize(tx.sql(), scope, company_id, capability).await?;
+    lock(tx, scope, company_id).await
+}
+
+/// Holds the company's row lock for the transaction (Bilimbi
+/// `lock_writable_company/2`): an archived company is refused.
+async fn lock(tx: &MutationTransaction<'_>, scope: &Scope, company_id: i64) -> Result<()> {
+    organisation::require_writable(tx.sql(), scope, company_id, true)
+        .await
+        .map(|_| ())
+        .map_err(|error| match error {
+            WriteError::NotFound => LedgerError::CompanyNotFound,
+            WriteError::Archived => LedgerError::CompanyArchived,
+            WriteError::Access(error) => refusal(error),
+            WriteError::InUse | WriteError::Stale | WriteError::Invalid(_) => {
+                LedgerError::Failed(Error::Internal)
+            }
+        })
+}
+
+/// Posts the reversal of `entry_id` inside a write that already authorized
+/// and locked: `owner` is `None` for a manual entry's reversal and the
+/// owner's own record for [`Ledger::reverse_owned_entry`].
+async fn reverse(
+    tx: &mut MutationTransaction<'_>,
+    scope: &Scope,
+    company_id: i64,
+    entry_id: i64,
+    owner: Option<&EntryOwner>,
+    reversal: &Reversal,
+) -> Result<Entry> {
+    let tenant = scope.tenant();
+    let book = books::find(tx.sql(), tenant, company_id)
+        .await?
+        .ok_or(LedgerError::BookNotOpen)?;
+    let original = entries::find(tx.sql(), tenant, company_id, entry_id)
+        .await?
+        .ok_or(LedgerError::EntryNotFound)?;
+    if original.reverses_entry_id.is_some() {
+        return Err(LedgerError::ReversalNotReversible);
+    }
+    if original.reversed_by_entry_id.is_some() {
+        return Err(LedgerError::AlreadyReversed);
+    }
+    if periods::closing_entry(tx.sql(), company_id, original.id).await? {
+        return Err(LedgerError::ClosingEntry);
+    }
+    match (&original.owner, owner) {
+        (Some(owned), None) => return Err(LedgerError::OwnedBy(owned.clone())),
+        (None, Some(_)) => return Err(LedgerError::NotOwned),
+        (Some(owned), Some(owner)) if owned != owner => return Err(LedgerError::NotTheOwner),
+        _ => {}
+    }
+    let new = NewEntry {
+        reference: reversal.reference.clone(),
+        ..entries::mirror(&original, reversal.entry_date, reversal.description.clone())
+    };
+    let validated = entries::validate(
+        tx.sql(),
+        tenant,
+        company_id,
+        book.minor_units,
+        &new,
+        None,
+        entries::Inactive::Any,
+    )
+    .await?;
+    let valid = if reversal.entry_date < original.entry_date {
+        let early = FieldError::new("entry_date", "cannot be before the reversed entry's date");
+        let mut errors = validated.err().unwrap_or_default();
+        errors.insert(0, early);
+        return Err(LedgerError::Invalid(errors));
+    } else {
+        validated
+            .map_err(LedgerError::Invalid)?
+            .reversing(&original)
+    };
+    let (actor, impersonator) = people(scope);
+    let entry = tx
+        .mutate(move |sql| {
+            Box::pin(async move {
+                let posted = entries::insert(
+                    sql,
+                    tenant,
+                    company_id,
+                    &book.currency_code,
+                    actor,
+                    impersonator,
+                    &valid,
+                )
+                .await?;
+                let entry = posted.entry.clone();
+                Ok((entry, entry_changes(posted)))
+            })
+        })
+        .await?;
+    Ok(entry)
+}
+
+/// A journal of the company that is still submitted.
+async fn submitted_journal(
+    client: &impl GenericClient,
+    tenant: i64,
+    company_id: i64,
+    journal_id: i64,
+) -> Result<Journal> {
+    let journal = journals::find(client, tenant, company_id, journal_id)
+        .await?
+        .ok_or(LedgerError::JournalNotFound)?;
+    if journal.status != JournalStatus::Submitted {
+        return Err(LedgerError::JournalDecided);
+    }
+    Ok(journal)
+}
+
+async fn separation_view(
+    client: &impl GenericClient,
+    tenant: i64,
+    company_id: i64,
+) -> Result<DutySeparation> {
+    let change = duties::latest_change(client, tenant, company_id).await?;
+    Ok(DutySeparation {
+        required: duties::required(change.as_ref()),
+        change,
+    })
 }
 
 /// The actor's current grant and company reach decide every call.
@@ -735,5 +2653,116 @@ fn account_change(id: i64, old: serde_json::Value, new: serde_json::Value) -> Ch
         id,
         old,
         new,
+    }
+}
+
+/// The entry and its lines as the audit records them.
+fn entry_changes(posted: entries::Inserted) -> Vec<Change> {
+    let mut changes = vec![Change {
+        kind: "finance.ledger.entry".into(),
+        id: posted.entry.id,
+        old: serde_json::Value::Null,
+        new: posted.entry_json,
+    }];
+    changes.extend(posted.lines.into_iter().map(|(id, json)| Change {
+        kind: "finance.ledger.entry_line".into(),
+        id,
+        old: serde_json::Value::Null,
+        new: json,
+    }));
+    changes
+}
+
+/// The scope's actor and any impersonator, as every record names them.
+fn people(scope: &Scope) -> (i64, Option<i64>) {
+    (
+        scope.user(),
+        scope.impersonator().map(|operator| operator.user()),
+    )
+}
+
+/// Whether two `(user, impersonator)` people overlap: either one's user or
+/// impersonator is the other's user or impersonator.
+pub(crate) fn same_person(one: (i64, Option<i64>), other: (i64, Option<i64>)) -> bool {
+    let mine = [Some(one.0), one.1];
+    let theirs = [Some(other.0), other.1];
+    mine.iter()
+        .flatten()
+        .any(|person| theirs.iter().flatten().any(|other| other == person))
+}
+
+/// A positive net is a debit, a negative one a credit.
+fn side(account_id: i64, net: rust_decimal::Decimal) -> NewLine {
+    if net.is_sign_positive() {
+        NewLine::debit(account_id, Money::stored(net))
+    } else {
+        NewLine::credit(account_id, Money::stored(-net))
+    }
+}
+
+async fn fiscal_year(
+    client: &impl GenericClient,
+    tenant: i64,
+    company_id: i64,
+    fiscal_year_id: i64,
+) -> Result<FiscalYear> {
+    periods::state(client, tenant, company_id)
+        .await?
+        .years
+        .into_iter()
+        .find(|year| year.id == fiscal_year_id)
+        .ok_or(LedgerError::FiscalYearNotFound)
+}
+
+async fn controlled_view(
+    client: &impl GenericClient,
+    tenant: i64,
+    company_id: i64,
+) -> Result<ControlledBookkeeping> {
+    let change = bookkeeping::latest(client, tenant, company_id).await?;
+    Ok(ControlledBookkeeping {
+        controlled: change.as_ref().is_some_and(|change| change.controlled),
+        change,
+        fiscal_years: periods::state(client, tenant, company_id)
+            .await?
+            .years
+            .len(),
+    })
+}
+
+/// The approval exception a reopen records: it overrides a close.
+struct Reopen {
+    action: &'static str,
+    subject_type: &'static str,
+    subject_id: i64,
+    subject: String,
+}
+impl Reopen {
+    fn with_reason<'a>(&self, reason: &'a str) -> duties::Override<'a> {
+        duties::Override {
+            action: self.action,
+            subject_type: self.subject_type,
+            subject_id: self.subject_id,
+            subject: self.subject.clone(),
+            reason,
+        }
+    }
+}
+fn duties_reopen(
+    subject_type: &'static str,
+    label: &str,
+    subject_id: i64,
+    start: Date,
+    end: Date,
+) -> Reopen {
+    Reopen {
+        action: if subject_type == "period" {
+            "period_reopen"
+        } else {
+            "fiscal_year_reopen"
+        },
+        subject_type,
+        subject_id,
+        subject: format!("{label} {start} to {end}"),
     }
 }

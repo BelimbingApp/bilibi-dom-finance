@@ -8,10 +8,11 @@ Bilibi checkout; it does not build on its own.
 
 | Module | Descriptor ID | Owns |
 | --- | --- | --- |
-| [`ledger/`](ledger/README.md) | `finance/ledger` | each company's book and currency, its chart of accounts, and the controlled-bookkeeping setting a new book opens with, and its journal entries (append-only, numbered without gaps, balanced at commit, optionally owned by another module's record) with posting notices that announce only committed entries. Periods, journals and the other controls follow in later versions of the module. |
+| [`ledger/`](ledger/README.md) | `finance/ledger` | each company's book and currency, its chart of accounts, its journal entries (append-only, numbered without gaps, balanced at commit, optionally owned by another module's record) with posting notices that announce only committed entries, its fiscal years of monthly periods with the closing log (close, reopen, lock, year-end close and reopen with closing entries), controlled bookkeeping and its changes, the late-recording report with its reviews, reversals (an owned entry only through its owner), the separation of duties (impersonation counted) with the approval exceptions log and its independent reviews, and manual journals that post only once someone else approves them. |
+| [`attachments/`](attachments/README.md) | `finance/attachments` | source documents kept with the records they support: records-grade files in Base Artifacts, the company's retention years and their history, replace and remove while a record is a draft, legal holds, and the retention refresh job that follows a record's final date. The `Source` contract each record owner implements is here. |
 | [`einvoice/`](einvoice/README.md) | `finance/einvoice` | a company's fiscal documents for a clearance authority: the append-only schema (documents, lines, submissions, status events, consolidated sources and source links), the `finance.einvoice` settings (environment, format version, credentials, signing certificate and key, supplier profile, posting accounts) with encryption and PEM validators, the platform API and portal URLs, the `Authority` contract with MyInvois, and the authority's code lists with company overrides. Issuing, signing, submitting, posting and the pages follow in later versions of the module. |
 
-Every other Finance module of Bilimbi (attachments, receivables, payables,
+Every other Finance module of Bilimbi (receivables, payables,
 fixed assets, payroll, reconciliation, SST, reports) lands beside
 the ledger as a sibling module folder, in later slices of the port.
 
@@ -36,7 +37,7 @@ versions. The composition rules are in Bilibi's `apps/domains/AGENTS.md`.
 
 `fixtures/walkthrough/` is an example-only crate (never a product dependency)
 that installs the Platform's walkthrough fixture and then opens Company 001's
-book and chart of accounts through the ledger facade. Its binary is the
+book, chart of accounts and first fiscal year through the ledger facade. Its binary is the
 running proof of this repository's facade:
 
 ```sh
@@ -50,7 +51,27 @@ settlement accounts, concurrent posts, paged reads), reach (grants,
 affiliation, tenancy, archival), money finer than the book allows, the
 database's own refusals (edits to posted entries, unbalanced or lineless
 entries, cross-company keys) and the posting notices a commit, a rollback and
-a refusal do and do not send. Its e-invoice section shows the code lists and
+a refusal do and do not send. Its attachments section does the same for
+source documents: the company's retention years, attaching and capturing
+files, replacing and removing on a draft record, a final record that keeps its
+files, retention extensions and legal holds (including a change made in Base
+Artifacts out of band), the retention refresh job as its system principal
+before and after a tenant grants it, evidence pages, restricted sources, an
+archived company and the database's own refusals. Its periods section, on
+Company 002 with dates counted back from today, opens fiscal years, closes,
+locks and reopens periods in and out of order, closes and reopens a year with
+its closing entry and reversal, turns controlled bookkeeping off and on,
+reviews entries recorded late, races a close against posts into the same
+period, and ends with the database's own closing refusals. Its controls section, on
+Company 001 in 2026, reverses manual entries (refused twice, for a reversal,
+before its original, for a closing entry), corrects an owned entry only through
+its owner's own transaction (rolled back and committed), submits, approves and
+rejects journals (refused for the submitter, for an operator who impersonated
+the submitter, after a period closed and an account was deactivated), turns
+the separation of duties off and on around sibling approvals and overrides,
+lists and reviews the approval exceptions (refused for the approver and
+preparer), races two approvals of one journal, and ends with the database's
+own journal and exception refusals. Its e-invoice section shows the code lists and
 their overrides, the company settings with their validators and encryption
 (it needs `BILIBI_SETTINGS_KEY`, 64 hex characters, and `openssl` for a
 throwaway certificate and key), the setup read, the authority's rules and the

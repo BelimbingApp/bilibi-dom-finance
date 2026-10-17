@@ -1,17 +1,20 @@
 # Ledger
 
 Module ID: `finance/ledger` (Bilimbi `Bilimbi.Finance.Ledger`). A company's
-general ledger: its book, chart of accounts, journal entries and posting
-notices now; fiscal years and period closing, manual journals, the separation
-of duties with its approval exceptions, controlled bookkeeping, late-recording
-reviews, trial balance and account totals in later versions of this module. Other Finance modules and other Domains post and read through
-this module's facade; none of them reads its tables.
+general ledger: its book, chart of accounts, journal entries, posting
+notices, fiscal years with period closing and the year-end close, controlled
+bookkeeping and late-recording reviews, reversals, the separation of duties
+with its approval exceptions and their reviews, and manual journals now;
+trial balance and account totals in a later version of this module. Other Finance modules and other Domains post
+and read through this module's facade; none of them reads its tables.
 
 ## Public API
 
 Resolve the `Ledger` service (`finance/ledger.ledger`) from the registry and
 call it with a sealed `Scope` and an explicit company id. Results are plain
-records (`Book`, `Account`, `Entry`); the schema is private.
+records (`Book`, `Account`, `Entry`, `FiscalYear`, `Period`, `ClosingEvent`,
+`ControlledBookkeeping`, `LateRecording`, `DutySeparation`,
+`ApprovalException`, `Journal`, ...); the schema is private.
 
 | Function | Capability | Does |
 | --- | --- | --- |
@@ -22,9 +25,34 @@ records (`Book`, `Account`, `Entry`); the schema is private.
 | `update_account` | `finance.ledger.accounts.manage` | Changes `name`, `parent_id`, `active` or `retained_earnings`; `AccountNotFound` for an id of another company |
 | `post_entry` | `finance.ledger.entries.post` | Posts a balanced entry of at least two lines (see Entries); `BookNotOpen` before the book is opened |
 | `get_entry` | `finance.ledger.view` | One entry with its lines and the entry that reversed it; `EntryNotFound` for another company's id |
-| `list_entries` | `finance.ledger.view` | Entries by date then id, 100 by default and 500 at most, paged with `after`; bounded by `from`, `to`, `account_id` and `through_entry_number` |
+| `list_entries` | `finance.ledger.view` | Entries by date then id, 100 by default and 500 at most, paged with `after`; bounded by `from`, `to`, `account_id` and `through_entry_number`; `exclude_closing` leaves out year-end closing entries and their reversals |
+| `reverse_entry` | `finance.ledger.entries.post` | Posts a manual entry's reversal (see Reversals) |
+| `reverse_owned_entry` | `finance.ledger.entries.post` | The owning module's reversal of its own entry, inside its own transaction |
 | `subscribe_postings` | `finance.ledger.view` | A `PostingSubscription` that hears each committed entry of the company (see Posting notices) |
-| `Ledger::account_types` | none | The five account types every chart classifies by |
+| `open_fiscal_year` | `finance.ledger.periods.manage` | Opens the next fiscal year and its monthly periods, all open (see Fiscal years and periods) |
+| `list_fiscal_years`, `get_fiscal_year` | `finance.ledger.view` | Years in date order with their status, closing entry and periods; `FiscalYearNotFound` |
+| `list_closing_events` | `finance.ledger.view` | A year's closing log, oldest first |
+| `close_period` | `finance.ledger.periods.manage` | Closes an open period, optional `reason` |
+| `reopen_period` | `finance.ledger.periods.reopen` | Reopens a closed period with a `reason`; records an approval exception |
+| `lock_period` | `finance.ledger.periods.lock` | Locks a closed period for good, optional `reason` |
+| `close_fiscal_year` | `.periods.manage` and `.entries.post` | Posts the closing entry and closes the year with its open periods |
+| `reopen_fiscal_year` | `.periods.reopen` and `.entries.post` | Reopens the year and its last period, reverses the closing entry; records an approval exception |
+| `get_controlled_bookkeeping` | `finance.ledger.view` | The setting, its latest change and the number of fiscal years |
+| `set_controlled_bookkeeping` | `finance.ledger.controlled-bookkeeping.manage` | Turns it on, or off with a `reason` (an approval exception); a call that changes nothing records nothing |
+| `list_controlled_bookkeeping_changes` | `finance.ledger.view` | Every change, oldest first |
+| `list_late_recordings` | `finance.ledger.view` | Entries recorded 45 or more days after their date, with their reviews (see Late recordings) |
+| `record_late_recording_review` | `finance.ledger.late-recordings.review` | An independent reviewer's `reason` for one late entry |
+| `get_duty_separation` | `finance.ledger.view` | Whether the company requires separation of duties, and its latest change |
+| `set_duty_separation` | `finance.ledger.duty-separation.manage` | Turns it on, or off with a `reason`; a call that changes nothing records nothing |
+| `list_duty_separation_changes` | `finance.ledger.view` | Every change, oldest first |
+| `check_approval` | `finance.ledger.view` | A Finance module's approval, inside its own transaction: refused as `SamePerson` or recorded as an approval exception (see Separation of duties) |
+| `list_approval_exceptions`, `get_approval_exception` | `finance.ledger.view` | The exceptions log with each review; `ExceptionNotFound` |
+| `review_approval_exception` | `finance.ledger.approval-exceptions.review` | An independent reviewer's reading of one exception, optional `note` |
+| `submit_journal` | `finance.ledger.journals.submit` | Keeps a manual journal for approval (see Manual journals) |
+| `approve_journal` | `finance.ledger.journals.approve` | Posts a submitted journal as an entry by its approver |
+| `reject_journal` | `finance.ledger.journals.approve` | Rejects a submitted journal with a `reason` |
+| `get_journal`, `list_journals` | `finance.ledger.view` | Journals with their lines, status and decision; `JournalNotFound` |
+| `Ledger::account_types`, `Ledger::late_recording_thresholds`, `Ledger::journal_statuses` | none | The five account types; the report's 45 and 60 days; `submitted`, `approved`, `rejected` |
 
 Every call authorizes the capability for the scope's actor and the target
 company at the moment it runs (Core Company's `authorize_target`): a missing
@@ -85,9 +113,91 @@ stamps `posted_at`, whatever the writer sent. `Entry` is read back from what
 PostgreSQL stored. Reading an entry authorizes `finance.ledger.view` afresh,
 and an entry id of another company is `EntryNotFound`.
 
-Period rules (an entry dated in a closed or locked period, before the first
-fiscal year, or outside any period of a controlled company) arrive with the
-periods version of this module; until then every date is accepted.
+An entry's date must fall in an open period: never in a closed or locked one
+(`entry_date falls in a closed period`), never before the company's first
+fiscal year (`is before the first fiscal year`), and, while the company is
+controlled, never where no period exists (`falls in no fiscal period: open the
+fiscal year that covers it first`). The database refuses the same dates on its
+own, and a posting holds a share lock on its period until it commits, so a
+concurrent close waits for it.
+
+## Reversals
+
+A posted entry is never edited or deleted. `reverse_entry(scope, company_id,
+entry_id, &Reversal)` posts its mirror image (each debit a credit and the other
+way round, with the lines' descriptions) on `entry_date`, not before the
+original's (`entry_date cannot be before the reversed entry's date`), with its
+own `description` and optional `reference`. An entry is reversed once
+(`AlreadyReversed`), a reversal is never reversed (`ReversalNotReversible`:
+post a new entry), and a year-end closing entry is reversed only by
+`reopen_fiscal_year` (`ClosingEntry`). Accounts deactivated since the original
+still take its reversal, but its date must fall in an open period, as a new
+entry's does. An owned entry is `OwnedBy(owner)`: correct it through its
+owner.
+
+`reverse_owned_entry(tx, scope, company_id, entry_id, &owner, &Reversal)` is
+the owning module's correction path. The owner calls it on the
+`MutationTransaction` that records its own reversal record (a payment
+reversal, a cancellation); the ledger authorizes and takes the company lock on
+that transaction and leaves the commit to the owner, so both stand or
+neither. The reversal carries the same owner. Another module's or record's
+entry is `NotTheOwner`, a manual entry `NotOwned`, and a malformed owner
+`InvalidOption`. The owner is a seam, not an authorization boundary: the
+ledger cannot tell which module calls, so anyone holding
+`finance.ledger.entries.post` who passes an entry's owner reverses it without
+the owner's record, and the owner's tie-out shows the difference.
+
+## Separation of duties
+
+A company requires separation of duties unless it turns it off. The setting
+is the latest of its append-only changes (`DutySeparationChange`); with none,
+separation is required. `set_duty_separation(scope, company_id, required,
+reason)` turns it off only with a reason (`reason is required to turn
+separation off`).
+
+`check_approval(tx, scope, company_id, &Approval)` is how every Finance
+approval asks, on the approving module's own `MutationTransaction` (it
+authorizes `finance.ledger.view` and takes the company lock there, so a
+refusal rolls the approval back). `Approval` names the `source` module, an
+`action` and `subject_type` code, the `subject_id`, a `subject` label for the
+reviewer, everyone in `prepared_by` (`Preparer { user_id, impersonator_id }`)
+and, for an approval that overrides a control, its `override_reason`. Two
+people overlap when either one's user or impersonator is the other's user or
+impersonator, so impersonation counts both ways. A preparer who overlaps the
+approver is `SamePerson` while separation is required; while it is off, the
+approval is allowed and recorded as a same-person approval exception with the
+reason separation was turned off, naming that change. An override is always
+recorded with its own reason. Anything else records nothing. The ledger's own
+reopens and turning controlled bookkeeping off are recorded as overrides
+(`period_reopen`, `fiscal_year_reopen`, `controlled_bookkeeping_off`, source
+`finance/ledger`, no preparer).
+
+`list_approval_exceptions` lists the exceptions oldest first, each with its
+review; `ApprovalExceptionQuery` bounds `recorded_from` (inclusive) and
+`recorded_before` (exclusive) instants, filters `reviewed`, and pages by
+`after` (the last exception number) and `limit` (1 to 500, 100 by default;
+`InvalidOption` outside). `review_approval_exception(.., note)` records one
+independent review (`AlreadyReviewed` after), never by whoever approved or
+prepared what it records or anyone overlapping them
+(`ReviewerNotIndependent`), whatever the setting; a note is at most 500
+characters.
+
+## Manual journals
+
+`submit_journal(scope, company_id, &NewEntry)` keeps a journal for approval:
+the same fields and refusals as `post_entry` (balanced, active accounts of the
+company, an open period), numbered per company and stamped by the database,
+with the submitter and any impersonator. Nothing posts until
+`approve_journal`, which posts it as an entry on its date, by the approver,
+and records the `approved` decision naming the entry. The entry is checked
+again when it is approved: a period closed or an account deactivated since is
+`Invalid`, and the journal stays submitted. The approver must not overlap the
+submitter (`SamePerson`) unless separation is off, when the approval is
+recorded as a same-person exception (`journal_approval`, subject `Journal
+<number>: <description>`). `reject_journal(.., reason)` needs a reason
+(`reason is required to reject a journal`). Anything but a submitted journal
+is `JournalDecided`. `list_journals` filters by `status` and pages like the
+exceptions.
 
 ## Posting notices
 
@@ -105,7 +215,77 @@ connection, opened by the first subscription from `DATABASE_URL` (the variable
 the Platform builds its pool from) and re-opened every five seconds after a
 failure; dropping a subscription ends it.
 
-## Schema (versions 001 to 003)
+## Fiscal years and periods
+
+`open_fiscal_year(scope, company_id, &NewFiscalYear)` opens the company's next
+year, divided into calendar-month periods. `start_date` is the first day of a
+month (`must be the first day of a month`) and `end_date` the last day of a
+month (`must be the last day of a month`), one to 24 months on (`must end one
+to 24 months after the start`); the end defaults to twelve months on. The
+first year may start on any month; each later year starts the day after the
+previous one ends (`must be <date>, the day after the previous fiscal year
+ends`), which is also its default. `BookNotOpen` before the book is opened.
+
+A status is never stored: it is the latest closing event's (open with none).
+`close_period` closes in date order (`EarlierPeriodOpen`; `PeriodNotOpen` for a
+closed or locked period), and a year's last period closes only with its year
+(`ClosesWithFiscalYear`). `reopen_period` needs a reason (`reason is required
+to reopen`) and reopens in reverse date order (`LaterPeriodClosed`); a locked
+period never reopens (`PeriodLocked`), an open one is `PeriodNotClosed`, and a
+closed year's periods reopen only after the year (`FiscalYearClosed`).
+`lock_period` locks a closed period in date order (`EarlierPeriodUnlocked`).
+Reasons are trimmed and at most 500 characters. Each call returns the period
+with its new status.
+
+`close_fiscal_year(scope, company_id, year_id, &YearClose)` posts one entry,
+dated the year's last day (description `Close fiscal year <start> to <end>`
+unless given, optional reference), that brings each income and expense
+account's balance for the year to zero against the active retained-earnings
+account (`NoRetainedEarningsAccount` without one), then records the year's
+close (naming the entry and the account) and closes every open period of the
+year. A year with no income or expense balance closes with no entry; the
+previous year's periods must be closed first (`EarlierPeriodOpen`); closing a
+closed year returns it unchanged. `reopen_fiscal_year(.., reason)` reopens
+the year and its last period and posts the closing entry's reversal on the
+same day (`Reopen fiscal year <start> to <end>`); the other periods stay
+closed. It is `FiscalYearNotClosed`, `PeriodLocked` when the last period is
+locked, and `LaterPeriodClosed` while the next year has a closed period.
+Closing entries and their reversals may name inactive accounts, are never
+reversed by hand, and are left out of `list_entries` with `exclude_closing`
+and of the late-recording report.
+
+A reopen overrides a close and turning controlled bookkeeping off overrides a
+control, so each is recorded in `finance_ledger_approval_exceptions` with its
+reason (`period_reopen`, `fiscal_year_reopen`, `controlled_bookkeeping_off`,
+source `finance/ledger`); see Separation of duties.
+
+## Controlled bookkeeping
+
+A company that is controlled posts only into a fiscal period it has opened
+and left open, so its first year is opened explicitly and an entry dated after
+its last year is refused until the next one is opened; an entry is never
+refused for being old. The setting is the latest of the company's append-only
+changes (`BookkeepingChange`: number, setting, reason, actor, impersonator,
+time); `open_book` records the change that turns it on, so a new company is
+controlled from the start. `set_controlled_bookkeeping(scope, company_id,
+controlled, reason)` turns it off only with a reason (`reason is required to
+turn this off`) and returns the new `ControlledBookkeeping`; setting what is
+already set records nothing.
+
+## Late recordings
+
+An entry's days are whole UTC days from its `entry_date` (its transaction
+date) to `posted_at` (its recording). `list_late_recordings` lists the entries
+of 45 days or more, oldest number first, `Approaching` up to 60 days and `Late`
+past it, each with its review; `LateRecordingQuery` filters by `status` and
+`reviewed` and pages by `after` (the last entry number) and `limit` (1 to 500,
+100 by default; `InvalidOption` outside). `record_late_recording_review` is
+refused for an entry that is not listed (`NotLateRecorded`; `EntryNotFound`
+for another company's or a closing entry), a second time (`AlreadyReviewed`),
+and for a reviewer who posted the entry or impersonated (or was impersonated
+by) its poster (`ReviewerNotIndependent`); its `reason` is required.
+
+## Schema (versions 001 to 005)
 
 `finance_ledger_books` (one per company; currency and minor units fixed for
 good), `finance_ledger_accounts` (code and type kept by a trigger, a
@@ -125,17 +305,41 @@ or whose debits and credits differ. A line has exactly one positive side. An
 owned record has one original entry, and a reversal carries exactly its
 original's owner. 003 adds the notice trigger.
 
-## Controlled bookkeeping
+004 adds `finance_ledger_fiscal_years`, `finance_ledger_periods` and
+`finance_ledger_closing_events` (all append-only): a year starts the day after
+the previous one and, deferred to commit, is divided into whole months through
+its end, in the transaction that opens it; the database numbers and stamps
+each event and refuses one that breaks the closing rules above, a reopen with
+no reason, and a closed year with an open period. An entry dated in a closed
+or locked period, before the first year, or (controlled) in no period is
+refused. `finance_ledger_late_recording_reviews` takes one review per entry,
+refusing an entry recorded under 45 days late and a reviewer who overlaps the
+poster. `finance_ledger_duty_separation_changes`,
+`finance_ledger_approval_exceptions` and
+`finance_ledger_approval_exception_reviews` are the end state of Bilimbi's
+separation-of-duties tables, all append-only: the database numbers and stamps
+each row, refuses a change that changes nothing, a same-person exception
+unless the change it names is the latest and turns separation off, and a
+review by anyone overlapping the approver or preparer.
 
-A company that is controlled posts only into a fiscal period it has opened
-and left open. The setting is the latest of the company's append-only
-changes; `open_book` records the change that turns it on, so a new company is
-controlled from the start. Reading and changing the setting, and the fiscal
-years it governs, arrive with the periods version of this module.
+005 adds `finance_ledger_journals`, `finance_ledger_journal_lines` and
+`finance_ledger_journal_events` (all append-only): the database numbers and
+stamps a journal, refuses a line added after the submitting transaction and,
+deferred to commit, a journal with no lines or out of balance; a journal is
+decided once, an approval names its entry and a rejection its reason, and an
+approval by its submitter (or anyone overlapping them) is refused unless the
+same transaction recorded its same-person exception.
 
 ## Standards addressed
 
 A book is opened once with its currency fixed; an account keeps its code and
 type because entries are posted against them, and is deactivated only once
-its balance is zero (the sum of its lines); every write is attributed to the signed-in actor and any
+its balance is zero (the sum of its lines); a closed period takes no entry
+until it is reopened with a reason that an independent reviewer can read, and
+a locked one never reopens; a late entry is reviewed by someone other than
+its poster; a posted entry is corrected only by a reversal, once, and an owned
+one only through its owner; the person who prepares a record does not
+approve it unless the company has turned separation off, and every such
+approval and every override is listed for an independent reviewer; a manual
+journal posts only once someone else approves it; every write is attributed to the signed-in actor and any
 impersonator through the Platform's audit capture.

@@ -75,12 +75,41 @@ they govern this code and are not copied here.
   `settlement_account_ids` only to settle a document posted earlier on an
   account deactivated since. The database numbers entries, so never send or
   compute an `entry_number`.
+- A new book is controlled, so it posts only into a fiscal period opened with
+  `Ledger::open_fiscal_year`: a fixture opens one before posting, and a sibling
+  reports the ledger's `entry_date` refusal instead of picking another date. A
+  period's or year's status is its latest closing event's, never a column;
+  inside the ledger read it through `periods::state` and record each override
+  of a control (a reopen, controlled bookkeeping off) with
+  `duties::record_override` in the same write.
+- Ask `Ledger::check_approval` on your own `MutationTransaction` before every
+  approval you record, with everyone whose work it approves in `prepared_by`
+  and an `override_reason` for an override; never compare actor ids yourself:
+  the ledger counts impersonation both ways, records the exception an
+  independent reviewer reads, and a `SamePerson` refusal must roll your
+  approval back. Correct an entry you own with `Ledger::reverse_owned_entry` on
+  the transaction that records your own reversal, never `reverse_entry`, which
+  refuses it as `OwnedBy`.
 - Learn of a posting through `Ledger::subscribe_postings`, never your own
   LISTEN: the relay shares one connection, and a notice carries identifiers
   only. On `PostingEvent::Refresh` read again instead of trusting the stream.
   `TODO(platform)`: the relay opens its connection from `DATABASE_URL` because
   `base/database` exposes only the pool.
 
+- Keep a record's source documents through `Attachments` (`attach`, or
+  `capture_file` then `attach_capture` inside your own transaction), never
+  through `bilibi_artifacts` or the `finance_attachments*` tables: the facade
+  is what links the bytes to the record, applies the company's retention years,
+  numbers and audits the attachment, and records holds. Describe your record
+  with a `Source` contributed to `finance/attachments.sources` under
+  `<your module id>/<kind>` that reads it on the connection it is handed; do
+  not hand the attachments module a facade of yours, which would make a cycle.
+  Call `refresh_retention` in the transaction that finalises a record whose
+  date can change while it is a draft; never extend retention yourself.
+- Name a system principal as one lowercase hyphenated segment
+  (`finance-attachments-retention-refresh`): Bilibi's vocabulary refuses
+  Bilimbi's dotted names. Declaring one grants nothing; a tenant administrator
+  grants it (`Grants::set_system`) or its jobs cancel as `actor_refused`.
 - Read a company's e-invoice configuration only through `Einvoice::setup`, and
   its code lists only through `list_codes`/`override_code`; never select
   `base_settings` rows or `finance_einvoice_*` tables from a sibling. A secret
