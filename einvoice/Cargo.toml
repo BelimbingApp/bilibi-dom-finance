@@ -6,13 +6,19 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+bilibi-audit.workspace = true
 bilibi-authz.workspace = true
 bilibi-company.workspace = true
 bilibi-database.workspace = true
+bilibi-integration.workspace = true
 bilibi-module-registry.workspace = true
 bilibi-party-ids.workspace = true
+bilibi-queue.workspace = true
 bilibi-settings.workspace = true
 bilibi-tenancy.workspace = true
+# The PUT method of a cancellation: Base Integration's `Outgoing` names
+# methods by `http::Method` and has no `put` shorthand.
+http = "1.5.0"
 inventory.workspace = true
 jiff = { version = "0.2.38", features = ["serde"] }
 # The signature's base64 digests and certificate.
@@ -26,5 +32,6 @@ rust_decimal.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
 tokio-postgres.workspace = true
 x509-parser = "0.18.1"

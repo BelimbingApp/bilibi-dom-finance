@@ -357,12 +357,18 @@ supplier_format!(
 );
 
 // The authority's hosts, per environment: platform settings.
-platform_url!(
-    "finance.einvoice.sandbox.api_url",
-    "https://preprod-api.myinvois.hasil.gov.my",
-    "E-invoice sandbox API URL",
-    "Base URL of the MyInvois sandbox API. Change it only when the authority publishes a new host."
-);
+// The sandbox API may also be a stand-in on this machine's loopback, so a
+// company's clearance can be exercised without the authority's sandbox.
+define!("finance.einvoice.sandbox.api_url", GLOBAL, ValueType::String,
+    || json!("https://preprod-api.myinvois.hasil.gov.my"),
+    nullable: false, encrypted: false, bounds: (None, None),
+    validator: Some(Validator {
+        accepts: |value| value.as_str().is_some_and(myinvois::valid_sandbox_api_url),
+        message: "must be an https URL without a path",
+    }),
+    editor: (GROUP, "E-invoice sandbox API URL",
+        "Base URL of the MyInvois sandbox API. Change it only when the authority publishes a new host.",
+        OPERATOR));
 platform_url!("finance.einvoice.production.api_url", "https://api.myinvois.hasil.gov.my",
     "E-invoice production API URL",
     "Base URL of the MyInvois production API. Change it only when the authority publishes a new host.");

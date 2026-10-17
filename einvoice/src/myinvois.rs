@@ -15,14 +15,18 @@
 //! it reports a calendar month (Malaysian time) of sales no buyer asked an
 //! individual e-invoice for, issued within seven days after the month ends. A
 //! self-billed document (§8.3) names the supplier as the counterparty.
+mod api;
+mod client;
+pub(crate) use api::sha256_hex;
 pub mod json;
 pub mod signer;
 pub mod ubl;
 
 use crate::authority::{
-    Authority, CertificateIdentity, CertificateSubject, ConsolidationWindow, DocumentVersion,
-    FormatKind, Payload, PayloadError, PayloadOptions, PostingAccount, PostingRule, Side, Supplier,
-    SupplierField, ValidationContext,
+    Authority, CancelOutcome, CertificateIdentity, CertificateSubject, Connection,
+    ConsolidationWindow, DocumentVersion, FormatKind, LoginOutcome, Lookup, Payload, PayloadError,
+    PayloadOptions, PostingAccount, PostingRule, Progress, Search, Side, StatusRead, SubmitOutcome,
+    Supplier, SupplierField, ValidationContext,
 };
 use crate::code_lists::Codes;
 use crate::document::{Document, DocumentLine, PartySnapshot};
@@ -138,6 +142,29 @@ pub(crate) fn valid_document_version(value: &str) -> bool {
 /// path (a query or fragment is not read).
 pub(crate) fn valid_url(value: &str) -> bool {
     let rest = value.strip_prefix("https://").unwrap_or("");
+    host_only(rest)
+}
+
+/// Settings validator for the sandbox API's base URL: as [`valid_url`], or an
+/// http URL on this machine's loopback (`127.0.0.1`, `[::1]` or `localhost`,
+/// with a port), where a stand-in for the authority answers sandbox calls.
+/// Production traffic is https only.
+pub(crate) fn valid_sandbox_api_url(value: &str) -> bool {
+    if valid_url(value) {
+        return true;
+    }
+    let Some(rest) = value.strip_prefix("http://") else {
+        return false;
+    };
+    let authority = rest.split(['?', '#', '/']).next().unwrap_or("");
+    let host = authority
+        .rsplit_once(':')
+        .filter(|(_, port)| !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()))
+        .map_or(authority, |(host, _)| host);
+    host_only(rest) && ["127.0.0.1", "[::1]", "localhost"].contains(&host)
+}
+
+fn host_only(rest: &str) -> bool {
     let rest = rest.split(['?', '#']).next().unwrap_or("");
     let host = rest.strip_suffix('/').unwrap_or(rest);
     !host.is_empty()
@@ -319,6 +346,44 @@ impl Authority for MyInvois {
             version: version.version.to_owned(),
             bytes,
         })
+    }
+
+    async fn login(&self, connection: &Connection<'_>) -> LoginOutcome {
+        api::login(connection).await
+    }
+
+    async fn submit(
+        &self,
+        connection: &Connection<'_>,
+        payload: &Payload,
+        code_number: &str,
+    ) -> SubmitOutcome {
+        api::submit(connection, payload, code_number).await
+    }
+
+    async fn submission_progress(
+        &self,
+        connection: &Connection<'_>,
+        submission_uid: &str,
+    ) -> Progress {
+        api::submission_progress(connection, submission_uid).await
+    }
+
+    async fn find_submission(&self, connection: &Connection<'_>, lookup: &Lookup<'_>) -> Search {
+        api::find_submission(connection, lookup).await
+    }
+
+    async fn document_status(&self, connection: &Connection<'_>, document_uuid: &str) -> StatusRead {
+        api::document_status(connection, document_uuid).await
+    }
+
+    async fn cancel(
+        &self,
+        connection: &Connection<'_>,
+        document_uuid: &str,
+        reason: &str,
+    ) -> CancelOutcome {
+        api::cancel(connection, document_uuid, reason).await
     }
 }
 

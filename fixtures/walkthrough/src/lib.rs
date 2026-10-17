@@ -37,6 +37,8 @@ pub mod receivables_documents;
 pub mod reports;
 pub mod totals;
 
+pub mod clearance;
+
 /// Every fixture account's password.
 pub use bilibi_walkthrough_fixture::PASSWORD;
 #[doc(hidden)]

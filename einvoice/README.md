@@ -7,9 +7,12 @@ with its facts, and supplier profile), the `Authority` contract with the one
 authority this release clears documents with (MyInvois) and its rules: the
 draft a caller asks to issue and its validation, the UBL 2.1 JSON builder with
 its byte-exact writer, the JSON XAdES signer, and the authority's code lists
-with each company's overrides. Issuing, submitting, posting, consolidating and
-the pages follow in later versions of this module (slices NE3 to NE6). Other
-modules and Domains never read its tables.
+with each company's overrides; and clearance: issuing a document, submitting
+it through the MyInvois client on Base Integration with the submit and poll
+jobs on Base Queue, refreshing its status and cancelling it. The ledger
+bridge, source links, consolidation and the pages follow in later versions of
+this module (slices NE4 to NE6). Other modules and Domains never read its
+tables.
 
 ## Public API
 
@@ -24,6 +27,13 @@ and call it with a sealed `Scope` and an explicit company id.
 | `setup` | `finance.einvoice.settings.manage` | What the company has configured, never a secret (see Settings), with the signing certificate's facts |
 | `Einvoice::authority` | none | The `Authority` every company's documents are cleared with |
 | `Draft::validate` | none | A draft's shape and the authority's rules, with the derived amounts (see Drafts) |
+| `issue_document` | `.documents.issue` | Records a valid draft as an `issued` document; `Invalid`, `CodeNumberTaken`; audit action `finance.einvoice.document.issued` |
+| `get_document` | `.view` | A `DocumentView`: the document, its lines, events, status, identifiers, validation link, cancellation deadline, attention flags and whether a submit job waits |
+| `submit_document` | `.documents.submit` | Queues the submit job as the caller (answers its ID); `NotSubmittable`, `SourceTaken`, `MissingCredentials`, `SigningKeyRequired`, `AlreadyQueued`; audit action `finance.einvoice.submission.queued` |
+| `refresh_status` | `.documents.submit` | Reads the status at the authority and records what changed; `NotSubmitted`, `Authority(code)` |
+| `cancel_document` | `.documents.cancel` | Cancels a valid or rejected document at the authority with a reason; `NotCancellable`, `CancellationPeriodOver`, `ActiveReferencingDocuments`, `InvalidReason`, `CancellationRefused`, `RateLimited`, `AuthorityUnavailable` |
+| `test_connection` | `.settings.manage` | Logs in afresh with the company's current credentials; audit action `finance.einvoice.connection.tested` |
+| `run_submission`, `run_poll` | `.documents.submit` | The submit and poll jobs' bodies (see Clearance), callable directly for one attempt |
 
 Every call authorizes its capability for the scope's actor and the target
 company at the moment it runs (Core Company's `authorize_target`): a missing
@@ -62,13 +72,88 @@ It answers the `ValidDraft` with every line's derived amounts, or every
 `FieldError` in Bilimbi's words. The walkthrough prints both for invoices,
 notes, self-billed and consolidated drafts.
 
+## Clearance
+
+A recorded document is cleared with the authority by the submit and poll jobs
+(`finance/einvoice-submit`, 100 attempts, and `finance/einvoice-poll`, 20
+attempts), Base Queue workers queued with `enqueue_for`, so each runs as the
+person who asked: the queue re-proves that person and their
+`.documents.submit` grant on every attempt, every write of a job opens with
+`Execution::begin` (which fences the job's lease), and the arguments are the
+company and document IDs only. Each outcome is a new status event with the
+authority's answer beside it, and each outcome the authority decides is also
+an audit action; nothing edits a document. No transaction is held across a
+call to the authority.
+
+- **Submitting.** A submission row holding the exact bytes (signed when the
+  company's format version is) commits before the HTTP call, so an attempt
+  that dies mid-flight still leaves what it sent. The answer is then recorded
+  under the company lock, only while the document is still submittable:
+  `submitted` (with the submission UID and document UUID; the poll job is
+  queued; action `finance.einvoice.submitted`), `refused` (action
+  `finance.einvoice.refused`), `duplicate` (action
+  `finance.einvoice.submission.duplicate`; the job stops with
+  `duplicate_submission` for an operator), `rate_limited` (retry
+  `rate_limited`) or `unavailable` (retry `authority_unavailable`). A document
+  that cannot be sent records `unsendable` and stops the job with its reason
+  (`missing_credentials`, `signing_key_required`, `source_taken`, ...).
+- **Never resubmitting blindly.** After a duplicate, or an outage that may
+  have hidden an accepted request, and before any retry that finds an earlier
+  attempt without a final answer, the authority is asked for the document by
+  its code number among what was sent from a minute before the oldest such
+  attempt; what it holds is recorded as `submitted`. Only a clean not-found
+  lets the bytes go out again; a search that cannot answer records
+  `search_deferred` and retries without sending.
+- **Overdue.** The queue retries after `min(3600, 2^attempt)` seconds, so a
+  hundred attempts span about four days. Once the authority has been
+  unavailable for its outage allowance (72 hours) since the document's first
+  failed attempt, an `overdue` event and the action
+  `finance.einvoice.submission.overdue` give the operator notice once; the job
+  keeps retrying.
+- **Polling.** The poll job reads the submission's progress up to ten times,
+  four seconds apart, and retries `in_progress` while the authority is still
+  processing. Then it reads the document's status and records `valid` (with
+  the long ID that completes the validation link; action
+  `finance.einvoice.validated`) or `invalid` (with the failed validation
+  steps; action `finance.einvoice.invalid`). A 404 right after a submission is
+  retried as `not_yet_available`; another refusal records `status_unreadable`.
+- **Refreshing** records what changed: a buyer's rejection request becomes
+  `rejected` (action `finance.einvoice.rejected`), a cancellation on the
+  portal `cancelled`, and an unchanged status `status_checked`.
+- **Cancelling** is guarded before the authority is asked: a valid or
+  rejected document, inside the 72 hours after validation, with no note the
+  authority holds (submitted, valid or rejected) referencing it, and a reason
+  of 1 to 300 characters. The authority's refusal is recorded as
+  `cancellation_refused`. Each outcome is recorded only while the document,
+  read again under the company lock, is still cancellable.
+
+The ledger entry a validated document posts and a cancelled one reverses are
+slice NE4's (`TODO(NE4 ledger bridge)` in `clearance.rs`). A document's view
+flags `Overdue` and `RejectionRequested` for an operator.
+
+### The MyInvois client
+
+`myinvois/client.rs` calls the API only through Base Integration's `send`, as
+the person the call acts for, so each exchange is recorded under them without
+bodies or headers (system `myinvois`, owner `finance/einvoice` and the
+company). Logging in (`POST /connect/token`, client credentials, scope
+`InvoicingAPI`) yields a token that lives an hour; it is cached in process
+memory per company, environment and client ID until two minutes before it
+lapses, and a 401 drops it, so the authority's 12 logins a minute are never
+spent per call. A token never reaches the database, a log or an exchange
+record. The request envelopes are written by the module's ordered JSON
+writer, like the documents. `myinvois/api.rs` turns each answer into the
+`Authority` callbacks' meta-term outcomes (`SubmitOutcome`, `Progress`,
+`Search`, `StatusRead`, `CancelOutcome`, `LoginOutcome`), keeping the
+authority's answer intact. Nothing in the client retries.
+
 ## Capabilities
 
 Five keys, verbatim from Bilimbi, under the `finance` domain, all granted to
 `tenant_owner`: `finance.einvoice.view`, `.documents.issue`,
 `.documents.submit`, `.documents.cancel` and `.settings.manage`. The module
 declares the verbs `issue`, `submit` and `cancel` (Bilibi merges verbs across
-modules). It has no pages, menu items or agent operations yet.
+modules). It contributes the two queue workers above and has no pages, menu items or agent operations yet.
 
 ## Settings
 
@@ -96,7 +181,10 @@ default that names a country, a tax number or a credential.
   `payable_account`, `expense_account`, `purchase_tax_account`).
 - Platform settings (operators, `base.settings.global.manage`):
   `finance.einvoice.<environment>.api_url` and `.portal_url`, an https URL
-  without a path, defaulting to the authority's published hosts.
+  without a path, defaulting to the authority's published hosts. The sandbox
+  API URL may also be an http URL on this machine's loopback (`127.0.0.1`,
+  `[::1]` or `localhost`, with a port), where a stand-in answers sandbox calls;
+  production is https only.
 
 Encrypted values use Base Settings' envelope (`BILIBI_SETTINGS_KEY`), are masked
 on screen and revealed only through its password-checked reveal. `setup`
@@ -118,9 +206,11 @@ consolidation window, the validation link, its rules over a draft
 format, version and exact bytes to submit, signed at the given time when the
 version is signed, `SigningKeyRequired` without a key, `UnsupportedVersion`
 for a version it lacks). MyInvois is the only implementation (Guideline v4.8
-and the SDK as read on 12 October 2026). The API callbacks join the trait with
-the MyInvois client, and the consolidated document's shape and refusal with
-consolidation, in later versions.
+and the SDK as read on 12 October 2026). Its API callbacks (`login`, `submit`,
+`submission_progress`, `find_submission`, `document_status`, `cancel`) take a
+`Connection` (the outgoing edge, the person, the company, its credentials and
+the environment's base URL) and answer in meta-terms. The consolidated
+document's shape and refusal join the trait with consolidation.
 
 Everything MyInvois defines sits in `src/myinvois.rs` and its submodules:
 
