@@ -1,20 +1,26 @@
 //! Bilimbi.Finance.FixedAssets: immutable category defaults and acquisition
-//! assumptions. Registration recognises an existing debit; it never posts or
-//! takes ownership of it. Runs/corrections and pages follow in NX2/NX3.
+//! assumptions, monthly runs and immutable corrections. Registration recognises
+//! an existing debit; it never posts or takes ownership of it. Pages follow in NX3.
 mod acquisitions;
+mod activity;
 mod categories;
 mod contributions;
+mod reports;
 mod schedule;
 mod store;
 
+pub use activity::{DisposalInput, Event, EventAction, EventInput, Run, RunException, RunItem};
 use bilibi_company::organisation;
 use bilibi_database::{Db, Error, MutationTransaction};
 use bilibi_finance_ledger::{FieldError, Ledger, LedgerError, Money};
 use bilibi_finance_payables::{Payables, PayablesError};
 use bilibi_module_registry::{Layer, Module, Service};
 use bilibi_tenancy::Scope;
-pub use contributions::{ACQUIRE, CAPABILITIES, CONFIGURE, VIEW};
+pub use contributions::{
+    ACQUIRE, CAPABILITIES, CONFIGURE, DEPRECIATE, DISPOSE, REVERSE, VIEW, VOID,
+};
 use jiff::civil::Date;
+pub use reports::{Reconciliation, ReconciliationKind, RegisterReport, RegisterRow, ReportPins};
 use rust_decimal::Decimal;
 use serde::Serialize;
 use std::sync::Arc;
@@ -26,7 +32,10 @@ pub const SERVICE: &str = "finance/fixed_assets.fixed_assets";
 inventory::submit! { Module {
     id: MODULE, layer: Layer::Domains,
     dependencies: &["base/authz", "base/database", "base/tenancy", "core/company", "finance/ledger", "finance/payables"],
-    migrations: &[("finance-fixed-assets-001-acquisitions", include_str!("../migrations/001-acquisitions.sql"))],
+    migrations: &[
+        ("finance-fixed-assets-001-acquisitions", include_str!("../migrations/001-acquisitions.sql")),
+        ("finance-fixed-assets-002-runs-corrections", include_str!("../migrations/002-runs-corrections.sql")),
+    ],
     services: &[Service { id: SERVICE, factory: |s| Ok(Arc::new(FixedAssets {
         db: s.get::<Db>("base/database.pool")?.as_ref().clone(),
         ledger: s.get(bilibi_finance_ledger::SERVICE)?,
@@ -55,6 +64,40 @@ pub enum FixedAssetsError {
     NotAcquisitionDebit,
     #[error("The acquisition entry was reversed. Void the asset's acquisition from its page.")]
     AcquisitionReversed,
+    #[error("Invalid period")]
+    InvalidPeriod,
+    #[error("Open a fiscal year covering this month before running depreciation.")]
+    PeriodNotFound,
+    #[error("The period is closed. Choose an open period.")]
+    PeriodClosed,
+    #[error("This date precedes recorded asset activity. Choose a later date.")]
+    LaterActivity,
+    #[error("Reverse later depreciation runs and standing disposals first.")]
+    DependentPostings,
+    #[error("Empty run")]
+    EmptyRun,
+    #[error("Already reversed")]
+    AlreadyReversed,
+    #[error("Before original")]
+    BeforeOriginal,
+    #[error("Before acquisition")]
+    BeforeAcquisition,
+    #[error("Already disposed")]
+    AlreadyDisposed,
+    #[error("Not disposed")]
+    NotDisposed,
+    #[error("Post depreciation through the last completed month before disposing of this asset.")]
+    DepreciationRequired,
+    #[error("Invalid settlement account")]
+    InvalidSettlementAccount,
+    #[error("This asset's acquisition was voided, so it cannot be disposed of.")]
+    AssetVoided,
+    #[error("This asset's acquisition is already voided.")]
+    AlreadyVoided,
+    #[error("Only an asset whose acquisition entry was reversed in the ledger can be voided.")]
+    AcquisitionNotReversed,
+    #[error("Reverse the standing disposal before voiding this asset's acquisition.")]
+    DisposalStanding,
     #[error("Invalid option")]
     InvalidOption,
     #[error("Invalid input")]

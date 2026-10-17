@@ -9,6 +9,10 @@ pub(crate) enum Table {
     Category,
     Revision,
     Asset,
+    Run,
+    Item,
+    Exception,
+    Event,
 }
 impl Table {
     fn name(self) -> &'static str {
@@ -16,6 +20,10 @@ impl Table {
             Self::Category => "finance_fixed_assets_categories",
             Self::Revision => "finance_fixed_assets_category_revisions",
             Self::Asset => "finance_fixed_assets_assets",
+            Self::Run => "finance_fixed_assets_runs",
+            Self::Item => "finance_fixed_assets_run_items",
+            Self::Exception => "finance_fixed_assets_run_exceptions",
+            Self::Event => "finance_fixed_assets_events",
         }
     }
     fn kind(self) -> &'static str {
@@ -23,6 +31,10 @@ impl Table {
             Self::Category => "finance.fixed-assets.category",
             Self::Revision => "finance.fixed-assets.category_revision",
             Self::Asset => "finance.fixed-assets.asset",
+            Self::Run => "finance.fixed-assets.run",
+            Self::Item => "finance.fixed-assets.run_item",
+            Self::Exception => "finance.fixed-assets.run_exception",
+            Self::Event => "finance.fixed-assets.event",
         }
     }
     fn fields(self) -> &'static [&'static str] {
@@ -49,6 +61,58 @@ impl Table {
                 "method",
                 "life_months",
                 "annual_rate",
+                "reason",
+                "recorded_by_user_id",
+                "recorded_by_impersonator_id",
+                "recorded_at",
+            ],
+            Self::Run => &[
+                "id",
+                "tenant_id",
+                "company_id",
+                "period",
+                "entry_id",
+                "entry_number",
+                "total",
+                "recorded_by_user_id",
+                "recorded_by_impersonator_id",
+                "recorded_at",
+            ],
+            Self::Item => &[
+                "id",
+                "tenant_id",
+                "company_id",
+                "run_id",
+                "asset_id",
+                "amount",
+                "recorded_by_user_id",
+                "recorded_by_impersonator_id",
+                "recorded_at",
+            ],
+            Self::Exception => &[
+                "id",
+                "tenant_id",
+                "company_id",
+                "run_id",
+                "asset_id",
+                "recorded_by_user_id",
+                "recorded_by_impersonator_id",
+                "recorded_at",
+            ],
+            Self::Event => &[
+                "id",
+                "tenant_id",
+                "company_id",
+                "event_number",
+                "asset_id",
+                "run_id",
+                "action",
+                "effective_date",
+                "entry_id",
+                "entry_number",
+                "reverses_event_id",
+                "proceeds",
+                "accumulated",
                 "reason",
                 "recorded_by_user_id",
                 "recorded_by_impersonator_id",
@@ -86,10 +150,13 @@ pub(crate) fn identity(s: &Scope, company: i64) -> Value {
 pub(crate) async fn insert(
     c: &impl GenericClient,
     t: Table,
-    value: Value,
+    mut value: Value,
 ) -> DbResult<(Value, Change)> {
+    if value["id"].is_null() {
+        value["id"] = reserve(c, t).await?.into();
+    }
     let name = t.name();
-    let r = c.query_one(&format!("INSERT INTO {name} SELECT (jsonb_populate_record(NULL::{name}, $1::jsonb || jsonb_build_object('id',nextval(pg_get_serial_sequence('{name}','id'))))).* RETURNING to_jsonb({name})"), &[&value]).await?;
+    let r = c.query_one(&format!("INSERT INTO {name} SELECT (jsonb_populate_record(NULL::{name}, $1::jsonb)).* RETURNING to_jsonb({name})"), &[&value]).await?;
     let value: Value = r.get(0);
     Ok((
         value.clone(),
@@ -100,6 +167,32 @@ pub(crate) async fn insert(
             new: value,
         },
     ))
+}
+pub(crate) async fn reserve(c: &impl GenericClient, t: Table) -> DbResult<i64> {
+    Ok(c.query_one(
+        "SELECT nextval(pg_get_serial_sequence($1,'id'))",
+        &[&t.name()],
+    )
+    .await?
+    .get(0))
+}
+pub(crate) async fn all(
+    c: &impl GenericClient,
+    t: Table,
+    tenant: i64,
+    company: i64,
+) -> DbResult<Vec<Value>> {
+    Ok(c.query(
+        &format!(
+            "SELECT to_jsonb(r) FROM {} r WHERE tenant_id=$1 AND company_id=$2 ORDER BY id",
+            t.name()
+        ),
+        &[&tenant, &company],
+    )
+    .await?
+    .iter()
+    .map(|r| r.get(0))
+    .collect())
 }
 pub(crate) async fn raw(
     c: &impl GenericClient,
@@ -124,7 +217,7 @@ pub(crate) fn int(v: &Value, key: &str) -> DbResult<i64> {
 pub(crate) fn string(v: &Value, key: &str) -> DbResult<String> {
     v[key].as_str().map(str::to_owned).ok_or(Error::Invalid)
 }
-fn decimal(v: &Value, key: &str) -> DbResult<Decimal> {
+pub(crate) fn decimal(v: &Value, key: &str) -> DbResult<Decimal> {
     let text = v[key]
         .as_str()
         .map(str::to_owned)
@@ -215,7 +308,15 @@ pub struct EvidencePage {
     pub next: Option<i64>,
 }
 pub(crate) fn datasets() -> Vec<&'static str> {
-    vec!["asset", "category", "category_revision"]
+    vec![
+        "asset",
+        "category",
+        "category_revision",
+        "event",
+        "run",
+        "run_exception",
+        "run_item",
+    ]
 }
 pub(crate) async fn page(
     c: &impl GenericClient,
@@ -229,6 +330,10 @@ pub(crate) async fn page(
         "asset" => Table::Asset,
         "category" => Table::Category,
         "category_revision" => Table::Revision,
+        "event" => Table::Event,
+        "run" => Table::Run,
+        "run_exception" => Table::Exception,
+        "run_item" => Table::Item,
         _ => return Err(FixedAssetsError::InvalidOption),
     };
     let limit = limit.unwrap_or(500);
@@ -244,7 +349,16 @@ pub(crate) async fn page(
                 format!("to_char(r.{f},'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS {f}")
             } else if f.ends_with("_date") {
                 format!("to_char(r.{f},'YYYY-MM-DD') AS {f}")
-            } else if matches!(*f, "cost" | "residual_value" | "annual_rate") {
+            } else if matches!(
+                *f,
+                "cost"
+                    | "residual_value"
+                    | "annual_rate"
+                    | "total"
+                    | "amount"
+                    | "proceeds"
+                    | "accumulated"
+            ) {
                 format!("r.{f}::text AS {f}")
             } else {
                 format!("r.{f}")

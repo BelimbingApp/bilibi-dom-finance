@@ -1504,14 +1504,26 @@ impl Ledger {
         company_id: i64,
         query: &TotalsQuery,
     ) -> Result<AccountTotals> {
-        let window = totals::Window::new(query)?;
         let client = self.db.get().await.map_err(Error::from)?;
-        authorize(&**client, scope, company_id, VIEW).await?;
+        self.account_totals_on(&**client, scope, company_id, query)
+            .await
+    }
+
+    /// Authorized aggregate read on the caller's snapshot or write transaction.
+    pub async fn account_totals_on(
+        &self,
+        client: &(impl GenericClient + Sync),
+        scope: &Scope,
+        company_id: i64,
+        query: &TotalsQuery,
+    ) -> Result<AccountTotals> {
+        let window = totals::Window::new(query)?;
+        authorize(client, scope, company_id, VIEW).await?;
         let tenant = scope.tenant();
-        let book = books::find(&**client, tenant, company_id)
+        let book = books::find(client, tenant, company_id)
             .await?
             .ok_or(LedgerError::BookNotOpen)?;
-        let (through, rows) = totals::by_account(&**client, tenant, company_id, &window).await?;
+        let (through, rows) = totals::by_account(client, tenant, company_id, &window).await?;
         Ok(Totals {
             company_id,
             from: window.from,
@@ -2390,8 +2402,19 @@ impl Ledger {
         company_id: i64,
     ) -> Result<Vec<FiscalYear>> {
         let client = self.db.get().await.map_err(Error::from)?;
-        authorize(&**client, scope, company_id, VIEW).await?;
-        Ok(periods::state(&**client, scope.tenant(), company_id)
+        self.list_fiscal_years_on(&**client, scope, company_id)
+            .await
+    }
+
+    /// Authorized period states on the caller's connection, including its writes.
+    pub async fn list_fiscal_years_on(
+        &self,
+        client: &(impl GenericClient + Sync),
+        scope: &Scope,
+        company_id: i64,
+    ) -> Result<Vec<FiscalYear>> {
+        authorize(client, scope, company_id, VIEW).await?;
+        Ok(periods::state(client, scope.tenant(), company_id)
             .await?
             .years)
     }
