@@ -858,8 +858,19 @@ impl Ledger {
     /// [`Ledger::open_book`].
     pub async fn get_book(&self, scope: &Scope, company_id: i64) -> Result<Book> {
         let client = self.db.get().await.map_err(Error::from)?;
-        authorize(&**client, scope, company_id, VIEW).await?;
-        books::find(&**client, scope.tenant(), company_id)
+        self.get_book_on(&**client, scope, company_id).await
+    }
+
+    /// The same authorized book read on the caller's connection, so an owner
+    /// holding the company lock never needs a second pool connection.
+    pub async fn get_book_on(
+        &self,
+        client: &(impl GenericClient + Sync),
+        scope: &Scope,
+        company_id: i64,
+    ) -> Result<Book> {
+        authorize(client, scope, company_id, VIEW).await?;
+        books::find(client, scope.tenant(), company_id)
             .await?
             .ok_or(LedgerError::BookNotOpen)
     }
@@ -925,8 +936,19 @@ impl Ledger {
     /// The company's accounts, ordered by code (`finance.ledger.view`).
     pub async fn list_accounts(&self, scope: &Scope, company_id: i64) -> Result<Vec<Account>> {
         let client = self.db.get().await.map_err(Error::from)?;
-        authorize(&**client, scope, company_id, VIEW).await?;
-        Ok(accounts::list(&**client, scope.tenant(), company_id).await?)
+        self.list_accounts_on(&**client, scope, company_id).await
+    }
+
+    /// The same authorized chart read on the caller's connection. A record
+    /// owner validates account choices while holding its company write lock.
+    pub async fn list_accounts_on(
+        &self,
+        client: &(impl GenericClient + Sync),
+        scope: &Scope,
+        company_id: i64,
+    ) -> Result<Vec<Account>> {
+        authorize(client, scope, company_id, VIEW).await?;
+        Ok(accounts::list(client, scope.tenant(), company_id).await?)
     }
 
     /// Adds an account (`finance.ledger.accounts.manage`). `retained_earnings`

@@ -89,6 +89,19 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         .put_settings(&manager, 1, &SettingsChange::default())
         .await?;
     assert_eq!(payroll.list_settings_changes(&manager, 1).await?.len(), n);
+    // Leave exactly one slot: validation must use its write connection, not
+    // wait forever for a second one while holding the company lock.
+    let mut held = Vec::new();
+    for _ in 0..15 {
+        held.push(db.get().await?);
+    }
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        payroll.put_settings(&manager, 1, &SettingsChange::default()),
+    )
+    .await??;
+    drop(held);
+    println!("configuration completes with 15 of 16 pool slots occupied");
     for (direction, exp, liab) in [
         ("earning", Some(expense), None),
         ("deduction", None, Some(claims)),
@@ -302,9 +315,21 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         reason: "Historical correction".into(),
         entry_date: Some(date(2027, 2, 3)),
     };
+    let grants = services.get::<bilibi_authz::grants::Grants>("base/authz.grants")?;
+    grants
+        .set_direct(&admin, 1, bilibi_finance_ledger::VIEW, Some(false))
+        .await?;
+    assert!(matches!(
+        ledger.get_book(&manager, 1).await,
+        Err(LedgerError::Unauthorized)
+    ));
     let corrected = payroll
         .reverse_posting(&manager, 1, ids[0], &reversal)
         .await?;
+    grants
+        .set_direct(&admin, 1, bilibi_finance_ledger::VIEW, None)
+        .await?;
+    println!("historical reversal succeeds with ledger posting but explicitly denied ledger view");
     assert!(corrected.last_failure.is_none());
     let mirror = ledger
         .get_entry(&manager, 1, corrected.reversal.unwrap().entry_id)

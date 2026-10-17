@@ -163,7 +163,7 @@ impl Payroll {
             .into_iter()
             .map(store::decode)
             .collect::<Result<_>>()?;
-        let book = self.ledger.get_book(scope, company).await?;
+        let book = self.ledger.get_book_on(tx.sql(), scope, company).await?;
         if book.currency_code != document.currency() {
             return Err(failed(format!(
                 "the book is kept in {}, the source in {}",
@@ -312,9 +312,7 @@ impl Payroll {
                 },
             )
             .await?;
-        let units = self.ledger.get_book(scope, company).await?.minor_units;
-        let amount = Money::new(entry.lines.iter().map(|l| l.debit.amount()).sum(), units)
-            .map_err(|e| failed(e.to_string()))?;
+        let amount = entry.lines.iter().map(|l| l.debit).sum();
         store::record(
             &mut tx,
             scope,
@@ -446,6 +444,15 @@ fn infrastructure(error: &PayrollError) -> bool {
     )
 }
 fn transient(error: &PayrollError) -> bool {
+    // Transparent error wrappers forward their inner source(), skipping the
+    // database enum itself. Match pool failures before traversing the chain.
+    if matches!(
+        error,
+        PayrollError::Failed(Error::Pool(_))
+            | PayrollError::Ledger(LedgerError::Failed(Error::Pool(_)))
+    ) {
+        return true;
+    }
     let mut cause: Option<&(dyn StdError + 'static)> = Some(error);
     while let Some(error) = cause {
         if let Some(db) = error.downcast_ref::<tokio_postgres::error::DbError>() {

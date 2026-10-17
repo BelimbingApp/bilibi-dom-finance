@@ -56,7 +56,10 @@ impl Payroll {
             old.as_ref()
                 .and_then(|v| v["claims_payable_account_id"].as_i64())
         });
-        let accounts = self.ledger.list_accounts(scope, company).await?;
+        let accounts = self
+            .ledger
+            .list_accounts_on(tx.sql(), scope, company)
+            .await?;
         let mut errors = Vec::new();
         account(
             &accounts,
@@ -141,7 +144,10 @@ impl Payroll {
         ) {
             errors.push(FieldError::new("direction", "is invalid"));
         }
-        let accounts = self.ledger.list_accounts(scope, company).await?;
+        let accounts = self
+            .ledger
+            .list_accounts_on(tx.sql(), scope, company)
+            .await?;
         let expense_needed = matches!(direction.as_str(), "earning" | "employer" | "claim");
         let liability_needed = matches!(direction.as_str(), "deduction" | "employer");
         for (field, id, needed, liability) in [
