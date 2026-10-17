@@ -27,6 +27,7 @@ use jiff::civil::{date, Date};
 
 pub mod attachments;
 pub mod controls;
+pub mod matching;
 pub mod payables;
 pub mod payments;
 pub mod payroll;
