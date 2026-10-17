@@ -251,8 +251,12 @@ fn scale(errors: &mut Errors, field: &str, value: Option<Decimal>, places: u32) 
     }
 }
 
+// Two places, always written with both (`10.20`, `0.00`), as the columns hold
+// them.
 fn money(value: Decimal) -> Decimal {
-    value.round_dp_with_strategy(2, RoundingStrategy::MidpointAwayFromZero)
+    let mut money = value.round_dp_with_strategy(2, RoundingStrategy::MidpointAwayFromZero);
+    money.rescale(2);
+    money
 }
 
 impl Draft {
@@ -503,7 +507,7 @@ impl DraftAddress {
             .filter(|line| !line.is_empty())
             .collect();
         if lines.is_empty() {
-            errors.add("lines", "can't be blank");
+            errors.add("lines", "should have at least 1 item(s)");
         } else if lines.len() > 3 {
             errors.add("lines", "should have at most 3 item(s)");
         }

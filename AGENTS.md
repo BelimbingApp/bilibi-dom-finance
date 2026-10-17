@@ -147,6 +147,15 @@ they govern this code and are not copied here.
 - Change receivable drafts through `Receivables`, not its tables: null/missing
   lines preserve snapshots, an array replaces them atomically, and discard
   keeps them. Issuing, payments and attachment sources belong to NR2.
+- Validate a document to issue with `Draft::validate` (the shape every
+  authority shares, then `Authority::validate`), never with checks of your own
+  on the facade: it derives every amount and answers `FieldError`s at the
+  field's path in Bilimbi's words. Write the authority's JSON only through
+  `myinvois::json::Json` and build and sign it only through `myinvois::ubl`
+  and `myinvois::signer` (or `Authority::payload`), never `serde_json`: the
+  authority hashes and signs exact bytes, and `serde_json`'s maps sort keys
+  and reformat numbers. Read a certificate's facts with `Certificate::parse`
+  and report them, never the PEM.
 
 ## Maintaining this file
 

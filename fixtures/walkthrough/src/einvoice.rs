@@ -1,18 +1,28 @@
 //! The e-invoice section of the walkthrough: the module's facade answering
-//! what Bilimbi's does (code lists, overrides, setup), the company settings
-//! with their validators and encryption, the signing certificate and key
-//! validators, and the database's own refusals. Every line is the actual
-//! answer; nothing here is a test double. A throwaway certificate and key are
-//! made with `openssl` for the run and removed after it.
+//! what Bilimbi's does (code lists, overrides, setup with the certificate's
+//! facts), the company settings with their validators and encryption, the
+//! signing certificate and key validators, the authority's rules over drafts
+//! (accepted with their derived amounts, or refused in Bilimbi's words), the
+//! payload a recorded document becomes (unsigned, and signed and verified),
+//! and the database's own refusals. Every line is the actual answer; nothing
+//! here is a test double. A throwaway certificate and key are made with
+//! `openssl` for the run and removed after it.
 use bilibi_database::{Db, MutationBoundary};
+use bilibi_finance_einvoice::myinvois::json::Json;
+use bilibi_finance_einvoice::myinvois::signer;
 use bilibi_finance_einvoice::{
-    Authority, CodeOverrideChange, Einvoice, EinvoiceError, FormatKind, SERVICE,
+    Authority, Certificate, CodeOverrideChange, Details, Document, DocumentLine, Draft,
+    DraftAddress, DraftLine, DraftParty, Einvoice, EinvoiceError, FieldError, FormatKind, Original,
+    PartySnapshot, PayloadOptions, PrivateKey, SigningKey, ValidDraft, ValidationContext, SERVICE,
 };
 use bilibi_module_registry::Services;
 use bilibi_party_ids::OrganisationId;
 use bilibi_settings::{Settings, Target};
 use bilibi_tenancy::Scope;
+use jiff::Timestamp;
+use rust_decimal::Decimal;
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::{fmt::Debug, process::Command};
 
 fn show<T: Debug>(step: &str, result: Result<T, EinvoiceError>) {
@@ -105,7 +115,7 @@ fn make_pems() -> Result<Pems, Box<dyn std::error::Error>> {
         "-days",
         "30",
         "-subj",
-        "/C=MY/O=Walkthrough Sdn Bhd/CN=Walkthrough",
+        "/C=MY/O=Walkthrough Sdn Bhd/organizationIdentifier=C2584563222/serialNumber=201901234567/CN=Walkthrough",
         "-keyout",
         &key,
         "-out",
@@ -665,7 +675,703 @@ pub async fn prove(
         println!("{key}: {}", settings.get_global(&**client, key).await?);
     }
 
+    drafts_and_payloads(&einvoice, manager, company, &pems).await?;
     database_refusals(db).await?;
+    Ok(())
+}
+
+fn d(text: &str) -> Decimal {
+    Decimal::from_str_exact(text).expect("a decimal")
+}
+
+fn text(value: &str) -> Option<String> {
+    Some(value.to_owned())
+}
+
+fn buyer() -> DraftParty {
+    DraftParty {
+        name: text("Buyer's Name"),
+        tax_id: text("C29702635060"),
+        registration_type: text("BRN"),
+        registration_number: text("D12345678"),
+        sales_tax_registration: None,
+        email: text("buyer@email.com"),
+        phone: text("+60123456789"),
+        industry_code: None,
+        business_activity: None,
+        address: Some(DraftAddress {
+            lines: vec!["Lot 66".into(), "Bangunan Merdeka".into(), "".into()],
+            city: text("Kuala Lumpur"),
+            postcode: text("50480"),
+            state_code: text("14"),
+            country_code: text("MYS"),
+        }),
+    }
+}
+
+fn draft_line(
+    description: &str,
+    quantity: &str,
+    unit_price: &str,
+    tax_type: &str,
+    rate: &str,
+) -> DraftLine {
+    DraftLine {
+        description: text(description),
+        classification_code: text("003"),
+        tariff_code: None,
+        origin_country_code: None,
+        quantity: Some(d(quantity)),
+        unit_code: text("C62"),
+        unit_price: Some(d(unit_price)),
+        discount_amount: None,
+        charge_amount: None,
+        tax_type: text(tax_type),
+        tax_rate: Some(d(rate)),
+        tax_exemption_reason: None,
+        tax_amount: None,
+    }
+}
+
+fn invoice() -> Draft {
+    Draft {
+        document_type: text("01"),
+        code_number: text("  INV-2026-0001 "),
+        issued_at: Some("2026-10-01T00:30:00Z".parse().expect("a timestamp")),
+        currency_code: text("MYR"),
+        exchange_rate: None,
+        payment_means_code: text("03"),
+        payment_terms: text("Payment method is cash"),
+        billing_period_start: Some("2026-09-01".parse().expect("a date")),
+        billing_period_end: Some("2026-09-30".parse().expect("a date")),
+        billing_period_description: text("Monthly"),
+        original_document_id: None,
+        buyer: Some(buyer()),
+        supplier: None,
+        lines: vec![
+            draft_line("Laptop Peripherals", "10", "17.00", "01", "6"),
+            DraftLine {
+                discount_amount: Some(d("5.50")),
+                charge_amount: Some(d("2.00")),
+                tariff_code: text("9800.00.0010"),
+                origin_country_code: text("MYS"),
+                ..draft_line("Computer Monitor", "1.5", "333.333", "01", "6")
+            },
+            DraftLine {
+                tax_exemption_reason: text("Exempt New Means of Transport"),
+                ..draft_line("Wireless Mouse", "3", "15.00", "E", "0")
+            },
+        ],
+    }
+}
+
+fn outcome(step: &str, result: &Result<ValidDraft, Vec<FieldError>>) {
+    match result {
+        Ok(valid) => {
+            let lines: Vec<String> = valid
+                .lines
+                .iter()
+                .map(|line| {
+                    format!(
+                        "{} x {} = {} - {} + {} = {} tax {} ({} at {}%)",
+                        line.quantity,
+                        line.unit_price,
+                        line.subtotal,
+                        line.discount_amount,
+                        line.charge_amount,
+                        line.line_extension_amount,
+                        line.tax_amount,
+                        line.tax_type,
+                        line.tax_rate
+                    )
+                })
+                .collect();
+            println!(
+                "{step}: accepted {} {:?} issued {} {}; lines [{}]; total {} tax {}",
+                valid.document_type,
+                valid.code_number,
+                valid.issued_at,
+                valid.currency_code,
+                lines.join("; "),
+                valid.line_extension_amount,
+                valid.tax_amount
+            );
+        }
+        Err(errors) => {
+            let errors: Vec<String> = errors
+                .iter()
+                .map(|error| format!("{} {}", error.field, error.message))
+                .collect();
+            println!("{step}: refused ({})", errors.join("; "));
+        }
+    }
+}
+
+/// The authority's rules over drafts, and the payload a recorded document
+/// becomes.
+async fn drafts_and_payloads(
+    einvoice: &Einvoice,
+    manager: &Scope,
+    company: i64,
+    pems: &Pems,
+) -> Result<(), Box<dyn std::error::Error>> {
+    println!("\n== Drafts: the shape every authority shares, then MyInvois' rules");
+    let authority = Einvoice::authority();
+    let setup = einvoice.setup(manager, company).await?;
+    let mut codes = BTreeMap::new();
+    for list in Einvoice::code_lists() {
+        codes.insert(
+            list.to_owned(),
+            einvoice.list_codes(manager, company, list).await?,
+        );
+    }
+    let now: Timestamp = "2026-10-17T12:00:00Z".parse()?;
+    let context = ValidationContext {
+        supplier: &setup.supplier,
+        codes: &codes,
+        original: None,
+        consolidated: false,
+    };
+    let validate =
+        |draft: &Draft, context: &ValidationContext<'_>| draft.validate(now, &authority, context);
+    println!(
+        "the company's profile lacks {:?}; its codes: {} lists",
+        setup.supplier_missing,
+        codes.len()
+    );
+
+    let accepted = validate(&invoice(), &context);
+    outcome(
+        "an invoice with three lines (the code number is trimmed)",
+        &accepted,
+    );
+
+    let mut incomplete = setup.supplier.clone();
+    incomplete.registration_number = None;
+    incomplete.city = None;
+    outcome(
+        "the same invoice while the profile lacks its registration number and city",
+        &validate(
+            &invoice(),
+            &ValidationContext {
+                supplier: &incomplete,
+                ..context
+            },
+        ),
+    );
+    let mut unknown = setup.supplier.clone();
+    unknown.industry_code = text("99999");
+    outcome(
+        "the same invoice while the profile's industry code is not in the list",
+        &validate(
+            &invoice(),
+            &ValidationContext {
+                supplier: &unknown,
+                ..context
+            },
+        ),
+    );
+
+    let wrong = Draft {
+        document_type: text("99"),
+        code_number: text(&"1".repeat(51)),
+        issued_at: Some("2026-10-17T12:00:01Z".parse()?),
+        currency_code: text("USD"),
+        exchange_rate: Some(d("0")),
+        payment_means_code: text("ZZ"),
+        payment_terms: text(&"x".repeat(301)),
+        billing_period_start: Some("2026-09-30".parse()?),
+        billing_period_end: Some("2026-09-01".parse()?),
+        billing_period_description: None,
+        original_document_id: Some(7),
+        buyer: Some(DraftParty {
+            tax_id: text("c1"),
+            registration_type: text("PASS"),
+            phone: None,
+            address: Some(DraftAddress {
+                lines: vec!["   ".into()],
+                city: None,
+                postcode: None,
+                state_code: text("ZZ"),
+                country_code: text("MYS"),
+            }),
+            ..buyer()
+        }),
+        supplier: Some(buyer()),
+        lines: vec![
+            draft_line(
+                "Exempt without a reason, taxed at 6",
+                "1",
+                "10.00",
+                "E",
+                "6",
+            ),
+            DraftLine {
+                discount_amount: Some(d("20.00")),
+                classification_code: text("004"),
+                ..draft_line(
+                    "Discount above the amount, consolidated class",
+                    "1",
+                    "10.00",
+                    "01",
+                    "6",
+                )
+            },
+            DraftLine {
+                unit_code: text("ZZZ"),
+                ..draft_line(
+                    "Seven decimal places, unknown unit",
+                    "1.1234567",
+                    "10.00",
+                    "06",
+                    "5",
+                )
+            },
+            draft_line("Zero rate on a taxed type", "1", "10.00", "01", "0"),
+        ],
+    };
+    outcome(
+        "a draft that breaks many rules at once",
+        &validate(&wrong, &context),
+    );
+    outcome(
+        "a draft with nothing in it",
+        &validate(&Draft::default(), &context),
+    );
+
+    println!("\n== Notes reference the validated original they correct");
+    let note = |original_document_id: Option<i64>| Draft {
+        document_type: text("02"),
+        code_number: text("CN-2026-0001"),
+        original_document_id,
+        ..invoice()
+    };
+    let original =
+        |document_type: &str, status: &str, uuid: Option<&str>, currency: &str| Original {
+            document_type: document_type.to_owned(),
+            currency_code: currency.to_owned(),
+            status: status.to_owned(),
+            document_uuid: uuid.map(str::to_owned),
+        };
+    fn with<'a>(context: &ValidationContext<'a>, original: &'a Original) -> ValidationContext<'a> {
+        ValidationContext {
+            original: Some(original),
+            ..*context
+        }
+    }
+    outcome(
+        "a credit note naming no original",
+        &validate(&note(None), &context),
+    );
+    outcome(
+        "a credit note naming a document that is not the company's",
+        &validate(&note(Some(7)), &context),
+    );
+    outcome(
+        "a credit note of an original the authority has not validated",
+        &validate(
+            &note(Some(7)),
+            &with(&context, &original("01", "submitted", None, "MYR")),
+        ),
+    );
+    outcome(
+        "a credit note of a validated original without a UUID",
+        &validate(
+            &note(Some(7)),
+            &with(&context, &original("01", "valid", None, "MYR")),
+        ),
+    );
+    outcome(
+        "a credit note of another note",
+        &validate(
+            &note(Some(7)),
+            &with(&context, &original("03", "valid", Some("UUID-1"), "MYR")),
+        ),
+    );
+    outcome(
+        "a credit note of a self-billed invoice",
+        &validate(
+            &note(Some(7)),
+            &with(&context, &original("11", "valid", Some("UUID-1"), "MYR")),
+        ),
+    );
+    outcome(
+        "a credit note in another currency than its original",
+        &validate(
+            &note(Some(7)),
+            &with(&context, &original("01", "valid", Some("UUID-1"), "USD")),
+        ),
+    );
+    outcome(
+        "a credit note of a validated invoice (a buyer's rejection request leaves it valid)",
+        &validate(
+            &note(Some(7)),
+            &with(&context, &original("01", "rejected", Some("UUID-1"), "MYR")),
+        ),
+    );
+    outcome(
+        "an invoice naming an original",
+        &validate(
+            &Draft {
+                original_document_id: Some(7),
+                ..invoice()
+            },
+            &with(&context, &original("01", "valid", Some("UUID-1"), "MYR")),
+        ),
+    );
+
+    println!("\n== Self-billed documents name the supplier");
+    let foreign_supplier = DraftParty {
+        name: text("Overseas Supplier Pte Ltd"),
+        tax_id: text("EI00000000030"),
+        registration_type: text("BRN"),
+        registration_number: text("201912345K"),
+        industry_code: text("00000"),
+        business_activity: text("NOT APPLICABLE"),
+        address: Some(DraftAddress {
+            lines: vec!["1 Marina Boulevard".into()],
+            city: text("Singapore"),
+            postcode: text("018989"),
+            state_code: text("17"),
+            country_code: text("SGP"),
+        }),
+        ..buyer()
+    };
+    let self_billed = |supplier: DraftParty| Draft {
+        document_type: text("11"),
+        code_number: text("SB-2026-0001"),
+        buyer: None,
+        supplier: Some(supplier),
+        lines: vec![draft_line("Consulting", "2", "50.00", "06", "0")],
+        ..invoice()
+    };
+    outcome(
+        "a self-billed invoice from a foreign supplier (state 17 is retired for company 1)",
+        &validate(&self_billed(foreign_supplier.clone()), &context),
+    );
+    outcome(
+        "the same with the supplier's state code 14",
+        &validate(
+            &self_billed(DraftParty {
+                address: Some(DraftAddress {
+                    state_code: text("14"),
+                    ..foreign_supplier.address.clone().unwrap_or_default()
+                }),
+                ..foreign_supplier.clone()
+            }),
+            &context,
+        ),
+    );
+    outcome(
+        "a self-billed invoice with the foreign TIN for a supplier in Malaysia",
+        &validate(
+            &self_billed(DraftParty {
+                address: Some(DraftAddress {
+                    state_code: text("14"),
+                    country_code: text("MYS"),
+                    ..foreign_supplier.address.clone().unwrap_or_default()
+                }),
+                ..foreign_supplier.clone()
+            }),
+            &context,
+        ),
+    );
+    outcome(
+        "a self-billed invoice whose supplier lacks its industry and activity",
+        &validate(
+            &self_billed(DraftParty {
+                industry_code: None,
+                business_activity: None,
+                ..buyer()
+            }),
+            &context,
+        ),
+    );
+    outcome(
+        "a self-billed invoice that gives the buyer",
+        &validate(
+            &Draft {
+                buyer: Some(buyer()),
+                ..self_billed(foreign_supplier.clone())
+            },
+            &context,
+        ),
+    );
+
+    println!("\n== Consolidated documents go to the general public");
+    let general_public = DraftParty {
+        name: text("General Public"),
+        tax_id: text("EI00000000010"),
+        registration_type: text("BRN"),
+        registration_number: text("NA"),
+        email: None,
+        phone: text("NA"),
+        address: Some(DraftAddress {
+            lines: vec!["NA".into()],
+            city: text("NA"),
+            postcode: None,
+            state_code: text("14"),
+            country_code: text("MYS"),
+        }),
+        ..buyer()
+    };
+    let consolidated = Draft {
+        document_type: text("01"),
+        code_number: text("CONS-2026-09"),
+        buyer: Some(general_public.clone()),
+        lines: vec![
+            DraftLine {
+                classification_code: text("004"),
+                tax_amount: Some(d("30.00")),
+                ..draft_line("Receipts 001 to 100", "1", "500.00", "01", "6")
+            },
+            DraftLine {
+                classification_code: text("004"),
+                tax_amount: Some(d("0.00")),
+                ..draft_line("Receipts 101 to 120", "1", "80.00", "06", "0")
+            },
+        ],
+        ..invoice()
+    };
+    let consolidation = ValidationContext {
+        consolidated: true,
+        ..context
+    };
+    outcome(
+        "a consolidated invoice whose lines carry their sources' tax",
+        &validate(&consolidated, &consolidation),
+    );
+    outcome(
+        "the same lines without their tax",
+        &validate(
+            &Draft {
+                lines: consolidated
+                    .lines
+                    .iter()
+                    .map(|line| DraftLine {
+                        tax_amount: None,
+                        ..line.clone()
+                    })
+                    .collect(),
+                ..consolidated.clone()
+            },
+            &consolidation,
+        ),
+    );
+    outcome(
+        "a consolidated invoice to a named buyer with an ordinary classification",
+        &validate(
+            &Draft {
+                buyer: Some(buyer()),
+                lines: vec![DraftLine {
+                    tax_amount: Some(d("0.60")),
+                    ..draft_line("Receipts", "1", "10.00", "01", "6")
+                }],
+                ..consolidated.clone()
+            },
+            &consolidation,
+        ),
+    );
+    outcome(
+        "a consolidated credit note",
+        &validate(
+            &Draft {
+                document_type: text("02"),
+                ..consolidated.clone()
+            },
+            &consolidation,
+        ),
+    );
+    outcome(
+        "the general public buyer on an ordinary (not consolidated) invoice",
+        &validate(
+            &Draft {
+                buyer: Some(general_public.clone()),
+                ..invoice()
+            },
+            &context,
+        ),
+    );
+
+    println!("\n== The payload a recorded document becomes");
+    // What the issue records for the accepted invoice (the facade's own
+    // recording lands with the next version of the module).
+    let Ok(valid) = accepted else {
+        println!("no accepted draft to record");
+        return Ok(());
+    };
+    let buyer_snapshot = valid
+        .buyer
+        .as_ref()
+        .map(|party| PartySnapshot::of_party(party, false))
+        .unwrap_or_default();
+    let document = Document {
+        id: 1,
+        environment: setup.environment.clone(),
+        document_type: valid.document_type.clone(),
+        code_number: valid.code_number.clone(),
+        issued_at: valid.issued_at,
+        currency_code: valid.currency_code.clone(),
+        exchange_rate: valid.exchange_rate,
+        supplier: PartySnapshot::of_profile(&setup.supplier),
+        buyer: buyer_snapshot,
+        details: Details {
+            payment_means_code: valid.payment_means_code.clone(),
+            payment_terms: valid.payment_terms.clone(),
+            billing_period_start: valid.billing_period_start.map(|date| date.to_string()),
+            billing_period_end: valid.billing_period_end.map(|date| date.to_string()),
+            billing_period_description: valid.billing_period_description.clone(),
+            original_code_number: None,
+            original_document_uuid: None,
+        },
+        original_document_id: None,
+        line_extension_amount: valid.line_extension_amount,
+        tax_exclusive_amount: valid.line_extension_amount,
+        tax_amount: valid.tax_amount,
+        tax_inclusive_amount: valid.line_extension_amount + valid.tax_amount,
+        payable_amount: valid.line_extension_amount + valid.tax_amount,
+        lines: valid
+            .lines
+            .iter()
+            .enumerate()
+            .map(|(index, line)| DocumentLine {
+                line_number: index as i32 + 1,
+                description: line.description.clone(),
+                classification_code: line.classification_code.clone(),
+                tariff_code: line.tariff_code.clone(),
+                origin_country_code: line.origin_country_code.clone(),
+                quantity: line.quantity,
+                unit_code: line.unit_code.clone(),
+                unit_price: line.unit_price,
+                subtotal: line.subtotal,
+                discount_amount: line.discount_amount,
+                charge_amount: line.charge_amount,
+                line_extension_amount: line.line_extension_amount,
+                tax_type: line.tax_type.clone(),
+                tax_rate: Some(line.tax_rate),
+                tax_amount: line.tax_amount,
+                tax_exemption_reason: line.tax_exemption_reason.clone(),
+            })
+            .collect(),
+    };
+    let signing_time: Timestamp = "2026-10-17T12:00:00.5Z".parse()?;
+    let unsigned = authority.payload(
+        &document,
+        &PayloadOptions {
+            version: "1.0",
+            signing_key: None,
+        },
+        signing_time,
+    );
+    match &unsigned {
+        Ok(payload) => {
+            let text = String::from_utf8_lossy(&payload.bytes);
+            println!(
+                "version 1.0 (unsigned): {} {} bytes, signature present: {}",
+                payload.format,
+                payload.bytes.len(),
+                text.contains("UBLExtensions")
+            );
+            println!("  {text}");
+            println!(
+                "  reads back as the same ordered JSON: {}",
+                Json::decode(&text)
+                    .map(|json| json.encode() == text)
+                    .unwrap_or(false)
+            );
+        }
+        Err(error) => println!("version 1.0: {error}"),
+    }
+    println!(
+        "version 1.1 without a signing key: {:?}",
+        authority
+            .payload(
+                &document,
+                &PayloadOptions {
+                    version: "1.1",
+                    signing_key: None,
+                },
+                signing_time,
+            )
+            .map(|payload| payload.bytes.len())
+    );
+    println!(
+        "version 9.9: {:?}",
+        authority
+            .payload(
+                &document,
+                &PayloadOptions {
+                    version: "9.9",
+                    signing_key: None,
+                },
+                signing_time,
+            )
+            .map(|payload| payload.bytes.len())
+    );
+    let signing_key = SigningKey {
+        certificate: Certificate::parse(&pems.certificate)?,
+        key: PrivateKey::parse(&pems.key_pkcs8)?,
+    };
+    println!(
+        "the walkthrough certificate: issuer {:?}, subject {:?}, serial {}, valid {} to {}, subject attributes {:?}, key matches {}",
+        signing_key.certificate.issuer_name,
+        signing_key.certificate.subject_name,
+        signing_key.certificate.serial_number,
+        signing_key.certificate.not_before,
+        signing_key.certificate.not_after,
+        signing_key.certificate.subject,
+        signing_key.certificate.key_matches(&signing_key.key)
+    );
+    match authority.payload(
+        &document,
+        &PayloadOptions {
+            version: "1.1",
+            signing_key: Some(&signing_key),
+        },
+        signing_time,
+    ) {
+        Ok(payload) => {
+            let text = String::from_utf8_lossy(&payload.bytes);
+            println!(
+                "version 1.1 (signed): {} bytes, verifies: {:?}, signing time {:?}",
+                payload.bytes.len(),
+                signer::verify(&payload.bytes),
+                Json::decode(&text).ok().and_then(|json| {
+                    json.at(&[
+                        "Invoice",
+                        "UBLExtensions",
+                        "UBLExtension",
+                        "ExtensionContent",
+                        "UBLDocumentSignatures",
+                        "SignatureInformation",
+                        "Signature",
+                        "Object",
+                        "QualifyingProperties",
+                        "SignedProperties",
+                        "SignedSignatureProperties",
+                    ])
+                    .and_then(|properties| properties.text_at(&["SigningTime"]))
+                    .map(str::to_owned)
+                })
+            );
+            let tampered = text.replace("Laptop Peripherals", "Laptop Peripheralz");
+            println!(
+                "  the same bytes with one letter changed: {:?}",
+                signer::verify(tampered.as_bytes())
+            );
+            println!(
+                "  the unsigned bytes inside it are the 1.0 payload's with version 1.1: {}",
+                unsigned.as_ref().ok().is_some_and(|unsigned| {
+                    let expected = String::from_utf8_lossy(&unsigned.bytes)
+                        .replace(r#""listVersionID":"1.0""#, r#""listVersionID":"1.1""#);
+                    Json::decode(&text)
+                        .map(|json| signer::document_bytes(&json) == expected.as_bytes())
+                        .unwrap_or(false)
+                })
+            );
+        }
+        Err(error) => println!("version 1.1 (signed): {error}"),
+    }
     Ok(())
 }
 
