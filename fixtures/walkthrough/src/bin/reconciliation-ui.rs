@@ -152,7 +152,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         | (Err(ReconciliationError::Invalid(_)), Ok(record)) => record,
         outcomes => return Err(format!("concurrent opening outcomes: {outcomes:?}").into()),
     };
-    assert_eq!(opened.status, "open");
+    assert_eq!(opened.status.as_str(), "open");
     assert_eq!(
         facade
             .list_reconciliations(&manager, COMPANY, reserve.id)
