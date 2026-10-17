@@ -42,6 +42,20 @@ pub struct Draft {
     /// The counterparty of a self-billed document.
     pub supplier: Option<DraftParty>,
     pub lines: Vec<DraftLine>,
+    /// The transaction this document is the tax document of, when another
+    /// module already recognised it in the ledger; the facade holds it to the
+    /// ledger (`Einvoice::issue_document`), not the draft's validation.
+    pub source: Option<DraftSource>,
+}
+
+/// A source a caller names: the module that recognised the transaction (its
+/// descriptor ID, `finance/receivables`), its record in that module's terms
+/// (`document:17`), and the ledger entry that record posted.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DraftSource {
+    pub module: Option<String>,
+    pub record: Option<String>,
+    pub ledger_entry_id: Option<i64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

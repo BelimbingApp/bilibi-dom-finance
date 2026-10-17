@@ -6,9 +6,14 @@
 //! the one authority this release clears documents with (MyInvois) and its
 //! rules: the [`Draft`] a caller asks to issue and its validation, the UBL
 //! 2.1 JSON builder with its byte-exact writer, the JSON XAdES signer, and
-//! the authority's code lists with each company's overrides. Issuing,
-//! submitting and posting documents follow in later versions of this module.
-//! Other modules never read its tables.
+//! the authority's code lists with each company's overrides; clearance
+//! (issuing, submitting, refreshing and cancelling a document); and the
+//! ledger bridge: a validated document's one owned entry and a cancelled
+//! one's reversal, retried from the reconciliation read, source links to the
+//! entry another Finance module already posted, the monthly consolidated
+//! document, the printable PDF on Base Artifacts with the validation link's
+//! QR code, and the auditor's evidence datasets. Other modules never read its
+//! tables.
 //!
 //! Every function takes the sealed [`Scope`] it was handed and an explicit
 //! company id. Reads authorize their capability and writes theirs for the
@@ -23,11 +28,15 @@ mod certificate;
 mod clearance;
 mod code_lists;
 mod configuration;
+mod consolidation;
 mod contributions;
 mod document;
 mod documents;
 mod draft;
+mod evidence;
 pub mod myinvois;
+mod pdf;
+mod posting;
 mod workers;
 
 pub use authority::{
@@ -37,19 +46,30 @@ pub use authority::{
     PayloadOptions, PostingAccount, PostingRule, Progress, Search, Side, StatusRead, SubmitOutcome,
     Supplier, SupplierField, ValidationContext,
 };
+pub use consolidation::{
+    Candidates, ConsolidatedLine, ConsolidatedRequest, ConsolidationRequest, RefusedCandidate,
+};
 pub use certificate::{Certificate, CertificateError, PrivateKey};
 pub use clearance::{POLL_WORKER, SUBMIT_WORKER};
 pub use code_lists::Codes;
 pub use contributions::{CANCEL, CAPABILITIES, ISSUE, SETTINGS, SUBMIT, VIEW};
 pub use document::{AddressSnapshot, Details, Document, DocumentLine, PartySnapshot};
-pub use documents::{Attention, DocumentView, StatusEvent};
-pub use draft::{
-    Draft, DraftAddress, DraftLine, DraftParty, ValidAddress, ValidDraft, ValidLine, ValidParty,
+pub use documents::{
+    Attention, ConsolidatedSource, DocumentSummary, DocumentView, Reconciliation,
+    ReconciliationRow, SourceLink, StatusEvent,
 };
+pub use draft::{
+    Draft, DraftAddress, DraftLine, DraftParty, DraftSource, ValidAddress, ValidDraft, ValidLine,
+    ValidParty,
+};
+pub use evidence::EvidencePage;
+pub use pdf::{qr_code_svg, PdfArtifact, PdfFile, ARTIFACT_OWNER};
 pub use myinvois::signer::SigningKey;
 
 use bilibi_company::{organisation, WriteError};
+use bilibi_artifacts::Artifacts;
 use bilibi_database::{Change, Db, Error, MutationBoundary, MutationTransaction};
+use bilibi_finance_ledger::Ledger;
 use bilibi_integration::Integration;
 use bilibi_module_registry::{Layer, Module, Service};
 use bilibi_party_ids::OrganisationId;
@@ -71,11 +91,10 @@ pub const SERVICE: &str = "finance/einvoice.einvoice";
 inventory::submit! {
     Module {
         id: MODULE, layer: Layer::Domains,
-        // TODO(finance/ledger edge): the ledger bridge (NE4) adds the edge to
-        // `finance/ledger` where Bilimbi has it, with the first call into it.
         dependencies: &[
-            "base/audit", "base/authz", "base/database", "base/integration", "base/party_ids",
-            "base/queue", "base/settings", "base/tenancy", "core/company",
+            "base/artifacts", "base/audit", "base/authz", "base/database", "base/integration",
+            "base/party_ids", "base/queue", "base/settings", "base/tenancy", "core/company",
+            "finance/ledger",
         ],
         migrations: &[
             ("finance-einvoice-001-documents", include_str!("../migrations/001-documents.sql")),
@@ -89,6 +108,8 @@ inventory::submit! {
                 settings: services.get("base/settings.store")?,
                 integration: services.get("base/integration.exchanges")?,
                 queue: services.get("base/queue.store")?,
+                ledger: services.get(bilibi_finance_ledger::SERVICE)?,
+                artifacts: services.get("base/artifacts.store")?,
             })) },
             Service { id: workers::SUBMIT_SERVICE, factory: |services| workers::handler(services, workers::Job::Submit) },
             Service { id: workers::POLL_SERVICE, factory: |services| workers::handler(services, workers::Job::Poll) },
@@ -168,6 +189,39 @@ pub enum EinvoiceError {
     /// `authority_unavailable`, `not_yet_available` or `status_unreadable`.
     #[error("The authority could not answer ({0})")]
     Authority(&'static str),
+    /// A retry asked of a document that is neither valid nor rejected.
+    #[error("The document is not validated")]
+    NotPostable,
+    /// A reversal retry asked of a document that is not cancelled.
+    #[error("The document is not cancelled")]
+    NotReversible,
+    /// The ledger follow-up was tried and failed again; the reason is also
+    /// recorded as the document's `posting_failed` or `reversal_failed` event.
+    #[error("The ledger follow-up failed: {0}")]
+    LedgerFollowUpFailed(String),
+    /// The consolidated month has not ended yet.
+    #[error("The month has not ended")]
+    PeriodNotEnded,
+    /// The authority's time for issuing the month's consolidated document is over.
+    #[error("The consolidation window is closed")]
+    ConsolidationWindowClosed,
+    /// The month has no document a consolidated document may cover.
+    #[error("Nothing to consolidate")]
+    NothingToConsolidate,
+    /// A named document a consolidated document may not cover.
+    #[error("Document {0} cannot be consolidated")]
+    NotConsolidatable(i64),
+    /// Sources linked to another module's entries and sources without links.
+    #[error("Linked and unlinked documents do not consolidate together")]
+    MixedSourceLinks,
+    /// An option of another shape: an empty or non-positive list of IDs, a
+    /// limit or cursor out of range, an unknown evidence dataset.
+    #[error("Invalid option")]
+    InvalidOption,
+    /// Base Artifacts could not render, store or read the PDF; its stable
+    /// code (`policy` before storage is configured, `not_found`, ...).
+    #[error("The PDF is unavailable ({0})")]
+    Artifacts(&'static str),
     /// A database or capture failure; never a refusal.
     #[error(transparent)]
     Failed(#[from] Error),
@@ -306,6 +360,8 @@ pub struct Einvoice {
     settings: Arc<Settings>,
     integration: Arc<Integration>,
     queue: Arc<Queue>,
+    ledger: Arc<Ledger>,
+    artifacts: Arc<Artifacts>,
 }
 
 impl Einvoice {

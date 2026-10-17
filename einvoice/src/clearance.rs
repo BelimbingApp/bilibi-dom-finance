@@ -13,9 +13,9 @@
 //! recorded in a second transaction under the company lock, only while the
 //! document is still submittable.
 //!
-//! The ledger bridge (posting a validated document, reversing a cancelled
-//! one) and source links follow with slice NE4; their seams are marked
-//! `TODO(NE4 ledger bridge)`.
+//! A status that leaves ledger work (a validated document's entry, a
+//! cancelled one's reversal) runs it through the bridge (`posting.rs`) once the
+//! status is committed and outside any transaction of ours.
 use crate::authority::{
     Answer, Authority, AuthorityStatus, CancelOutcome, CancelRefusal, Connection, Credentials,
     DocumentStatus, LoginOutcome, Lookup, Original, PayloadError, PayloadOptions, Progress, Search,
@@ -23,13 +23,15 @@ use crate::authority::{
 };
 use crate::code_lists::{self, Codes};
 use crate::document::{Details, PartySnapshot};
-use crate::documents::{self, Attempt, DocumentView, NewEvent, Recorded, RELEASING};
+use crate::documents::{self, Attempt, DocumentView, NewEvent, Recorded, SourceLink, RELEASING};
 use crate::draft::Draft;
 use crate::myinvois::signer::SigningKey;
+use crate::posting::{utc_date, Bridge};
 use crate::{
-    authorize, configuration, refusal, supplier_profile, text, Certificate, Einvoice,
-    EinvoiceError, PrivateKey, Result, CANCEL, ISSUE, SUBMIT,
+    authorize, configuration, refusal, supplier_profile, text, Certificate, DraftSource, Einvoice,
+    EinvoiceError, FieldError, PrivateKey, Result, CANCEL, ISSUE, SUBMIT,
 };
+use bilibi_finance_ledger::LedgerError;
 use bilibi_audit::Attribution;
 use bilibi_company::{organisation, WriteError};
 use bilibi_database::{Error, MutationTransaction};
@@ -109,6 +111,18 @@ impl Einvoice {
     /// setting. The document, its lines and its `issued` event are recorded
     /// in one transaction with the audit action
     /// `finance.einvoice.document.issued`. Amounts are derived, never taken.
+    ///
+    /// A draft's `source` names the transaction the document is the tax
+    /// document of, when another module already recognised it in the ledger
+    /// (`finance/receivables` `document:17` and the entry it posted). The
+    /// ledger must hold that entry for that owner, unreversed and not itself a
+    /// reversal, in the document's currency and for the document's total, and
+    /// no other document that stands may link the same source; reading the
+    /// entry needs `finance.ledger.view`. The link is recorded with the
+    /// document, which then never posts when validated nor reverses when
+    /// cancelled: its accounting and its correction are the source module's,
+    /// so a note correcting a linked original is refused without its own
+    /// `source`. Each problem is a `source` field error.
     pub async fn issue_document(
         &self,
         scope: &Scope,
@@ -175,9 +189,26 @@ impl Einvoice {
         {
             return Err(EinvoiceError::CodeNumberTaken);
         }
-        // TODO(NE4 ledger bridge): a `source` (module, record, ledger entry)
-        // is held to the ledger and linked here, and a note whose original is
-        // linked is refused without one.
+        let source = match &draft.source {
+            Some(source) => Some(
+                self.source_link(tx.sql(), scope, company_id, source, &valid)
+                    .await?
+                    .map_err(|message| {
+                        EinvoiceError::Invalid(vec![FieldError::new("source", message)])
+                    })?,
+            ),
+            None if original
+                .as_ref()
+                .is_some_and(|original| original.recognised_by_source()) =>
+            {
+                return Err(EinvoiceError::Invalid(vec![FieldError::new(
+                    "source",
+                    "is required: the original document is the tax document of a transaction \
+                     another module recognised",
+                )]));
+            }
+            None => None,
+        };
         let self_billed = authority
             .self_billed_document_types()
             .contains(&valid.document_type.as_str());
@@ -228,6 +259,17 @@ impl Einvoice {
             details,
         )
         .await?;
+        let (source_module, source_record, source_entry) = match &source {
+            Some(link) => (
+                Some(link.module.clone()),
+                Some(link.record.clone()),
+                Some(link.ledger_entry_id),
+            ),
+            None => (None, None, None),
+        };
+        if let Some(link) = source {
+            documents::record_source_link(&mut tx, scope, company_id, document_id, link).await?;
+        }
         action(
             &tx,
             "finance.einvoice.document.issued",
@@ -235,6 +277,8 @@ impl Einvoice {
                 "document_id": document_id, "document_type": document_type,
                 "code_number": code_number, "environment": environment,
                 "original_document_id": original_document_id,
+                "source_module": source_module, "source_record": source_record,
+                "source_ledger_entry_id": source_entry,
             }),
         )
         .await?;
@@ -445,7 +489,14 @@ impl Einvoice {
                     )
                     .await?;
                 if recorded {
-                    self.settle(FollowUp::Reverse);
+                    self.settle(
+                        scope,
+                        company_id,
+                        document_id,
+                        FollowUp::Reverse,
+                        Writer::Session(CANCEL),
+                    )
+                    .await;
                 }
                 self.view(scope, company_id, document_id).await
             }
@@ -1072,7 +1123,8 @@ impl Einvoice {
                     .map_err(|_| retry_database())?;
                 if changed {
                     tx.commit().await.map_err(|_| retry_database())?;
-                    self.settle(follow_up);
+                    self.settle(scope, company_id, document.id, follow_up, writer)
+                        .await;
                 }
                 Ok(status)
             }
@@ -1172,15 +1224,126 @@ impl Einvoice {
     }
 
     /// The ledger work a status change leaves, run once the status is
-    /// committed and outside any transaction of ours.
-    fn settle(&self, follow_up: FollowUp) {
-        match follow_up {
-            // TODO(NE4 ledger bridge): post the validated document's entry
-            // once (`Posting.post`), and reverse a cancelled one's
-            // (`Posting.reverse`), each recorded as `posted`/`posting_failed`
-            // and `posting_reversed`/`reversal_failed`.
-            FollowUp::Post | FollowUp::Reverse | FollowUp::None => {}
+    /// committed and outside any transaction of ours: the ledger rolls back
+    /// the transaction it joins when it refuses, which would take ours with
+    /// it. Its outcome is recorded on the document (`posted` or
+    /// `posting_failed`, `posting_reversed` or `reversal_failed`); a failure
+    /// waits on the reconciliation read for a retry and never fails the
+    /// clearance that led to it.
+    async fn settle(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        document_id: i64,
+        follow_up: FollowUp,
+        writer: Writer<'_>,
+    ) {
+        let bridge = match follow_up {
+            FollowUp::None => return,
+            FollowUp::Post => Bridge::Post,
+            FollowUp::Reverse => Bridge::Reverse,
+        };
+        self.bridge(
+            scope,
+            company_id,
+            document_id,
+            bridge,
+            utc_date(Timestamp::now()),
+            writer,
+        )
+        .await;
+    }
+
+    /// The source a draft names, held to the ledger: the entry exists, that
+    /// module and record own it, it stands unreversed and is not a reversal,
+    /// and it recognises what the document bills, in the document's currency;
+    /// and no other standing document links the source. The inner error is
+    /// the `source` field's message.
+    async fn source_link(
+        &self,
+        client: &(impl GenericClient + Sync),
+        scope: &Scope,
+        company_id: i64,
+        source: &DraftSource,
+        draft: &crate::ValidDraft,
+    ) -> Result<std::result::Result<SourceLink, String>> {
+        const SHAPE: &str = "names a module, a record, and a ledger entry";
+        let module = source.module.as_deref().map(str::trim).unwrap_or_default();
+        let record = source.record.as_deref().map(str::trim).unwrap_or_default();
+        let Some(entry_id) = source.ledger_entry_id.filter(|id| *id > 0) else {
+            return Ok(Err(SHAPE.into()));
+        };
+        if !owner_module(module) || !owner_record(record) {
+            return Ok(Err(SHAPE.into()));
         }
+        let entry = match self
+            .ledger
+            .get_entry_on(client, scope, company_id, entry_id)
+            .await
+        {
+            Ok(entry) => entry,
+            Err(LedgerError::EntryNotFound) => {
+                return Ok(Err(format!(
+                    "names ledger entry {entry_id}, which does not exist"
+                )))
+            }
+            Err(LedgerError::Failed(error)) => return Err(error.into()),
+            Err(error) => {
+                return Ok(Err(format!(
+                    "cannot read ledger entry {entry_id}: {error}"
+                )))
+            }
+        };
+        let recognised: rust_decimal::Decimal =
+            entry.lines.iter().map(|line| line.debit.amount()).sum();
+        let billed = draft.line_extension_amount + draft.tax_amount;
+        let owned = entry
+            .owner
+            .as_ref()
+            .is_some_and(|owner| owner.module == module && owner.record == record);
+        let refusal = if !owned {
+            Some(format!(
+                "ledger entry {} is not owned by {module} {record}",
+                entry.id
+            ))
+        } else if entry.reverses_entry_id.is_some() {
+            Some(format!("ledger entry {} is a reversal", entry.id))
+        } else if let Some(by) = entry.reversed_by_entry_id {
+            Some(format!(
+                "ledger entry {} was reversed by entry {by}",
+                entry.id
+            ))
+        } else if entry.currency_code != draft.currency_code {
+            Some(format!(
+                "ledger entry {} is in {}, the document in {}",
+                entry.id, entry.currency_code, draft.currency_code
+            ))
+        } else if recognised != billed {
+            Some(format!(
+                "ledger entry {} recognises {}, not the document's {}",
+                entry.id,
+                money(recognised),
+                money(billed)
+            ))
+        } else {
+            None
+        };
+        if let Some(refusal) = refusal {
+            return Ok(Err(refusal));
+        }
+        if let Some(standing) =
+            documents::standing_source_document(client, scope.tenant(), company_id, module, record)
+                .await?
+        {
+            return Ok(Err(format!(
+                "is already the source of document {standing}, which stands"
+            )));
+        }
+        Ok(Ok(SourceLink {
+            module: module.to_owned(),
+            record: record.to_owned(),
+            ledger_entry_id: entry_id,
+        }))
     }
 
     // Records only if the document, read again under the company lock, is
@@ -1367,7 +1530,7 @@ impl Einvoice {
         })
     }
 
-    async fn environment(
+    pub(crate) async fn environment(
         &self,
         client: &(impl GenericClient + Sync),
         scope: &Scope,
@@ -1412,7 +1575,7 @@ impl Einvoice {
         }
     }
 
-    async fn fetch(&self, scope: &Scope, company_id: i64, document_id: i64) -> Result<Recorded> {
+    pub(crate) async fn fetch(&self, scope: &Scope, company_id: i64, document_id: i64) -> Result<Recorded> {
         let client = self.db.get().await.map_err(Error::from)?;
         documents::fetch(&**client, scope.tenant(), company_id, document_id)
             .await?
@@ -1420,7 +1583,7 @@ impl Einvoice {
     }
 
     /// The view of a document the caller was authorized to read.
-    async fn view(&self, scope: &Scope, company_id: i64, document_id: i64) -> Result<DocumentView> {
+    pub(crate) async fn view(&self, scope: &Scope, company_id: i64, document_id: i64) -> Result<DocumentView> {
         let recorded = self.fetch(scope, company_id, document_id).await?;
         let client = self.db.get().await.map_err(Error::from)?;
         let portal = self
@@ -1434,15 +1597,20 @@ impl Einvoice {
             )
             .await?;
         let queued = submission_queued(&**client, scope.tenant(), company_id, document_id).await?;
-        Ok(recorded.view(
+        let (sources, consolidated_by) =
+            crate::consolidation::view(&**client, scope.tenant(), company_id, document_id).await?;
+        let mut view = recorded.view(
             &Self::authority(),
             portal.as_str().unwrap_or_default(),
             queued,
-        ))
+        );
+        view.sources = sources;
+        view.consolidated_by = consolidated_by;
+        Ok(view)
     }
 
     /// A clearance write's transaction, holding the company's row lock.
-    async fn begin<'c>(
+    pub(crate) async fn begin<'c>(
         &self,
         client: &'c mut tokio_postgres::Client,
         scope: &Scope,
@@ -1467,7 +1635,7 @@ impl Einvoice {
 
     /// Whether the company can be written to, asked before an irreversible
     /// call to the authority so its outcome can still be recorded.
-    async fn ensure_writable(
+    pub(crate) async fn ensure_writable(
         &self,
         scope: &Scope,
         company_id: i64,
@@ -1532,7 +1700,7 @@ impl Einvoice {
     }
 }
 
-fn company_target(company_id: i64) -> Result<Target> {
+pub(crate) fn company_target(company_id: i64) -> Result<Target> {
     Ok(Target::Company(
         OrganisationId::new(company_id).map_err(|_| EinvoiceError::CompanyNotFound)?,
     ))
@@ -1595,7 +1763,7 @@ fn unsendable(reason: String) -> NewEvent {
 /// An audit action with its payload, in the transaction that records the
 /// outcome. The payload names identifiers and outcomes, never a payload, a
 /// secret or a party's details.
-async fn action(
+pub(crate) async fn action(
     tx: &MutationTransaction<'_>,
     event: &str,
     payload: Value,
@@ -1762,4 +1930,41 @@ fn cancel_for(error: EinvoiceError) -> Outcome {
         EinvoiceError::DocumentNotFound => Outcome::Cancel("document_not_found"),
         _ => retry_database(),
     }
+}
+
+/// A ledger owner's module: a descriptor ID (`finance/receivables`), at most
+/// 100 characters.
+fn owner_module(text: &str) -> bool {
+    let mut parts = text.split('/');
+    let segment = |part: Option<&str>| {
+        part.is_some_and(|part| {
+            part.starts_with(|c: char| c.is_ascii_lowercase())
+                && part
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        })
+    };
+    text.len() <= 100 && segment(parts.next()) && segment(parts.next()) && parts.next().is_none()
+}
+
+/// A ledger owner's record: a kind and a positive integer (`document:17`), at
+/// most 100 characters.
+fn owner_record(text: &str) -> bool {
+    let Some((kind, number)) = text.split_once(':') else {
+        return false;
+    };
+    text.len() <= 100
+        && kind.starts_with(|c: char| c.is_ascii_lowercase())
+        && kind
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        && number.starts_with(|c: char| ('1'..='9').contains(&c))
+        && number.chars().all(|c| c.is_ascii_digit())
+}
+
+/// An amount as a source refusal names it: two places.
+fn money(amount: rust_decimal::Decimal) -> String {
+    amount
+        .round_dp_with_strategy(2, rust_decimal::RoundingStrategy::MidpointAwayFromZero)
+        .to_string()
 }

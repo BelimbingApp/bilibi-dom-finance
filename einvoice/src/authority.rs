@@ -12,7 +12,7 @@
 //! status, cancel) are here with their types. Each API callback answers in
 //! meta-terms ([`Answer`] and an outcome enum), keeping the authority's own
 //! answer beside it so a caller can store it as the record. The consolidated
-//! document's shape and refusal join the trait with consolidation; none of
+//! document's shape and refusal are the authority's too; none of
 //! them is invented before then.
 use crate::code_lists::Codes;
 use crate::document::Document;
@@ -476,6 +476,17 @@ pub trait Authority {
     /// `month` covers, in the authority's own calendar, and when it may be
     /// issued.
     fn consolidation_window(&self, month: jiff::civil::Date) -> ConsolidationWindow;
+
+    /// Why a recorded document may not be covered by a consolidated document,
+    /// in a short phrase, or `None` when it may: the authority's own limits on
+    /// what a consolidated document reports.
+    fn consolidation_refusal(&self, document: &Document) -> Option<String>;
+
+    /// The consolidated document for a month, as the draft the authority
+    /// shapes it into (document type, the general buyer, the consolidated
+    /// classification, the month as its billing period), whose lines carry
+    /// the given amounts and their sources' tax.
+    fn consolidated_document(&self, request: &crate::ConsolidatedRequest) -> Draft;
 
     /// The public link that shows a validated document on the authority's
     /// portal, whose base URL is `portal_url`.

@@ -748,6 +748,7 @@ fn invoice() -> Draft {
         original_document_id: None,
         buyer: Some(buyer()),
         supplier: None,
+        source: None,
         lines: vec![
             draft_line("Laptop Peripherals", "10", "17.00", "01", "6"),
             DraftLine {
@@ -898,6 +899,7 @@ async fn drafts_and_payloads(
             ..buyer()
         }),
         supplier: Some(buyer()),
+        source: None,
         lines: vec![
             draft_line(
                 "Exempt without a reason, taxed at 6",

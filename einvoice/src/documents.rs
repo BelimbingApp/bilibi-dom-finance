@@ -9,6 +9,7 @@ use crate::draft::ValidDraft;
 use bilibi_database::{Change, Error, MutationTransaction, Result};
 use bilibi_tenancy::Scope;
 use jiff::{SignedDuration, Timestamp};
+use rust_decimal::Decimal;
 use serde::Serialize;
 use serde_json::{json, Value};
 use tokio_postgres::{GenericClient, Row};
@@ -33,6 +34,9 @@ pub(crate) const STATUS_EVENTS: [&str; 9] = [
 const ANSWERS: [&str; 4] = ["submitted", "refused", "duplicate", "rate_limited"];
 /// The events after which a consolidated document releases its sources.
 pub(crate) const RELEASING: [&str; 3] = ["refused", "invalid", "cancelled"];
+/// The statuses in which the authority holds a document as validated, so it
+/// posts (a buyer's rejection request leaves it valid there).
+pub(crate) const VALID_STATUSES: [&str; 2] = ["valid", "rejected"];
 /// A status event keeps at most this much of a reason.
 const REASON_LENGTH: usize = 300;
 
@@ -67,6 +71,81 @@ pub enum Attention {
     Overdue,
     /// The buyer asked the authority to reject it.
     RejectionRequested,
+    /// Validated, without its ledger entry, and no posting was tried or the
+    /// last try is older than the entry it waits for.
+    Unposted,
+    /// Validated, without its ledger entry, after a failed posting.
+    PostingFailed,
+    /// Cancelled while its entry stands, and no reversal was tried.
+    Unreversed,
+    /// Cancelled while its entry stands, after a failed reversal.
+    ReversalFailed,
+}
+
+/// The transaction a document is the tax document of: the module that
+/// recognised it in the ledger, its record in that module's terms, and the
+/// entry that record posted.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SourceLink {
+    pub module: String,
+    pub record: String,
+    pub ledger_entry_id: i64,
+}
+
+/// A document without its lines or events, as lists show it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct DocumentSummary {
+    pub id: i64,
+    pub authority: String,
+    pub environment: String,
+    pub document_type: String,
+    pub code_number: String,
+    pub issued_at: Timestamp,
+    pub currency_code: String,
+    pub exchange_rate: Option<Decimal>,
+    pub line_extension_amount: Decimal,
+    pub tax_exclusive_amount: Decimal,
+    pub tax_amount: Decimal,
+    pub tax_inclusive_amount: Decimal,
+    pub payable_amount: Decimal,
+    pub original_document_id: Option<i64>,
+    pub issued_by_user_id: i64,
+    pub issued_by_impersonator_id: Option<i64>,
+    pub recorded_at: Timestamp,
+    pub buyer_name: Option<String>,
+    /// The buyer, or the supplier of a self-billed document.
+    pub counterparty_name: Option<String>,
+    pub self_billed: bool,
+    pub consolidated: bool,
+    /// The latest status-moving event.
+    pub status: String,
+}
+
+/// One document a consolidated document covers, with the consolidated
+/// document's lines that carry it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ConsolidatedSource {
+    pub document: DocumentSummary,
+    pub line_numbers: Vec<i32>,
+}
+
+/// The documents whose ledger side does not match their status.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct Reconciliation {
+    /// Valid (or buyer-rejected) documents without their ledger entry.
+    pub unposted: Vec<ReconciliationRow>,
+    /// Cancelled documents whose entry stands.
+    pub unreversed: Vec<ReconciliationRow>,
+}
+
+/// One document of the reconciliation, with its entries and the reason its
+/// last posting or reversal failed, if one did.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ReconciliationRow {
+    pub document: DocumentSummary,
+    pub ledger_entry_id: Option<i64>,
+    pub reversal_entry_id: Option<i64>,
+    pub reason: Option<String>,
 }
 
 /// A recorded document as the facade returns it: the document with its lines,
@@ -98,6 +177,19 @@ pub struct DocumentView {
     pub attention: Vec<Attention>,
     /// Whether a submit job for the document is waiting or running.
     pub submission_queued: bool,
+    /// The entry its validation posted, and the one that reversed it.
+    pub ledger_entry_id: Option<i64>,
+    pub reversal_entry_id: Option<i64>,
+    /// The transactions it is the tax document of. With any, it never posts
+    /// or reverses an entry itself (`recognised_by_source`).
+    pub source_links: Vec<SourceLink>,
+    pub recognised_by_source: bool,
+    /// The latest PDF generated of it.
+    pub pdf_artifact_id: Option<String>,
+    /// For a consolidated document, the documents it covers.
+    pub sources: Vec<ConsolidatedSource>,
+    /// For a covered document, the consolidated document holding it now.
+    pub consolidated_by: Option<DocumentSummary>,
     pub events: Vec<StatusEvent>,
 }
 
@@ -110,6 +202,7 @@ pub(crate) struct Recorded {
     pub issued_by_impersonator_id: Option<i64>,
     pub recorded_at: Timestamp,
     pub events: Vec<StatusEvent>,
+    pub source_links: Vec<SourceLink>,
 }
 
 impl Recorded {
@@ -190,6 +283,47 @@ impl Recorded {
         self.document.details.consolidation_month.is_some()
     }
 
+    /// The entry the document's validation posted.
+    pub fn ledger_entry_id(&self) -> Option<i64> {
+        self.latest("posted")?.ledger_entry_id
+    }
+
+    /// The entry that reversed it.
+    pub fn reversal_entry_id(&self) -> Option<i64> {
+        self.latest("posting_reversed")?.ledger_entry_id
+    }
+
+    /// Whether another module recognised its transaction in the ledger, so
+    /// the document never posts or reverses an entry itself.
+    pub fn recognised_by_source(&self) -> bool {
+        !self.source_links.is_empty()
+    }
+
+    /// What its ledger side needs: a validated document without its entry,
+    /// or a cancelled one whose entry stands; a linked one needs nothing.
+    fn ledger_attention(&self, status: &str) -> Option<Attention> {
+        if self.recognised_by_source() {
+            return None;
+        }
+        let failed = |name| self.latest(name).is_some();
+        let posted = self.ledger_entry_id().is_some();
+        if VALID_STATUSES.contains(&status) && !posted {
+            Some(if failed("posting_failed") {
+                Attention::PostingFailed
+            } else {
+                Attention::Unposted
+            })
+        } else if status == "cancelled" && posted && self.reversal_entry_id().is_none() {
+            Some(if failed("reversal_failed") {
+                Attention::ReversalFailed
+            } else {
+                Attention::Unreversed
+            })
+        } else {
+            None
+        }
+    }
+
     /// The view, given the portal's base URL for the validation link and
     /// whether a submit job is waiting.
     pub fn view(
@@ -207,6 +341,7 @@ impl Recorded {
         if status == "rejected" {
             attention.push(Attention::RejectionRequested);
         }
+        attention.extend(self.ledger_attention(&status));
         let self_billed = authority
             .self_billed_document_types()
             .contains(&self.document.document_type.as_str());
@@ -232,6 +367,18 @@ impl Recorded {
             cancellable_until: self.cancellable_until(authority),
             attention,
             submission_queued,
+            ledger_entry_id: self.ledger_entry_id(),
+            reversal_entry_id: self.reversal_entry_id(),
+            recognised_by_source: self.recognised_by_source(),
+            pdf_artifact_id: self
+                .latest("pdf_generated")
+                .and_then(|event| event.response.as_ref())
+                .and_then(|response| response.get("artifact_id"))
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            source_links: self.source_links,
+            sources: Vec::new(),
+            consolidated_by: None,
             status,
             authority: self.authority,
             issued_by_user_id: self.issued_by_user_id,
@@ -329,8 +476,248 @@ pub(crate) async fn fetch(
         issued_by_impersonator_id: row.get("issued_by_impersonator_id"),
         recorded_at: stamp(&row, "recorded_at")?,
         events: events(client, tenant, company_id, document_id).await?,
+        source_links: source_links_of(client, tenant, company_id, &[document_id])
+            .await?
+            .into_iter()
+            .map(|(_, link)| link)
+            .collect(),
         document,
     }))
+}
+
+/// Each document's source links, as `(document, link)` in link order.
+pub(crate) async fn source_links_of(
+    client: &impl GenericClient,
+    tenant: i64,
+    company_id: i64,
+    document_ids: &[i64],
+) -> Result<Vec<(i64, SourceLink)>> {
+    if document_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(client
+        .query(
+            "SELECT document_id, source_module, source_record, ledger_entry_id \
+             FROM finance_einvoice_source_links \
+             WHERE tenant_id = $1 AND company_id = $2 AND document_id = ANY($3) ORDER BY id",
+            &[&tenant, &company_id, &document_ids],
+        )
+        .await?
+        .iter()
+        .map(|row| {
+            (
+                row.get(0),
+                SourceLink {
+                    module: row.get(1),
+                    record: row.get(2),
+                    ledger_entry_id: row.get(3),
+                },
+            )
+        })
+        .collect())
+}
+
+/// The document that stands as the fiscal document of a source, or `None`:
+/// its latest status is `submitted`, `valid`, `rejected` or `consolidated`,
+/// or a submission was stored after its latest status event (an attempt the
+/// authority may hold). The database's own rule, asked for a document not
+/// recorded yet.
+pub(crate) async fn standing_source_document(
+    client: &impl GenericClient,
+    tenant: i64,
+    company_id: i64,
+    module: &str,
+    record: &str,
+) -> Result<Option<i64>> {
+    Ok(client
+        .query_one(
+            "SELECT finance_einvoice_standing_source_link(\
+             ROW(0, $1, $2, 0, $3, $4, 1)::finance_einvoice_source_links, 0)",
+            &[&tenant, &company_id, &module, &record],
+        )
+        .await?
+        .get(0))
+}
+
+/// Records a source link for the document, in the transaction that records
+/// the document.
+pub(crate) async fn record_source_link(
+    tx: &mut MutationTransaction<'_>,
+    scope: &Scope,
+    company_id: i64,
+    document_id: i64,
+    link: SourceLink,
+) -> Result<()> {
+    let tenant = scope.tenant();
+    tx.mutate(move |sql| {
+        Box::pin(async move {
+            let id: i64 = sql
+                .query_one(
+                    "INSERT INTO finance_einvoice_source_links (tenant_id, company_id, \
+                     document_id, source_module, source_record, ledger_entry_id) \
+                     VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
+                    &[
+                        &tenant,
+                        &company_id,
+                        &document_id,
+                        &link.module,
+                        &link.record,
+                        &link.ledger_entry_id,
+                    ],
+                )
+                .await?
+                .get(0);
+            let change = Change {
+                kind: "finance.einvoice.source_link".into(),
+                id,
+                old: Value::Null,
+                new: json!({
+                    "document_id": document_id, "source_module": link.module,
+                    "source_record": link.record, "ledger_entry_id": link.ledger_entry_id,
+                }),
+            };
+            Ok(((), vec![change]))
+        })
+    })
+    .await
+}
+
+/// The documents' summaries with their current status, in the order of
+/// `document_ids`; an ID the company lacks is left out.
+pub(crate) async fn summaries(
+    client: &impl GenericClient,
+    authority: &impl Authority,
+    tenant: i64,
+    company_id: i64,
+    document_ids: &[i64],
+) -> Result<Vec<DocumentSummary>> {
+    if document_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let sql = format!(
+        "SELECT d.id, d.authority, d.environment, d.document_type, d.code_number, \
+         to_char(d.issued_at, {STAMP}) AS issued_at, d.currency_code, d.exchange_rate, \
+         d.line_extension_amount, d.tax_exclusive_amount, d.tax_amount, d.tax_inclusive_amount, \
+         d.payable_amount, d.original_document_id, d.issued_by_user_id, \
+         d.issued_by_impersonator_id, to_char(d.recorded_at, {STAMP}) AS recorded_at, \
+         d.buyer->>'name' AS buyer_name, d.supplier->>'name' AS supplier_name, \
+         d.details ? 'consolidation_month' AS consolidated, \
+         (SELECT e.event FROM finance_einvoice_status_events e WHERE e.document_id = d.id \
+          AND e.event = ANY($4) ORDER BY e.sequence DESC LIMIT 1) AS status \
+         FROM finance_einvoice_documents d \
+         WHERE d.tenant_id = $1 AND d.company_id = $2 AND d.id = ANY($3)"
+    );
+    let rows = client
+        .query(
+            &sql,
+            &[&tenant, &company_id, &document_ids, &&STATUS_EVENTS[..]],
+        )
+        .await?;
+    let self_billed = authority.self_billed_document_types();
+    let mut summaries = Vec::with_capacity(rows.len());
+    for id in document_ids {
+        let Some(row) = rows.iter().find(|row| row.get::<_, i64>("id") == *id) else {
+            continue;
+        };
+        let document_type: String = row.get("document_type");
+        let is_self_billed = self_billed.contains(&document_type.as_str());
+        let buyer_name: Option<String> = row.get("buyer_name");
+        summaries.push(DocumentSummary {
+            id: *id,
+            authority: row.get("authority"),
+            environment: row.get("environment"),
+            code_number: row.get("code_number"),
+            issued_at: stamp(row, "issued_at")?,
+            currency_code: row.get("currency_code"),
+            exchange_rate: row.get("exchange_rate"),
+            line_extension_amount: row.get("line_extension_amount"),
+            tax_exclusive_amount: row.get("tax_exclusive_amount"),
+            tax_amount: row.get("tax_amount"),
+            tax_inclusive_amount: row.get("tax_inclusive_amount"),
+            payable_amount: row.get("payable_amount"),
+            original_document_id: row.get("original_document_id"),
+            issued_by_user_id: row.get("issued_by_user_id"),
+            issued_by_impersonator_id: row.get("issued_by_impersonator_id"),
+            recorded_at: stamp(row, "recorded_at")?,
+            counterparty_name: if is_self_billed {
+                row.get("supplier_name")
+            } else {
+                buyer_name.clone()
+            },
+            buyer_name,
+            self_billed: is_self_billed,
+            consolidated: row.get("consolidated"),
+            status: row
+                .get::<_, Option<String>>("status")
+                .unwrap_or_else(|| "issued".into()),
+            document_type,
+        });
+    }
+    Ok(summaries)
+}
+
+/// The documents whose ledger side does not match their status, newest
+/// first: valid (or buyer-rejected) documents without their entry, and
+/// cancelled documents whose entry stands, each with the reason its last
+/// posting or reversal failed. A document linked to its source never posts,
+/// so it is never listed.
+pub(crate) async fn reconciliation(
+    client: &impl GenericClient,
+    authority: &impl Authority,
+    tenant: i64,
+    company_id: i64,
+) -> Result<Reconciliation> {
+    let rows = client
+        .query(
+            "WITH status AS ( \
+               SELECT DISTINCT ON (document_id) document_id, event FROM finance_einvoice_status_events \
+               WHERE tenant_id = $1 AND company_id = $2 AND event = ANY($3) \
+               ORDER BY document_id, sequence DESC), \
+             ledger AS ( \
+               SELECT document_id, \
+                 max(ledger_entry_id) FILTER (WHERE event = 'posted') AS posted, \
+                 max(ledger_entry_id) FILTER (WHERE event = 'posting_reversed') AS reversed, \
+                 (array_agg(reason ORDER BY sequence DESC) \
+                   FILTER (WHERE event = 'posting_failed'))[1] AS posting_failed, \
+                 (array_agg(reason ORDER BY sequence DESC) \
+                   FILTER (WHERE event = 'reversal_failed'))[1] AS reversal_failed \
+               FROM finance_einvoice_status_events \
+               WHERE tenant_id = $1 AND company_id = $2 \
+               GROUP BY document_id) \
+             SELECT s.document_id, s.event, l.posted, l.reversed, l.posting_failed, \
+               l.reversal_failed \
+             FROM status s JOIN ledger l USING (document_id) \
+             WHERE NOT EXISTS (SELECT 1 FROM finance_einvoice_source_links k \
+                               WHERE k.document_id = s.document_id) \
+               AND ((s.event = ANY($4) AND l.posted IS NULL) \
+                 OR (s.event = 'cancelled' AND l.posted IS NOT NULL AND l.reversed IS NULL)) \
+             ORDER BY s.document_id DESC",
+            &[
+                &tenant,
+                &company_id,
+                &&STATUS_EVENTS[..],
+                &&VALID_STATUSES[..],
+            ],
+        )
+        .await?;
+    let ids: Vec<i64> = rows.iter().map(|row| row.get(0)).collect();
+    let summaries = summaries(client, authority, tenant, company_id, &ids).await?;
+    let mut reconciliation = Reconciliation::default();
+    for (row, document) in rows.iter().zip(summaries) {
+        let cancelled = row.get::<_, String>(1) == "cancelled";
+        let entry = ReconciliationRow {
+            document,
+            ledger_entry_id: row.get(2),
+            reversal_entry_id: row.get(3),
+            reason: row.get(if cancelled { 5 } else { 4 }),
+        };
+        if cancelled {
+            reconciliation.unreversed.push(entry);
+        } else {
+            reconciliation.unposted.push(entry);
+        }
+    }
+    Ok(reconciliation)
 }
 
 /// A document's events in recording order.
@@ -545,6 +932,8 @@ pub(crate) struct NewEvent {
     pub reason: Option<String>,
     pub http_status: Option<u16>,
     pub response: Option<Value>,
+    /// The ledger entry a `posted` or `posting_reversed` event names.
+    pub ledger_entry_id: Option<i64>,
 }
 
 impl NewEvent {
@@ -594,9 +983,9 @@ async fn insert_event(
                     "INSERT INTO finance_einvoice_status_events (tenant_id, company_id, \
                      document_id, submission_id, event, authority_status, submission_uid, \
                      document_uuid, long_id, reason, http_status, response, actor_type, \
-                     actor_user_id, actor_impersonator_id) \
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'user', $13, $14) \
-                     RETURNING id, sequence",
+                     actor_user_id, actor_impersonator_id, ledger_entry_id) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'user', $13, $14, \
+                     $15) RETURNING id, sequence",
                     &[
                         &tenant,
                         &company_id,
@@ -612,6 +1001,7 @@ async fn insert_event(
                         &event.response,
                         &user,
                         &impersonator,
+                        &event.ledger_entry_id,
                     ],
                 )
                 .await?;
@@ -632,6 +1022,7 @@ async fn insert_event(
                     "long_id": event.long_id,
                     "reason": reason,
                     "http_status": http_status,
+                    "ledger_entry_id": event.ledger_entry_id,
                 }),
             };
             Ok(((), vec![change]))

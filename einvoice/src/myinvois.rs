@@ -100,6 +100,8 @@ const SUPPLIER_REQUIRED: [(SupplierField, &str); 9] = [
 // Malaysian time (UTC+8, no daylight saving).
 const LOCAL_OFFSET_HOURS: i8 = 8;
 const CONSOLIDATION_DAYS: i64 = 7;
+// A sale above this needs an individual e-invoice, never a consolidated one.
+const CONSOLIDATION_LIMIT: Decimal = Decimal::from_parts(10_000, 0, 0, false, 0);
 
 pub(crate) const TAX_ID_MESSAGE: &str = "must be one or two capital letters and 8 to 12 digits";
 pub(crate) const PHONE_MESSAGE: &str =
@@ -303,6 +305,69 @@ impl Authority for MyInvois {
             closes_at: until
                 .checked_add(SignedDuration::from_hours(CONSOLIDATION_DAYS * 24))
                 .unwrap_or(until),
+        }
+    }
+
+    // A consolidated invoice reports sales in ringgit no buyer asked an
+    // individual invoice for, none above RM10,000 (Specific Guideline §3.6).
+    fn consolidation_refusal(&self, document: &Document) -> Option<String> {
+        if document.document_type != INVOICE {
+            Some("is not an invoice".into())
+        } else if document.currency_code != TAX_CURRENCY {
+            Some(format!("is not in {TAX_CURRENCY}"))
+        } else if document.payable_amount > CONSOLIDATION_LIMIT {
+            Some(format!(
+                "is above RM{CONSOLIDATION_LIMIT}, which needs an individual e-invoice"
+            ))
+        } else {
+            None
+        }
+    }
+
+    // The general public buyer, whose contact the authority writes as "NA",
+    // the consolidated classification, and one unit per line (§3.7).
+    fn consolidated_document(&self, request: &crate::ConsolidatedRequest) -> Draft {
+        let na = || Some("NA".to_owned());
+        Draft {
+            document_type: Some(INVOICE.into()),
+            code_number: request.code_number.clone(),
+            issued_at: Some(request.issued_at),
+            currency_code: Some(TAX_CURRENCY.into()),
+            billing_period_start: Some(request.month.first_of_month()),
+            billing_period_end: Some(request.month.last_of_month()),
+            billing_period_description: Some("Monthly".into()),
+            buyer: Some(DraftParty {
+                name: Some("General Public".into()),
+                tax_id: Some(GENERAL_PUBLIC_TIN.into()),
+                registration_type: Some("BRN".into()),
+                registration_number: na(),
+                phone: na(),
+                address: Some(crate::DraftAddress {
+                    lines: vec!["NA".into()],
+                    city: na(),
+                    state_code: Some("17".into()),
+                    country_code: Some(HOME_COUNTRY.into()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            lines: request
+                .lines
+                .iter()
+                .map(|line| DraftLine {
+                    description: Some(line.description.clone()),
+                    classification_code: Some(CONSOLIDATED_CLASSIFICATION.into()),
+                    quantity: Some(Decimal::ONE),
+                    unit_code: Some("C62".into()),
+                    unit_price: Some(line.amount),
+                    tax_type: Some(line.tax_type.clone()),
+                    tax_rate: line.tax_rate,
+                    tax_exemption_reason: line.tax_exemption_reason.clone(),
+                    tax_amount: Some(line.tax_amount),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
         }
     }
 

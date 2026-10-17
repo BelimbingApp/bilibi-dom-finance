@@ -593,6 +593,7 @@ fn draft(code: &str, original: Option<i64>) -> Draft {
         original_document_id: original,
         buyer: Some(buyer()),
         supplier: None,
+        source: None,
         lines: if original.is_some() {
             vec![line("Returned keyboard", "1", "40.00")]
         } else {
