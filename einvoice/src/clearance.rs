@@ -31,10 +31,10 @@ use crate::{
     authorize, configuration, refusal, supplier_profile, text, Certificate, DraftSource, Einvoice,
     EinvoiceError, FieldError, PrivateKey, Result, CANCEL, ISSUE, SUBMIT,
 };
-use bilibi_finance_ledger::LedgerError;
 use bilibi_audit::Attribution;
 use bilibi_company::{organisation, WriteError};
 use bilibi_database::{Error, MutationTransaction};
+use bilibi_finance_ledger::LedgerError;
 use bilibi_party_ids::OrganisationId;
 use bilibi_queue::execution::{Execution, Outcome};
 use bilibi_settings::Target;
@@ -1288,11 +1288,7 @@ impl Einvoice {
                 )))
             }
             Err(LedgerError::Failed(error)) => return Err(error.into()),
-            Err(error) => {
-                return Ok(Err(format!(
-                    "cannot read ledger entry {entry_id}: {error}"
-                )))
-            }
+            Err(error) => return Ok(Err(format!("cannot read ledger entry {entry_id}: {error}"))),
         };
         let recognised: rust_decimal::Decimal =
             entry.lines.iter().map(|line| line.debit.amount()).sum();
@@ -1575,7 +1571,12 @@ impl Einvoice {
         }
     }
 
-    pub(crate) async fn fetch(&self, scope: &Scope, company_id: i64, document_id: i64) -> Result<Recorded> {
+    pub(crate) async fn fetch(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        document_id: i64,
+    ) -> Result<Recorded> {
         let client = self.db.get().await.map_err(Error::from)?;
         documents::fetch(&**client, scope.tenant(), company_id, document_id)
             .await?
@@ -1583,7 +1584,12 @@ impl Einvoice {
     }
 
     /// The view of a document the caller was authorized to read.
-    pub(crate) async fn view(&self, scope: &Scope, company_id: i64, document_id: i64) -> Result<DocumentView> {
+    pub(crate) async fn view(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        document_id: i64,
+    ) -> Result<DocumentView> {
         let recorded = self.fetch(scope, company_id, document_id).await?;
         let client = self.db.get().await.map_err(Error::from)?;
         let portal = self
@@ -1964,7 +1970,8 @@ fn owner_record(text: &str) -> bool {
 
 /// An amount as a source refusal names it: two places.
 fn money(amount: rust_decimal::Decimal) -> String {
-    amount
-        .round_dp_with_strategy(2, rust_decimal::RoundingStrategy::MidpointAwayFromZero)
-        .to_string()
+    format!(
+        "{:.2}",
+        amount.round_dp_with_strategy(2, rust_decimal::RoundingStrategy::MidpointAwayFromZero)
+    )
 }

@@ -40,6 +40,8 @@ pub mod totals;
 
 pub mod clearance;
 
+mod einvoice_bridge;
+
 /// Every fixture account's password.
 pub use bilibi_walkthrough_fixture::PASSWORD;
 #[doc(hidden)]

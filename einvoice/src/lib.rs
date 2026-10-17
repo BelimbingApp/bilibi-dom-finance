@@ -46,12 +46,12 @@ pub use authority::{
     PayloadOptions, PostingAccount, PostingRule, Progress, Search, Side, StatusRead, SubmitOutcome,
     Supplier, SupplierField, ValidationContext,
 };
-pub use consolidation::{
-    Candidates, ConsolidatedLine, ConsolidatedRequest, ConsolidationRequest, RefusedCandidate,
-};
 pub use certificate::{Certificate, CertificateError, PrivateKey};
 pub use clearance::{POLL_WORKER, SUBMIT_WORKER};
 pub use code_lists::Codes;
+pub use consolidation::{
+    Candidates, ConsolidatedLine, ConsolidatedRequest, ConsolidationRequest, RefusedCandidate,
+};
 pub use contributions::{CANCEL, CAPABILITIES, ISSUE, SETTINGS, SUBMIT, VIEW};
 pub use document::{AddressSnapshot, Details, Document, DocumentLine, PartySnapshot};
 pub use documents::{
@@ -63,11 +63,11 @@ pub use draft::{
     ValidParty,
 };
 pub use evidence::EvidencePage;
-pub use pdf::{qr_code_svg, PdfArtifact, PdfFile, ARTIFACT_OWNER};
 pub use myinvois::signer::SigningKey;
+pub use pdf::{qr_code_svg, PdfArtifact, PdfFile, ARTIFACT_OWNER};
 
-use bilibi_company::{organisation, WriteError};
 use bilibi_artifacts::Artifacts;
+use bilibi_company::{organisation, WriteError};
 use bilibi_database::{Change, Db, Error, MutationBoundary, MutationTransaction};
 use bilibi_finance_ledger::Ledger;
 use bilibi_integration::Integration;

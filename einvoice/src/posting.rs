@@ -60,7 +60,8 @@ pub(crate) enum Settled {
     /// Nothing to do: no such document, one linked to its source, or one that
     /// already has its entry (or its reversal).
     Unchanged,
-    Entry(Entry),
+    /// The entry (or its reversal) was posted and its event recorded.
+    Posted,
     /// Recorded as the failure event, with its reason.
     Failed(String),
 }
@@ -113,7 +114,7 @@ impl Einvoice {
                 .await;
         }
         let message = match outcome {
-            Ok(Some(entry)) => return Settled::Entry(entry),
+            Ok(Some(_)) => return Settled::Posted,
             Ok(None) => return Settled::Unchanged,
             Err(Refused::Transient(message)) => {
                 format!("a database failure, tried twice: {message}")
@@ -140,7 +141,11 @@ impl Einvoice {
         on: Date,
         writer: Writer<'_>,
     ) -> std::result::Result<Option<Entry>, Refused> {
-        let mut client = self.db.get().await.map_err(|error| database(error.into()))?;
+        let mut client = self
+            .db
+            .get()
+            .await
+            .map_err(|error| database(error.into()))?;
         let action = match bridge {
             Bridge::Post => "finance.einvoice.post_document",
             Bridge::Reverse => "finance.einvoice.reverse_document",
@@ -165,7 +170,10 @@ impl Einvoice {
             return Ok(None);
         }
         let entry = match bridge {
-            Bridge::Post => self.post_entry(&mut tx, scope, company_id, &current).await?,
+            Bridge::Post => {
+                self.post_entry(&mut tx, scope, company_id, &current)
+                    .await?
+            }
             Bridge::Reverse => {
                 self.reverse_entry(&mut tx, scope, company_id, &current, on)
                     .await?
@@ -327,7 +335,11 @@ impl Einvoice {
             .map_err(database)?;
         let codes: Vec<Option<String>> = keys
             .iter()
-            .map(|key| values.get(key).and_then(|resolved| crate::text(&resolved.value)))
+            .map(|key| {
+                values
+                    .get(key)
+                    .and_then(|resolved| crate::text(&resolved.value))
+            })
             .collect();
         let missing: Vec<&str> = needed
             .iter()
@@ -397,7 +409,10 @@ impl Einvoice {
     pub async fn reconciliation(&self, scope: &Scope, company_id: i64) -> Result<Reconciliation> {
         let client = self.db.get().await.map_err(Error::from)?;
         authorize(&**client, scope, company_id, VIEW).await?;
-        Ok(documents::reconciliation(&**client, &Self::authority(), scope.tenant(), company_id).await?)
+        Ok(
+            documents::reconciliation(&**client, &Self::authority(), scope.tenant(), company_id)
+                .await?,
+        )
     }
 
     /// Posts the ledger entry of a valid document whose posting failed or was
@@ -414,8 +429,14 @@ impl Einvoice {
         company_id: i64,
         document_id: i64,
     ) -> Result<DocumentView> {
-        self.retry(scope, company_id, document_id, Bridge::Post, Timestamp::now())
-            .await
+        self.retry(
+            scope,
+            company_id,
+            document_id,
+            Bridge::Post,
+            Timestamp::now(),
+        )
+        .await
     }
 
     /// Reverses the ledger entry of a cancelled document whose reversal failed
@@ -482,7 +503,7 @@ impl Einvoice {
             )
             .await;
         let (outcome, reason) = match &settled {
-            Settled::Entry(_) => ("succeeded", None),
+            Settled::Posted => ("succeeded", None),
             Settled::Unchanged => ("unchanged", None),
             Settled::Failed(message) => ("failed", Some(message.clone())),
         };
@@ -512,8 +533,12 @@ impl Einvoice {
                 "finance.einvoice.retry_posting",
             )
             .await?;
-        crate::clearance::action(&tx, "finance.einvoice.posting.retried", Value::Object(payload))
-            .await?;
+        crate::clearance::action(
+            &tx,
+            "finance.einvoice.posting.retried",
+            Value::Object(payload),
+        )
+        .await?;
         tx.commit().await?;
         match reason {
             Some(reason) => Err(EinvoiceError::LedgerFollowUpFailed(reason)),
@@ -570,9 +595,7 @@ fn ledger_refusal(error: LedgerError) -> Refused {
                 .collect::<Vec<_>>()
                 .join("; "),
         ),
-        LedgerError::Unauthorized => {
-            Refused::Final("the actor may not post to the ledger".into())
-        }
+        LedgerError::Unauthorized => Refused::Final("the actor may not post to the ledger".into()),
         LedgerError::BookNotOpen => Refused::Final("the company's book is not open".into()),
         LedgerError::CompanyArchived => Refused::Final("the company is archived".into()),
         other => Refused::Final(other.to_string()),

@@ -98,9 +98,8 @@ impl Owner for ArtifactOwner {
         reference: Option<&'a Reference>,
     ) -> ProofFuture<'a, ()> {
         Box::pin(async move {
-            let shaped = reference.is_some_and(|r| {
-                r.kind == KIND && r.subject.starts_with("document-")
-            });
+            let shaped =
+                reference.is_some_and(|r| r.kind == KIND && r.subject.starts_with("document-"));
             let allowed = match operation {
                 Operation::Purge => true,
                 Operation::Create | Operation::Read | Operation::Delete => shaped,
@@ -177,7 +176,8 @@ impl Einvoice {
         {
             return Ok(stored);
         }
-        let company = OrganisationId::new(company_id).map_err(|_| EinvoiceError::CompanyNotFound)?;
+        let company =
+            OrganisationId::new(company_id).map_err(|_| EinvoiceError::CompanyNotFound)?;
         let owner = ArtifactOwner {
             render: Some(printable(&view)),
         };
@@ -236,7 +236,8 @@ impl Einvoice {
     ) -> Result<PdfFile> {
         let mut client = self.db.get().await.map_err(Error::from)?;
         authorize(&**client, scope, company_id, VIEW).await?;
-        let company = OrganisationId::new(company_id).map_err(|_| EinvoiceError::CompanyNotFound)?;
+        let company =
+            OrganisationId::new(company_id).map_err(|_| EinvoiceError::CompanyNotFound)?;
         let owner = ArtifactOwner { render: None };
         let document = self
             .artifacts
@@ -337,11 +338,20 @@ fn printable(view: &DocumentView) -> serializer::Document {
                     .collect(),
             },
             Block::Table {
-                headers: vec!["Total".into(), format!("Amount ({})", document.currency_code)],
+                headers: vec![
+                    "Total".into(),
+                    format!("Amount ({})", document.currency_code),
+                ],
                 rows: vec![
-                    vec!["Tax exclusive".into(), amount(document.tax_exclusive_amount)],
+                    vec![
+                        "Tax exclusive".into(),
+                        amount(document.tax_exclusive_amount),
+                    ],
                     vec!["Tax".into(), amount(document.tax_amount)],
-                    vec!["Tax inclusive".into(), amount(document.tax_inclusive_amount)],
+                    vec![
+                        "Tax inclusive".into(),
+                        amount(document.tax_inclusive_amount),
+                    ],
                     vec!["Payable".into(), amount(document.payable_amount)],
                 ],
             },
@@ -367,7 +377,10 @@ fn party(party: &PartySnapshot) -> String {
     };
     [
         party.name.clone(),
-        Some(format!("TIN {}", party.tax_id.as_deref().unwrap_or_default())),
+        Some(format!(
+            "TIN {}",
+            party.tax_id.as_deref().unwrap_or_default()
+        )),
         party
             .registration_number
             .as_ref()
@@ -378,7 +391,10 @@ fn party(party: &PartySnapshot) -> String {
             " ",
         )),
         Some(join(
-            &[address.state_code.as_deref(), address.country_code.as_deref()],
+            &[
+                address.state_code.as_deref(),
+                address.country_code.as_deref(),
+            ],
             " ",
         )),
         party.phone.clone(),
@@ -394,9 +410,10 @@ fn party(party: &PartySnapshot) -> String {
 
 /// An amount at two places.
 fn amount(value: Decimal) -> String {
-    value
-        .round_dp_with_strategy(2, rust_decimal::RoundingStrategy::MidpointAwayFromZero)
-        .to_string()
+    format!(
+        "{:.2}",
+        value.round_dp_with_strategy(2, rust_decimal::RoundingStrategy::MidpointAwayFromZero)
+    )
 }
 
 /// The serializer's font covers printable ASCII and Latin-1; anything else is

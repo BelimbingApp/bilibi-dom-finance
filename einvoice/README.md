@@ -9,10 +9,13 @@ draft a caller asks to issue and its validation, the UBL 2.1 JSON builder with
 its byte-exact writer, the JSON XAdES signer, and the authority's code lists
 with each company's overrides; and clearance: issuing a document, submitting
 it through the MyInvois client on Base Integration with the submit and poll
-jobs on Base Queue, refreshing its status and cancelling it. The ledger
-bridge, source links, consolidation and the pages follow in later versions of
-this module (slices NE4 to NE6). Other modules and Domains never read its
-tables.
+jobs on Base Queue, refreshing its status and cancelling it; and the ledger
+bridge: a validated document's one owned entry and a cancelled one's
+reversal, retried from the reconciliation read, source links to the entry
+Receivables or Payables already posted, the monthly consolidated document,
+the printable PDF with its validation link's QR code, and the auditor's
+evidence datasets. The pages follow (slices NE5 and NE6). Other modules and
+Domains never read its tables.
 
 ## Public API
 
@@ -34,6 +37,14 @@ and call it with a sealed `Scope` and an explicit company id.
 | `cancel_document` | `.documents.cancel` | Cancels a valid or rejected document at the authority with a reason; `NotCancellable`, `CancellationPeriodOver`, `ActiveReferencingDocuments`, `InvalidReason`, `CancellationRefused`, `RateLimited`, `AuthorityUnavailable` |
 | `test_connection` | `.settings.manage` | Logs in afresh with the company's current credentials; audit action `finance.einvoice.connection.tested` |
 | `run_submission`, `run_poll` | `.documents.submit` | The submit and poll jobs' bodies (see Clearance), callable directly for one attempt |
+| `retry_posting`, `retry_reversal` | `.documents.submit` and `finance.ledger.entries.post` | Posts a valid document's entry, or reverses a cancelled one's, after a failure (see Ledger bridge); `NotPostable`, `NotReversible`, `LedgerFollowUpFailed(reason)`; audit action `finance.einvoice.posting.retried` |
+| `reconciliation` | `.view` | `unposted` (valid without an entry) and `unreversed` (cancelled with an entry standing) documents, newest first, each with its entries and the last failure's reason |
+| `consolidation_candidates` | `.view` | What a month's consolidated document would cover at `now`: the window, the eligible documents, those the authority's limits refuse with the reason, and the totals |
+| `issue_consolidated_document` | `.documents.issue` | Records the month's consolidated document at `now` (see Consolidation); audit action `finance.einvoice.document.consolidated` |
+| `generate_pdf` | `.view` | Renders the document's PDF on Base Artifacts once per state and records `pdf_generated`; audit action `finance.einvoice.pdf.generated` |
+| `read_pdf` | `.view` | A stored PDF's bytes and download name, for the download route |
+| `qr_code_svg` | none | The validation link's QR code as an inline SVG |
+| `Einvoice::evidence_datasets`, `evidence_page` | `.view` | The auditor pack's frozen exports of this module's tables (see Evidence) |
 
 Every call authorizes its capability for the scope's actor and the target
 company at the moment it runs (Core Company's `authorize_target`): a missing
@@ -127,9 +138,102 @@ call to the authority.
   `cancellation_refused`. Each outcome is recorded only while the document,
   read again under the company lock, is still cancellable.
 
-The ledger entry a validated document posts and a cancelled one reverses are
-slice NE4's (`TODO(NE4 ledger bridge)` in `clearance.rs`). A document's view
-flags `Overdue` and `RejectionRequested` for an operator.
+Once a `valid` (or `rejected`) status commits, the bridge posts the
+document's entry; once `cancelled` commits, it reverses it (see Ledger
+bridge). A document's view flags `Overdue`, `RejectionRequested`, `Unposted`,
+`PostingFailed`, `Unreversed` and `ReversalFailed` for an operator.
+
+## Ledger bridge
+
+`posting.rs` (Bilimbi `Posting`). A document the authority validated posts
+one balanced entry through the ledger's `post_entry_in`, as the person the
+work runs for (the poll job's, the refresh's or the cancellation's), dated
+its issue date in UTC (a consolidated document's, the last day of the month
+it reports), described `E-invoice <code> (<type>)`, with its code number and
+authority UUID as the `reference`. The accounts are the company's
+`finance.einvoice.posting.*` codes in its own chart; the authority's
+`posting_rule` says which three a type uses. The counter-account
+(receivable, payable or settlement) takes the rule's side for the payable
+amount; the net (revenue or expense) and tax accounts take the other side,
+and a tax of zero posts no tax line. A sale debits receivable; a credit note
+mirrors it; a refund note credits settlement; a self-billed purchase credits
+payable and debits expense and purchase tax.
+
+The entry's owner is `finance/einvoice` `document:<id>`, so the ledger
+refuses a second entry for the document and a reversal by anyone else
+(`OwnedBy`). Its ID is recorded on a `posted` event, and the reversal's on a
+`posting_reversed` event, each in the transaction that posts it, under the
+company lock; the database refuses a second of either. A refusal (book not
+open, the book's currency differs, `posting accounts not set: ...`,
+`accounts not in the chart: ...`, a closed period, a missing ledger grant) is
+recorded afterwards, in its own transaction, as `posting_failed` or
+`reversal_failed` with the reason, and the document waits on
+`reconciliation` until `retry_posting` or `retry_reversal` succeeds. Only a
+database failure that may pass at once (a lost connection, lock contention, a
+deadlock, a serialization failure) is tried a second time, and recorded as
+one failure that says so. A document posts and reverses once: asking again
+is unchanged. A clearance never fails because its follow-up did.
+
+A document issued with a `source` never posts or reverses (see Source
+links): its accounting and its correction are the source module's.
+
+## Source links
+
+`Draft.source` names the transaction the document is the tax document of,
+when another Finance module already recognised it in the ledger: the
+module's descriptor ID (`finance/receivables`, `finance/payables`), its
+record (`document:17`) and the entry that record posted. `issue_document`
+holds it to the ledger through `get_entry_on` (so the caller needs
+`finance.ledger.view`): the entry exists, that module and record own it, it
+is neither a reversal nor reversed, it is in the document's currency, and its
+debits equal the document's total; and no other document that stands
+(submitted, valid, rejected or consolidated, or with an attempt the authority
+may hold) links the same source, which the database refuses too. Each
+problem is a `source` field error in Bilimbi's words (`ledger entry 12 is
+not owned by finance/receivables document:3`). A note correcting a linked
+original needs its own `source`: the record that module corrected it with.
+The view lists `source_links` and says `recognised_by_source`.
+
+## Consolidation
+
+`consolidation.rs` (Bilimbi `Consolidation`). The sources of a month's
+consolidated document are the company's documents issued in the month (the
+authority's calendar: MyInvois' UTC+8 month) in the current environment,
+never submitted on their own, not held by another consolidated document, not
+waiting in a submit job, and within the authority's limits (an invoice, in
+ringgit, at most RM10,000). It is issued from the month's end for seven days
+(`PeriodNotEnded`, `ConsolidationWindowClosed`) at the `now` the caller
+passes (the database still stamps `recorded_at`), with a line per source and
+tax whose amount and tax are that source's exact sums, to the general public
+buyer with classification `004` and the month as its billing period. It
+records which source each line carries and a `consolidated` event on each
+source, which then cannot be submitted alone; a refused, invalid or
+cancelled consolidated document releases them (`released`) and is never sent
+again. Linked sources pass their links on, and linked and unlinked sources do
+not mix (`MixedSourceLinks`). The view of a consolidated document lists its
+`sources` with their line numbers; a source names its `consolidated_by`.
+
+## Printable document
+
+`pdf.rs` (Bilimbi `ArtifactOwner` and `QrCode`). `generate_pdf` renders the
+document with Base Artifacts' deterministic serializer (parties, lines,
+totals, status, identifiers and the validation link; characters outside
+Latin-1 print as `?`) and stores it under owner `finance/einvoice`, kind
+`document-pdf`, subject `document-<id>`. The adapter re-asks
+`finance.einvoice.view` on every create, read and delete and never retains.
+A `pdf_generated` event keeps the artifact and the last event it was
+rendered from, so asking again before the document changes answers the same
+artifact. Base Artifacts needs its storage root and retention period first.
+`qr_code_svg` draws the validation link's QR code (black on white, no
+script) for the document page.
+
+## Evidence
+
+`evidence.rs`: one dataset per table (`code_override`,
+`consolidated_source`, `document`, `line`, `source_link`, `status_event`,
+`submission`) with a frozen field list, ID-ordered pages of 1 to 500. The
+submission's payload is exported as the text it is; credentials live in Base
+Settings and are never exported.
 
 ### The MyInvois client
 
@@ -153,7 +257,7 @@ Five keys, verbatim from Bilimbi, under the `finance` domain, all granted to
 `tenant_owner`: `finance.einvoice.view`, `.documents.issue`,
 `.documents.submit`, `.documents.cancel` and `.settings.manage`. The module
 declares the verbs `issue`, `submit` and `cancel` (Bilibi merges verbs across
-modules). It contributes the two queue workers above and has no pages, menu items or agent operations yet.
+modules). It contributes the two queue workers above and has no pages, menu items or agent operations yet. It depends on `finance/ledger` (posting, reversal, source entries) and `base/artifacts` (the PDF), where Bilimbi has the same edges.
 
 ## Settings
 
@@ -294,7 +398,12 @@ Migrations `finance-einvoice-001-documents`, `-002-consolidation` and
 - `finance_einvoice_code_overrides` is the one editable table.
 
 Prove it with `fixtures/walkthrough` on a disposable database (see the
-repository README); its e-invoice section prints the facade's answers, the
+repository README); its ledger bridge section (inside the clearance section)
+opens Company 002's book, retries the postings its earlier validations could
+not make, posts and reverses on validation and cancellation, consolidates
+September 2026 (refused, released, consolidated again), generates and reads a
+PDF, links Company 001's documents to Receivables' and Payables' entries, and
+pages the evidence. Its e-invoice section prints the facade's answers, the
 drafts accepted and refused, the payload a recorded document becomes (unsigned
 and signed, verified, and tampered) and each database refusal. Its clearance
 section (last) serves a stand-in for the MyInvois API on the loopback for the

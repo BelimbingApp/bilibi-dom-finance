@@ -39,14 +39,14 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-type Outcome<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+pub(crate) type Outcome<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 /// The company the section clears documents for.
-const COMPANY: i64 = 2;
-const CLIENT_ID: &str = "walkthrough-client";
-const CLIENT_SECRET: &str = "walkthrough-secret";
+pub(crate) const COMPANY: i64 = 2;
+pub(crate) const CLIENT_ID: &str = "walkthrough-client";
+pub(crate) const CLIENT_SECRET: &str = "walkthrough-secret";
 
-fn show<T: Debug>(step: &str, result: Result<T, EinvoiceError>) {
+pub(crate) fn show<T: Debug>(step: &str, result: Result<T, EinvoiceError>) {
     match result {
         Ok(value) => println!("{step}: {value:?}"),
         Err(EinvoiceError::Invalid(errors)) => {
@@ -62,7 +62,7 @@ fn show<T: Debug>(step: &str, result: Result<T, EinvoiceError>) {
 
 /// A document on a few lines: its status, identifiers, attention flags and
 /// every event with its reason.
-fn brief(view: &DocumentView) -> String {
+pub(crate) fn brief(view: &DocumentView) -> String {
     let events: Vec<String> = view
         .events
         .iter()
@@ -94,7 +94,10 @@ fn brief(view: &DocumentView) -> String {
     )
 }
 
-fn shown(step: &str, result: Result<DocumentView, EinvoiceError>) -> Option<DocumentView> {
+pub(crate) fn shown(
+    step: &str,
+    result: Result<DocumentView, EinvoiceError>,
+) -> Option<DocumentView> {
     match result {
         Ok(view) => {
             println!("{step}:\n  {}", brief(&view));
@@ -478,7 +481,7 @@ async fn serve(standin: Arc<StandIn>) -> Outcome<String> {
 }
 
 /// Saves one setting as the Settings screen would.
-async fn save(
+pub(crate) async fn save(
     db: &Db,
     services: &Services,
     scope: &Scope,
@@ -533,15 +536,15 @@ fn certificate() -> Outcome<(String, String)> {
     Ok((pems.0?, pems.1?))
 }
 
-fn d(text: &str) -> Decimal {
+pub(crate) fn d(text: &str) -> Decimal {
     Decimal::from_str_exact(text).expect("a decimal")
 }
 
-fn text(value: &str) -> Option<String> {
+pub(crate) fn text(value: &str) -> Option<String> {
     Some(value.to_owned())
 }
 
-fn buyer() -> DraftParty {
+pub(crate) fn buyer() -> DraftParty {
     DraftParty {
         name: text("Buyer Two Sdn Bhd"),
         tax_id: text("C29702635060"),
@@ -563,7 +566,7 @@ fn buyer() -> DraftParty {
 }
 
 /// An invoice (or, with `original`, a credit note) on two lines.
-fn draft(code: &str, original: Option<i64>) -> Draft {
+pub(crate) fn draft(code: &str, original: Option<i64>) -> Draft {
     let line = |description: &str, quantity: &str, price: &str| DraftLine {
         description: text(description),
         classification_code: text("003"),
@@ -606,7 +609,7 @@ fn draft(code: &str, original: Option<i64>) -> Draft {
 }
 
 /// Waits until no e-invoice job is waiting or running, then prints them.
-async fn jobs_settle(client: &tokio_postgres::Client) -> Outcome<()> {
+pub(crate) async fn jobs_settle(client: &tokio_postgres::Client) -> Outcome<()> {
     for _ in 0..240 {
         let waiting: i64 = client
             .query_one(
@@ -624,7 +627,7 @@ async fn jobs_settle(client: &tokio_postgres::Client) -> Outcome<()> {
     Ok(())
 }
 
-async fn job_states(client: &tokio_postgres::Client, since: i64) -> Outcome<String> {
+pub(crate) async fn job_states(client: &tokio_postgres::Client, since: i64) -> Outcome<String> {
     let rows = client
         .query(
             "SELECT id, worker_id, state, attempt, COALESCE(failure_code, '-'), args::text \
@@ -649,7 +652,7 @@ async fn job_states(client: &tokio_postgres::Client, since: i64) -> Outcome<Stri
         .join("\n  "))
 }
 
-async fn last_job(client: &tokio_postgres::Client) -> Outcome<i64> {
+pub(crate) async fn last_job(client: &tokio_postgres::Client) -> Outcome<i64> {
     Ok(client
         .query_one("SELECT COALESCE(max(id), 0) FROM base_queue_jobs", &[])
         .await?
@@ -1121,6 +1124,7 @@ pub async fn run(
             .await,
     );
     println!("stand-in saw:\n  {}", standin.drain().join("\n  "));
+    crate::einvoice_bridge::run(db, services, manager, viewer).await?;
     let _ = stop.send(true);
     let _ = worker.await;
 

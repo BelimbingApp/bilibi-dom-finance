@@ -27,9 +27,7 @@ use crate::documents::{
     self, ConsolidatedSource, DocumentSummary, DocumentView, NewEvent, Recorded, SourceLink,
     RELEASING,
 };
-use crate::{
-    authorize, supplier_profile, Einvoice, EinvoiceError, Result, ISSUE, VIEW,
-};
+use crate::{authorize, supplier_profile, Einvoice, EinvoiceError, Result, ISSUE, VIEW};
 use bilibi_company::organisation;
 use bilibi_database::{Change, Error, MutationTransaction};
 use bilibi_tenancy::Scope;
@@ -279,8 +277,15 @@ impl Einvoice {
         let window = authority.consolidation_window(month);
         let environment = self.environment(&**client, scope, company_id).await?;
         let tenant = scope.tenant();
-        let (eligible, refused) =
-            candidates(&**client, &authority, tenant, company_id, &environment, &window).await?;
+        let (eligible, refused) = candidates(
+            &**client,
+            &authority,
+            tenant,
+            company_id,
+            &environment,
+            &window,
+        )
+        .await?;
         let ids: Vec<i64> = eligible.iter().map(|d| d.document.id).collect();
         let refused_ids: Vec<i64> = refused.iter().map(|(d, _)| d.document.id).collect();
         let refused_summaries =
@@ -355,8 +360,15 @@ impl Einvoice {
         let window = authority.consolidation_window(month);
         open(&window, now)?;
         let environment = self.environment(tx.sql(), scope, company_id).await?;
-        let (eligible, _refused) =
-            candidates(tx.sql(), &authority, tenant, company_id, &environment, &window).await?;
+        let (eligible, _refused) = candidates(
+            tx.sql(),
+            &authority,
+            tenant,
+            company_id,
+            &environment,
+            &window,
+        )
+        .await?;
         let sources: Vec<Recorded> = match &request.document_ids {
             None if eligible.is_empty() => return Err(EinvoiceError::NothingToConsolidate),
             None => eligible,
@@ -455,7 +467,15 @@ impl Einvoice {
             details,
         )
         .await?;
-        record_sources(&mut tx, scope, company_id, document_id, &code_number, &lines).await?;
+        record_sources(
+            &mut tx,
+            scope,
+            company_id,
+            document_id,
+            &code_number,
+            &lines,
+        )
+        .await?;
         let links: Vec<SourceLink> = sources
             .iter()
             .flat_map(|source| source.source_links.iter().cloned())

@@ -175,7 +175,10 @@ fn column(field: &str) -> String {
     } else if field == "payload" {
         "convert_from(r.payload,'UTF8') AS payload".into()
     } else if field.ends_with("_amount")
-        || matches!(field, "exchange_rate" | "quantity" | "unit_price" | "subtotal" | "tax_rate")
+        || matches!(
+            field,
+            "exchange_rate" | "quantity" | "unit_price" | "subtotal" | "tax_rate"
+        )
     {
         format!("r.{field}::text AS {field}")
     } else {
