@@ -420,7 +420,7 @@ fn issue() -> Value {
             "company_id":identifier(),"document_type":string(2),"code_number":string(50),"issued_at":{"type":"string","format":"date-time"},"currency_code":string(3),"exchange_rate":string(40),
             "payment_means_code":string(16),"payment_terms":string(300),"billing_period_start":{"type":"string","format":"date"},"billing_period_end":{"type":"string","format":"date"},"billing_period_description":string(300),"original_document_id":identifier(),
             "buyer":party(),"supplier":party(),
-            "lines":{"type":"array","items":object(&["description","classification_code","quantity","unit_price","tax_type","tax_rate"],json!({"description":string(300),"classification_code":string(16),"tariff_code":string(32),"origin_country_code":string(16),"quantity":string(40),"unit_code":string(16),"unit_price":string(40),"discount_amount":string(40),"charge_amount":string(40),"tax_type":string(16),"tax_rate":string(40),"tax_exemption_reason":string(300)}))},
+            "lines":{"type":"array","items":object(&["description","classification_code","quantity","unit_price","tax_type","tax_rate"],json!({"description":string(300),"classification_code":string(16),"tariff_code":string(32),"origin_country_code":string(3),"quantity":string(40),"unit_code":string(16),"unit_price":string(40),"discount_amount":string(40),"charge_amount":string(40),"tax_type":string(8),"tax_rate":string(40),"tax_exemption_reason":string(300)}))},
             "source":object(&["module","record","ledger_entry_id"],json!({"module":{"type":"string","enum":["finance/receivables","finance/payables"]},"record":string(100),"ledger_entry_id":identifier()}))
         }),
     )
