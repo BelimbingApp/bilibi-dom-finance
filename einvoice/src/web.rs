@@ -621,7 +621,6 @@ impl State {
             id: "einvoice-test-connection",
             event: "test_connection",
             button_type: "button",
-            class: "mt-4",
             body: Html::text("Test connection"),
             ..Button::default()
         })?);
@@ -672,7 +671,7 @@ impl State {
             parts.push(render(Card {
                 id: "einvoice-expiry-alert",
                 role: "alert",
-                class: "mt-6",
+                inner_class: "p-5 sm:p-6",
                 body: render(SectionHeading {
                     id: "einvoice-expiry-heading",
                     title: "Renew soon",
@@ -805,7 +804,7 @@ fn issue_error(error: &EinvoiceError) -> String {
                         .filter(|s| !s.is_empty())
                         .map(|s| {
                             s.parse::<usize>()
-                                .map_or_else(|_| s.replace('_', " "), |n| (n + 1).to_string())
+                                .map_or_else(|_| s.to_owned(), |n| (n + 1).to_string())
                         })
                         .collect::<Vec<_>>()
                         .join(" ");
@@ -892,7 +891,7 @@ fn document_row(d: &DocumentSummary, row_id: &str, framed: bool) -> Result<FlexR
                 record_id: &d.id.to_string(),
                 href: &format!("/finance/einvoice/documents/{}", d.id),
                 body: Html::text(&d.code_number),
-                class: "",
+                class: "font-medium text-ink-strong hover:underline",
             })?,
         )
         .slot("status", render(Badge::status(kind, &d.status))?)
@@ -932,10 +931,9 @@ fn section(id: &str, title: &str, description: &str, flat: bool, content: Html) 
     body.push(&content);
     render(Card {
         id,
-        class: "mt-6",
         role: "region",
         labelledby: &heading,
-        inner_class: if flat { "p-0" } else { "" },
+        inner_class: if flat { "p-0" } else { "p-5 sm:p-6" },
         body,
         ..Card::default()
     })
@@ -988,7 +986,7 @@ struct Instant<'a> {
 struct SupplierComplete {}
 #[derive(Template)]
 #[template(
-    source = "{% import \"components.html\" as ui %}<span id=\"{{ window_id }}\">{% call ui::badge(kind=kind) %}{{ label }}{% endcall %}</span>",
+    source = "{% import \"components.html\" as ui %}<span id=\"{{ window_id }}\" class=\"ml-2\">{% call ui::badge(kind=kind) %}{{ label }}{% endcall %}</span>",
     ext = "html"
 )]
 struct WindowBadge<'a> {

@@ -2,12 +2,12 @@
 {% import "components.html" as ui %}
 {% import "forms.html" as form %}
 {% if issue %}
-<form id="einvoice-consolidation-issue" data-change data-event="issue_change" data-submit-event="issue" class="mt-4 flex flex-wrap items-end gap-3">
+<form id="einvoice-consolidation-issue" data-change data-event="issue_change" data-submit-event="issue" class="mt-4 space-y-3">
 {% call form::input(field=field) %}{% endcall %}
 {% call ui::button(id="einvoice-consolidation-submit", button_type="submit", variant=bilibi_ui::ButtonVariant::Primary, working="Issuing…") %}Issue consolidated document{% endcall %}
 </form>
 {% else %}
-<form id="einvoice-consolidation-month" data-change data-event="month" class="mt-4 flex flex-wrap items-end gap-3">
+<form id="einvoice-consolidation-month" data-change data-event="month">
 {% call form::input(field=field) %}{% endcall %}
 </form>
 {% endif %}

@@ -434,3 +434,6 @@ macro_rules! walkthrough_reconciliation_roles {
 
 // NE5: real e-invoice pages, downloads and local authority browser proof.
 pub mod einvoice_ui;
+
+// NE6: executable page and browser proof on disposable data.
+pub mod einvoice_pages;

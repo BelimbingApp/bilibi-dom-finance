@@ -2,8 +2,7 @@
 {% import "components.html" as ui %}
 {% import "feedback.html" as feedback %}
 {% call ui::page(id=page_id, variant=variant) %}
-<div id="{{ page_id }}-state" data-history="params">
+<span id="{{ page_id }}-state" data-history="params" hidden></span>
 {% call feedback::flash_group(messages=flash) %}{% endcall %}
 {% for part in parts %}{{ part }}{% endfor %}
-</div>
 {% endcall %}

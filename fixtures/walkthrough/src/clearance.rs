@@ -512,7 +512,7 @@ pub(crate) async fn save(
 
 /// A throwaway RSA certificate whose subject carries the company's tax and
 /// registration numbers, and its key, as PEM; the files are removed on return.
-fn certificate() -> Outcome<(String, String)> {
+pub(crate) fn certificate() -> Outcome<(String, String)> {
     let dir = std::env::temp_dir().join(format!("einvoice-clearance-{}", std::process::id()));
     std::fs::create_dir_all(&dir)?;
     let (cert, key) = (dir.join("cert.pem"), dir.join("key.pem"));

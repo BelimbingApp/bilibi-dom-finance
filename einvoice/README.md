@@ -454,3 +454,34 @@ limited, a duplicate found and one not found, a lost answer found again, the
 portal cancellation, and cancellations accepted and refused; then the stored
 submissions, the database's refusals, the exchanges Base Integration recorded
 (without bodies or the secret) and the audit actions.
+
+## Consolidation, reconciliation and setup pages (NE6)
+
+`/finance/einvoice/consolidation` selects an authority-calendar month, shows its window, eligible documents, individual-invoice exceptions and totals, and issues only the candidate IDs the page displayed. Month changes are addressable and Back restores the month without discarding the number draft. An issuance refusal refreshes candidates and retains the number. The issue control requires `finance.einvoice.documents.issue`, an open window and nonempty candidates; the facade rechecks all three under its audited company write.
+
+`/finance/einvoice/reconciliation` lists validated documents missing their ledger entry and cancelled documents whose entry stands. Retry controls require both `finance.einvoice.documents.submit` and `finance.ledger.entries.post`, checked again on each event and in the facade. Every outcome reloads both tables. All four tables use shared FlexTable/ListColumns, with compact rows and column arrangement; Bilimbi has no sort, filters or paging on these pages, so none are added.
+
+`/finance/einvoice/setup` requires `finance.einvoice.settings.manage`. It displays only the facade's secret-free setup: credential presence, certificate facts and days left, key/TIN matches, renewal alerts and supplier gaps. Editing remains in `/system/settings`. Test connection reauthorizes and reports the authority's outcome; a login `Retry-After` is preserved in `LoginOutcome::RateLimited` without exposing HTTP bodies. Successful tests use an info flash, not a write-success flash.
+
+The page adapters mirror Bilimbi `Einvoice.Web.{ConsolidationLive,ReconciliationLive,SetupLive}` at `4abfaf829321f8540581d833752a086b21b45ba9`. They own no CSS, JavaScript or SQL. The document links and successful issue redirect are NE5 destinations; NE6 does not register them.
+
+### Running proof
+
+Build from the pinned Platform with Finance mounted, then run `einvoice-pages` on an empty disposable PostgreSQL 18 database. It uses real PageService/LiveState, facade writes, Settings, ledger periods and Base Integration; only the authority is a local HTTP stand-in. No production seed or unit test is involved.
+
+```sh
+cargo build -p bilibi-finance-walkthrough-fixture --bin einvoice-pages
+# DATABASE_URL must name a fresh disposable database; keep a generated
+# BILIBI_SETTINGS_KEY in the process environment, never in source control.
+target/debug/einvoice-pages
+```
+
+For the open-window proof, run the built binary with an external process clock at 3 October 2026 (Linux `libfaketime`; monotonic time remains real):
+
+```sh
+LD_PRELOAD=/usr/lib/x86_64-linux-gnu/faketime/libfaketime.so.1 \
+FAKETIME='@2026-10-03 10:00:00' FAKETIME_DONT_FAKE_MONOTONIC=1 \
+target/debug/einvoice-pages
+```
+
+The proof asserts later arrivals are excluded, competing consolidation is refused, drafts survive parameter changes, login feedback includes 429's 37-second delay, secrets never render, revoked grants cannot retry, and closed-period reversals fail then succeed after reopening. At the ordinary clock outside the window it instead checks the issue form is withheld. `--serve` continues into the composed app for browser inspection; `--serve-existing` reopens the prepared database without repeating proof writes, with the same settings encryption key and process clock. Set `APP_ORIGIN` to the exact browsed origin and `BIND_ADDR` to the listening address. Fixture accounts are `manager@example.test` and `viewer@example.test`, password `bilibi-dev`. Use September 2026 for the illustrated consolidation fixture; a deliberately missing revenue account leaves a real failed posting to retry. The server remains supervised with `amp orb service start` in an orb.
