@@ -10,10 +10,11 @@ Bilibi checkout; it does not build on its own.
 | --- | --- | --- |
 | [`ledger/`](ledger/README.md) | `finance/ledger` | each company's book and currency, its chart of accounts, its journal entries (append-only, numbered without gaps, balanced at commit, optionally owned by another module's record) with posting notices that announce only committed entries, its fiscal years of monthly periods with the closing log (close, reopen, lock, year-end close and reopen with closing entries), controlled bookkeeping and its changes, the late-recording report with its reviews, reversals (an owned entry only through its owner), the separation of duties (impersonation counted) with the approval exceptions log and its independent reviews, and manual journals that post only once someone else approves them. |
 | [`attachments/`](attachments/README.md) | `finance/attachments` | source documents kept with the records they support: records-grade files in Base Artifacts, the company's retention years and their history, replace and remove while a record is a draft, legal holds, and the retention refresh job that follows a record's final date. The `Source` contract each record owner implements is here. |
+| [`reconciliation/`](reconciliation/README.md) | `finance/reconciliation` | each company's bank accounts mapped one-to-one to a ledger account, with a change log and a per-account CSV import mapping (a bank's layout is the company's data), and the bank statements imported through it: read by a small RFC 4180 reader, kept whole as a source document through `finance/attachments`, numbered, immutable, and refused a second time by file SHA-256 or by line fingerprint. The schema for matches and reconciliations is in place; their services and the pages follow. |
 
 Every other Finance module of Bilimbi (receivables, payables,
-e-invoice, fixed assets, payroll, reconciliation, SST, reports) lands beside
-the ledger as a sibling module folder, in later slices of the port.
+e-invoice, fixed assets, payroll, SST, reports) lands beside the ledger as a
+sibling module folder, in later slices of the port.
 
 ## Mount
 
@@ -69,7 +70,20 @@ the submitter, after a period closed and an account was deactivated), turns
 the separation of duties off and on around sibling approvals and overrides,
 lists and reviews the approval exceptions (refused for the approver and
 preparer), races two approvals of one journal, and ends with the database's
-own journal and exception refusals.
+own journal and exception refusals. Its reconciliation section, on Company 001
+after the others, adds bank accounts (refused for a liability account, an
+unknown or inactive account, a counter account of the wrong type, a window of
+91 and twelve kinds of unreadable import mapping; changed with a reason and
+read back from the change log) and imports statements in four bank layouts
+(a signed amount with a running balance, written newest first; debit and credit
+columns with semicolons, decimal commas and two header rows; columns by
+position with no header row; month names with `CR` and `DR` markers), refusing
+a file twice, an overlapping export naming the lines it repeats, unreadable
+rows, missing headers, a running balance that does not follow, stray and open
+quotes, a file that is not UTF-8 or is too large, a viewer, another tenant and
+a deactivated account; it reads the kept file back from Attachments, races two
+sessions importing one file, imports a 10,000 line statement, and ends with the
+database's own statement, match and reconciliation refusals.
 
 ## Naming
 

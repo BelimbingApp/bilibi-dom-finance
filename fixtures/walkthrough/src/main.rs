@@ -19,6 +19,7 @@ bilibi_walkthrough_fixture::walkthrough_vocabulary!();
 bilibi_walkthrough_fixture::walkthrough_module_roles!();
 bilibi_finance_walkthrough_fixture::walkthrough_ledger_roles!();
 bilibi_finance_walkthrough_fixture::walkthrough_attachments_roles!();
+bilibi_finance_walkthrough_fixture::walkthrough_reconciliation_roles!();
 
 /// An entry on one line: number, date, description, owner and `account:amount`
 /// per line (debits positive, credits negative).
@@ -1101,5 +1102,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     bilibi_finance_walkthrough_fixture::attachments::run(&db, &services).await?;
     bilibi_finance_walkthrough_fixture::periods::run(&db, &services).await?;
     bilibi_finance_walkthrough_fixture::controls::run(&db, &services).await?;
+    bilibi_finance_walkthrough_fixture::reconciliation::run(&db, &services).await?;
     Ok(())
 }

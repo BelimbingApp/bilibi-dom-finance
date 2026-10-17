@@ -19,6 +19,7 @@ bilibi-extensions.workspace = true
 bilibi-company.workspace = true
 bilibi-finance-attachments = { path = "../../attachments" }
 bilibi-finance-ledger = { path = "../../ledger" }
+bilibi-finance-reconciliation = { path = "../../reconciliation" }
 bilibi-module-registry.workspace = true
 bilibi-party-ids.workspace = true
 bilibi-queue.workspace = true

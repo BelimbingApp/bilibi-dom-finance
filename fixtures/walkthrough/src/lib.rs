@@ -28,6 +28,7 @@ use jiff::civil::{date, Date};
 pub mod attachments;
 pub mod controls;
 pub mod periods;
+pub mod reconciliation;
 
 /// Every fixture account's password.
 pub use bilibi_walkthrough_fixture::PASSWORD;
@@ -333,6 +334,36 @@ macro_rules! walkthrough_attachments_roles {
                 ] },
                 $crate::authz::RoleDefinition { code: "viewer", name: "viewer", description: "Walkthrough fixture role", grant_all: false, capabilities: &[
                     "finance.attachments.view",
+                ] },
+            ],
+            system_principals: &[],
+        }) }
+    };
+}
+
+/// What the Platform fixture's roles hold in the reconciliation module: the
+/// manager every capability, staff view and import statements, the viewer
+/// only view. Declared in the expanding example's own crate beside
+/// [`walkthrough_ledger_roles!`].
+#[macro_export]
+macro_rules! walkthrough_reconciliation_roles {
+    () => {
+        $crate::inventory::submit! { $crate::registry::Contribution::new($crate::authz::VOCABULARY, "walkthrough.fixture.finance.reconciliation", $crate::registry::Provenance { module: "finance/reconciliation", source: file!(), line: line!() }, &$crate::authz::VocabularyContribution {
+            domains: &[],
+            verbs: &[],
+            capabilities: &[],
+            roles: &[
+                $crate::authz::RoleDefinition { code: "manager", name: "manager", description: "Walkthrough fixture role", grant_all: false, capabilities: &[
+                    "finance.reconciliation.view", "finance.reconciliation.bank-accounts.manage",
+                    "finance.reconciliation.statements.import", "finance.reconciliation.matches.manage",
+                    "finance.reconciliation.reconciliations.manage", "finance.reconciliation.reconciliations.finalise",
+                    "finance.reconciliation.statement-lines.post", "finance.reconciliation.statement-lines.manage",
+                ] },
+                $crate::authz::RoleDefinition { code: "staff", name: "staff", description: "Walkthrough fixture role", grant_all: false, capabilities: &[
+                    "finance.reconciliation.view", "finance.reconciliation.statements.import",
+                ] },
+                $crate::authz::RoleDefinition { code: "viewer", name: "viewer", description: "Walkthrough fixture role", grant_all: false, capabilities: &[
+                    "finance.reconciliation.view",
                 ] },
             ],
             system_principals: &[],
