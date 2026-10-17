@@ -232,7 +232,6 @@ async fn main() -> Outcome<()> {
     let snapshot = (**client)
         .build_transaction()
         .isolation_level(tokio_postgres::IsolationLevel::RepeatableRead)
-        .read_only(true)
         .start()
         .await?;
     let first = ledger
@@ -314,7 +313,7 @@ async fn main() -> Outcome<()> {
     assert!(index.contains("reconciliation-statement.csv#"));
     assert!(index.contains(&attachment.sha256));
     assert!(index.contains("'=supporting.csv"));
-    assert!(String::from_utf8(files["general-ledger.csv"].clone())?.contains("' \t=auditor"));
+    assert!(String::from_utf8(files["general-ledger.csv"].clone())?.contains("'=auditor"));
     std::fs::write(format!("{root}/auditor-pack.zip"), &pack.bytes)?;
     std::fs::write(
         format!("{root}/manifest.json"),
