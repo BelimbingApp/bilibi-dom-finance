@@ -395,7 +395,10 @@ pub enum LoginOutcome {
     /// The authority refused it with this HTTP status.
     Refused(u16),
     /// The authority asks the operator to wait this many seconds before login.
-    RateLimited { status: u16, seconds: u64 },
+    RateLimited {
+        status: u16,
+        seconds: u64,
+    },
     Unreachable,
     Failed,
 }

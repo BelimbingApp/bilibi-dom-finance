@@ -37,6 +37,7 @@ mod evidence;
 pub mod myinvois;
 mod pdf;
 mod posting;
+mod web;
 mod workers;
 
 pub use authority::{
@@ -92,8 +93,8 @@ inventory::submit! {
     Module {
         id: MODULE, layer: Layer::Domains,
         dependencies: &[
-            "base/artifacts", "base/audit", "base/authz", "base/database", "base/integration",
-            "base/party_ids", "base/queue", "base/settings", "base/tenancy", "core/company",
+            "base/artifacts", "base/audit", "base/authz", "base/database", "base/datetime", "base/integration",
+            "base/locale", "base/menu", "base/party_ids", "base/queue", "base/settings", "base/tenancy", "base/ui", "core/company",
             "finance/ledger",
         ],
         migrations: &[
@@ -113,6 +114,11 @@ inventory::submit! {
             })) },
             Service { id: workers::SUBMIT_SERVICE, factory: |services| workers::handler(services, workers::Job::Submit) },
             Service { id: workers::POLL_SERVICE, factory: |services| workers::handler(services, workers::Job::Poll) },
+            Service { id: web::SERVICE, factory: |services| Ok(Arc::new(bilibi_ui::page::PageService::<Scope, Error>(Arc::new(web::Pages {
+                einvoice: services.get(SERVICE)?,
+                display: services.get("base/datetime.display")?,
+                locales: services.get("base/locale.locales")?,
+            })))) },
         ],
     }
 }

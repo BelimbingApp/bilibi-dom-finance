@@ -6,18 +6,23 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+askama.workspace = true
 bilibi-artifacts.workspace = true
 bilibi-audit.workspace = true
 bilibi-authz.workspace = true
 bilibi-company.workspace = true
 bilibi-database.workspace = true
+bilibi-datetime.workspace = true
 bilibi-finance-ledger = { path = "../ledger" }
 bilibi-integration.workspace = true
+bilibi-locale.workspace = true
+bilibi-menu.workspace = true
 bilibi-module-registry.workspace = true
 bilibi-party-ids.workspace = true
 bilibi-queue.workspace = true
 bilibi-settings.workspace = true
 bilibi-tenancy.workspace = true
+bilibi-ui.workspace = true
 # The PUT method of a cancellation: Base Integration's `Outgoing` names
 # methods by `http::Method` and has no `put` shorthand.
 http = "1.5.0"
