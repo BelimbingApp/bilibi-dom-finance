@@ -9,7 +9,7 @@
 //! (`panel.rs`).
 use super::{download::company_of, format, time_cell, DENIED};
 use crate::{
-    AttachmentError, AttachmentQuery, Attachments, Retention, RetentionChange, Status,
+    AttachmentError, AttachmentQuery, Attachments, FieldError, Retention, RetentionChange, Status,
     MANAGE_RETENTION,
 };
 use askama::Template;
@@ -58,7 +58,7 @@ static SPEC: LazyLock<Arc<ListSpec>> = LazyLock::new(|| {
 });
 
 fn attachment_columns() -> Vec<BuiltinColumn> {
-    let mut number = BuiltinColumn::new("number", "#").right();
+    let mut number = BuiltinColumn::new("number", "#");
     number.kind = ColumnType::Integer;
     let mut dated = BuiltinColumn::new("dated", "Dated");
     dated.kind = ColumnType::Date;
@@ -77,7 +77,7 @@ fn attachment_columns() -> Vec<BuiltinColumn> {
 }
 
 fn change_columns() -> Vec<BuiltinColumn> {
-    let mut number = BuiltinColumn::new("number", "#").right();
+    let mut number = BuiltinColumn::new("number", "#");
     number.kind = ColumnType::Integer;
     let mut years = BuiltinColumn::new("years", "Years").right();
     years.kind = ColumnType::Integer;
@@ -445,7 +445,7 @@ impl Index {
         });
 
         let filter = render(FilterForm {
-            source: Field::named("filters[source]")
+            source: Field::named("filter[source]")
                 .id("attachments-filter-source")
                 .kind(InputKind::Select)
                 .prompt("Every kind of record")
@@ -456,7 +456,7 @@ impl Index {
                         .collect(),
                 )
                 .value(self.list.filters.get("source").cloned().unwrap_or_default()),
-            status: Field::named("filters[status]")
+            status: Field::named("filter[status]")
                 .id("attachments-filter-status")
                 .kind(InputKind::Select)
                 .options(vec![
@@ -509,8 +509,24 @@ impl Index {
             );
             return Ok(());
         };
-        let Ok(years) = self.draft_years.trim().parse::<i32>() else {
-            self.flash(StatusKind::Error, "years is invalid");
+        // Bilimbi casts the years: blank is not a change, anything else that
+        // is not a whole number is invalid, and the changeset says so after
+        // the reason.
+        let years = self.draft_years.trim();
+        let Ok(years) = years.parse::<i32>() else {
+            let mut errors = crate::operations::reason_errors(&self.draft_reason);
+            errors.push(FieldError::new(
+                "years",
+                if years.is_empty() {
+                    "can't be blank"
+                } else {
+                    "is invalid"
+                },
+            ));
+            self.flash(
+                StatusKind::Error,
+                format::refusal(AttachmentError::Invalid(errors))?,
+            );
             return Ok(());
         };
         match told(
@@ -541,7 +557,7 @@ impl Index {
         match get("type").ok_or(Error::Invalid)? {
             "filter" => {
                 self.list
-                    .apply_filters(&params::form_values(value, "filters"));
+                    .apply_filters(&params::form_values(value, "filter"));
                 self.pages_loaded = 1;
                 Ok(true)
             }
@@ -560,6 +576,17 @@ impl Index {
                 self.draft_years = posted.get("years").cloned().unwrap_or_default();
                 self.draft_reason = posted.get("reason").cloned().unwrap_or_default();
                 self.set_retention(scope).await?;
+                // A recorded change reads the page again (Bilimbi `load/1`).
+                Ok(matches!(self.flash, Some((StatusKind::Success, _))))
+            }
+            "clear-flash" => {
+                if self
+                    .flash
+                    .as_ref()
+                    .is_some_and(|(kind, _)| get("key") == Some(kind.name()))
+                {
+                    self.flash = None;
+                }
                 Ok(false)
             }
             "attachments_grid" => {
@@ -642,7 +669,6 @@ impl Page<Scope, Error> for Pages {
 impl LiveState<Scope, Error> for Index {
     fn update<'a>(&'a mut self, request: LiveRequest<'a, Scope>) -> LiveFuture<'a, Error> {
         Box::pin(async move {
-            self.flash = None;
             let reload = match request.input {
                 LiveInput::Refresh => true,
                 LiveInput::Params(values) => {
@@ -653,7 +679,6 @@ impl LiveState<Scope, Error> for Index {
                 }
                 LiveInput::Event(value) => self.event(request.scope, value).await?,
             };
-            // A write refreshes the list too, as Bilimbi's `load/1` does.
             if reload || self.shown.is_empty() {
                 self.reload(request.scope).await?;
             }

@@ -131,6 +131,13 @@ struct Time<'a> {
 
 pub(super) fn refusal(action: &str, error: PayablesError) -> String {
     use PayablesError::*;
+    // The ledger's own access and archive refusals read as the page's
+    // (Bilimbi's ledger answers the same `:unauthorized`/`:company_archived`).
+    let error = match error {
+        Ledger(LedgerError::Unauthorized) => Unauthorized,
+        Ledger(LedgerError::CompanyArchived) => CompanyArchived,
+        other => other,
+    };
     match (action, &error) {
         ("approve", NotDraft) => "Only a draft can be approved.".into(),
         ("approve", Ledger(LedgerError::SamePerson)) => "This company separates duties: someone other than whoever recorded the document must approve it.".into(),

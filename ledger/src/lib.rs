@@ -1670,10 +1670,12 @@ impl Ledger {
         owner: &EntryOwner,
         reversal: &Reversal,
     ) -> Result<Entry> {
+        // Authorized first, as Bilimbi's `write/4` is: a caller out of reach
+        // learns nothing about the owner it passed.
+        join(tx, scope, company_id, POST_ENTRIES).await?;
         if !entries::owner_valid(owner) {
             return Err(LedgerError::InvalidOption);
         }
-        join(tx, scope, company_id, POST_ENTRIES).await?;
         reverse(tx, scope, company_id, entry_id, Some(owner), reversal).await
     }
 
@@ -2883,6 +2885,39 @@ impl Ledger {
         let reason = periods::reason(Some(reason), Some("is required to reopen"))
             .map_err(LedgerError::Invalid)?
             .unwrap_or_default();
+        // The closing entry's reversal is decided before anything is written
+        // (Bilimbi's one `write` rolls a refused reversal back with the
+        // events), as the year's last period will stand once reopened.
+        let reversal = match year.closing_entry_id {
+            Some(entry_id) => {
+                let original = entries::find(tx.sql(), tenant, company_id, entry_id)
+                    .await?
+                    .ok_or(Error::Internal)?;
+                let new = entries::mirror(
+                    &original,
+                    year.end_date,
+                    format!(
+                        "Reopen fiscal year {} to {}",
+                        year.start_date, year.end_date
+                    ),
+                );
+                let closed = fiscal_year(tx.sql(), tenant, company_id, fiscal_year_id).await?;
+                Some(
+                    entries::validate_reopening(
+                        tx.sql(),
+                        tenant,
+                        company_id,
+                        book.minor_units,
+                        &new,
+                        &closed,
+                    )
+                    .await?
+                    .map_err(LedgerError::Invalid)?
+                    .reversing(&original),
+                )
+            }
+            None => None,
+        };
         let (actor, impersonator) = people(scope);
         let events_reason = reason.clone();
         tx.mutate(move |sql| {
@@ -2912,38 +2947,6 @@ impl Ledger {
             })
         })
         .await?;
-        // The year's last period is open again, so its reversal is checked
-        // against the closing rules as they now stand.
-        let reversal = match year.closing_entry_id {
-            Some(entry_id) => {
-                let original = entries::find(tx.sql(), tenant, company_id, entry_id)
-                    .await?
-                    .ok_or(Error::Internal)?;
-                let new = entries::mirror(
-                    &original,
-                    year.end_date,
-                    format!(
-                        "Reopen fiscal year {} to {}",
-                        year.start_date, year.end_date
-                    ),
-                );
-                Some(
-                    entries::validate(
-                        tx.sql(),
-                        tenant,
-                        company_id,
-                        book.minor_units,
-                        &new,
-                        None,
-                        entries::Inactive::Any,
-                    )
-                    .await?
-                    .map_err(LedgerError::Invalid)?
-                    .reversing(&original),
-                )
-            }
-            None => None,
-        };
         let exception = duties_reopen(
             "fiscal_year",
             "Fiscal year",

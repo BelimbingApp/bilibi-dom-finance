@@ -1,5 +1,7 @@
 //! Mirrors Bilimbi `Finance.Reconciliation.Web.BankAccountsLive`.
-use super::{company, event_type, flash_map, format::told, record_id, render, Pages, DENIED};
+use super::{
+    clear_flash, company, event_type, flash_map, format::told, record_id, render, Pages, DENIED,
+};
 use crate::{
     BankAccount, BankAccountEdit, FieldError, NewBankAccount, ReconciliationError,
     MANAGE_BANK_ACCOUNTS,
@@ -190,7 +192,8 @@ impl Index {
         if self.editing.is_some() {
             fields.push(
                 self.field("reason", "bank-account-reason", "Reason for the change")
-                    .attr("maxlength", "500"),
+                    .attr("maxlength", "500")
+                    .wrapper_class("md:col-span-2 mb-4"),
             );
         }
         fields
@@ -457,8 +460,7 @@ impl Index {
     }
     async fn event(&mut self, scope: &Scope, value: &serde_json::Value) -> Result<()> {
         match event_type(value)? {
-            // The page clears its message on every update already.
-            "clear-flash" => {}
+            "clear-flash" => clear_flash(&mut self.flash, value),
             "accounts_grid" => {
                 self.columns.handle(&params::string_values(value));
             }
@@ -574,7 +576,6 @@ impl Index {
 impl LiveState<Scope, Error> for Index {
     fn update<'a>(&'a mut self, request: LiveRequest<'a, Scope>) -> LiveFuture<'a, Error> {
         Box::pin(async move {
-            self.flash = None;
             match request.input {
                 LiveInput::Refresh => {}
                 LiveInput::Params(v) => {

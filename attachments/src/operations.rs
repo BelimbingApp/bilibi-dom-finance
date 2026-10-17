@@ -224,29 +224,21 @@ impl Attachments {
             .await?;
         let tenant = scope.tenant();
         let reason = reason.trim().to_owned();
-        let mut errors = Vec::new();
-        if years <= 0 {
-            errors.push(FieldError::new("years", "must be greater than 0"));
-        } else if years > 100 {
+        // Bilimbi asks whether the years lengthen retention before it reads
+        // the changeset's errors, which it lists by field (reason, years).
+        let current = self.retention_years(tx.sql(), scope, company_id).await?;
+        if years <= current {
+            return Err(AttachmentError::RetentionNotLengthened);
+        }
+        let mut errors = reason_errors(&reason);
+        if years > 100 {
             errors.push(FieldError::new(
                 "years",
                 "must be less than or equal to 100",
             ));
         }
-        if reason.is_empty() {
-            errors.push(FieldError::new("reason", "can't be blank"));
-        } else if reason.chars().count() > 500 {
-            errors.push(FieldError::new(
-                "reason",
-                "should be at most 500 character(s)",
-            ));
-        }
         if !errors.is_empty() {
             return Err(AttachmentError::Invalid(errors));
-        }
-        let current = self.retention_years(tx.sql(), scope, company_id).await?;
-        if years <= current {
-            return Err(AttachmentError::RetentionNotLengthened);
         }
         let (user, impersonator) = actor_ids(scope);
         let change = tx
@@ -952,4 +944,19 @@ pub(crate) async fn ensure_writable(
                 AttachmentError::Failed(Error::Internal)
             }
         })
+}
+
+/// Bilimbi `RetentionChange.changeset`'s reason errors, trimmed.
+pub(crate) fn reason_errors(reason: &str) -> Vec<FieldError> {
+    let reason = reason.trim();
+    if reason.is_empty() {
+        vec![FieldError::new("reason", "can't be blank")]
+    } else if reason.chars().count() > 500 {
+        vec![FieldError::new(
+            "reason",
+            "should be at most 500 character(s)",
+        )]
+    } else {
+        vec![]
+    }
 }

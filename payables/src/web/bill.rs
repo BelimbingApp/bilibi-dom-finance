@@ -1,6 +1,6 @@
 //! Bilimbi Payables.Web.BillLive. The reviewed hold belongs to the dialog,
 //! not to a subsequent refreshed document or a value supplied by the browser.
-use super::{company, format as f, render, Pages, INDEX};
+use super::{company, format as f, render, Pages};
 use crate::{
     Document, MatchApproval, PayablesError, APPROVE_DOCUMENTS, APPROVE_MATCH, POST_DOCUMENTS,
 };
@@ -10,7 +10,7 @@ use bilibi_datetime::DisplayContext;
 use bilibi_tenancy::Scope;
 use bilibi_ui::{
     page::{LiveBody, LiveFuture, LiveInput, LiveRequest, LiveState, PanelSpec},
-    params, BadgeKind, BuiltinColumn, Button, ButtonVariant, Cell, EmptyState, Fact, Facts, Field,
+    params, BadgeKind, BuiltinColumn, ButtonVariant, Cell, EmptyState, Fact, Facts, Field,
     FlashMap, FlexRow, FlexTable, Html, ListColumns, StatusKind, NO_FLASH,
 };
 use std::collections::HashMap;
@@ -125,11 +125,7 @@ impl Bill {
         let Some(d) = &self.document else {
             let mut missing = EmptyState::missing("Document not found", "There is no such document for this company, or it cannot be read with your current access.");
             missing.id = "payables-bill-missing".into();
-            missing.action = render(Button {
-                href: INDEX,
-                body: Html::text("All bills"),
-                ..Button::default()
-            })?;
+            missing.action = render(AllBills)?;
             return Missing {
                 flash,
                 missing: render(missing)?,
@@ -242,6 +238,7 @@ impl Bill {
         )
         .then(|| Attention {
             approved: d.match_status.as_deref() == Some("exception_approved"),
+            has_match: last_match.is_some(),
             exceptions: last_match
                 .into_iter()
                 .flat_map(|e| &e.lines)
@@ -684,9 +681,16 @@ struct Actions {
     void: bool,
 }
 #[derive(Template)]
+#[template(
+    source = r#"<a href="/finance/payables/bills">All bills</a>"#,
+    ext = "html"
+)]
+struct AllBills;
+#[derive(Template)]
 #[template(path = "bill_attention.html")]
 struct Attention {
     approved: bool,
+    has_match: bool,
     exceptions: Vec<ExceptionView>,
 }
 struct ExceptionView {

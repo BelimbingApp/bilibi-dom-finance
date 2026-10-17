@@ -1,6 +1,6 @@
 //! Mirrors Bilimbi `Finance.Reconciliation.Web.ImportLive`.
 use super::{
-    company, event_type, flash_map,
+    clear_flash, company, event_type, flash_map,
     format::{money, told},
     render, Pages, DENIED,
 };
@@ -53,7 +53,6 @@ pub(super) struct Account {
     reconciliations: ListColumns,
     uploads: Uploads,
     draft: HashMap<String, String>,
-    errors: Vec<crate::FieldError>,
     flash: Option<(StatusKind, String)>,
     workspace: bool,
 }
@@ -133,7 +132,6 @@ impl Account {
                 "text/plain",
             ])]),
             draft: HashMap::new(),
-            errors: vec![],
             flash: None,
             workspace,
         })
@@ -387,13 +385,6 @@ impl Account {
                     .label(label)
                     .value(self.draft.get(key).cloned().unwrap_or_default())
                     .required()
-                    .errors(
-                        self.errors
-                            .iter()
-                            .filter(|e| e.field == key)
-                            .map(|e| e.message.clone())
-                            .collect(),
-                    )
             };
             view.end_date = Some(
                 field("end_date", "reconciliation-end-date", "Statement end date")
@@ -416,8 +407,7 @@ impl Account {
     }
     async fn event(&mut self, scope: &Scope, value: &serde_json::Value) -> Result<Option<String>> {
         match event_type(value)? {
-            // The page clears its message on every update already.
-            "clear-flash" => {}
+            "clear-flash" => clear_flash(&mut self.flash, value),
             "statements_grid" => {
                 self.statements.handle(&params::string_values(value));
             }
@@ -479,28 +469,24 @@ impl Account {
                     self.flash = Some((StatusKind::Error, DENIED.into()));
                     return Ok(None);
                 }
-                let result = self
-                    .pages
-                    .reconciliation
-                    .open_reconciliation(
-                        scope,
-                        company(scope)?,
-                        self.id,
-                        &NewReconciliation {
-                            end_date: self.draft.get("end_date").and_then(|s| s.parse().ok()),
-                            statement_balance: self
-                                .draft
-                                .get("statement_balance")
-                                .cloned()
-                                .unwrap_or_default(),
-                        },
-                    )
-                    .await;
-                self.errors = match &result {
-                    Err(crate::ReconciliationError::Invalid(e)) => e.clone(),
-                    _ => vec![],
-                };
-                match told(result)? {
+                match told(
+                    self.pages
+                        .reconciliation
+                        .open_reconciliation(
+                            scope,
+                            company(scope)?,
+                            self.id,
+                            &NewReconciliation {
+                                end_date: self.draft.get("end_date").and_then(|s| s.parse().ok()),
+                                statement_balance: self
+                                    .draft
+                                    .get("statement_balance")
+                                    .cloned()
+                                    .unwrap_or_default(),
+                            },
+                        )
+                        .await,
+                )? {
                     Ok(r) => {
                         self.flash = Some((
                             StatusKind::Success,
@@ -525,7 +511,6 @@ impl LiveState<Scope, Error> for Account {
     }
     fn update<'a>(&'a mut self, request: LiveRequest<'a, Scope>) -> LiveFuture<'a, Error> {
         Box::pin(async move {
-            self.flash = None;
             let redirect = match request.input {
                 LiveInput::Refresh => None,
                 LiveInput::Params(v) => {
@@ -548,7 +533,7 @@ impl LiveState<Scope, Error> for Account {
 
 #[derive(Template)]
 #[template(
-    source = r#"{% import "components.html" as ui %}{% call ui::button(id="bank-account-matching", href=href) %}Match statement lines{% endcall %}"#,
+    source = r#"<a id="bank-account-matching" href="{{ href }}">Match statement lines</a>"#,
     ext = "html"
 )]
 struct Matching {

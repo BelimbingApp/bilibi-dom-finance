@@ -188,7 +188,7 @@ impl Bills {
                             kind: crate::MODULE,
                             record_id: &d.id.to_string(),
                             href: &format!("{INDEX}/{}", d.id),
-                            class: "",
+                            class: "font-medium text-ink-strong hover:underline",
                             body: Html::text(&format::number(d.document_number)),
                         })?,
                     )
@@ -202,9 +202,11 @@ impl Bills {
                         Cell::text(format::optional(&d.party_document_number)),
                     )
                     .cell("document_date", Cell::text(d.document_date.to_string()))
-                    .cell(
+                    .slot(
                         "total",
-                        Cell::text(format!("{} {}", d.total, d.currency_code)),
+                        render(Tabular {
+                            text: format!("{} {}", d.total, d.currency_code),
+                        })?,
                     )
                     .slot("status", format::status(&d.status)?)
                     .slot(
@@ -294,4 +296,13 @@ impl LiveState<Scope, Error> for Bills {
             })
         })
     }
+}
+
+#[derive(askama::Template)]
+#[template(
+    source = r#"<span class="tabular-nums">{{ text }}</span>"#,
+    ext = "html"
+)]
+struct Tabular {
+    text: String,
 }

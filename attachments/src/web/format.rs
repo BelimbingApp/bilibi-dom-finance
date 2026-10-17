@@ -37,6 +37,14 @@ pub(crate) fn refusal(error: AttachmentError) -> Result<String, Error> {
             .collect::<Vec<_>>()
             .join("; "),
         E::Failed(error) => return Err(error),
+        // Bilimbi `"The action was refused: #{inspect(other)}."`: the atom.
+        E::CaptureMismatch => "The action was refused: :capture_mismatch.".into(),
+        E::DocumentNotFinal => "The action was refused: :document_not_final.".into(),
+        E::RetentionOutOfRange => "The action was refused: :invalid_retention.".into(),
+        E::AlreadyOnHold => "The action was refused: :already_on_hold.".into(),
+        E::NotOnHold => "The action was refused: :not_on_hold.".into(),
+        E::InvalidOption => "The action was refused: :invalid_option.".into(),
+        E::Storage(code) => format!("The action was refused: :{code}."),
         other => format!("The action was refused: {other}."),
     })
 }
