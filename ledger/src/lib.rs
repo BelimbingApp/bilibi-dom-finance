@@ -1,9 +1,9 @@
 //! The general ledger, module `finance/ledger` (Bilimbi
 //! `Bilimbi.Finance.Ledger`): a company's book, chart of accounts, journal
 //! entries, fiscal years and their closing, controlled bookkeeping and late
-//! recordings, and in later versions its journals and the separation of
-//! duties. Other Finance modules post and read through this facade; none
-//! reads its tables.
+//! recordings, reversals, the separation of duties with its approval
+//! exceptions, and manual journals. Other Finance modules post, reverse and
+//! ask for approvals through this facade; none reads its tables.
 //!
 //! Every function takes the sealed [`Scope`] it was handed and an explicit
 //! company id. Reads authorize `finance.ledger.view` and writes their own
@@ -35,6 +35,24 @@
 //! independent review. A reopen, and turning controlled bookkeeping off,
 //! override a control and are recorded as approval exceptions.
 //!
+//! A posted entry is never edited or deleted: [`Ledger::reverse_entry`] posts
+//! its mirror image, once. An entry another module owns is corrected only
+//! through that module, which calls [`Ledger::reverse_owned_entry`] inside the
+//! transaction that records its own reversal. The owner is a seam between
+//! modules, not an authorization boundary: the ledger cannot tell which module
+//! is calling, so a caller holding `finance.ledger.entries.post` that passes an
+//! entry's owner from anywhere else reverses it without the owner's record, and
+//! the owner's control-account tie-out then shows the difference.
+//!
+//! A company requires separation of duties unless it turns it off: the person
+//! who approves a record, or whoever impersonated them, is not the person who
+//! prepared it, nor anyone they impersonated. [`Ledger::check_approval`] is how
+//! every Finance approval asks, inside the approving transaction, and it
+//! records what an independent reviewer reads: a same-person approval while
+//! separation is off, and an override of a control. A manual journal is
+//! submitted and posts only once someone approves it
+//! ([`Ledger::submit_journal`], [`Ledger::approve_journal`]).
+//!
 //! Results are plain records; the schema, SQL and validation stay private.
 mod accounts;
 mod bookkeeping;
@@ -42,6 +60,7 @@ mod books;
 mod contributions;
 mod duties;
 mod entries;
+mod journals;
 mod late_recordings;
 mod money;
 mod periods;
@@ -77,6 +96,7 @@ inventory::submit! {
             ("finance-ledger-002-entries", include_str!("../migrations/002-entries.sql")),
             ("finance-ledger-003-posting-notices", include_str!("../migrations/003-posting-notices.sql")),
             ("finance-ledger-004-periods", include_str!("../migrations/004-periods.sql")),
+            ("finance-ledger-005-journals", include_str!("../migrations/005-journals.sql")),
         ],
         services: &[Service { id: SERVICE, factory: |services| Ok(Arc::new(Ledger {
             db: services.get::<Db>("base/database.pool")?.as_ref().clone(),
@@ -144,12 +164,44 @@ pub enum LedgerError {
     NoRetainedEarningsAccount,
     #[error("That entry was not recorded late")]
     NotLateRecorded,
-    #[error("Someone has already reviewed that entry")]
+    /// A late entry or an approval exception already has its one review.
+    #[error("It has already been reviewed")]
     AlreadyReviewed,
-    /// The reviewer posted the entry, or impersonated (or was impersonated
-    /// by) whoever did.
-    #[error("An entry is reviewed by someone who did not post it")]
+    /// The reviewer posted the late entry, or approved or prepared what an
+    /// approval exception records, or impersonated (or was impersonated by)
+    /// whoever did.
+    #[error("The reviewer is not independent of what is reviewed")]
     ReviewerNotIndependent,
+    /// The entry already has its one reversal.
+    #[error("The entry is already reversed")]
+    AlreadyReversed,
+    /// A reversal is not reversed in turn: post a new entry instead.
+    #[error("A reversal is not reversed")]
+    ReversalNotReversible,
+    /// A year-end closing entry is reversed only by reopening its year.
+    #[error("A year-end closing entry is reversed by reopening its fiscal year")]
+    ClosingEntry,
+    /// The entry belongs to another module's record: correct it through that
+    /// module.
+    #[error("The entry is owned by {} ({})", .0.module, .0.record)]
+    OwnedBy(EntryOwner),
+    /// [`Ledger::reverse_owned_entry`] for an entry another module or record owns.
+    #[error("The entry is owned by another record")]
+    NotTheOwner,
+    /// [`Ledger::reverse_owned_entry`] for a manual entry.
+    #[error("The entry has no owner")]
+    NotOwned,
+    /// The approver prepared the record, impersonated whoever did, or was
+    /// impersonated by them, while the company requires separation of duties.
+    #[error("The person who prepared it cannot approve it")]
+    SamePerson,
+    #[error("Not found")]
+    ExceptionNotFound,
+    #[error("Not found")]
+    JournalNotFound,
+    /// Anything but a submitted journal.
+    #[error("The journal is already decided")]
+    JournalDecided,
     /// An option the call does not accept: an `owner` or settlement account
     /// of another shape, or a limit, cursor or bound out of range.
     #[error("Invalid option")]
@@ -604,6 +656,174 @@ pub struct LateRecordingQuery {
     pub after: Option<i64>,
 }
 
+/// What a reversal says about itself: its `entry_date` (not before the
+/// original's), `description` (1 to 500 characters) and an optional
+/// `reference` (at most 100). Its lines are the original's, sides swapped.
+#[derive(Clone, Debug)]
+pub struct Reversal {
+    pub entry_date: Date,
+    pub description: String,
+    pub reference: Option<String>,
+}
+
+/// One change of the company's separation of duties.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct DutySeparationChange {
+    pub id: i64,
+    pub change_number: i64,
+    pub required: bool,
+    pub reason: Option<String>,
+    pub changed_by_user_id: i64,
+    pub changed_by_impersonator_id: Option<i64>,
+    #[serde(serialize_with = "as_text")]
+    pub changed_at: Timestamp,
+}
+/// The company's separation of duties: the setting and its latest change. A
+/// company that never changed it requires separation.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct DutySeparation {
+    pub required: bool,
+    pub change: Option<DutySeparationChange>,
+}
+
+/// Someone whose work an approval approves: an account and, when they acted
+/// as it through impersonation, the operator who did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct Preparer {
+    pub user_id: i64,
+    pub impersonator_id: Option<i64>,
+}
+/// What [`Ledger::check_approval`] decides: `source` (the approving module's
+/// descriptor id, such as `finance/payables`), `action` and `subject_type`
+/// (lower-case codes), `subject_id`, `subject` (a label a reviewer reads, kept
+/// to 200 characters), `prepared_by` (everyone whose work is approved) and,
+/// for an approval that overrides a control, `override_reason`: the
+/// approver's reason, which records the override whoever approves.
+#[derive(Clone, Debug)]
+pub struct Approval {
+    pub source: String,
+    pub action: String,
+    pub subject_type: String,
+    pub subject_id: i64,
+    pub subject: String,
+    pub prepared_by: Vec<Preparer>,
+    pub override_reason: Option<String>,
+}
+
+/// An independent reviewer's reading of an approval exception.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ApprovalExceptionReview {
+    pub note: Option<String>,
+    pub reviewed_by_user_id: i64,
+    pub reviewed_by_impersonator_id: Option<i64>,
+    #[serde(serialize_with = "as_text")]
+    pub reviewed_at: Timestamp,
+}
+/// An approval an independent reviewer should read: a same-person approval
+/// while separation is off (naming the change that turned it off) or an
+/// override of a control. `overrides` is Bilimbi's `override`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ApprovalException {
+    pub id: i64,
+    pub exception_number: i64,
+    pub source: String,
+    pub action: String,
+    pub subject_type: String,
+    pub subject_id: i64,
+    pub subject: String,
+    pub same_person: bool,
+    #[serde(rename = "override")]
+    pub overrides: bool,
+    pub prepared_by_user_id: Option<i64>,
+    pub prepared_by_impersonator_id: Option<i64>,
+    pub approved_by_user_id: i64,
+    pub approved_by_impersonator_id: Option<i64>,
+    pub reason: String,
+    pub separation_change_id: Option<i64>,
+    #[serde(serialize_with = "as_text")]
+    pub recorded_at: Timestamp,
+    pub review: Option<ApprovalExceptionReview>,
+}
+/// Bounds of [`Ledger::list_approval_exceptions`]; `Default` lists the first
+/// 100, reviewed or not.
+#[derive(Clone, Debug, Default)]
+pub struct ApprovalExceptionQuery {
+    /// Recorded at or after this instant.
+    pub recorded_from: Option<Timestamp>,
+    /// Recorded before this instant, so a period's bounds in any time zone
+    /// select it exactly.
+    pub recorded_before: Option<Timestamp>,
+    pub reviewed: Option<bool>,
+    /// 1 to 500, 100 when absent.
+    pub limit: Option<u32>,
+    /// The last `exception_number` of the previous page.
+    pub after: Option<i64>,
+}
+
+/// The statuses a journal moves through: submitted until its one decision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum JournalStatus {
+    Submitted,
+    Approved,
+    Rejected,
+}
+impl JournalStatus {
+    pub const ALL: [JournalStatus; 3] = [Self::Submitted, Self::Approved, Self::Rejected];
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Submitted => "submitted",
+            Self::Approved => "approved",
+            Self::Rejected => "rejected",
+        }
+    }
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|status| status.as_str() == value)
+    }
+}
+/// A journal's decision: who approved or rejected it and when, any `reason`,
+/// and the `entry_id` an approval posted.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct JournalDecision {
+    pub event: JournalStatus,
+    pub reason: Option<String>,
+    pub entry_id: Option<i64>,
+    pub actor_user_id: i64,
+    pub actor_impersonator_id: Option<i64>,
+    #[serde(serialize_with = "as_text")]
+    pub occurred_at: Timestamp,
+}
+/// A manual journal with its lines; the number and time are the database's.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Journal {
+    pub id: i64,
+    pub journal_number: i64,
+    #[serde(serialize_with = "as_text")]
+    pub entry_date: Date,
+    pub description: String,
+    pub reference: Option<String>,
+    pub currency_code: String,
+    pub submitted_by_user_id: i64,
+    pub submitted_by_impersonator_id: Option<i64>,
+    #[serde(serialize_with = "as_text")]
+    pub submitted_at: Timestamp,
+    pub status: JournalStatus,
+    pub decision: Option<JournalDecision>,
+    pub lines: Vec<EntryLine>,
+}
+/// Bounds of [`Ledger::list_journals`]; `Default` lists the first 100 of
+/// every status.
+#[derive(Clone, Debug, Default)]
+pub struct JournalQuery {
+    pub status: Option<JournalStatus>,
+    /// 1 to 500, 100 when absent.
+    pub limit: Option<u32>,
+    /// The last `journal_number` of the previous page.
+    pub after: Option<i64>,
+}
+
 /// What a [`PostingSubscription`] hears.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PostingEvent {
@@ -939,6 +1159,525 @@ impl Ledger {
             .subscribe(scope.tenant(), company_id)
             .await
             .ok_or(LedgerError::NoticesUnavailable)
+    }
+
+    // Reversals
+
+    /// Posts the reversal of a manual entry (`finance.ledger.entries.post`):
+    /// the same accounts and amounts with debits and credits swapped, dated
+    /// `reversal.entry_date`, not before the original's (`entry_date cannot be
+    /// before the reversed entry's date`). An entry is reversed at most once
+    /// (`AlreadyReversed`), and a reversal is not itself reversed
+    /// (`ReversalNotReversible`): post a new entry instead. Accounts
+    /// deactivated since the original still take its reversal, but its date
+    /// must fall in an open period, as a new entry's does. A year-end closing
+    /// entry is reversed only by [`Ledger::reopen_fiscal_year`]
+    /// (`ClosingEntry`). An entry another module owns is
+    /// [`LedgerError::OwnedBy`]: correct it through that module, which records
+    /// its own reversal and calls [`Ledger::reverse_owned_entry`].
+    pub async fn reverse_entry(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        entry_id: i64,
+        reversal: &Reversal,
+    ) -> Result<Entry> {
+        let mut client = self.db.get().await.map_err(Error::from)?;
+        let mut tx = self
+            .write(
+                &mut client,
+                scope,
+                company_id,
+                &[POST_ENTRIES],
+                "finance.ledger.reverse_entry",
+            )
+            .await?;
+        let entry = reverse(&mut tx, scope, company_id, entry_id, None, reversal).await?;
+        tx.commit().await?;
+        Ok(entry)
+    }
+
+    /// The owner's correction path (`finance.ledger.entries.post`): posts the
+    /// reversal of an entry the calling module posted with `owner` (the same
+    /// module and record as [`PostOptions::owner`]), as
+    /// [`Ledger::reverse_entry`] does for a manual entry and with the same
+    /// refusals. The owner calls it inside the transaction that records its own
+    /// reversal (a payment reversal, a cancellation), so both stand or
+    /// neither; it authorizes and takes the company lock on that transaction,
+    /// and leaves the commit to the owner. The reversal carries the same owner.
+    /// An entry owned by another module or record is `NotTheOwner`, a manual
+    /// entry `NotOwned`, and an `owner` of another shape `InvalidOption`.
+    ///
+    /// Only the owning module calls this, from its own correction path; use
+    /// [`Ledger::reverse_entry`] for a manual entry.
+    pub async fn reverse_owned_entry(
+        &self,
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company_id: i64,
+        entry_id: i64,
+        owner: &EntryOwner,
+        reversal: &Reversal,
+    ) -> Result<Entry> {
+        if !entries::owner_valid(owner) {
+            return Err(LedgerError::InvalidOption);
+        }
+        join(tx, scope, company_id, POST_ENTRIES).await?;
+        reverse(tx, scope, company_id, entry_id, Some(owner), reversal).await
+    }
+
+    // Separation of duties
+
+    /// The company's separation of duties (`finance.ledger.view`): the
+    /// setting and its latest change. A company that never changed it
+    /// requires separation.
+    pub async fn get_duty_separation(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+    ) -> Result<DutySeparation> {
+        let client = self.db.get().await.map_err(Error::from)?;
+        authorize(&**client, scope, company_id, VIEW).await?;
+        separation_view(&**client, scope.tenant(), company_id).await
+    }
+
+    /// Turns the company's separation of duties on or off
+    /// (`finance.ledger.duty-separation.manage`); turning it off needs a
+    /// `reason` (`reason is required to turn separation off`). The change is
+    /// appended with the actor, any impersonator and the database's time; a
+    /// call that changes nothing records nothing. While separation is off, an
+    /// approval by the person who prepared the record is allowed and listed
+    /// in the approval exceptions with this change's reason.
+    pub async fn set_duty_separation(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        required: bool,
+        reason: Option<&str>,
+    ) -> Result<DutySeparation> {
+        let mut client = self.db.get().await.map_err(Error::from)?;
+        let mut tx = self
+            .write(
+                &mut client,
+                scope,
+                company_id,
+                &[MANAGE_DUTY_SEPARATION],
+                "finance.ledger.set_duty_separation",
+            )
+            .await?;
+        let tenant = scope.tenant();
+        let reason = duties::validate_change(required, reason).map_err(LedgerError::Invalid)?;
+        let latest = duties::latest_change(tx.sql(), tenant, company_id).await?;
+        if duties::required(latest.as_ref()) == required {
+            tx.rollback().await?;
+            return Ok(DutySeparation {
+                required,
+                change: latest,
+            });
+        }
+        let (actor, impersonator) = people(scope);
+        tx.mutate(move |sql| {
+            Box::pin(async move {
+                let change = duties::record_change(
+                    sql,
+                    tenant,
+                    company_id,
+                    actor,
+                    impersonator,
+                    required,
+                    reason.as_deref(),
+                )
+                .await?;
+                Ok(((), vec![change]))
+            })
+        })
+        .await?;
+        let view = separation_view(tx.sql(), tenant, company_id).await?;
+        tx.commit().await?;
+        Ok(view)
+    }
+
+    /// Every change of the company's separation of duties, oldest first
+    /// (`finance.ledger.view`).
+    pub async fn list_duty_separation_changes(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+    ) -> Result<Vec<DutySeparationChange>> {
+        let client = self.db.get().await.map_err(Error::from)?;
+        authorize(&**client, scope, company_id, VIEW).await?;
+        Ok(duties::changes(&**client, scope.tenant(), company_id).await?)
+    }
+
+    /// Whether the scope's actor may approve what `approval` describes, for
+    /// the Finance modules that approve: called inside the transaction that
+    /// records the approval, which it authorizes (`finance.ledger.view`, which
+    /// the exceptions are read with) and locks the company on, so a refusal
+    /// rolls the approval back. When the approver, or whoever impersonated
+    /// them, is someone in `prepared_by` or impersonated someone there, the
+    /// approval is `SamePerson` while the company requires separation; while
+    /// it does not, it is allowed and recorded as a same-person approval
+    /// exception with the reason separation was turned off. An override is
+    /// always recorded with its `override_reason`. Anything else records
+    /// nothing. A malformed `source`, code, subject or reason is
+    /// [`LedgerError::Invalid`].
+    pub async fn check_approval(
+        &self,
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company_id: i64,
+        approval: &Approval,
+    ) -> Result<()> {
+        join(tx, scope, company_id, VIEW).await?;
+        let (tenant, approver) = (scope.tenant(), people(scope));
+        if let Some(exception) =
+            duties::decide(tx.sql(), tenant, company_id, approver, approval).await?
+        {
+            tx.mutate(move |sql| {
+                Box::pin(async move {
+                    let change =
+                        duties::record_exception(sql, tenant, company_id, approver, &exception)
+                            .await?;
+                    Ok(((), vec![change]))
+                })
+            })
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// The company's approval exceptions, oldest first, each with its review
+    /// (`finance.ledger.view`). An out-of-range option is `InvalidOption`.
+    pub async fn list_approval_exceptions(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        query: &ApprovalExceptionQuery,
+    ) -> Result<Vec<ApprovalException>> {
+        let client = self.db.get().await.map_err(Error::from)?;
+        authorize(&**client, scope, company_id, VIEW).await?;
+        duties::exceptions(&**client, scope.tenant(), company_id, query).await
+    }
+
+    /// One approval exception, as [`Ledger::list_approval_exceptions`] shows
+    /// it (`finance.ledger.view`), or `ExceptionNotFound`.
+    pub async fn get_approval_exception(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        exception_id: i64,
+    ) -> Result<ApprovalException> {
+        let client = self.db.get().await.map_err(Error::from)?;
+        authorize(&**client, scope, company_id, VIEW).await?;
+        duties::exception(&**client, scope.tenant(), company_id, exception_id)
+            .await?
+            .ok_or(LedgerError::ExceptionNotFound)
+    }
+
+    /// Records an independent review of an approval exception with an
+    /// optional `note` (`finance.ledger.approval-exceptions.review`): the
+    /// reviewer, any impersonator and the database's time. An exception is
+    /// reviewed once (`AlreadyReviewed`), and never by whoever approved or
+    /// prepared what it records, nor anyone impersonating them or impersonated
+    /// by them (`ReviewerNotIndependent`), whatever the company's separation
+    /// setting.
+    pub async fn review_approval_exception(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        exception_id: i64,
+        note: Option<&str>,
+    ) -> Result<ApprovalException> {
+        let mut client = self.db.get().await.map_err(Error::from)?;
+        let mut tx = self
+            .write(
+                &mut client,
+                scope,
+                company_id,
+                &[REVIEW_EXCEPTIONS],
+                "finance.ledger.review_approval_exception",
+            )
+            .await?;
+        let tenant = scope.tenant();
+        let exception = duties::exception(tx.sql(), tenant, company_id, exception_id)
+            .await?
+            .ok_or(LedgerError::ExceptionNotFound)?;
+        let reviewer = people(scope);
+        if exception.review.is_some() {
+            return Err(LedgerError::AlreadyReviewed);
+        }
+        let approver = (
+            exception.approved_by_user_id,
+            exception.approved_by_impersonator_id,
+        );
+        let preparer = exception
+            .prepared_by_user_id
+            .map(|user| (user, exception.prepared_by_impersonator_id));
+        if same_person(reviewer, approver)
+            || preparer.is_some_and(|preparer| same_person(reviewer, preparer))
+        {
+            return Err(LedgerError::ReviewerNotIndependent);
+        }
+        let note = duties::validate_note(note).map_err(LedgerError::Invalid)?;
+        tx.mutate(move |sql| {
+            Box::pin(async move {
+                let change = duties::record_review(
+                    sql,
+                    tenant,
+                    company_id,
+                    exception_id,
+                    reviewer,
+                    note.as_deref(),
+                )
+                .await?;
+                Ok(((), vec![change]))
+            })
+        })
+        .await?;
+        let reviewed = duties::exception(tx.sql(), tenant, company_id, exception_id)
+            .await?
+            .ok_or(Error::Internal)?;
+        tx.commit().await?;
+        Ok(reviewed)
+    }
+
+    // Manual journals
+
+    /// Submits a manual journal for approval (`finance.ledger.journals.submit`):
+    /// `entry_date`, `description`, an optional `reference` and `lines`, as
+    /// [`Ledger::post_entry`] takes them. It is checked as an entry would be
+    /// (balanced, active accounts of the company, an open period) and kept,
+    /// numbered per company, with the submitter and the database's time;
+    /// nothing posts until [`Ledger::approve_journal`]. `BookNotOpen` before
+    /// the book is opened.
+    pub async fn submit_journal(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        new: &NewEntry,
+    ) -> Result<Journal> {
+        let mut client = self.db.get().await.map_err(Error::from)?;
+        let mut tx = self
+            .write(
+                &mut client,
+                scope,
+                company_id,
+                &[SUBMIT_JOURNALS],
+                "finance.ledger.submit_journal",
+            )
+            .await?;
+        let tenant = scope.tenant();
+        let book = books::find(tx.sql(), tenant, company_id)
+            .await?
+            .ok_or(LedgerError::BookNotOpen)?;
+        let valid = entries::validate(
+            tx.sql(),
+            tenant,
+            company_id,
+            book.minor_units,
+            new,
+            None,
+            entries::Inactive::Listed(&[]),
+        )
+        .await?
+        .map_err(LedgerError::Invalid)?;
+        let submitter = people(scope);
+        let journal = tx
+            .mutate(move |sql| {
+                Box::pin(async move {
+                    journals::insert(
+                        sql,
+                        tenant,
+                        company_id,
+                        &book.currency_code,
+                        submitter,
+                        &valid,
+                    )
+                    .await
+                })
+            })
+            .await?;
+        tx.commit().await?;
+        Ok(journal)
+    }
+
+    /// Approves a submitted journal (`finance.ledger.journals.approve`), which
+    /// posts it as an entry on its date with its lines, by the approver, and
+    /// records the `approved` decision naming the entry. The entry is checked
+    /// as [`Ledger::post_entry`] checks one, now: a period closed or an
+    /// account deactivated since submission is [`LedgerError::Invalid`], and
+    /// the journal stays submitted. The approver differs from the submitter
+    /// (`SamePerson`) unless the company has turned separation of duties off,
+    /// when the approval is recorded as an approval exception (see
+    /// [`Ledger::check_approval`]). Anything but a submitted journal is
+    /// `JournalDecided`.
+    pub async fn approve_journal(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        journal_id: i64,
+    ) -> Result<Journal> {
+        let mut client = self.db.get().await.map_err(Error::from)?;
+        let mut tx = self
+            .write(
+                &mut client,
+                scope,
+                company_id,
+                &[APPROVE_JOURNALS],
+                "finance.ledger.approve_journal",
+            )
+            .await?;
+        let tenant = scope.tenant();
+        let book = books::find(tx.sql(), tenant, company_id)
+            .await?
+            .ok_or(LedgerError::BookNotOpen)?;
+        let journal = submitted_journal(tx.sql(), tenant, company_id, journal_id).await?;
+        let approver = people(scope);
+        let exception = duties::decide(
+            tx.sql(),
+            tenant,
+            company_id,
+            approver,
+            &journals::approval(&journal),
+        )
+        .await?;
+        let valid = entries::validate(
+            tx.sql(),
+            tenant,
+            company_id,
+            book.minor_units,
+            &journals::entry(&journal),
+            None,
+            entries::Inactive::Listed(&[]),
+        )
+        .await?
+        .map_err(LedgerError::Invalid)?;
+        tx.mutate(move |sql| {
+            Box::pin(async move {
+                let mut changes = Vec::new();
+                if let Some(exception) = exception {
+                    changes.push(
+                        duties::record_exception(sql, tenant, company_id, approver, &exception)
+                            .await?,
+                    );
+                }
+                let posted = entries::insert(
+                    sql,
+                    tenant,
+                    company_id,
+                    &book.currency_code,
+                    approver.0,
+                    approver.1,
+                    &valid,
+                )
+                .await?;
+                let entry_id = posted.entry.id;
+                changes.extend(entry_changes(posted));
+                changes.push(
+                    journals::decide(
+                        sql,
+                        tenant,
+                        company_id,
+                        journal_id,
+                        approver,
+                        JournalStatus::Approved,
+                        None,
+                        Some(entry_id),
+                    )
+                    .await?,
+                );
+                Ok(((), changes))
+            })
+        })
+        .await?;
+        let journal = journals::find(tx.sql(), tenant, company_id, journal_id)
+            .await?
+            .ok_or(Error::Internal)?;
+        tx.commit().await?;
+        Ok(journal)
+    }
+
+    /// Rejects a submitted journal with a `reason`
+    /// (`finance.ledger.journals.approve`; `reason is required to reject a
+    /// journal`): it never posts. Anything but a submitted journal is
+    /// `JournalDecided`.
+    pub async fn reject_journal(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        journal_id: i64,
+        reason: &str,
+    ) -> Result<Journal> {
+        let mut client = self.db.get().await.map_err(Error::from)?;
+        let mut tx = self
+            .write(
+                &mut client,
+                scope,
+                company_id,
+                &[APPROVE_JOURNALS],
+                "finance.ledger.reject_journal",
+            )
+            .await?;
+        let tenant = scope.tenant();
+        submitted_journal(tx.sql(), tenant, company_id, journal_id).await?;
+        let reason = journals::validate_reason(reason).map_err(LedgerError::Invalid)?;
+        let actor = people(scope);
+        tx.mutate(move |sql| {
+            Box::pin(async move {
+                let change = journals::decide(
+                    sql,
+                    tenant,
+                    company_id,
+                    journal_id,
+                    actor,
+                    JournalStatus::Rejected,
+                    Some(&reason),
+                    None,
+                )
+                .await?;
+                Ok(((), vec![change]))
+            })
+        })
+        .await?;
+        let journal = journals::find(tx.sql(), tenant, company_id, journal_id)
+            .await?
+            .ok_or(Error::Internal)?;
+        tx.commit().await?;
+        Ok(journal)
+    }
+
+    /// One journal with its lines, status and decision
+    /// (`finance.ledger.view`), or `JournalNotFound`.
+    pub async fn get_journal(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        journal_id: i64,
+    ) -> Result<Journal> {
+        let client = self.db.get().await.map_err(Error::from)?;
+        authorize(&**client, scope, company_id, VIEW).await?;
+        journals::find(&**client, scope.tenant(), company_id, journal_id)
+            .await?
+            .ok_or(LedgerError::JournalNotFound)
+    }
+
+    /// The company's journals by number, as [`Ledger::get_journal`] shows
+    /// them (`finance.ledger.view`). An out-of-range option is
+    /// `InvalidOption`.
+    pub async fn list_journals(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        query: &JournalQuery,
+    ) -> Result<Vec<Journal>> {
+        let client = self.db.get().await.map_err(Error::from)?;
+        authorize(&**client, scope, company_id, VIEW).await?;
+        journals::list(&**client, scope.tenant(), company_id, query).await
+    }
+
+    /// The statuses a journal moves through.
+    pub fn journal_statuses() -> &'static [JournalStatus] {
+        &JournalStatus::ALL
     }
 
     // Controlled bookkeeping
@@ -1747,18 +2486,144 @@ impl Ledger {
             .mutations
             .begin(client, scope.mutation_context(action))
             .await?;
-        organisation::require_writable(tx.sql(), scope, company_id, true)
-            .await
-            .map_err(|error| match error {
-                WriteError::NotFound => LedgerError::CompanyNotFound,
-                WriteError::Archived => LedgerError::CompanyArchived,
-                WriteError::Access(error) => refusal(error),
-                WriteError::InUse | WriteError::Stale | WriteError::Invalid(_) => {
-                    LedgerError::Failed(Error::Internal)
-                }
-            })?;
+        lock(&tx, scope, company_id).await?;
         Ok(tx)
     }
+}
+
+/// A write inside a caller's own transaction: the capability and company
+/// reach now, then the company's row lock on that transaction.
+async fn join(
+    tx: &MutationTransaction<'_>,
+    scope: &Scope,
+    company_id: i64,
+    capability: &str,
+) -> Result<()> {
+    authorize(tx.sql(), scope, company_id, capability).await?;
+    lock(tx, scope, company_id).await
+}
+
+/// Holds the company's row lock for the transaction (Bilimbi
+/// `lock_writable_company/2`): an archived company is refused.
+async fn lock(tx: &MutationTransaction<'_>, scope: &Scope, company_id: i64) -> Result<()> {
+    organisation::require_writable(tx.sql(), scope, company_id, true)
+        .await
+        .map(|_| ())
+        .map_err(|error| match error {
+            WriteError::NotFound => LedgerError::CompanyNotFound,
+            WriteError::Archived => LedgerError::CompanyArchived,
+            WriteError::Access(error) => refusal(error),
+            WriteError::InUse | WriteError::Stale | WriteError::Invalid(_) => {
+                LedgerError::Failed(Error::Internal)
+            }
+        })
+}
+
+/// Posts the reversal of `entry_id` inside a write that already authorized
+/// and locked: `owner` is `None` for a manual entry's reversal and the
+/// owner's own record for [`Ledger::reverse_owned_entry`].
+async fn reverse(
+    tx: &mut MutationTransaction<'_>,
+    scope: &Scope,
+    company_id: i64,
+    entry_id: i64,
+    owner: Option<&EntryOwner>,
+    reversal: &Reversal,
+) -> Result<Entry> {
+    let tenant = scope.tenant();
+    let book = books::find(tx.sql(), tenant, company_id)
+        .await?
+        .ok_or(LedgerError::BookNotOpen)?;
+    let original = entries::find(tx.sql(), tenant, company_id, entry_id)
+        .await?
+        .ok_or(LedgerError::EntryNotFound)?;
+    if original.reverses_entry_id.is_some() {
+        return Err(LedgerError::ReversalNotReversible);
+    }
+    if original.reversed_by_entry_id.is_some() {
+        return Err(LedgerError::AlreadyReversed);
+    }
+    if periods::closing_entry(tx.sql(), company_id, original.id).await? {
+        return Err(LedgerError::ClosingEntry);
+    }
+    match (&original.owner, owner) {
+        (Some(owned), None) => return Err(LedgerError::OwnedBy(owned.clone())),
+        (None, Some(_)) => return Err(LedgerError::NotOwned),
+        (Some(owned), Some(owner)) if owned != owner => return Err(LedgerError::NotTheOwner),
+        _ => {}
+    }
+    let new = NewEntry {
+        reference: reversal.reference.clone(),
+        ..entries::mirror(&original, reversal.entry_date, reversal.description.clone())
+    };
+    let validated = entries::validate(
+        tx.sql(),
+        tenant,
+        company_id,
+        book.minor_units,
+        &new,
+        None,
+        entries::Inactive::Any,
+    )
+    .await?;
+    let valid = if reversal.entry_date < original.entry_date {
+        let early = FieldError::new("entry_date", "cannot be before the reversed entry's date");
+        let mut errors = validated.err().unwrap_or_default();
+        errors.insert(0, early);
+        return Err(LedgerError::Invalid(errors));
+    } else {
+        validated
+            .map_err(LedgerError::Invalid)?
+            .reversing(&original)
+    };
+    let (actor, impersonator) = people(scope);
+    let entry = tx
+        .mutate(move |sql| {
+            Box::pin(async move {
+                let posted = entries::insert(
+                    sql,
+                    tenant,
+                    company_id,
+                    &book.currency_code,
+                    actor,
+                    impersonator,
+                    &valid,
+                )
+                .await?;
+                let entry = posted.entry.clone();
+                Ok((entry, entry_changes(posted)))
+            })
+        })
+        .await?;
+    Ok(entry)
+}
+
+/// A journal of the company that is still submitted.
+async fn submitted_journal(
+    client: &impl GenericClient,
+    tenant: i64,
+    company_id: i64,
+    journal_id: i64,
+) -> Result<Journal> {
+    let journal = journals::find(client, tenant, company_id, journal_id)
+        .await?
+        .ok_or(LedgerError::JournalNotFound)?;
+    if journal.status != JournalStatus::Submitted {
+        return Err(LedgerError::JournalDecided);
+    }
+    Ok(journal)
+}
+
+async fn separation_view(
+    client: &impl GenericClient,
+    tenant: i64,
+    company_id: i64,
+) -> Result<DutySeparation> {
+    let change = duties::latest_change(client, tenant, company_id).await?;
+    Ok(DutySeparation {
+        required: duties::required(change.as_ref()),
+        change,
+    })
 }
 
 /// The actor's current grant and company reach decide every call.
@@ -1818,7 +2683,7 @@ fn people(scope: &Scope) -> (i64, Option<i64>) {
 
 /// Whether two `(user, impersonator)` people overlap: either one's user or
 /// impersonator is the other's user or impersonator.
-fn same_person(one: (i64, Option<i64>), other: (i64, Option<i64>)) -> bool {
+pub(crate) fn same_person(one: (i64, Option<i64>), other: (i64, Option<i64>)) -> bool {
     let mine = [Some(one.0), one.1];
     let theirs = [Some(other.0), other.1];
     mine.iter()

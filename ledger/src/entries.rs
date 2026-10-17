@@ -27,12 +27,12 @@ const LINE_COLUMNS: &str = "entry_id,line_number,account_id,debit,credit,descrip
 
 /// A new entry's values after trimming and checking, ready to insert.
 pub(crate) struct ValidEntry {
-    entry_date: Date,
-    description: String,
-    reference: Option<String>,
+    pub entry_date: Date,
+    pub description: String,
+    pub reference: Option<String>,
     owner: Option<EntryOwner>,
     reverses_entry_id: Option<i64>,
-    lines: Vec<ValidLine>,
+    pub lines: Vec<ValidLine>,
 }
 
 /// Which inactive accounts a new entry may name.
@@ -72,11 +72,11 @@ pub(crate) fn mirror(original: &Entry, entry_date: Date, description: String) ->
             .collect(),
     }
 }
-struct ValidLine {
-    account_id: i64,
-    debit: Money,
-    credit: Money,
-    description: Option<String>,
+pub(crate) struct ValidLine {
+    pub account_id: i64,
+    pub debit: Money,
+    pub credit: Money,
+    pub description: Option<String>,
 }
 
 /// The shape `post_entry`'s `owner` option must have: a module's descriptor

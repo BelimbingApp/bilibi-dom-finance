@@ -468,6 +468,22 @@ pub(crate) const NOT_CLOSING: &str = "e.id NOT IN (SELECT entry_id FROM finance_
      AND (e.reverses_entry_id IS NULL OR e.reverses_entry_id NOT IN \
      (SELECT entry_id FROM finance_ledger_closing_events WHERE company_id=$2 AND entry_id IS NOT NULL))";
 
+/// Whether the entry is a year-end closing entry, which only reopening its
+/// fiscal year reverses.
+pub(crate) async fn closing_entry(
+    client: &impl GenericClient,
+    company_id: i64,
+    entry_id: i64,
+) -> Result<bool> {
+    Ok(client
+        .query_opt(
+            "SELECT 1 FROM finance_ledger_closing_events WHERE company_id=$1 AND entry_id=$2",
+            &[&company_id, &entry_id],
+        )
+        .await?
+        .is_some())
+}
+
 fn date(text: String) -> Result<Date> {
     text.parse().map_err(|_| bilibi_database::Error::Internal)
 }
