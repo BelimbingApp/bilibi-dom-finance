@@ -18,6 +18,10 @@ const RECEIPT_REVERSED: &str = "supply_chain/receiving.receipt_reversed";
 /// Every event the copy reads. The order source is available only while all
 /// of them are mounted event types: a line cannot name an order line before,
 /// and a bill naming one is held as `order_source_unavailable`.
+// TODO(domain events): add Purchasing's order_status_changed, order_approved
+// and order_amended (unit price, currency, status, supersession) once the
+// pinned Supply Chain declares them; until then a copied line has no order
+// facts and matches as `order_line_not_found`.
 const SOURCE_EVENTS: [&str; 2] = [GOODS_RECEIVED, RECEIPT_REVERSED];
 
 pub(crate) fn available(events: &Events) -> bool {

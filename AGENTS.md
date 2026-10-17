@@ -16,10 +16,16 @@ they govern this code and are not copied here.
   exists to hide. Add a `pub` only for something the facade's contract names.
 - Never add a Cargo dependency, descriptor edge, port call or SQL reference to
   another Domain's container (Supply Chain, Factory, People, ...): cross-domain
-  flows will use Base domain events, a Platform slice in progress. Until it
-  lands, leave a clearly named `TODO(domain events)` seam at the place the
+  flows use Base domain events (`apps/base/events/README.md`), and the
+  subscriber keeps its own copy of what it needs. Where the publisher has no
+  events yet, leave a clearly named `TODO(domain events)` seam at the place the
   flow would start, and do not reach across. Bilimbi's `OrderSource` and
   `PeopleSource` seams are not ported as ports.
+- Read order lines and goods receipts only from Payables' own copy
+  (`payables/src/orders.rs`), kept from Supply Chain's documented events by
+  name and parsed into its own serde types; add an event to its subscriber and
+  `SOURCE_EVENTS` only once the pinned Supply Chain declares it, because boot
+  refuses a subscriber to an event a mounted publisher does not declare.
 - Within this Domain, depend on a sibling module only through its facade,
   declared both in the descriptor's `dependencies` and the Cargo manifest,
   only where Bilimbi has the same edge (`finance/attachments` ← `ledger`,
