@@ -1297,7 +1297,7 @@ impl Ledger {
     /// sibling write holding the company lock. Never acquire a second pool slot.
     pub async fn get_entry_on(
         &self,
-        client: &impl GenericClient,
+        client: &(impl GenericClient + Sync),
         scope: &Scope,
         company_id: i64,
         entry_id: i64,
