@@ -1,0 +1,25 @@
+[package]
+name = "bilibi-finance-einvoice"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+bilibi-authz.workspace = true
+bilibi-company.workspace = true
+bilibi-database.workspace = true
+bilibi-module-registry.workspace = true
+bilibi-party-ids.workspace = true
+bilibi-settings.workspace = true
+bilibi-tenancy.workspace = true
+inventory.workspace = true
+jiff = "0.2.38"
+# Reads the company's signing certificate and RSA key (PEM); the signer and the
+# certificate facts of later slices use the same two crates.
+rsa = "0.9.10"
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio-postgres.workspace = true
+x509-parser = "0.18.1"

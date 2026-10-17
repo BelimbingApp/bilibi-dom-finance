@@ -112,6 +112,22 @@ they govern this code and are not copied here.
   (`finance-attachments-retention-refresh`): Bilibi's vocabulary refuses
   Bilimbi's dotted names. Declaring one grants nothing; a tenant administrator
   grants it (`Grants::set_system`) or its jobs cancel as `actor_refused`.
+- Read a company's e-invoice configuration only through `Einvoice::setup`, and
+  its code lists only through `list_codes`/`override_code`; never select
+  `base_settings` rows or `finance_einvoice_*` tables from a sibling. A secret
+  (client secret, certificate, private key) is never returned by the facade: a
+  later slice that signs or submits reads it inside `finance/einvoice` only,
+  masked everywhere else.
+- Put what one clearance authority defines (document types, posting rules,
+  shapes, versions, windows, URLs) behind `Authority` in `myinvois.rs`, not in
+  the facade, a setting or a page; a second authority is a second
+  implementation, not a branch.
+- Correct a fiscal document with a new status event or a note, never an edit:
+  the e-invoice tables except `finance_einvoice_code_overrides` are
+  append-only in the database, and a schema change is the next migration.
+- Declare a setting with the `define!` macros in `configuration.rs`, with the
+  editor `capability` set; a validator must accept `null` for a nullable value,
+  because Base Settings runs it on cleared values too.
 
 ## Maintaining this file
 

@@ -11,6 +11,8 @@ use bilibi_finance_ledger::{
     SERVICE,
 };
 use bilibi_finance_walkthrough_fixture::{install, sign_in, COMPANY};
+
+mod einvoice;
 use bilibi_module_registry::{verify_composition, Services};
 use jiff::civil::date;
 use std::{fmt::Debug, sync::Arc, time::Duration};
@@ -20,6 +22,7 @@ bilibi_walkthrough_fixture::walkthrough_module_roles!();
 bilibi_finance_walkthrough_fixture::walkthrough_ledger_roles!();
 bilibi_finance_walkthrough_fixture::walkthrough_attachments_roles!();
 bilibi_finance_walkthrough_fixture::walkthrough_payables_roles!();
+bilibi_finance_walkthrough_fixture::walkthrough_einvoice_roles!();
 
 /// An entry on one line: number, date, description, owner and `account:amount`
 /// per line (debits positive, credits negative).
@@ -1103,5 +1106,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     bilibi_finance_walkthrough_fixture::payables::run(&db, &services).await?;
     bilibi_finance_walkthrough_fixture::periods::run(&db, &services).await?;
     bilibi_finance_walkthrough_fixture::controls::run(&db, &services).await?;
+
+    einvoice::prove(
+        &db,
+        &services,
+        &einvoice::Actors {
+            manager: &manager,
+            viewer: &viewer,
+            contractor: &contractor,
+            other_tenant: &other,
+        },
+    )
+    .await?;
     Ok(())
 }

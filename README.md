@@ -10,11 +10,11 @@ Bilibi checkout; it does not build on its own.
 | --- | --- | --- |
 | [`ledger/`](ledger/README.md) | `finance/ledger` | each company's book and currency, its chart of accounts, its journal entries (append-only, numbered without gaps, balanced at commit, optionally owned by another module's record) with posting notices that announce only committed entries, its fiscal years of monthly periods with the closing log (close, reopen, lock, year-end close and reopen with closing entries), controlled bookkeeping and its changes, the late-recording report with its reviews, reversals (an owned entry only through its owner), the separation of duties (impersonation counted) with the approval exceptions log and its independent reviews, and manual journals that post only once someone else approves them. |
 | [`attachments/`](attachments/README.md) | `finance/attachments` | source documents kept with the records they support: records-grade files in Base Artifacts, the company's retention years and their history, replace and remove while a record is a draft, legal holds, and the retention refresh job that follows a record's final date. The `Source` contract each record owner implements is here. |
-
+| [`einvoice/`](einvoice/README.md) | `finance/einvoice` | a company's fiscal documents for a clearance authority: the append-only schema (documents, lines, submissions, status events, consolidated sources and source links), the `finance.einvoice` settings (environment, format version, credentials, signing certificate and key, supplier profile, posting accounts) with encryption and PEM validators, the platform API and portal URLs, the `Authority` contract with MyInvois, and the authority's code lists with company overrides. Issuing, signing, submitting, posting and the pages follow in later versions of the module. |
 | [`payables/`](payables/README.md) | `finance/payables` | settings and tax codes with change histories; immutable bills and debit notes; independent approval, void, and atomic owned ledger posting; source documents. Matching, payments and pages follow in NP2–NP4. |
 
 Every other Finance module of Bilimbi (receivables,
-e-invoice, fixed assets, payroll, reconciliation, SST, reports) lands beside
+fixed assets, payroll, reconciliation, SST, reports) lands beside
 the ledger as a sibling module folder, in later slices of the port.
 
 ## Mount
@@ -42,7 +42,8 @@ book, chart of accounts and first fiscal year through the ledger facade. Its bin
 running proof of this repository's facade:
 
 ```sh
-DATABASE_URL=postgres://…/disposable cargo run -p bilibi-finance-walkthrough-fixture
+DATABASE_URL=postgres://…/disposable BILIBI_SETTINGS_KEY=$(openssl rand -hex 32) \
+  cargo run -p bilibi-finance-walkthrough-fixture
 ```
 
 It migrates a fresh disposable database, installs the fixtures, and prints
@@ -71,7 +72,11 @@ the submitter, after a period closed and an account was deactivated), turns
 the separation of duties off and on around sibling approvals and overrides,
 lists and reviews the approval exceptions (refused for the approver and
 preparer), races two approvals of one journal, and ends with the database's
-own journal and exception refusals.
+own journal and exception refusals. Its e-invoice section shows the code lists and
+their overrides, the company settings with their validators and encryption
+(it needs `BILIBI_SETTINGS_KEY`, 64 hex characters, and `openssl` for a
+throwaway certificate and key), the setup read, the authority's rules and the
+database's refusals on the e-invoice tables.
 
 ## Naming
 
