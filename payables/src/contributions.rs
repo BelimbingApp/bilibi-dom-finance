@@ -1,4 +1,4 @@
-//! Bilimbi.Finance.Payables.Contributions. Pages/menu land in NP4.
+//! Bilimbi.Finance.Payables.Contributions (routes and menu live in `web`).
 use crate::MODULE;
 use bilibi_authz::{CapabilityDefinition as C, RoleDefinition, VocabularyContribution, VOCABULARY};
 use bilibi_module_registry::{Contribution, Provenance};

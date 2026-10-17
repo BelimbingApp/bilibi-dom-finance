@@ -23,6 +23,7 @@ mod orders;
 mod settings;
 mod source;
 mod store;
+mod web;
 
 use bilibi_agent_api::OperationClient;
 use bilibi_company::organisation;
@@ -48,7 +49,7 @@ pub const DOCUMENT_SOURCE: &str = "finance/payables/document";
 
 inventory::submit! { Module {
     id: MODULE, layer: Layer::Domains,
-    dependencies: &["base/agent_api", "base/authz", "base/database", "base/events", "base/party_ids", "base/tenancy", "core/company", "finance/attachments", "finance/ledger"],
+    dependencies: &["base/agent_api", "base/authz", "base/database", "base/datetime", "base/events", "base/locale", "base/menu", "base/party_ids", "base/tenancy", "base/ui", "core/company", "finance/attachments", "finance/ledger"],
     migrations: &[
         ("finance-payables-001-documents", include_str!("../migrations/001-documents.sql")),
         ("finance-payables-002-payments", include_str!("../migrations/002-payments.sql")),
@@ -58,7 +59,12 @@ inventory::submit! { Module {
         db: s.get::<Db>("base/database.pool")?.as_ref().clone(),
         ledger: s.get(bilibi_finance_ledger::SERVICE)?,
         order_source: orders::available(&*s.get::<bilibi_events::Events>(bilibi_events::SERVICE)?),
-    }); agent_operations::bind(payables.clone(), s.get("base/tenancy.parties")?)?; Ok(payables) } }],
+    }); agent_operations::bind(payables.clone(), s.get("base/tenancy.parties")?)?; Ok(payables) } }, Service { id: web::PAGES, factory: |s| Ok(Arc::new(bilibi_ui::page::PageService::<Scope, Error>(Arc::new(web::Pages {
+        db: s.get::<Db>("base/database.pool")?.as_ref().clone(),
+        payables: s.get(SERVICE)?,
+        display: s.get("base/datetime.display")?,
+        locales: s.get("base/locale.locales")?,
+    })))) }],
 } }
 
 pub type Result<T> = std::result::Result<T, PayablesError>;
