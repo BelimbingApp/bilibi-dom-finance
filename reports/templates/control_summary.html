@@ -1,0 +1,6 @@
+{# Bilimbi bookkeeping/separation summary, with shared badge and date rendering. #}
+<div class="mt-3 flex flex-wrap items-center gap-3">
+<span id="{{ status_id }}">{{ badge }}</span>
+{% if !since.is_empty() %}<span class="text-sm text-ink-muted">Since {{ since }} by {{ actor }}{% if !reason.is_empty() %}: {{ reason }}{% endif %}</span>{% endif %}
+{{ action }}
+</div>

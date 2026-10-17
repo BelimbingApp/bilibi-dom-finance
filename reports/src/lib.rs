@@ -28,6 +28,7 @@
 //! they are when it runs.
 mod configuration;
 mod contributions;
+mod controls;
 mod issued;
 mod layout;
 mod statement;
@@ -88,6 +89,12 @@ inventory::submit! {
             ledger: services.get(bilibi_finance_ledger::SERVICE)?,
         })) }, Service { id: "finance/reports.pages", factory: |services| {
             Ok(Arc::new(bilibi_ui::page::PageService::<Scope, Error>(Arc::new(web::Pages {
+                reports: services.get(SERVICE)?,
+                display: services.get("base/datetime.display")?,
+                locales: services.get("base/locale.locales")?,
+            }))))
+        } }, Service { id: "finance/reports.control-pages", factory: |services| {
+            Ok(Arc::new(bilibi_ui::page::PageService::<Scope, Error>(Arc::new(controls::Pages {
                 reports: services.get(SERVICE)?,
                 display: services.get("base/datetime.display")?,
                 locales: services.get("base/locale.locales")?,

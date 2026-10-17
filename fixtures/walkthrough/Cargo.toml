@@ -53,3 +53,7 @@ tokio.workspace = true
 # The e-invoice clearance section's stand-in authority.
 base64 = "0.23.1"
 sha2 = "0.11.1"
+
+# NT3: construct an independent, affiliated page reviewer through Core facades.
+bilibi-affiliation.workspace = true
+bilibi-user.workspace = true

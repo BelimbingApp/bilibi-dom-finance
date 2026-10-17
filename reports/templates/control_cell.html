@@ -1,0 +1,5 @@
+{# Bilimbi table text and subordinate line; compact rows keep one line. #}
+{% if !id.is_empty() %}<span id="{{ id }}">{% endif %}
+<span class="block">{{ main }}</span>
+{% if !compact && !detail.is_empty() %}<span class="block text-xs text-ink-muted">{{ detail }}</span>{% endif %}
+{% if !id.is_empty() %}</span>{% endif %}

@@ -1,0 +1,9 @@
+{# Mirrors Bilimbi Reports.Web.{BookkeepingLive,ApprovalExceptionsLive}. #}
+{% import "components.html" as ui %}
+{% import "feedback.html" as feedback %}
+{% call ui::page(id=id, variant=bilibi_ui::PageVariant::Detail) %}
+{% call feedback::flash_group(messages=flash) %}{% endcall %}
+<div data-history="params" data-hook="BrowserTimeZone" id="{{ id }}-content">
+{% for part in parts %}{{ part }}{% endfor %}
+</div>
+{% endcall %}

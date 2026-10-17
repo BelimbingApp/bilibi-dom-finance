@@ -9,8 +9,8 @@ snapshots; every figure comes through `finance/ledger`'s facade, and it reads
 none of the ledger's tables.
 
 Management reports and account activity are available at `/finance/reports`
-and `/finance/reports/accounts/{account_id}` (NT2). Bookkeeping, Approval
-exceptions and the auditor pack follow in later slices.
+and `/finance/reports/accounts/{account_id}` (NT2). Bookkeeping and Approval
+exceptions are also available (NT3); the auditor pack follows in NT4.
 
 ## Pages
 
@@ -171,3 +171,17 @@ subscription hears, issues and reads back snapshots, and shows the facade's
 and the database's refusals.
 
 From the Platform root, with `DATABASE_URL` naming a disposable PostgreSQL 18 database, `cargo run -p bilibi-finance-walkthrough-fixture --bin reports-ui` exercises the mounted page contracts and prepares the browser fixture. It proves subscribe-before-read, a stale-click pin, pinned and unpinned notices, range draft/error retention, table compactness, four views, comparison off, unopened and forbidden ledgers, and account cursors at 99/100/101 entries with stable whole-window totals. Sign in as `manager@example.test` with the walkthrough password `bilibi-dev`, then open `/finance/reports`; running the same command with `-- post` commits a real later posting to demonstrate live refresh and pinned figures. These are executable fixture proofs, not unit tests or production seeds.
+
+## Bookkeeping and approval exceptions pages
+
+NT3 ports Bilimbi's `/finance/reports/bookkeeping` and `/finance/reports/approval-exceptions` pages. They use the ledger facade for controlled bookkeeping, fiscal years, late-recording reviews, separation of duties and independent exception reviews. Every write checks its capability when the event arrives and again inside the ledger's audited transaction.
+
+The pages are framed routes protected by `finance.ledger.view` and menu items under Finance. Bookkeeping keeps `status=all|approaching|late`, `review=all|pending|reviewed` and the positive `after` entry-number cursor in the URL. Approval exceptions defaults to `period=this_month`, resolves custom `from`/`to` dates against the saved display clock (including the reported browser timezone in Local mode), and keeps the same review filter and an exception-number cursor. Each page reads at most 100 rows and offers the reference's later-records link when full. FlexTable supplies column customization and compact rows for both records and change histories; these reference pages have no additional sort controls.
+
+Turning off controlled bookkeeping requires a reason and records an approval exception atomically through `Ledger::set_controlled_bookkeeping`. Fiscal-year opening is explicit, including the first year's start date. Separation changes and both kinds of reviews use their ledger capabilities; reviews retain the ledger's independent-person and impersonation checks. Invalid reasons/dates keep their dialog open; other refusals close it and show the reference wording. Readers without a write capability see the withheld-control explanation. Open dialogs retain their intended separation state, so another session's change cannot invert a later submission.
+
+Run the page-service proof on a fresh disposable database with `DATABASE_URL=… cargo run -p bilibi-finance-walkthrough-fixture --bin report-controls`. It migrates and installs only walkthrough records, then exercises the actual page service and ledger: first fiscal year, invalid inputs, Unicode reasons, controlled overrides, date/review filters, independent reviews, stale grants, review races, archived-company refusals and PostgreSQL's append-only review guards. `-- --empty` installs the empty walkthrough state for comparison with the R1 reference captures before opening any book.
+
+The page's company is the sealed actor's affiliation, matching the other Finance pages. An account without an affiliation gets an explicit missing-company state. The page proof creates and binds the independent reviewer's Company 001 affiliation through the Core Affiliation and User facades; its administrator stays unaffiliated so this missing-context case remains covered.
+
+Archived-company history remains readable. Until Base Settings accepts an archived company for display reads, these pages fall back to the user's tenant display clock, as the report facade already does for the unavailable company layout. The ledger still refuses every archived-company write; this display fallback only keeps that refusal visible on the live page.

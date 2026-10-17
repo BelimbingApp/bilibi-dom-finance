@@ -59,3 +59,33 @@ bilibi_menu::contribute!(
         .requires(bilibi_menu::Requirement::Capability(crate::VIEW))
         .order(20)
 );
+
+// Bilimbi Reports.Web.{BookkeepingLive,ApprovalExceptionsLive} routes/menu.
+inventory::submit! { Contribution::new(ROUTES, "finance/reports.bookkeeping", provenance!(), &Route {
+    method: Method::Get, path: "/finance/reports/bookkeeping", service: "finance/reports.control-pages", operation: "bookkeeping", access: Access::Capability(crate::VIEW), framed: true,
+}) }
+inventory::submit! { Contribution::new(ROUTES, "finance/reports.approval-exceptions", provenance!(), &Route {
+    method: Method::Get, path: "/finance/reports/approval-exceptions", service: "finance/reports.control-pages", operation: "approval-exceptions", access: Access::Capability(crate::VIEW), framed: true,
+}) }
+bilibi_menu::contribute!(
+    "finance/reports",
+    bilibi_menu::MenuItem::page(
+        "finance.reports.bookkeeping",
+        "Bookkeeping",
+        "/finance/reports/bookkeeping"
+    )
+    .under("finance")
+    .requires(bilibi_menu::Requirement::Capability(crate::VIEW))
+    .order(22)
+);
+bilibi_menu::contribute!(
+    "finance/reports",
+    bilibi_menu::MenuItem::page(
+        "finance.reports.approval-exceptions",
+        "Approval exceptions",
+        "/finance/reports/approval-exceptions"
+    )
+    .under("finance")
+    .requires(bilibi_menu::Requirement::Capability(crate::VIEW))
+    .order(21)
+);
