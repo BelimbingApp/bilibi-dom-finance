@@ -34,8 +34,8 @@ pub mod payroll;
 mod payroll_ui;
 pub mod periods;
 pub mod receivables;
-pub mod reconciliation;
 pub mod receivables_documents;
+pub mod reconciliation;
 pub mod reports;
 pub mod totals;
 
