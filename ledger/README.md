@@ -31,6 +31,7 @@ records (`Book`, `Account`, `Entry`, `FiscalYear`, `Period`, `ClosingEvent`,
 | `write` | caller's supplied capabilities | Opens an audited writable-company transaction, reauthorizing inside it, for a Finance record owner |
 | `get_entry` | `finance.ledger.view` | One entry with its lines and the entry that reversed it; `EntryNotFound` for another company's id |
 | `list_entries` | `finance.ledger.view` | Entries by date then id, 100 by default and 500 at most, paged with `after`; bounded by `from`, `to`, `account_id` and `through_entry_number`; `exclude_closing` leaves out year-end closing entries and their reversals |
+| `list_entries_on` | `finance.ledger.view` | `list_entries` on the caller's connection, for a sibling reading entries inside its own write while it holds the company lock |
 | `reverse_entry` | `finance.ledger.entries.post` | Posts a manual entry's reversal (see Reversals) |
 | `reverse_owned_entry` | `finance.ledger.entries.post` | The owning module's reversal of its own entry, inside its own transaction |
 | `subscribe_postings` | `finance.ledger.view` | A `PostingSubscription` that hears each committed entry of the company (see Posting notices) |

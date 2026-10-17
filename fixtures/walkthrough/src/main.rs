@@ -1133,5 +1133,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     bilibi_finance_walkthrough_fixture::clearance::run(&db, &services, &manager, &viewer, &admin)
         .await?;
     bilibi_finance_walkthrough_fixture::reconciliation::run(&db, &services).await?;
+
+    // NC2: reconciliation matching, reconciliations and statement-line posting.
+    bilibi_finance_walkthrough_fixture::reconciliation_matching::run(&db, &services).await?;
     Ok(())
 }

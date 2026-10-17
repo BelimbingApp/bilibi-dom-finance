@@ -43,6 +43,9 @@ pub mod clearance;
 
 mod einvoice_bridge;
 
+// NC2: reconciliation matching, reconciliations and statement-line posting.
+pub mod reconciliation_matching;
+
 /// Every fixture account's password.
 pub use bilibi_walkthrough_fixture::PASSWORD;
 #[doc(hidden)]
