@@ -24,6 +24,9 @@ bilibi_finance_walkthrough_fixture::walkthrough_ledger_roles!();
 bilibi_finance_walkthrough_fixture::walkthrough_attachments_roles!();
 bilibi_finance_walkthrough_fixture::walkthrough_einvoice_roles!();
 
+// H2 shares the credential bootstrap, never product seeds or production roles.
+bilibi_finance_walkthrough_fixture::walkthrough_receivables_roles!();
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::var("BILIBI_AGENT_PROOF").as_deref() != Ok("disposable") {
@@ -56,6 +59,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .chain(["admin.company.tenant-wide.manage"])
     {
         grants.set_direct(&admin, 7, key, Some(true)).await?;
+    }
+    // H2 grants are disposable fixture data. Include issuance and settlement,
+    // which NR1's shared manager role deliberately does not carry.
+    for user in [1, 7] {
+        for key in bilibi_finance_receivables::CAPABILITIES {
+            grants.set_direct(&admin, user, key, Some(true)).await?;
+        }
     }
     let manager = sign_in(&db, &services, 1, 1).await?;
     let settings = services.get::<Settings>("base/settings.store")?;
