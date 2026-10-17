@@ -34,6 +34,7 @@ mod document;
 mod documents;
 mod draft;
 mod evidence;
+mod list;
 pub mod myinvois;
 mod pdf;
 mod posting;
@@ -63,6 +64,7 @@ pub use draft::{
     ValidParty,
 };
 pub use evidence::EvidencePage;
+pub use list::{DocumentPage, DocumentQuery};
 pub use myinvois::signer::SigningKey;
 pub use pdf::{qr_code_svg, PdfArtifact, PdfFile, ARTIFACT_OWNER};
 
