@@ -9,6 +9,15 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
+default-run = "bilibi-finance-walkthrough-fixture"
+
+[[bin]]
+name = "bilibi-finance-walkthrough-fixture"
+path = "src/main.rs"
+
+[[bin]]
+name = "bilibi-finance-walkthrough-ui"
+path = "src/ui.rs"
 
 [dependencies]
 bilibi-authz.workspace = true
@@ -32,7 +41,9 @@ bilibi-queue.workspace = true
 bilibi-settings.workspace = true
 bilibi-tenancy.workspace = true
 bilibi-ui.workspace = true
+bilibi-web = { path = "../../../../web" }
 bilibi-walkthrough-fixture = { path = "../../../../../fixtures/walkthrough" }
+axum.workspace = true
 inventory.workspace = true
 jiff = "0.2.38"
 rust_decimal.workspace = true
