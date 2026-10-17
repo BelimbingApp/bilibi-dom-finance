@@ -1,0 +1,43 @@
+{# Bilimbi Finance.Sst.Web.SetupLive. Shared components own the DOM; lists use the shared FlexTable. #}
+{% import "components.html" as ui %}
+{% import "feedback.html" as feedback %}
+{% import "forms.html" as form %}
+{% call feedback::flash_group(messages=flash) %}{% endcall %}
+{% call ui::page(id="sst-setup") %}
+{% call ui::header(subtitle="The company's Sales and Service Tax registration and which SST-02 item each tax code reports in.", actions=actions) %}SST setup{% endcall %}
+{% if let Some(forbidden) = forbidden %}{{ forbidden|safe }}{% endif %}
+{% if let Some(r) = registration %}
+{% call ui::card(id="sst-registration", inner_class="p-5 sm:p-6", role="region", labelledby="sst-registration-heading") %}
+{% call ui::section_heading(id="sst-registration-heading", title="Registration", description="Each change is recorded as a new version; returns keep the version they were prepared under.") %}{% endcall %}
+{% if let Some(none) = r.none %}{{ none|safe }}{% endif %}
+{% if let Some(facts) = r.facts %}{{ facts|safe }}{% endif %}
+{% if let Some(history) = r.history %}<div class="mt-4">{{ history|safe }}</div>{% endif %}
+{% if let Some(manage_forbidden) = r.manage_forbidden %}{{ manage_forbidden|safe }}{% endif %}
+{% if let Some(fields) = r.fields %}
+<form id="sst-registration-form" data-event="registration_change" data-change data-submit-event="register" class="mt-6 grid gap-x-6 gap-y-2 md:grid-cols-2">
+{% for field in fields %}{% call form::input(field=field) %}{% endcall %}{% endfor %}
+<div class="md:col-span-2">{% call ui::button(id="registration-save", button_type="submit", variant=bilibi_ui::ButtonVariant::Primary, working="Recording…") %}Record registration{% endcall %}</div>
+</form>
+{% endif %}
+{% endcall %}
+{% endif %}
+{% if let Some(codes_forbidden) = codes_forbidden %}{{ codes_forbidden|safe }}{% endif %}
+{% if let Some(c) = codes %}
+{% call ui::card(id="sst-mappings", inner_class="p-0", role="region", labelledby="sst-mappings-heading") %}
+{% call ui::section_heading(id="sst-mappings-heading", title="Tax codes and SST-02 items", count=c.count, class="p-5 pb-0", description="A return counts each tax code's documents in its item; a code with tax and no item stops a return finalising.") %}{% endcall %}
+{{ c.table|safe }}
+{% if let Some(fields) = c.fields %}
+<form id="sst-mapping-form" data-event="mapping_change" data-change data-submit-event="map" class="grid gap-x-6 gap-y-2 p-5 md:grid-cols-3">
+{% for field in fields %}{% call form::input(field=field) %}{% endcall %}{% endfor %}
+<div class="md:col-span-3">{% call ui::button(id="mapping-save", button_type="submit", variant=bilibi_ui::ButtonVariant::Primary, working="Mapping…") %}Map tax code{% endcall %}</div>
+</form>
+{% endif %}
+{% endcall %}
+{% endif %}
+{% if let Some(mapping_history) = mapping_history %}
+{% call ui::card(id="sst-mapping-history", inner_class="p-0", role="region", labelledby="sst-mapping-history-heading") %}
+{% call ui::section_heading(id="sst-mapping-history-heading", title="Mapping history", class="p-5 pb-0") %}{% endcall %}
+{{ mapping_history|safe }}
+{% endcall %}
+{% endif %}
+{% endcall %}

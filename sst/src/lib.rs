@@ -7,8 +7,9 @@
 //! accounts' ledger postings; and the returns of each tax for each taxable
 //! period, adjusted while open, finalised into a stored snapshot that never
 //! changes, discarded, amended by a new return for the same period, read
-//! again at their recorded numbers, exported, and listed as evidence. The
-//! pages follow in NS3.
+//! again at their recorded numbers, exported, and listed as evidence; and
+//! the Returns, Return and Setup pages with the CSV download and print page
+//! (`web`).
 //!
 //! Every call authorizes its capability for the scope's signed-in actor and
 //! the explicit target company when it runs; a write then holds the company
@@ -27,6 +28,7 @@ mod periods;
 mod registrations;
 mod returns;
 mod store;
+mod web;
 
 use bilibi_company::organisation;
 use bilibi_database::{Db, Error, MutationTransaction};
@@ -57,14 +59,22 @@ pub const MODULE: &str = "finance/sst";
 pub const SERVICE: &str = "finance/sst.sst";
 inventory::submit! { Module {
     id: MODULE, layer: Layer::Domains,
-    dependencies: &["base/authz", "base/database", "base/tenancy", "core/company", "finance/ledger", "finance/payables", "finance/receivables"],
+    dependencies: &["base/authz", "base/database", "base/datetime", "base/locale", "base/menu", "base/tenancy", "base/ui", "core/company", "finance/ledger", "finance/payables", "finance/receivables"],
     migrations: &[("finance-sst-001-sst", include_str!("../migrations/001-sst.sql"))],
     services: &[Service { id: SERVICE, factory: |s| Ok(Arc::new(Sst {
         db: s.get::<Db>("base/database.pool")?.as_ref().clone(),
         ledger: s.get(bilibi_finance_ledger::SERVICE)?,
         receivables: s.get(bilibi_finance_receivables::SERVICE)?,
         payables: s.get(bilibi_finance_payables::SERVICE)?,
-    })) }],
+    })) }, Service { id: web::PAGES, factory: |s| Ok(Arc::new(bilibi_ui::page::PageService::<Scope, Error>(Arc::new(web::Pages {
+        db: s.get::<Db>("base/database.pool")?.as_ref().clone(),
+        sst: s.get(SERVICE)?,
+        ledger: s.get(bilibi_finance_ledger::SERVICE)?,
+        display: s.get("base/datetime.display")?,
+        locales: s.get("base/locale.locales")?,
+    })))) }, Service { id: web::FILES, factory: |s| Ok(Arc::new(bilibi_ui::download::DownloadService::<Scope, Error>(Arc::new(web::Downloads {
+        sst: s.get(SERVICE)?,
+    })))) }],
 } }
 
 pub type Result<T> = std::result::Result<T, SstError>;

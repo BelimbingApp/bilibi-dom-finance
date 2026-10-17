@@ -1,0 +1,8 @@
+{# Bilimbi ReturnLive's Part A controls: finalise and discard while open, amend the latest finalised version. #}
+{% import "components.html" as ui %}
+{% if open %}<div class="mt-4 flex flex-wrap gap-2">
+{% if finalise %}{% call ui::button(id="sst-return-finalise", event="finalise", button_type="button", variant=bilibi_ui::ButtonVariant::Primary, disabled=blocked, working="Finalising…") %}Finalise{% endcall %}{% endif %}
+{% if discard %}{% call ui::button(id="sst-return-discard", event="open_modal", name="modal", value="discard", button_type="button") %}Discard{% endcall %}{% endif %}
+</div>{% endif %}
+{% if let Some(forbidden) = finalise_forbidden %}{{ forbidden|safe }}{% endif %}
+{% if amend %}<div class="mt-4">{% call ui::button(id="sst-return-amend", event="open_modal", name="modal", value="amend", button_type="button") %}Amend{% endcall %}</div>{% endif %}

@@ -6,18 +6,24 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+askama.workspace = true
 bilibi-authz.workspace = true
 bilibi-company.workspace = true
 bilibi-database.workspace = true
+bilibi-datetime.workspace = true
 bilibi-finance-ledger = { path = "../ledger" }
 bilibi-finance-payables = { path = "../payables" }
 bilibi-finance-receivables = { path = "../receivables" }
+bilibi-locale.workspace = true
+bilibi-menu.workspace = true
 bilibi-module-registry.workspace = true
 bilibi-tenancy.workspace = true
+bilibi-ui.workspace = true
 inventory.workspace = true
 jiff = "0.2.38"
 rust_decimal.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
 tokio-postgres.workspace = true
