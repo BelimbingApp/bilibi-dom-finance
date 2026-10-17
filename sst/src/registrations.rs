@@ -113,6 +113,16 @@ pub(crate) async fn latest(
     )
 }
 
+/// One version by id: the one a return was prepared under.
+pub(crate) async fn get(
+    c: &impl GenericClient,
+    tenant: i64,
+    company: i64,
+    id: i64,
+) -> bilibi_database::Result<Option<Registration>> {
+    Ok(read(c, "AND id=$3", &[&tenant, &company, &id]).await?.pop())
+}
+
 /// The latest version whose cycle starts on or before `date`.
 pub(crate) async fn governing(
     c: &impl GenericClient,

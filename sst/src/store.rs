@@ -8,18 +8,36 @@ use tokio_postgres::GenericClient;
 pub(crate) enum Table {
     Registration,
     Mapping,
+    Return,
+    ReturnEvent,
+    Adjustment,
+    ReturnBox,
+    ReturnSource,
+    ReturnAccount,
 }
 impl Table {
     fn name(self) -> &'static str {
         match self {
             Self::Registration => "finance_sst_registrations",
             Self::Mapping => "finance_sst_mappings",
+            Self::Return => "finance_sst_returns",
+            Self::ReturnEvent => "finance_sst_return_events",
+            Self::Adjustment => "finance_sst_return_adjustments",
+            Self::ReturnBox => "finance_sst_return_boxes",
+            Self::ReturnSource => "finance_sst_return_sources",
+            Self::ReturnAccount => "finance_sst_return_accounts",
         }
     }
     fn kind(self) -> &'static str {
         match self {
             Self::Registration => "finance.sst.registration",
             Self::Mapping => "finance.sst.mapping",
+            Self::Return => "finance.sst.return",
+            Self::ReturnEvent => "finance.sst.return_event",
+            Self::Adjustment => "finance.sst.adjustment",
+            Self::ReturnBox => "finance.sst.return_box",
+            Self::ReturnSource => "finance.sst.return_source",
+            Self::ReturnAccount => "finance.sst.return_account",
         }
     }
 }
@@ -61,4 +79,17 @@ pub(crate) fn stamp(column: &str) -> String {
 
 pub(crate) fn date(text: &str) -> Result<jiff::civil::Date> {
     text.parse().map_err(|_| Error::Invalid)
+}
+
+/// A `numeric` column read as `::text`, exactly.
+pub(crate) fn decimal(text: &str) -> Result<rust_decimal::Decimal> {
+    rust_decimal::Decimal::from_str_exact(text).map_err(|_| Error::Invalid)
+}
+
+/// Merges `fields` into a row's `identity`.
+pub(crate) fn row(mut identity: Value, fields: Value) -> Value {
+    if let (Some(row), Value::Object(fields)) = (identity.as_object_mut(), fields) {
+        row.extend(fields);
+    }
+    identity
 }

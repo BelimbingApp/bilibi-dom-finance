@@ -4,8 +4,11 @@
 //! taxable periods of the registration's cycle; and a return's figures,
 //! computed from posted documents only through the Receivables and Payables
 //! tax totals at one ledger entry number and reconciled against the tax
-//! accounts' ledger postings. Opening, adjusting, finalising and amending
-//! returns follow in NS2, and the pages in NS3.
+//! accounts' ledger postings; and the returns of each tax for each taxable
+//! period, adjusted while open, finalised into a stored snapshot that never
+//! changes, discarded, amended by a new return for the same period, read
+//! again at their recorded numbers, exported, and listed as evidence. The
+//! pages follow in NS3.
 //!
 //! Every call authorizes its capability for the scope's signed-in actor and
 //! the explicit target company when it runs; a write then holds the company
@@ -15,11 +18,14 @@
 //! `finance/ledger` facades with the same scope, so a call that computes
 //! figures or lists tax codes also needs their view capabilities.
 mod contributions;
+mod evidence;
+mod export;
 mod figures;
 mod form;
 mod mappings;
 mod periods;
 mod registrations;
+mod returns;
 mod store;
 
 use bilibi_company::organisation;
@@ -32,11 +38,17 @@ use bilibi_tenancy::Scope;
 pub use contributions::{
     AMEND_RETURNS, CAPABILITIES, FINALISE_RETURNS, MANAGE_SETTINGS, PREPARE_RETURNS, VIEW,
 };
+pub use evidence::EvidencePage;
+pub use export::{Export, ExportFormat};
 pub use figures::{AccountReconciliation, Figures, SourceRow, UnmappedRow};
 pub use form::{BoxFigure, BoxKind, FormBox, MappableBox};
 use jiff::civil::Date;
 pub use mappings::{Mapping, MappingInput, TaxCodeMapping};
 pub use registrations::{Registration, RegistrationInput};
+pub use returns::{
+    Adjustment, AdjustmentInput, Amends, BoxChange, PostedSince, Reproduction, ReturnAdjustment,
+    ReturnEvent, ReturnReport, ReturnStatus, TaxReturn, Withdrawal,
+};
 use serde::Serialize;
 use std::{fmt, str::FromStr, sync::Arc};
 use tokio_postgres::GenericClient;
@@ -81,6 +93,32 @@ pub enum SstError {
     InvalidSource,
     #[error("The request was malformed.")]
     InvalidOption,
+    #[error("That period already has an open return.")]
+    ReturnOpen,
+    #[error("That return is finalised; its figures are fixed. Amend it to change them.")]
+    ReturnFinalised,
+    #[error("That return was discarded.")]
+    ReturnDiscarded,
+    #[error("The return no longer exists.")]
+    ReturnNotFound,
+    #[error("Only a finalised return is amended.")]
+    ReturnNotFinalised,
+    #[error("A later finalised version amends that return; amend the latest one.")]
+    ReturnSuperseded,
+    #[error("That period overlaps another period's return.")]
+    PeriodOverlaps,
+    #[error("The period has not ended yet.")]
+    PeriodNotEnded,
+    #[error("The adjustment no longer exists.")]
+    AdjustmentNotFound,
+    #[error("That adjustment is already withdrawn.")]
+    AdjustmentWithdrawn,
+    /// Each tax code with tax in the period and no mapping.
+    #[error("Map every tax code with tax in the period first: {}.", unmapped(.0))]
+    UnmappedTaxCodes(Vec<UnmappedRow>),
+    /// Each source row whose code's rate does not fit its box.
+    #[error("A tax code's rate does not fit its box: {}.", mismatched(.0))]
+    RateMismatch(Vec<SourceRow>),
     #[error("Refused: {}.", refused(.0))]
     Invalid(Vec<FieldError>),
     #[error(transparent)]
@@ -98,6 +136,24 @@ fn refused(errors: &[FieldError]) -> String {
         .map(|e| format!("{} {}", e.field.replace('_', " "), e.message))
         .collect::<Vec<_>>()
         .join("; ")
+}
+fn source_name(source: TaxSource) -> &'static str {
+    match source {
+        TaxSource::Receivables => "Receivables",
+        TaxSource::Payables => "Payables",
+    }
+}
+fn unmapped(rows: &[UnmappedRow]) -> String {
+    rows.iter()
+        .map(|r| format!("{} {}", source_name(r.source), r.tax_code))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+fn mismatched(rows: &[SourceRow]) -> String {
+    rows.iter()
+        .map(|r| format!("{} ({}%)", r.tax_code, r.rate.normalize()))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 impl From<tokio_postgres::Error> for SstError {
     fn from(e: tokio_postgres::Error) -> Self {
@@ -304,7 +360,8 @@ impl Sst {
             period_start: start,
             period_end: end,
         };
-        self.compute(s, company, &period, &registration, pins).await
+        self.compute(s, company, &period, &registration, &[], pins)
+            .await
     }
 
     async fn write<'c>(

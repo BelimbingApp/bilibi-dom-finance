@@ -1,10 +1,8 @@
 //! Bilimbi.Finance.Sst.Figures: a return's figures, the document tax of the
 //! period read through the ledger, receivables and payables facades at one
 //! ledger entry number, routed to boxes by the tax code mappings in force
-//! through one mapping number (and, from NS2, a return's standing
-//! adjustments); and
-//! how each tax account's ledger postings compare with the documents behind
-//! them.
+//! through one mapping number, plus a return's standing adjustments; and how
+//! each tax account's ledger postings compare with the documents behind them.
 //!
 //! Routing, by each row's tax code mapping:
 //!
@@ -21,6 +19,7 @@
 //! mapped box, and `credited_after_due` deducts in item 13(a).
 use crate::form::{self, BoxFigure, BoxKind, FormBox};
 use crate::registrations::Registration;
+use crate::returns::Adjustment;
 use crate::*;
 use bilibi_finance_ledger::TotalsQuery;
 use bilibi_finance_payables::TaxQuery;
@@ -97,7 +96,9 @@ pub struct AccountReconciliation {
 /// A return's figures: `boxes` in the form's order, `tax_payable` (item
 /// 14), every counted source row, the `unmapped` rows and `rate_mismatches`
 /// that keep a return from finalising, and the ledger reconciliation, read
-/// at `through_entry_number` and `through_mapping_number`.
+/// at `through_entry_number` and `through_mapping_number`. A finalised
+/// return's stored snapshot also names the `through_adjustment_number` its
+/// standing adjustments were counted through; a reading names none.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Figures {
     pub tax_type: TaxType,
@@ -108,6 +109,7 @@ pub struct Figures {
     pub minor_units: u8,
     pub through_entry_number: i64,
     pub through_mapping_number: i64,
+    pub through_adjustment_number: Option<i64>,
     pub boxes: Vec<BoxFigure>,
     pub tax_payable: Decimal,
     pub sources: Vec<SourceRow>,
@@ -243,13 +245,21 @@ fn to_box(row: &Row, mapping: &Mapping, found: &FormBox) -> SourceRow {
     counted
 }
 
-/// Each box's summed contributions. NS2 adds a return's standing
-/// adjustments here, each to its box.
-fn sums(sources: &[SourceRow]) -> HashMap<String, (Decimal, Decimal)> {
+/// Each box's summed contributions and standing adjustments, each to its
+/// box: an adjustment adds to its box, and a deduction box (item 13) deducts
+/// from the tax payable through item 14's formula.
+fn sums(sources: &[SourceRow], adjustments: &[&Adjustment]) -> HashMap<String, (Decimal, Decimal)> {
     let mut sums: HashMap<String, (Decimal, Decimal)> = HashMap::new();
     let contributions = sources
         .iter()
-        .filter_map(|r| Some((r.box_key.clone()?, r.taxable_amount, r.tax_amount)));
+        .filter_map(|r| Some((r.box_key.clone()?, r.taxable_amount, r.tax_amount)))
+        .chain(adjustments.iter().filter_map(|a| {
+            Some((
+                a.box_key.clone()?,
+                a.taxable_amount.unwrap_or_default(),
+                a.tax_amount.unwrap_or_default(),
+            ))
+        }));
     for (key, taxable, tax) in contributions {
         let sum = sums.entry(key).or_default();
         sum.0 += taxable;
@@ -324,14 +334,15 @@ fn reconcile(
 }
 
 impl Sst {
-    /// The figures of a return for `period` under `registration`, read at
-    /// `pins`.
+    /// The figures of a return for `period` under `registration`, with its
+    /// standing `adjustments`, read at `pins`.
     pub(crate) async fn compute(
         &self,
         s: &Scope,
         company: i64,
         period: &Period,
         registration: &Registration,
+        adjustments: &[&Adjustment],
         pins: Pins,
     ) -> Result<Figures> {
         let tax_type = period.tax_type;
@@ -489,7 +500,11 @@ impl Sst {
             }
         }
         let minor_units = book.minor_units.get();
-        let boxes = form::figures(tax_type, &sums(&sources), u32::from(minor_units));
+        let boxes = form::figures(
+            tax_type,
+            &sums(&sources, adjustments),
+            u32::from(minor_units),
+        );
         let tax_payable = boxes
             .iter()
             .find(|b| b.key == form::PAYABLE_BOX)
@@ -514,6 +529,7 @@ impl Sst {
             minor_units,
             through_entry_number: through,
             through_mapping_number: mapping_number,
+            through_adjustment_number: None,
             rate_mismatches: sources
                 .iter()
                 .filter(|r| r.rate_mismatch)
