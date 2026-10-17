@@ -137,7 +137,7 @@ for channel, company in [("api", 1), ("mcp", 2)]:
     require(invoke(channel, "read", op("customer.create", company, code="never", name="never")).get("error") == "writes_not_enabled", "direct write accepted")
     write(channel, "ledger.book.open", company, currency_code="MYR", minor_units=2)
     accounts = {}
-    for code, kind in [("control", "asset"), ("other-control", "asset"), ("deposit", "asset"), ("income", "income"), ("tax", "liability")]:
+    for code, kind in [("control", "asset"), ("other-control", "asset"), ("deposit", "asset"), ("income", "income"), ("other-income", "income"), ("tax", "liability")]:
         accounts[code] = write(channel, "ledger.account.create", company, code=code, name=code, account_type=kind)["id"]
     year = write(channel, "ledger.fiscal_year.open", company, start_date="2026-01-01", end_date="2026-12-31")
     first_period = year["periods"][0]["id"]
@@ -184,6 +184,9 @@ for channel, company in [("api", 1), ("mcp", 2)]:
     write(channel, "draft.update", company, document_id=invoice["id"], issue_date="2026-01-10")
     unrelated = [op("ledger.account.create", company, code="unrelated", name="Unrelated expense", account_type="expense"), op("draft.update", company, document_id=invoice["id"], description="Header with unrelated chart change")]
     require(len(commit(channel, unrelated, reviewed(channel, unrelated))["results"]) == 2, "unrelated chart change invalidated header-only update")
+    unrelated = [op("setup.configure", company, income_account_id=accounts["other-income"]), op("draft.update", company, document_id=invoice["id"], description="Header with unrelated default change")]
+    require(len(commit(channel, unrelated, reviewed(channel, unrelated))["results"]) == 2, "unused setup default invalidated header-only update")
+    write(channel, "setup.configure", company, income_account_id=accounts["income"])
     disposable = draft("1", None)
     cleared = write(channel, "draft.update", company, document_id=disposable["id"], lines=[])
     require(cleared["total"] == "0" and cleared["lines"] == [], "empty array did not clear")
@@ -223,6 +226,12 @@ for channel, company in [("api", 1), ("mcp", 2)]:
     independent_issue = draft("4", None)
     unrelated = [op("ledger.fiscal_year.open", company, start_date="2027-01-01", end_date="2027-12-31"), op("document.issue", company, document_id=independent_issue["id"])]
     require(len(commit(channel, unrelated, reviewed(channel, unrelated))["results"]) == 2, "unrelated future year invalidated posting in existing open period")
+    independent_issue = draft("5", None)
+    unrelated = [op("setup.configure", company, income_account_id=accounts["other-income"]), op("document.issue", company, document_id=independent_issue["id"])]
+    issued = commit(channel, unrelated, reviewed(channel, unrelated))["results"][1]["result"]["result"]["record"]
+    posting = read(channel, "ledger.entry.get", company, entry_id=issued["ledger_entry_id"])
+    require(any(l["account_id"] == accounts["income"] for l in posting["lines"]) and all(l["account_id"] != accounts["other-income"] for l in posting["lines"]), "changed income default replaced frozen draft account")
+    write(channel, "setup.configure", company, income_account_id=accounts["income"])
     print("same-series multi-issue and mixed ledger-close/issue roll back business, entries, audit and code; separate issues number consecutively; closed-period preview refuses", flush=True)
 
     credit = write(channel, "draft.create", company, kind="credit_note", series_id=series["credit_note"], customer_id=customer["id"], credited_document_id=invoice["id"], issue_date="2026-01-11", lines=[{"description": "Credit", "quantity": "1", "unit_price": "5"}])

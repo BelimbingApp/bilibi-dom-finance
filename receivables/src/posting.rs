@@ -288,7 +288,9 @@ impl Receivables {
             after: data,
             entry,
             options,
-            facts: json!({"draft":draft,"customer":customer,"series":series,"setup":setup,"credited_invoice":credited}),
+            // The effective control is frozen in `after` and the posting;
+            // unrelated defaults cannot change this saved draft's entry.
+            facts: json!({"draft":draft,"customer":customer,"series":series,"credited_invoice":credited}),
         })
     }
 

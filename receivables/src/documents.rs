@@ -302,7 +302,9 @@ impl Receivables {
             before: old,
             after: data,
             replacement,
-            facts: json!({"book":book,"setup":setup,"accounts":accounts,"series":series,"customer":customer,"document":before}),
+            // Normalized replacement lines already bind any defaults used.
+            // Header-only edits never depend on the setup's account choices.
+            facts: json!({"book":book,"accounts":accounts,"series":series,"customer":customer,"document":before}),
         })
     }
 
