@@ -88,6 +88,7 @@ pub(crate) fn decimal(
     field: &str,
     positive: bool,
     limit: Decimal,
+    scale: u8,
 ) -> Result<Decimal> {
     let text = match &data[field] {
         Value::String(s) if !s.trim().is_empty() => s.clone(),
@@ -123,8 +124,11 @@ pub(crate) fn decimal(
             ),
         ));
     }
-    if !digits.is_empty() && exponent < -4 {
-        return Err(invalid(field, "has more than 4 decimal places"));
+    if !digits.is_empty() && exponent < -i64::from(scale) {
+        return Err(invalid(
+            field,
+            format!("has more than {scale} decimal places"),
+        ));
     }
     let n = if digits.is_empty() {
         Decimal::ZERO
