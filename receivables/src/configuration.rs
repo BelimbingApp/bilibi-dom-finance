@@ -234,6 +234,15 @@ impl Receivables {
             json!({"active":true,"number_width":1,"prefix":""})
         };
         let mut data = v::merge(Some(old.as_ref().unwrap_or(&defaults)), attrs, &editable)?;
+        // Ecto.cast resets a blank editable value to its schema default,
+        // even on update. Omitted values keep the stored value; null does not.
+        for field in &editable {
+            if attrs[*field].as_str().is_some_and(|s| s.trim().is_empty()) {
+                if let Some(default) = defaults.get(*field) {
+                    data[*field] = default.clone();
+                }
+            }
+        }
         v::text(&mut data, "code", true, 50)?;
         v::text(&mut data, "name", true, 200)?;
         v::flag(&mut data, "active")?;

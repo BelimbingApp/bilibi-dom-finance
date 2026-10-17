@@ -95,10 +95,9 @@ pub(crate) fn decimal(
         Value::Null | Value::String(_) => return Err(invalid(field, "can't be blank")),
         _ => return Err(invalid(field, "is invalid")),
     };
-    let n = Decimal::from_str_exact(&text)
-        .map_err(|_| invalid(field, "is invalid"))?
-        .normalize();
-    if n < Decimal::ZERO || (positive && n.is_zero()) {
+    let (negative, digits, exponent) =
+        decimal_parts(&text).ok_or_else(|| invalid(field, "is invalid"))?;
+    if negative || (positive && digits.is_empty()) {
         return Err(invalid(
             field,
             if positive {
@@ -108,7 +107,10 @@ pub(crate) fn decimal(
             },
         ));
     }
-    if n >= limit {
+    // All callers' bounds are powers of ten. Check magnitude and scale as
+    // digit strings first, so even 1e6000 / 1e-6000 gets a domain refusal,
+    // never an overflow or rounded rust_decimal conversion.
+    if !digits.is_empty() && digits.len() as i64 + exponent > limit.to_string().len() as i64 - 1 {
         return Err(invalid(
             field,
             format!(
@@ -121,11 +123,86 @@ pub(crate) fn decimal(
             ),
         ));
     }
-    if n.scale() > 4 {
+    if !digits.is_empty() && exponent < -4 {
         return Err(invalid(field, "has more than 4 decimal places"));
     }
+    let n = if digits.is_empty() {
+        Decimal::ZERO
+    } else if exponent >= 0 {
+        Decimal::from_str_exact(&format!("{digits}{}", "0".repeat(exponent as usize)))
+            .map_err(|_| invalid(field, "is invalid"))?
+    } else {
+        let coefficient =
+            Decimal::from_str_exact(&digits).map_err(|_| invalid(field, "is invalid"))?;
+        coefficient
+            .checked_div(Decimal::from(10_i64.pow((-exponent) as u32)))
+            .ok_or_else(|| invalid(field, "is invalid"))?
+    }
+    .normalize();
     data[field] = json!(n.to_string());
     Ok(n)
+}
+
+// Ecto.Type.cast(:decimal) -> Decimal.parse, finite whole-string grammar.
+// Unlike rust_decimal's parser this accepts exponents and rejects underscores.
+// Apply Decimal 3's default parse limits before stripping trailing zeros.
+fn decimal_parts(text: &str) -> Option<(bool, String, i64)> {
+    let (negative, unsigned) = if let Some(s) = text.strip_prefix('-') {
+        (true, s)
+    } else {
+        (false, text.strip_prefix('+').unwrap_or(text))
+    };
+    let mut pieces = unsigned.split(['e', 'E']);
+    let mantissa = pieces.next()?;
+    let exponent = if let Some(e) = pieces.next() {
+        let unsigned = e.strip_prefix(['+', '-']).unwrap_or(e);
+        if unsigned.is_empty() || !unsigned.bytes().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        let magnitude = unsigned.trim_start_matches('0');
+        let n: i64 = if magnitude.is_empty() {
+            0
+        } else {
+            magnitude.parse().ok()?
+        };
+        if e.starts_with('-') {
+            -n
+        } else {
+            n
+        }
+    } else {
+        0
+    };
+    if pieces.next().is_some() {
+        return None;
+    }
+    let mut points = mantissa.split('.');
+    let whole = points.next()?;
+    let fraction = points.next().unwrap_or("");
+    if points.next().is_some()
+        || (whole.is_empty() && fraction.is_empty())
+        || !whole
+            .bytes()
+            .chain(fraction.bytes())
+            .all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+    let mut exponent = exponent.checked_sub(i64::try_from(fraction.len()).ok()?)?;
+    if !(-6144..=6144).contains(&exponent) {
+        return None;
+    }
+    let mut digits = format!("{whole}{fraction}")
+        .trim_start_matches('0')
+        .to_owned();
+    if digits.len() > 34 {
+        return None;
+    }
+    while digits.ends_with('0') {
+        digits.pop();
+        exponent += 1;
+    }
+    Some((negative && !digits.is_empty(), digits, exponent))
 }
 pub(crate) fn date(data: &mut Value, field: &str) -> Result<()> {
     if data[field].is_null() || data[field] == "" {

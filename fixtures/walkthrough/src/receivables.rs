@@ -47,6 +47,25 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
     let admin = sign_in(db, services, 1, 4).await?;
     let other = sign_in(db, services, 2, 5).await?;
     let client = db.get().await?;
+    let grants = services.get::<bilibi_authz::grants::Grants>("base/authz.grants")?;
+    grants
+        .set_direct(
+            &admin,
+            manager.user(),
+            bilibi_finance_receivables::MANAGE_CUSTOMERS,
+            Some(false),
+        )
+        .await?;
+    let stale_scope = ar.create_customer(&manager, 1, &json!({})).await;
+    grants
+        .set_direct(
+            &admin,
+            manager.user(),
+            bilibi_finance_receivables::MANAGE_CUSTOMERS,
+            None,
+        )
+        .await?;
+    assert!(matches!(stale_scope, Err(R::Unauthorized)));
     let chart = ledger.list_accounts(&manager, 1).await?;
     let account = |code: &str| {
         chart
@@ -155,7 +174,7 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         .create_tax_code(
             &manager,
             1,
-            &json!({"code":"T10","name":"Tax 10","rate":"10.00000","account_id":liability}),
+            &json!({"code":"T10","name":"Tax 10","rate":"1e1","account_id":liability}),
         )
         .await?;
     field(
@@ -167,6 +186,16 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         .await,
         "rate",
         "has more than 4 decimal places",
+    );
+    field(
+        ar.create_tax_code(
+            &manager,
+            1,
+            &json!({"code":"BAD","name":"Underscores","rate":"1_0","account_id":liability}),
+        )
+        .await,
+        "rate",
+        "is invalid",
     );
     let unchanged = ar
         .update_tax_code(
@@ -189,6 +218,34 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         )
         .await?;
     assert_eq!(unchanged.code, "A");
+    ar.update_customer(&manager, 1, customer.id, &json!({"active":false}))
+        .await?;
+    let defaults = ar
+        .update_customer(
+            &manager,
+            1,
+            customer.id,
+            &json!({"active":" ","payment_terms_days":""}),
+        )
+        .await?;
+    assert!(defaults.active && defaults.payment_terms_days == 0);
+    field(
+        ar.update_customer(&manager, 1, customer.id, &json!({"active":null}))
+            .await,
+        "active",
+        "can't be blank",
+    );
+    field(
+        ar.update_customer(
+            &manager,
+            1,
+            customer.id,
+            &json!({"payment_terms_days":null}),
+        )
+        .await,
+        "payment_terms_days",
+        "can't be blank",
+    );
     field(
         ar.create_customer(&manager, 1, &json!({"code":"A","name":"Duplicate"}))
             .await,
@@ -253,6 +310,14 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
             && draft.outstanding.is_none()
     );
     println!("rounding: 2 × (1 × 0.045 at 10%) = subtotal 0.10, tax 0.02, total 0.12");
+    let scientific = ar.update_draft(&manager, 1, empty.id, &json!({"lines":[{"description":"Scientific","quantity":"1e-4","unit_price":"5.e3","tax_code_id":tax.id}]})).await?;
+    assert_eq!(scientific.subtotal, money("0.50"));
+    assert_eq!(scientific.tax_total, money("0.05"));
+    let exact: Value = serde_json::from_str(
+        r#"{"lines":[{"description":"Exact JSON decimal","quantity":1,"unit_price":9007199254740991.01}]}"#,
+    )?;
+    let exact = ar.update_draft(&manager, 1, empty.id, &exact).await?;
+    assert_eq!(exact.total, money("9007199254740991.01"));
     for (lines, field_name, message) in [
         (
             json!([{"description":"Overflow","quantity":"9999999999999999","unit_price":"9999999999999999"}]),
@@ -270,7 +335,7 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
             "must be less than 1E+16",
         ),
         (
-            json!([{"description":"Fine","quantity":"0.00001","unit_price":"1"}]),
+            json!([{"description":"Fine","quantity":"1e-5","unit_price":"1"}]),
             "quantity",
             "has more than 4 decimal places",
         ),
@@ -293,6 +358,14 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         );
     }
     assert_eq!(ar.get_document(&manager, 1, draft.id).await?, draft);
+    // A real capture failure after the SQL replacement must roll back header,
+    // children and audit rows together. This trigger exists only in the proof DB.
+    client.batch_execute("CREATE FUNCTION nr1_refuse_capture() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.auditable_type='finance.receivables.document_line' THEN RAISE EXCEPTION 'NR1 capture fault'; END IF; RETURN NEW; END $$; CREATE TRIGGER nr1_capture_fault BEFORE INSERT ON base_audit_mutations FOR EACH ROW EXECUTE FUNCTION nr1_refuse_capture()").await?;
+    let failed = ar.update_draft(&manager, 1, draft.id, &json!({"description":"capture must roll back","lines":[{"description":"Replacement","quantity":"2","unit_price":"7"}]})).await;
+    client.batch_execute("DROP TRIGGER nr1_capture_fault ON base_audit_mutations; DROP FUNCTION nr1_refuse_capture()").await?;
+    assert!(matches!(failed, Err(R::Failed(_))));
+    assert_eq!(ar.get_document(&manager, 1, draft.id).await?, draft);
+    println!("stale scope refused after direct deny; capture fault rolled back header and child replacement");
     field(
         ar.create_draft(
             &manager,
@@ -342,10 +415,31 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         .await?;
     assert_eq!(replaced.lines.len(), 1);
     assert_eq!(replaced.lines[0].account_id, next_income.id);
+    let audit = client.query_one("SELECT count(*), count(*) FILTER (WHERE new_values='null'::jsonb), count(*) FILTER (WHERE old_values='null'::jsonb) FROM base_audit_mutations WHERE tenant_id=1 AND trace_id=(SELECT trace_id FROM base_audit_mutations WHERE tenant_id=1 AND auditable_type='finance.receivables.document' AND auditable_id=$1 ORDER BY id DESC LIMIT 1)", &[&draft.id.to_string()]).await?;
+    assert_eq!(
+        (
+            audit.get::<_, i64>(0),
+            audit.get::<_, i64>(1),
+            audit.get::<_, i64>(2)
+        ),
+        (6, 3, 2)
+    );
+    let populated = ar.update_draft(&manager, 1, empty.id, &json!({"lines":[{"description":"Taxed before clear","quantity":"1","unit_price":"7.25","tax_code_id":tax.id}]})).await?;
+    assert!(
+        !populated.lines.is_empty()
+            && !populated.tax_lines.is_empty()
+            && !populated.total.is_zero()
+    );
     let cleared = ar
         .update_draft(&manager, 1, empty.id, &json!({"lines":[]}))
         .await?;
-    assert!(cleared.lines.is_empty() && cleared.tax_lines.is_empty() && cleared.total.is_zero());
+    assert!(
+        cleared.lines.is_empty()
+            && cleared.tax_lines.is_empty()
+            && cleared.subtotal.is_zero()
+            && cleared.tax_total.is_zero()
+            && cleared.total.is_zero()
+    );
     // Deactivation does not prevent renaming a tax code with its unchanged account.
     ledger
         .update_account(
