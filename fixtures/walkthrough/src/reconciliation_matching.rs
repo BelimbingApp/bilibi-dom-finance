@@ -649,6 +649,11 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
             .map(|ms| ms.iter().map(brief_match).collect::<Vec<_>>()),
     );
 
+    raw(&raw_client, "an unmatched event without a reason", &format!(
+        "INSERT INTO finance_reconciliation_match_events(tenant_id,company_id,event_number,match_id,action,recorded_by_user_id,recorded_at) \
+         VALUES(1,{COMPANY},NULL,{},'unmatched',1,NULL)", matched.id
+    )).await;
+
     println!("\n== Two sessions match the same line at once");
     let racing = pick(vec![dep], vec![deposit.id]);
     let (one, two) = tokio::join!(
@@ -1153,9 +1158,10 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         pinned.figures == stored
     );
     println!(
-        "preview now, for the same date: difference {} with {} items (the late entry is new)",
+        "preview now, for the same date: difference {} with {} items, differing from the snapshot: {} (the late entry is new)",
         now.figures.difference,
-        now.figures.items.len()
+        now.figures.items.len(),
+        now.figures != stored
     );
 
     println!("\n== Finalising as an approval exception while duties are not separated");
@@ -1244,10 +1250,6 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
          SELECT 1,{COMPANY},NULL,id,'matched',1,NULL FROM m; COMMIT",
         collections.id, collections.id, cheque.id, cheque.entry_number
     )).await;
-    raw(&raw_client, "an unmatched event without a reason", &format!(
-        "INSERT INTO finance_reconciliation_match_events(tenant_id,company_id,event_number,match_id,action,recorded_by_user_id,recorded_at) \
-         VALUES(1,{COMPANY},NULL,{},'unmatched',1,NULL)", interest_posted.posted_match.id
-    )).await;
     raw(&raw_client, "an unmatched event for a match a finalised reconciliation counted", &format!(
         "INSERT INTO finance_reconciliation_match_events(tenant_id,company_id,event_number,match_id,action,reason,recorded_by_user_id,recorded_at) \
          VALUES(1,{COMPANY},NULL,{},'unmatched','Late',1,NULL)", matched.id
@@ -1295,9 +1297,17 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         "INSERT INTO finance_reconciliation_reconciliation_items(tenant_id,company_id,reconciliation_id,item_number,kind,statement_line_id,item_date,description,amount) \
          VALUES(1,{COMPANY},{},99,'statement_line',{unknown},date '2026-02-28','late',10)", february_open.id
     )).await;
+    raw(&raw_client, "an abandoned event for a finalised reconciliation", &format!(
+        "INSERT INTO finance_reconciliation_reconciliation_events(tenant_id,company_id,event_number,reconciliation_id,action,reason,recorded_by_user_id,recorded_at) \
+         VALUES(1,{COMPANY},NULL,{},'abandoned','Late',1,NULL)", february_open.id
+    )).await;
     raw(&raw_client, "an abandoned event without a reason", &format!(
-        "INSERT INTO finance_reconciliation_reconciliation_events(tenant_id,company_id,event_number,reconciliation_id,action,recorded_by_user_id,recorded_at) \
-         VALUES(1,{COMPANY},NULL,{},'abandoned',1,NULL)", february_open.id
+        "BEGIN; WITH r AS (INSERT INTO finance_reconciliation_reconciliations(tenant_id,company_id,bank_account_id,reconciliation_number,end_date,statement_balance,opened_by_user_id,opened_at) \
+         VALUES(1,{COMPANY},{},NULL,date '2026-04-30',0,1,NULL) RETURNING id), \
+         o AS (INSERT INTO finance_reconciliation_reconciliation_events(tenant_id,company_id,event_number,reconciliation_id,action,recorded_by_user_id,recorded_at) SELECT 1,{COMPANY},NULL,id,'opened',1,NULL FROM r) \
+         INSERT INTO finance_reconciliation_reconciliation_events(tenant_id,company_id,event_number,reconciliation_id,action,recorded_by_user_id,recorded_at) \
+         SELECT 1,{COMPANY},NULL,id,'abandoned',1,NULL FROM r; COMMIT",
+        collections.id
     )).await;
     raw(
         &raw_client,
