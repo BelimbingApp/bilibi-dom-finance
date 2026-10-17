@@ -138,10 +138,26 @@ impl Page<Scope, Error> for Pages {
                     input: LiveInput::Refresh,
                 })
                 .await?;
+            let title = if request.operation == "account" {
+                let id = request
+                    .path
+                    .get("id")
+                    .and_then(|s| s.parse().ok())
+                    .ok_or(Error::NotFound)?;
+                format::told(
+                    self.reconciliation
+                        .get_bank_account(scope, company(scope)?, id)
+                        .await,
+                )?
+                .ok()
+                .map(|account| account.name)
+            } else {
+                None
+            };
             Ok(PageBody {
                 html: body.html,
                 live: true,
-                title: None,
+                title,
             })
         })
     }

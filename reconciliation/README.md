@@ -189,3 +189,15 @@ for those).
 The account page's `list_reconciliations` and `open_reconciliation` facade calls are implemented in private `src/opening.rs`: openings use the book's `Money`, refuse a second open reconciliation or a date at/before the last finalised date before mutation, and audit both the record and its opening event in one company-locked write. Matching links and the successful opening's destination are the NC4 routes; that slice supplies those pages.
 
 The bank account, statement and reconciliation lists all use Base UI's FlexTable and ListColumns for column arrangement and compact rows. Bilimbi enables no list filter, sort or pager on these pages, so the source ordering and facade bounds are retained. Statement reads traverse every 500-row facade page; attachment lookups use batches of at most 100 statement IDs.
+
+
+Run the NC3 disposable browser proof from the mounted Platform with an empty database and `NC3_STORAGE_ROOT` naming a private task directory:
+
+```sh
+DATABASE_URL=postgres://postgres@localhost:5433/bilibi_bilibi_dom_nc3_ui \
+APP_ORIGIN=http://localhost:4324 BIND_ADDR=127.0.0.1:4324 \
+NC3_STORAGE_ROOT=/tmp/nc3-source-documents \
+cargo run -p bilibi-finance-walkthrough-fixture --bin bilibi-finance-reconciliation-ui
+```
+
+It proves the facade's import/skipped rows, duplicate-file refusal, original download bytes, denied/restricted scopes, Money precision, and concurrent opening refusal before serving the app. The walkthrough's manager, staff and viewer accounts exercise full control, import-only and read-only states; use the fixture's `PASSWORD`. The operating account is left ready for browser imports and opening, and the reserve account has one open reconciliation. These are disposable fixture facts, never production seeds.

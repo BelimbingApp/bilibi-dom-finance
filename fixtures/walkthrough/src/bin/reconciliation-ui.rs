@@ -142,16 +142,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             },
         )
         .await?;
-    let opened = facade
-        .open_reconciliation(&manager, COMPANY, reserve.id, &open())
-        .await?;
+    let attributes = open();
+    let (first, second) = tokio::join!(
+        facade.open_reconciliation(&manager, COMPANY, reserve.id, &attributes),
+        facade.open_reconciliation(&manager, COMPANY, reserve.id, &attributes)
+    );
+    let opened = match (first, second) {
+        (Ok(record), Err(ReconciliationError::Invalid(_)))
+        | (Err(ReconciliationError::Invalid(_)), Ok(record)) => record,
+        outcomes => return Err(format!("concurrent opening outcomes: {outcomes:?}").into()),
+    };
     assert_eq!(opened.status, "open");
-    assert!(matches!(
-        facade
-            .open_reconciliation(&manager, COMPANY, reserve.id, &open())
-            .await,
-        Err(ReconciliationError::Invalid(_))
-    ));
     assert_eq!(
         facade
             .list_reconciliations(&manager, COMPANY, reserve.id)
