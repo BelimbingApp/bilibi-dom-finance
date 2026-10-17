@@ -121,7 +121,15 @@ impl Reconciliation {
             match Money::parse(new.statement_balance.trim(), book.minor_units) {
                 Ok(v) => Some(v),
                 Err(error) => {
-                    errors.push(FieldError::new("statement_balance", error.to_string()));
+                    errors.push(FieldError::new(
+                        "statement_balance",
+                        match error {
+                            bilibi_finance_ledger::MoneyError::TooFine(_) => {
+                                "has more decimal places than the book's currency".into()
+                            }
+                            other => other.to_string(),
+                        },
+                    ));
                     None
                 }
             }
