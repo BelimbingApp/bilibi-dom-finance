@@ -141,12 +141,15 @@ async fn main() -> Outcome<()> {
     let storage = format!("{root}/artifacts");
     std::fs::create_dir_all(&storage)?;
     std::fs::set_permissions(&storage, std::fs::Permissions::from_mode(0o700))?;
-    assert!(matches!(
-        reports
-            .export_auditor_pack(&manager, COMPANY, date(2026, 3, 31))
-            .await,
-        Err(ReportsError::Artifact("policy"))
-    ));
+    match reports
+        .export_auditor_pack(&manager, COMPANY, date(2026, 3, 31))
+        .await
+    {
+        Err(ReportsError::Artifact("policy")) => {
+            println!("Unconfigured artifact retention refused")
+        }
+        other => panic!("Expected unconfigured retention, received {other:?}"),
+    }
     configure_storage(&db, services, &admin, &storage).await?;
     let debit = installed
         .accounts

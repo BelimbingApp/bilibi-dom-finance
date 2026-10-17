@@ -1,5 +1,5 @@
 //! Bilimbi Reports.AuditorPack and Web.AuditorPackController. All source reads
-//! share one read-only repeatable-read transaction; no sibling table is read here.
+//! share one repeatable-read transaction; no sibling table is read here.
 use crate::{authorize, json, pack_owner, Reports, ReportsError, Result, EXPORT};
 use bilibi_artifacts::{Metadata, Reference};
 use bilibi_database::Error;
@@ -70,10 +70,11 @@ impl Reports {
             .as_u64()
             .filter(|n| *n > 0)
             .ok_or(ReportsError::Artifact("policy"))?;
+        // Authz records every decision on this connection (base/authz), so
+        // this snapshot permits its access logs; no business records are written.
         let tx = (**client)
             .build_transaction()
             .isolation_level(tokio_postgres::IsolationLevel::RepeatableRead)
-            .read_only(true)
             .start()
             .await
             .map_err(Error::from)?;
