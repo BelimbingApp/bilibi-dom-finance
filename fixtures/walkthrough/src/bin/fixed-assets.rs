@@ -709,7 +709,7 @@ async fn run(db: &Db, services: &Services) -> Outcome<()> {
         ("category_revisions", "category_revision"),
         ("assets", "asset"),
     ] {
-        let mismatches: i64 = c.query_one(&format!("SELECT count(*) FROM finance_fixed_assets_{table} r WHERE (SELECT count(*) FROM base_audit_mutations a WHERE a.auditable_type=$1 AND a.auditable_id=r.id::text AND a.tenant_id=r.tenant_id AND a.company_id=r.company_id)<>1"), &[&format!("finance.fixed-assets.{kind}")]).await?.get(0);
+        let mismatches: i64 = c.query_one(&format!("SELECT count(*) FROM finance_fixed_assets_{table} r WHERE (SELECT count(*) FROM base_audit_mutations a WHERE a.auditable_type=$1 AND a.auditable_id=r.id::text AND a.tenant_id=r.tenant_id AND a.new_values->>'company_id'=r.company_id::text)<>1"), &[&format!("finance.fixed-assets.{kind}")]).await?.get(0);
         assert_eq!(mismatches, 0);
     }
     println!("audit: all {rows} affected rows captured; refusals created no rows");
