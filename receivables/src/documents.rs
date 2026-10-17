@@ -6,13 +6,20 @@ use crate::{
     validation as v, Document, DocumentQuery, ReceivableError as R, Receivables, Result,
     MANAGE_DOCUMENTS, VIEW,
 };
-use bilibi_database::Error;
+use bilibi_agent_api::OperationClient;
+use bilibi_database::{Error, MutationTransaction};
 use bilibi_finance_ledger::{Account, AccountType, MinorUnits, Money};
 use bilibi_tenancy::Scope;
 use rust_decimal::{Decimal, RoundingStrategy};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
-use tokio_postgres::GenericClient;
+
+pub(super) struct Prepared {
+    pub before: Option<Value>,
+    pub after: Value,
+    pub replacement: Option<(Vec<Value>, Vec<Value>)>,
+    pub facts: Value,
+}
 
 // A single statement gives headers and children the same MVCC snapshot.
 pub(crate) const READ: &str = "SELECT to_jsonb(d) || jsonb_build_object(
@@ -50,6 +57,20 @@ impl Receivables {
                 "finance.receivables.discard_draft",
             )
             .await?;
+        let document = self.discard_draft_on(&mut tx, scope, company, id).await?;
+        tx.commit().await?;
+        Ok(document)
+    }
+
+    pub(super) async fn discard_draft_on(
+        &self,
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company: i64,
+        id: i64,
+    ) -> Result<Document> {
+        self.join(tx.sql(), scope, company, MANAGE_DOCUMENTS)
+            .await?;
         let tenant = scope.tenant();
         let old = draft(tx.sql(), tenant, company, id).await?;
         let mut data = old.clone();
@@ -73,7 +94,6 @@ impl Receivables {
         })
         .await?;
         let document = read(tx.sql(), tenant, company, id).await?;
-        tx.commit().await?;
         Ok(document)
     }
     pub async fn get_document(&self, scope: &Scope, company: i64, id: i64) -> Result<Document> {
@@ -144,17 +164,30 @@ impl Receivables {
                 },
             )
             .await?;
+        let result = self
+            .save_draft_on(&mut tx, scope, company, id, attrs)
+            .await?;
+        tx.commit().await?;
+        Ok(result)
+    }
+
+    pub(super) async fn prepare_draft(
+        &self,
+        client: &dyn OperationClient,
+        scope: &Scope,
+        company: i64,
+        id: Option<i64>,
+        attrs: &Value,
+    ) -> Result<Prepared> {
+        self.join(client, scope, company, MANAGE_DOCUMENTS).await?;
         let tenant = scope.tenant();
-        let book = self.ledger.get_book_on(tx.sql(), scope, company).await?;
-        let setup = store::find(tx.sql(), SETUPS, tenant, company, None)
+        let book = self.ledger.get_book_on(client, scope, company).await?;
+        let setup = store::find(client, SETUPS, tenant, company, None)
             .await?
             .ok_or(R::NotConfigured)?;
-        let chart = self
-            .ledger
-            .list_accounts_on(tx.sql(), scope, company)
-            .await?;
+        let chart = self.ledger.list_accounts_on(client, scope, company).await?;
         let old = if let Some(id) = id {
-            Some(draft(tx.sql(), tenant, company, id).await?)
+            Some(draft(client, tenant, company, id).await?)
         } else {
             None
         };
@@ -185,15 +218,9 @@ impl Receivables {
                 return Err(invalid("due_date", "cannot be before the issue date"));
             }
         }
-        let series = store::find(
-            tx.sql(),
-            SERIES,
-            tenant,
-            company,
-            data["series_id"].as_i64(),
-        )
-        .await?
-        .ok_or_else(|| invalid("series_id", "is not a series of this company"))?;
+        let series = store::find(client, SERIES, tenant, company, data["series_id"].as_i64())
+            .await?
+            .ok_or_else(|| invalid("series_id", "is not a series of this company"))?;
         if series["kind"] != data["kind"] {
             return Err(invalid(
                 "series_id",
@@ -207,7 +234,7 @@ impl Receivables {
             return Err(invalid("series_id", "is an inactive series"));
         }
         let customer = store::find(
-            tx.sql(),
+            client,
             CUSTOMERS,
             tenant,
             company,
@@ -220,7 +247,7 @@ impl Receivables {
         }
         if data["kind"] == "credit_note" {
             let credited = store::find(
-                tx.sql(),
+                client,
                 DOCUMENTS,
                 tenant,
                 company,
@@ -240,7 +267,7 @@ impl Receivables {
         }
         // None preserves the stored lines AND their frozen tax/account snapshots.
         let replacement = if !attrs["lines"].is_null() || id.is_none() {
-            let tax_codes = store::list(tx.sql(), TAX, tenant, company).await?;
+            let tax_codes = store::list(client, TAX, tenant, company).await?;
             let (lines, taxes, subtotal, tax_total, total) = calculate(
                 &attrs["lines"],
                 &setup,
@@ -255,6 +282,49 @@ impl Receivables {
         } else {
             None
         };
+        let before = if let Some(id) = id {
+            Some(read(client, tenant, company, id).await?)
+        } else {
+            None
+        };
+        let accounts: Vec<_> = chart
+            .into_iter()
+            .filter(|a| {
+                replacement.as_ref().is_some_and(|(lines, taxes)| {
+                    lines
+                        .iter()
+                        .chain(taxes)
+                        .any(|line| line["account_id"].as_i64() == Some(a.id))
+                })
+            })
+            .collect();
+        Ok(Prepared {
+            before: old,
+            after: data,
+            replacement,
+            // Normalized replacement lines already bind any defaults used.
+            // Header-only edits never depend on the setup's account choices.
+            facts: json!({"book":book,"accounts":accounts,"series":series,"customer":customer,"document":before}),
+        })
+    }
+
+    pub(super) async fn save_draft_on(
+        &self,
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company: i64,
+        id: Option<i64>,
+        attrs: &Value,
+    ) -> Result<Document> {
+        let Prepared {
+            before: old,
+            after: data,
+            replacement,
+            ..
+        } = self
+            .prepare_draft(tx.sql(), scope, company, id, attrs)
+            .await?;
+        let tenant = scope.tenant();
         let id = tx
             .mutate(move |sql| {
                 Box::pin(async move {
@@ -280,12 +350,16 @@ impl Receivables {
             })
             .await?;
         let result = read(tx.sql(), tenant, company, id).await?;
-        tx.commit().await?;
         Ok(result)
     }
 }
 
-async fn draft(client: &impl GenericClient, tenant: i64, company: i64, id: i64) -> Result<Value> {
+pub(super) async fn draft(
+    client: &dyn OperationClient,
+    tenant: i64,
+    company: i64,
+    id: i64,
+) -> Result<Value> {
     let document = store::find(client, DOCUMENTS, tenant, company, Some(id))
         .await?
         .ok_or(R::DocumentNotFound)?;
@@ -295,15 +369,14 @@ async fn draft(client: &impl GenericClient, tenant: i64, company: i64, id: i64) 
     Ok(document)
 }
 pub(crate) async fn read(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     tenant: i64,
     company: i64,
     id: i64,
 ) -> Result<Document> {
     let row = client
         .query_opt(&format!("{READ} AND d.id=$3"), &[&tenant, &company, &id])
-        .await
-        .map_err(Error::from)?
+        .await?
         .ok_or(R::DocumentNotFound)?;
     Ok(store::decode(row.get(0))?)
 }

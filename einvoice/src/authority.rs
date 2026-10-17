@@ -8,18 +8,23 @@
 //! documents with one authority, MyInvois (`myinvois.rs`).
 //!
 //! The callbacks that take a draft or a recorded document (draft validation
-//! and the payload) are here with their types; the API callbacks (login,
-//! submit, progress, find, status, cancel) join the trait with the MyInvois
-//! client, and the consolidated document's shape and refusal with
-//! consolidation, each with the types it needs; none of them is invented
-//! before then.
+//! and the payload) and the API callbacks (login, submit, progress, find,
+//! status, cancel) are here with their types. Each API callback answers in
+//! meta-terms ([`Answer`] and an outcome enum), keeping the authority's own
+//! answer beside it so a caller can store it as the record. The consolidated
+//! document's shape and refusal join the trait with consolidation; none of
+//! them is invented before then.
 use crate::code_lists::Codes;
 use crate::document::Document;
 use crate::draft::Draft;
 use crate::myinvois::signer::SigningKey;
 use crate::FieldError;
+use bilibi_integration::Integration;
+use bilibi_tenancy::Scope;
 use jiff::Timestamp;
+use serde_json::Value;
 use std::collections::BTreeMap;
+use std::future::Future;
 
 /// A document format version a company may choose, and whether it carries a
 /// signature.
@@ -237,6 +242,187 @@ pub enum PayloadError {
     SigningFailed,
 }
 
+/// A company's credentials for one environment of the authority's API. The
+/// secret never leaves the module: it is read inside the facade, handed to the
+/// API call, and left out of `Debug`.
+#[derive(Clone)]
+pub struct Credentials {
+    /// `sandbox` or `production`.
+    pub environment: String,
+    pub client_id: Option<String>,
+    pub(crate) client_secret: Option<String>,
+}
+impl std::fmt::Debug for Credentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Credentials")
+            .field("environment", &self.environment)
+            .field("client_id", &self.client_id)
+            .field("client_secret_set", &self.client_secret.is_some())
+            .finish()
+    }
+}
+
+/// What an API callback needs: the outgoing HTTP edge, the person the call
+/// acts for (every exchange is recorded under them), the company, its
+/// credentials for the document's environment, and that environment's base URL.
+pub struct Connection<'a> {
+    pub(crate) integration: &'a Integration,
+    pub(crate) scope: &'a Scope,
+    pub(crate) company_id: i64,
+    pub(crate) credentials: &'a Credentials,
+    pub(crate) api_url: &'a str,
+}
+
+/// What the authority answered, as a status event keeps it: the HTTP status
+/// and body (`None` when no answer came), a short reason, the seconds it
+/// asked to wait, and the identifiers it gave.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Answer {
+    pub http_status: Option<u16>,
+    pub response: Option<Value>,
+    pub reason: Option<String>,
+    pub retry_after: Option<u64>,
+    pub submission_uid: Option<String>,
+    pub document_uuid: Option<String>,
+}
+
+/// What became of a submitted payload.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SubmitOutcome {
+    /// Accepted for processing, with its submission UID and document UUID.
+    Accepted(Answer),
+    /// The authority refused it and said why.
+    Refused(Answer),
+    /// The same bytes were submitted inside the authority's window: an
+    /// earlier attempt reached it.
+    Duplicate(Answer),
+    RateLimited(Answer),
+    /// An outage or a transport failure: no answer, or a 5xx.
+    Unavailable(Answer),
+}
+
+/// Whether a submission has finished processing.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Progress {
+    Done(Answer),
+    InProgress(Answer),
+    Refused(Answer),
+    RateLimited(Answer),
+    Unavailable(Answer),
+}
+
+/// Which document the authority holds under a code number.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Search {
+    /// Found, with its submission UID and document UUID and the authority's
+    /// own entry as the response.
+    Found(Answer),
+    NotFound(Answer),
+    Refused(Answer),
+    RateLimited(Answer),
+    Unavailable(Answer),
+}
+
+/// The status the authority holds a document in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuthorityStatus {
+    Submitted,
+    Valid,
+    Invalid,
+    Cancelled,
+}
+impl AuthorityStatus {
+    /// The name a status event keeps (`Valid`, ...).
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Submitted => "Submitted",
+            Self::Valid => "Valid",
+            Self::Invalid => "Invalid",
+            Self::Cancelled => "Cancelled",
+        }
+    }
+}
+
+/// A document's current status at the authority.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DocumentStatus {
+    pub status: AuthorityStatus,
+    /// The identifier that completes the validation link.
+    pub long_id: Option<String>,
+    pub validated_at: Option<Timestamp>,
+    pub cancelled_at: Option<Timestamp>,
+    /// When the buyer asked for the document's rejection, if they did.
+    pub rejection_requested_at: Option<Timestamp>,
+    pub answer: Answer,
+}
+
+/// The answer to a status read.
+#[derive(Clone, Debug, PartialEq)]
+pub enum StatusRead {
+    Read(DocumentStatus),
+    Refused(Answer),
+    RateLimited(Answer),
+    Unavailable(Answer),
+}
+
+/// Why the authority refused a cancellation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CancelRefusal {
+    /// Its cancellation window has ended.
+    PeriodOver,
+    /// It is not in a state that can be cancelled.
+    IncorrectState,
+    /// A note the authority holds references it.
+    ActiveReferencingDocuments,
+    Other,
+}
+
+/// What became of a cancellation request.
+#[derive(Clone, Debug, PartialEq)]
+pub enum CancelOutcome {
+    Cancelled(Answer),
+    Refused(CancelRefusal, Answer),
+    RateLimited(Answer),
+    Unavailable(Answer),
+}
+
+/// How a login with the company's credentials went, the "Test connection"
+/// outcome.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoginOutcome {
+    Succeeded,
+    MissingCredentials,
+    /// The authority refused it with this HTTP status.
+    Refused(u16),
+    Unreachable,
+    Failed,
+}
+impl LoginOutcome {
+    /// The outcome an audit action names: `succeeded`, `missing_credentials`,
+    /// `refused_<status>`, `unreachable` or `failed`.
+    pub fn name(self) -> String {
+        match self {
+            Self::Succeeded => "succeeded".into(),
+            Self::MissingCredentials => "missing_credentials".into(),
+            Self::Refused(status) => format!("refused_{status}"),
+            Self::Unreachable => "unreachable".into(),
+            Self::Failed => "failed".into(),
+        }
+    }
+}
+
+/// A search for a document the authority may already hold: the company's
+/// code number, among what the submitter sent between `since` and `until`,
+/// leaving out any whose document UUID is in `exclude` (identifiers this
+/// document already recorded, which belong to an earlier cycle).
+#[derive(Clone, Copy, Debug)]
+pub struct Lookup<'a> {
+    pub code_number: &'a str,
+    pub since: Timestamp,
+    pub until: Timestamp,
+    pub exclude: &'a [String],
+}
+
 /// What one clearance authority defines for the module.
 pub trait Authority {
     /// The authority's stable ID, stored on each document and code override.
@@ -311,4 +497,47 @@ pub trait Authority {
         options: &PayloadOptions<'_>,
         signing_time: Timestamp,
     ) -> Result<Payload, PayloadError>;
+
+    /// Logs in to the authority with the company's credentials, afresh.
+    fn login(&self, connection: &Connection<'_>) -> impl Future<Output = LoginOutcome> + Send;
+
+    /// Submits one document's payload under its code number and reports what
+    /// became of it.
+    fn submit(
+        &self,
+        connection: &Connection<'_>,
+        payload: &Payload,
+        code_number: &str,
+    ) -> impl Future<Output = SubmitOutcome> + Send;
+
+    /// Whether a submission has finished processing.
+    fn submission_progress(
+        &self,
+        connection: &Connection<'_>,
+        submission_uid: &str,
+    ) -> impl Future<Output = Progress> + Send;
+
+    /// Looks up a document the authority may already hold (see [`Lookup`]).
+    /// Used after a duplicate or an unknown outcome, so a submission is never
+    /// repeated once the authority accepted it.
+    fn find_submission(
+        &self,
+        connection: &Connection<'_>,
+        lookup: &Lookup<'_>,
+    ) -> impl Future<Output = Search> + Send;
+
+    /// A document's current status.
+    fn document_status(
+        &self,
+        connection: &Connection<'_>,
+        document_uuid: &str,
+    ) -> impl Future<Output = StatusRead> + Send;
+
+    /// Cancels a validated document with a reason.
+    fn cancel(
+        &self,
+        connection: &Connection<'_>,
+        document_uuid: &str,
+        reason: &str,
+    ) -> impl Future<Output = CancelOutcome> + Send;
 }

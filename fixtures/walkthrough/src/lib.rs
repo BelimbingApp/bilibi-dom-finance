@@ -27,6 +27,7 @@ use jiff::civil::{date, Date};
 
 pub mod attachments;
 pub mod controls;
+pub mod matching;
 pub mod payables;
 pub mod payments;
 pub mod payroll;
@@ -36,6 +37,8 @@ pub mod receivables;
 pub mod receivables_documents;
 pub mod reports;
 pub mod totals;
+
+pub mod clearance;
 
 /// Every fixture account's password.
 pub use bilibi_walkthrough_fixture::PASSWORD;

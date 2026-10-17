@@ -371,7 +371,7 @@ impl Write {
                         .await?;
                     json!({"before":document_value(d),"status":"approved","approval":approval})
                 } else {
-                    if !matches!(d.status.as_str(), "draft" | "approved") {
+                    if !matches!(d.status.as_str(), "draft" | "approved" | "held") {
                         return Err(PayablesError::NotVoidable);
                     }
                     let reason =
@@ -380,14 +380,28 @@ impl Write {
                 }
             }
             Self::Post => {
-                let (d, payable, new, options, capacity) = p
+                let prepared = p
                     .prepare_post_document(c, s, company, id(v, "document_id")?)
                     .await?;
-                let entry = p
-                    .ledger
-                    .preview_post_entry_on(c, s, company, &new, &options)
-                    .await?;
-                json!({"before":document_value(d),"status":"posted","payable_account_id":payable,"posting":entry,"capacity":capacity})
+                match prepared {
+                    documents::PreparedPosting::Held(d, lines) => {
+                        json!({"before":document_value(d),"status":"held","match_lines":lines,"posting":null})
+                    }
+                    documents::PreparedPosting::Post {
+                        document,
+                        payable,
+                        entry,
+                        options,
+                        matched,
+                        capacity,
+                    } => {
+                        let entry = p
+                            .ledger
+                            .preview_post_entry_on(c, s, company, &entry, &options)
+                            .await?;
+                        json!({"before":document_value(document),"status":"posted","payable_account_id":payable,"posting":entry,"match_lines":matched,"capacity":capacity})
+                    }
+                }
             }
             Self::Submit | Self::Pay => {
                 let request = if matches!(self, Self::Pay) {
@@ -453,7 +467,7 @@ impl Write {
                     .await?;
                 let entry = p
                     .ledger
-                    .preview_owned_reversal_on(
+                    .preview_reverse_owned_entry_on(
                         c,
                         s,
                         company,
@@ -648,10 +662,12 @@ impl WriteHandler for Write {
                 self,
                 Self::Bill | Self::Note | Self::Approve | Self::Post | Self::Void
             ) {
-                record
-                    .as_object_mut()
-                    .ok_or(Error::Internal)?
-                    .remove("debit_note_ids");
+                let id = record["id"].as_i64().ok_or(Error::Internal)?;
+                record = document_value(
+                    store::document_record(tx.sql(), s.tenant(), company, id)
+                        .await?
+                        .ok_or(Error::Internal)?,
+                );
             }
             Ok(json!({"record":record,"path":null}).into())
         })
@@ -670,10 +686,12 @@ enum Read {
 }
 fn document_value(document: Document) -> Value {
     let mut value = json!(document);
-    value
-        .as_object_mut()
-        .expect("document object")
-        .remove("debit_note_ids");
+    let fields = value.as_object_mut().expect("document object");
+    fields.remove("debit_note_ids");
+    let context = fields
+        .remove("match_events")
+        .expect("document match context");
+    fields.insert("match_context".into(), context);
     value
 }
 impl ReadHandler for Read {
@@ -845,7 +863,8 @@ fn list_schema(kind: &str) -> Value {
         props["party_key"] = string(100);
     }
     if kind == "document" {
-        props["status"] = json!({"type":"string","enum":["draft","approved","posted","voided"]});
+        props["status"] =
+            json!({"type":"string","enum":["draft","approved","held","posted","voided"]});
         props["document_type"] = json!({"type":"string","enum":["bill","debit_note"]});
         props["corrects_document_id"] = identifier();
     }
@@ -871,8 +890,8 @@ inventory::submit! {Contribution::new(DEFINITIONS,"finance/payables.operations",
         Operation {key:"finance.payables.bill.create",title:"Record a bill",summary:"Freeze the party, positive net lines and tax snapshots in a draft without posting.",keywords:&[],capability:CREATE_DOCUMENTS,input:||document_schema(false),output,handler:Handler::SafeWrite(&Write::Bill)},
         Operation {key:"finance.payables.debit_note.create",title:"Record a debit note",summary:"Draft a reduction against a posted bill, retaining its party and respecting future outstanding balances.",keywords:&[],capability:CREATE_DOCUMENTS,input:||document_schema(true),output,handler:Handler::SafeWrite(&Write::Note)},
         Operation {key:"finance.payables.document.approve",title:"Approve a payable document",summary:"Approve a draft through separation of duties; no accounting entry is posted yet.",keywords:&[],capability:APPROVE_DOCUMENTS,input:document_id,output,handler:Handler::SafeWrite(&Write::Approve)},
-        Operation {key:"finance.payables.document.post",title:"Post a payable document",summary:"Post an approved document and its owned entry atomically; ledger capability and an open period are required.",keywords:&[],capability:POST_DOCUMENTS,input:document_id,output,handler:Handler::SafeWrite(&Write::Post)},
-        Operation {key:"finance.payables.document.void",title:"Void a payable draft",summary:"Void an unposted draft or approved document permanently with a reason, retaining its evidence.",keywords:&[],capability:APPROVE_DOCUMENTS,input:||schema(&["document_id","void_reason"],json!({"document_id":identifier(),"void_reason":string(500)})),output,handler:Handler::SafeWrite(&Write::Void)},
+        Operation {key:"finance.payables.document.post",title:"Post a payable document",summary:"Match an approved or held bill; record a hold or post its owned entry atomically. Actual posting requires ledger capability and an open period.",keywords:&[],capability:POST_DOCUMENTS,input:document_id,output,handler:Handler::SafeWrite(&Write::Post)},
+        Operation {key:"finance.payables.document.void",title:"Void a payable draft",summary:"Void an unposted draft, approved or held document permanently with a reason, retaining its evidence.",keywords:&[],capability:APPROVE_DOCUMENTS,input:||schema(&["document_id","void_reason"],json!({"document_id":identifier(),"void_reason":string(500)})),output,handler:Handler::SafeWrite(&Write::Void)},
         Operation {key:"finance.payables.payment.submit",title:"Submit a payment request",summary:"Retain positive bill allocations for approval; no balance reservation or posting occurs.",keywords:&[],capability:SUBMIT_PAYMENTS,input:payment_schema,output,handler:Handler::SafeWrite(&Write::Submit)},
         Operation {key:"finance.payables.payment.approve",title:"Approve and post a payment",summary:"Independently approve a submitted request and post against the bills' original control accounts. Requires ledger posting capability.",keywords:&[],capability:POST_PAYMENTS,input:||schema(&["request_id"],json!({"request_id":identifier(),"override_reason":string(500)})),output,handler:Handler::SafeWrite(&Write::Pay)},
         Operation {key:"finance.payables.payment.reject",title:"Reject a payment request",summary:"Record a permanent rejection and reason without posting a payment.",keywords:&[],capability:POST_PAYMENTS,input:||schema(&["request_id","reason"],json!({"request_id":identifier(),"reason":string(500)})),output,handler:Handler::SafeWrite(&Write::Reject)},

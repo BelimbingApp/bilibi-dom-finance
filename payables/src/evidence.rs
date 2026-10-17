@@ -86,6 +86,97 @@ const DATASETS: &[(&str, &str, &[&str])] = &[
         ],
     ),
     (
+        "match_event",
+        "finance_payables_match_events",
+        &[
+            "id",
+            "tenant_id",
+            "company_id",
+            "document_id",
+            "event",
+            "reason",
+            "held_event_id",
+            "actor_user_id",
+            "actor_impersonator_id",
+            "occurred_at",
+        ],
+    ),
+    (
+        "match_exception",
+        "finance_payables_match_exceptions",
+        &[
+            "id",
+            "tenant_id",
+            "company_id",
+            "match_line_id",
+            "code",
+            "detail",
+        ],
+    ),
+    (
+        "match_line",
+        "finance_payables_match_lines",
+        &[
+            "id",
+            "tenant_id",
+            "company_id",
+            "event_id",
+            "document_id",
+            "line_number",
+            "order_line_id",
+            "order_number",
+            "billed_quantity",
+            "billed_unit_price",
+            "previously_billed_quantity",
+            "ordered_quantity",
+            "ordered_unit_price",
+            "received_quantity",
+            "quantity_tolerance_kind",
+            "quantity_tolerance",
+            "price_tolerance_kind",
+            "price_tolerance",
+        ],
+    ),
+    (
+        "order_line",
+        "finance_payables_order_lines",
+        &[
+            "id",
+            "tenant_id",
+            "company_id",
+            "order_line_id",
+            "order_id",
+            "order_number",
+            "line_number",
+            "description",
+            "unit",
+            "quantity",
+            "unit_price",
+            "currency_code",
+            "order_status",
+            "superseded_by_amendment_id",
+            "order_event_key",
+        ],
+    ),
+    (
+        "order_receipt",
+        "finance_payables_order_receipts",
+        &[
+            "id",
+            "tenant_id",
+            "company_id",
+            "order_line_id",
+            "event_key",
+            "kind",
+            "posting_id",
+            "receipt_id",
+            "receipt_number",
+            "posted_at",
+            "received_quantity",
+            "rejected_quantity",
+        ],
+    ),
+    (
         "payment",
         "finance_payables_payments",
         &[
@@ -293,6 +384,14 @@ fn column(field: &str) -> String {
             | "new_quantity_tolerance"
             | "old_price_tolerance"
             | "new_price_tolerance"
+            | "billed_quantity"
+            | "billed_unit_price"
+            | "previously_billed_quantity"
+            | "ordered_quantity"
+            | "ordered_unit_price"
+            | "received_quantity"
+            | "rejected_quantity"
+            | "unit_price"
     ) {
         format!("r.{field}::text AS {field}")
     } else {

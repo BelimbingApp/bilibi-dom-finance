@@ -20,22 +20,29 @@
 //! archived company is [`EinvoiceError::CompanyArchived`].
 mod authority;
 mod certificate;
+mod clearance;
 mod code_lists;
 mod configuration;
 mod contributions;
 mod document;
+mod documents;
 mod draft;
 pub mod myinvois;
+mod workers;
 
 pub use authority::{
-    Authority, CertificateIdentity, CertificateSubject, ConsolidationWindow, DocumentVersion,
-    FormatKind, Original, Payload, PayloadError, PayloadOptions, PostingAccount, PostingRule, Side,
+    Answer, Authority, AuthorityStatus, CancelOutcome, CancelRefusal, CertificateIdentity,
+    CertificateSubject, Connection, ConsolidationWindow, Credentials, DocumentStatus,
+    DocumentVersion, FormatKind, LoginOutcome, Lookup, Original, Payload, PayloadError,
+    PayloadOptions, PostingAccount, PostingRule, Progress, Search, Side, StatusRead, SubmitOutcome,
     Supplier, SupplierField, ValidationContext,
 };
 pub use certificate::{Certificate, CertificateError, PrivateKey};
+pub use clearance::{POLL_WORKER, SUBMIT_WORKER};
 pub use code_lists::Codes;
 pub use contributions::{CANCEL, CAPABILITIES, ISSUE, SETTINGS, SUBMIT, VIEW};
 pub use document::{AddressSnapshot, Details, Document, DocumentLine, PartySnapshot};
+pub use documents::{Attention, DocumentView, StatusEvent};
 pub use draft::{
     Draft, DraftAddress, DraftLine, DraftParty, ValidAddress, ValidDraft, ValidLine, ValidParty,
 };
@@ -43,13 +50,16 @@ pub use myinvois::signer::SigningKey;
 
 use bilibi_company::{organisation, WriteError};
 use bilibi_database::{Change, Db, Error, MutationBoundary, MutationTransaction};
+use bilibi_integration::Integration;
 use bilibi_module_registry::{Layer, Module, Service};
 use bilibi_party_ids::OrganisationId;
+use bilibi_queue::Queue;
 use bilibi_settings::{Resolved, Settings, Target};
 use bilibi_tenancy::Scope;
 use jiff::{civil::Date, Timestamp};
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio_postgres::GenericClient;
 
@@ -63,17 +73,26 @@ inventory::submit! {
         id: MODULE, layer: Layer::Domains,
         // TODO(finance/ledger edge): the ledger bridge (NE4) adds the edge to
         // `finance/ledger` where Bilimbi has it, with the first call into it.
-        dependencies: &["base/authz", "base/database", "base/party_ids", "base/settings", "base/tenancy", "core/company"],
+        dependencies: &[
+            "base/audit", "base/authz", "base/database", "base/integration", "base/party_ids",
+            "base/queue", "base/settings", "base/tenancy", "core/company",
+        ],
         migrations: &[
             ("finance-einvoice-001-documents", include_str!("../migrations/001-documents.sql")),
             ("finance-einvoice-002-consolidation", include_str!("../migrations/002-consolidation.sql")),
             ("finance-einvoice-003-source-links", include_str!("../migrations/003-source-links.sql")),
         ],
-        services: &[Service { id: SERVICE, factory: |services| Ok(Arc::new(Einvoice {
-            db: services.get::<Db>("base/database.pool")?.as_ref().clone(),
-            mutations: services.get("base/database.mutations")?,
-            settings: services.get("base/settings.store")?,
-        })) }],
+        services: &[
+            Service { id: SERVICE, factory: |services| Ok(Arc::new(Einvoice {
+                db: services.get::<Db>("base/database.pool")?.as_ref().clone(),
+                mutations: services.get("base/database.mutations")?,
+                settings: services.get("base/settings.store")?,
+                integration: services.get("base/integration.exchanges")?,
+                queue: services.get("base/queue.store")?,
+            })) },
+            Service { id: workers::SUBMIT_SERVICE, factory: |services| workers::handler(services, workers::Job::Submit) },
+            Service { id: workers::POLL_SERVICE, factory: |services| workers::handler(services, workers::Job::Poll) },
+        ],
     }
 }
 
@@ -97,6 +116,58 @@ pub enum EinvoiceError {
     /// Refused values, in the words a form shows beside each field.
     #[error("Invalid input")]
     Invalid(Vec<FieldError>),
+    /// No document of the company has that ID.
+    #[error("Document not found")]
+    DocumentNotFound,
+    /// The company already issued that code number in the environment.
+    #[error("The company already issued that number")]
+    CodeNumberTaken,
+    /// The document's status is not one a submission starts from.
+    #[error("The document cannot be submitted in its status")]
+    NotSubmittable,
+    /// Another document that stands is already the tax document of a source
+    /// of this one.
+    #[error("Another document already stands for its source")]
+    SourceTaken,
+    /// The company has no client ID or secret for the document's environment.
+    #[error("The company has no credentials for the environment")]
+    MissingCredentials,
+    /// The format version is signed and the certificate and key are missing,
+    /// unreadable or do not belong together.
+    #[error("A signing certificate and key are required")]
+    SigningKeyRequired,
+    /// A submit job for the document is already waiting or running.
+    #[error("The document is already queued for submission")]
+    AlreadyQueued,
+    /// The authority has not given the document a UUID yet.
+    #[error("The document has not been submitted")]
+    NotSubmitted,
+    /// Only a valid (or rejected) document with a UUID can be cancelled.
+    #[error("The document cannot be cancelled in its status")]
+    NotCancellable,
+    /// The authority's cancellation window has ended.
+    #[error("The cancellation period is over")]
+    CancellationPeriodOver,
+    /// A note the authority holds references the document.
+    #[error("A note the authority holds references the document")]
+    ActiveReferencingDocuments,
+    /// A cancellation reason must be 1 to 300 characters.
+    #[error("A reason of 1 to 300 characters is required")]
+    InvalidReason,
+    /// The authority refused the cancellation and said why.
+    #[error("The authority refused the cancellation")]
+    CancellationRefused {
+        code: CancelRefusal,
+        reason: Option<String>,
+    },
+    #[error("The authority is rate limiting requests")]
+    RateLimited,
+    #[error("The authority is unavailable")]
+    AuthorityUnavailable,
+    /// The authority could not answer a status read: `rate_limited`,
+    /// `authority_unavailable`, `not_yet_available` or `status_unreadable`.
+    #[error("The authority could not answer ({0})")]
+    Authority(&'static str),
     /// A database or capture failure; never a refusal.
     #[error(transparent)]
     Failed(#[from] Error),
@@ -233,6 +304,8 @@ pub struct Einvoice {
     db: Db,
     mutations: Arc<MutationBoundary>,
     settings: Arc<Settings>,
+    integration: Arc<Integration>,
+    queue: Arc<Queue>,
 }
 
 impl Einvoice {
@@ -429,31 +502,7 @@ impl Einvoice {
                 _ => CertificateSetup::Unreadable,
             }
         };
-        let mut profile = Supplier {
-            name: value(&configuration::supplier_key("name")),
-            tax_id: value(&configuration::supplier_key("tax_id")),
-            registration_type: value(&configuration::supplier_key("registration_type")),
-            registration_number: value(&configuration::supplier_key("registration_number")),
-            sales_tax_registration: value(&configuration::supplier_key("sales_tax_registration")),
-            tourism_tax_registration: value(&configuration::supplier_key(
-                "tourism_tax_registration",
-            )),
-            industry_code: value(&configuration::supplier_key("industry_code")),
-            business_activity: value(&configuration::supplier_key("business_activity")),
-            phone: value(&configuration::supplier_key("phone")),
-            email: value(&configuration::supplier_key("email")),
-            address_line1: value(&configuration::supplier_key("address_line1")),
-            address_line2: value(&configuration::supplier_key("address_line2")),
-            address_line3: value(&configuration::supplier_key("address_line3")),
-            city: value(&configuration::supplier_key("city")),
-            postcode: value(&configuration::supplier_key("postcode")),
-            state_code: value(&configuration::supplier_key("state_code")),
-            country_code: value(&configuration::supplier_key("country_code")),
-        };
-        profile.name.get_or_insert(name);
-        profile
-            .registration_type
-            .get_or_insert_with(|| "BRN".into());
+        let profile = supplier_profile(&values, name);
         let posting_value = |account: PostingAccount| {
             value(&format!("finance.einvoice.posting.{}", account.field()))
         };
@@ -508,7 +557,7 @@ impl Einvoice {
 
     /// Every write: the capability and company reach now, then the audited
     /// transaction holding the company's row lock.
-    async fn write<'c>(
+    pub(crate) async fn write<'c>(
         &self,
         client: &'c mut tokio_postgres::Client,
         scope: &Scope,
@@ -535,8 +584,43 @@ impl Einvoice {
     }
 }
 
+/// The company's supplier profile from its resolved `finance.einvoice.supplier.*`
+/// values, with the company's name for a blank `name` and `BRN` for a blank
+/// registration type.
+pub(crate) fn supplier_profile(values: &BTreeMap<String, Resolved>, name: String) -> Supplier {
+    let value = |field: &str| {
+        values
+            .get(&configuration::supplier_key(field))
+            .and_then(|resolved| text(&resolved.value))
+    };
+    let mut profile = Supplier {
+        name: value("name"),
+        tax_id: value("tax_id"),
+        registration_type: value("registration_type"),
+        registration_number: value("registration_number"),
+        sales_tax_registration: value("sales_tax_registration"),
+        tourism_tax_registration: value("tourism_tax_registration"),
+        industry_code: value("industry_code"),
+        business_activity: value("business_activity"),
+        phone: value("phone"),
+        email: value("email"),
+        address_line1: value("address_line1"),
+        address_line2: value("address_line2"),
+        address_line3: value("address_line3"),
+        city: value("city"),
+        postcode: value("postcode"),
+        state_code: value("state_code"),
+        country_code: value("country_code"),
+    };
+    profile.name.get_or_insert(name);
+    profile
+        .registration_type
+        .get_or_insert_with(|| "BRN".into());
+    profile
+}
+
 /// A trimmed, non-blank string value.
-fn text(value: &Value) -> Option<String> {
+pub(crate) fn text(value: &Value) -> Option<String> {
     value
         .as_str()
         .map(str::trim)
@@ -557,7 +641,7 @@ async fn days_until(client: &impl GenericClient, date: &str) -> Result<i64> {
 }
 
 /// The actor's current grant and company reach decide every call.
-async fn authorize(
+pub(crate) async fn authorize(
     client: &impl GenericClient,
     scope: &Scope,
     company_id: i64,
@@ -569,7 +653,7 @@ async fn authorize(
         .map_err(refusal)
 }
 
-fn refusal(error: Error) -> EinvoiceError {
+pub(crate) fn refusal(error: Error) -> EinvoiceError {
     match error {
         Error::Forbidden | Error::Unauthorized => EinvoiceError::Unauthorized,
         Error::NotFound => EinvoiceError::CompanyNotFound,

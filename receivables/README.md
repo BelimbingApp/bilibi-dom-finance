@@ -31,7 +31,7 @@ Attributes are JSON objects with Bilimbi's field names. Partial updates preserve
 
 Migration `finance-receivables-001-receivables` is the fresh final reference schema: eleven tables, identity/append-only/draft guards, database numbering and settlement constraints. It deliberately includes the final payment tables/functions so future migrations need not rewrite the reference guards. No Laravel adoption or legacy entry claiming is ported. Composite keys keep this module's references inside one company; ledger account and entry IDs have no storage-level dependency on sibling tables.
 
-Receivables has no pages, menu, CSS, JavaScript or agent operations, matching Bilimbi's `web: nil`; no new UI is invented for this slice.
+Receivables has no pages, menu, CSS or JavaScript, matching Bilimbi's `web: nil`. H2 exposes its facade-only actions through the shared reviewed agent API; no new UI is invented.
 
 ## Issuance and settlement
 
@@ -80,3 +80,31 @@ The disposable encryption key is required by the shared walkthrough's e-invoice 
 The NR1 section asserts setup history/no-op behavior, identity and uniqueness, address normalization, schema-default resets, scientific notation, exact large JSON decimals, precision and overflow, per-line half-up tax, empty/replace/keep/clear/discard semantics, invalid replacement and audit-capture failure rollback, inactive records, paging, tenant/capability refusals (including a direct deny applied to an already-sealed scope), concurrent duplicate creation, archived-company refusal, database guards and complete replacement audit rows under one trace. It precedes the existing ledger/attachments/periods/controls proof and restores shared setup/account state. The mounted release gate remains the Platform's `scripts/domain-ci.sh`, without unit tests.
 
 The NR2 section runs last and proves issue-time snapshots, numbering races, revoked grants, issue without source view, singleton/multi-control receipts, late audit-capture rollback, closed-period refusals, inactive-control settlement, owned correction, dated and pinned aging/tax figures, calendar-month tax boundaries and unrounded fractions, competing settlements/reversals, other-owner tie-out differences, both attachment sources, all eleven evidence datasets, row-by-row audit capture and database immutability guards. Its amounts and dates are fixture data only, never production defaults.
+
+## Reviewed agent operations (H2)
+
+Discover `finance.receivables.*` through the shared `/api/v1` or `/mcp` edge and read the contributed `finance.receivables` guide ([guide.md](guide.md)). All inputs name `company_id`; identity and tenant come from the credential. The thirteen safe writes are `setup.configure`, `series.create/update`, `tax_code.create/update`, `customer.create/update`, `draft.create/update/discard`, `document.issue`, `payment.record` and `payment.reverse`. The ten reads are `setup.get/changes`, `series.list`, `tax_code.list`, `customer.get/list`, `document.get/list` and `payment.get/list`.
+
+Writes reuse the same private facade preparation and transaction-taking methods as pooled callers. Preview validates on the handed `OperationClient`, without allocating IDs or touching business/audit/queue rows. Ledger's posting/reversal previews own accounting validation. Execution joins the plan's `MutationTransaction`; no nested commit or pooled side read escapes its rollback. The owner reauthorizes and locks the writable company at preview and execution. Required capabilities remain the facade's existing ones, including reversal without setup/ledger view and issuance without source view. Committed results carry `record` and `path:null`.
+
+The pinned engine previews all steps before any execution. A separate transaction-local FIFO rechecks each Receivables review immediately before mutation. It binds normalized values, defaults, saved snapshots, original controls, outstanding amounts, exact business numbers and applicable posting controls. Dependent steps (including two issues in the same series or settlements sharing an invoice) require separate plans; a refusal rolls back every business, ledger, audit and queue row and leaves the code unused. Independent chart/calendar changes do not invalidate unrelated Receivables steps. Failed execution may leave identity gaps, never skipped business series numbers.
+
+Wire decimals are strings; strict schemas refuse unknown/immutable fields, actor fields and explicit null. Omission preserves optional values. Empty text clears optional party text, description and draft dates; clearing due date restores issue-time terms derivation. Omitted lines preserve snapshots, arrays replace them and `[]` clears them. Lists have `page_size` 1–100, default 100. Code lists compare their exclusive `after_code` with the database's ordering collation; ID lists use exclusive `after` and finish on an empty page. Documents filter kind/status/customer, payments filter customer. Reports remain the separately documented facade surface.
+
+### Running the HTTP/MCP proof
+
+Use a new empty disposable PostgreSQL 18 database (ICU collation exercises code cursors). From the mounted Platform root:
+
+```sh
+export DATABASE_URL=postgres://…/empty_receivables_proof
+export BILIBI_AGENT_PROOF=disposable
+export BILIBI_AGENT_CREDENTIALS=/tmp/receivables-agent-credentials.json
+export APP_ORIGIN=http://127.0.0.1:3100
+cargo build -p bilibi-web -p bilibi-finance-walkthrough-fixture --bins
+./target/debug/agent-operations
+amp orb service start receivables-proof --port 3100 --command \
+  'BIND_ADDR=127.0.0.1:3100 ./target/debug/bilibi-web run'
+python3 apps/domains/finance/fixtures/walkthrough/receivables-operations.py
+```
+
+The bootstrap saves real resource-bound OAuth credentials in a new mode-0600 file; never print it or use a production database. `receivables-control` makes only fixture-scoped grant/archive changes through normal facades in a second session. The wire proof exercises all 23 operations on HTTP and MCP, exact half-up totals and posting sides, preserved/cleared snapshots and dates, controls after setup changes, original-owned reversal, repeated non-mutating previews, replay, strict schemas, capability revocation, tenant isolation, archived targets, ICU/ID paging, mixed H1/H2 independent batching, dependent-plan rollback and late audit-capture failure/recovery. Run the H1 wire walkthrough on a separate fresh database to check the shared Ledger seams. No unit tests are added.

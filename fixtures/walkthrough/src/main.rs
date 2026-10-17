@@ -1109,6 +1109,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     bilibi_finance_walkthrough_fixture::attachments::run(&db, &services).await?;
     bilibi_finance_walkthrough_fixture::payables::run(&db, &services).await?;
     bilibi_finance_walkthrough_fixture::payments::run(&db, &services).await?;
+    bilibi_finance_walkthrough_fixture::matching::run(&db, &services).await?;
     bilibi_finance_walkthrough_fixture::periods::run(&db, &services).await?;
     bilibi_finance_walkthrough_fixture::controls::run(&db, &services).await?;
     bilibi_finance_walkthrough_fixture::totals::run(&db, &services).await?;
@@ -1127,5 +1128,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?;
     bilibi_finance_walkthrough_fixture::payroll::run(&db, &services).await?;
     bilibi_finance_walkthrough_fixture::receivables_documents::run(&db, &services).await?;
+
+    bilibi_finance_walkthrough_fixture::clearance::run(&db, &services, &manager, &viewer, &admin)
+        .await?;
     Ok(())
 }

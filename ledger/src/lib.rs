@@ -1226,6 +1226,68 @@ impl Ledger {
         Ok(entry)
     }
 
+    /// Validate a proposed owned posting on the caller's review connection,
+    /// without allocating an identity or number. Requires posting authority,
+    /// not view. The deterministic JSON contains the normalized entry, book,
+    /// referenced accounts and posting controls; compare it again at execution.
+    /// For a record not yet allocated, pass no owner and describe its future
+    /// ownership in the caller's review. The real post still checks that owner.
+    pub async fn preview_post_entry_on(
+        &self,
+        client: &dyn bilibi_agent_api::OperationClient,
+        scope: &Scope,
+        company_id: i64,
+        new: &NewEntry,
+        options: &PostOptions,
+    ) -> Result<serde_json::Value> {
+        preview_lock(client, scope, company_id).await?;
+        let tenant = scope.tenant();
+        let (book, valid) = prepare_post(client, tenant, company_id, new, options).await?;
+        let calendar = periods::state(client, tenant, company_id).await?;
+        let period = calendar
+            .periods()
+            .find(|p| p.start_date <= valid.entry_date && valid.entry_date <= p.end_date);
+        Ok(serde_json::json!({
+            "book":book,"entry":valid,
+            "accounts":accounts::list(client,tenant,company_id).await?.into_iter().filter(|a|new.lines.iter().any(|l|l.account_id==a.id)).collect::<Vec<_>>(),
+            "period":period,
+            "bookkeeping":bookkeeping::latest(client,tenant,company_id).await?,
+            "settlement_account_ids":options.settlement_account_ids,
+        }))
+    }
+
+    /// Preview the owner's correction on the handed review connection. Uses
+    /// the same owner, date, period and double-reversal checks as execution;
+    /// returns the original and normalized mirror with its posting controls.
+    /// Like the correction itself, this does not require ledger view.
+    pub async fn preview_reverse_owned_entry_on(
+        &self,
+        client: &dyn bilibi_agent_api::OperationClient,
+        scope: &Scope,
+        company_id: i64,
+        entry_id: i64,
+        owner: &EntryOwner,
+        reversal: &Reversal,
+    ) -> Result<serde_json::Value> {
+        preview_lock(client, scope, company_id).await?;
+        if !entries::owner_valid(owner) {
+            return Err(LedgerError::InvalidOption);
+        }
+        let tenant = scope.tenant();
+        let (book, original, valid) =
+            prepare_reverse(client, tenant, company_id, entry_id, Some(owner), reversal).await?;
+        let calendar = periods::state(client, tenant, company_id).await?;
+        let period = calendar
+            .periods()
+            .find(|p| p.start_date <= valid.entry_date && valid.entry_date <= p.end_date);
+        Ok(serde_json::json!({
+            "book":book,"original":original,"entry":valid,
+            "accounts":accounts::list(client,tenant,company_id).await?.into_iter().filter(|a|original.lines.iter().any(|l|l.account_id==a.id)).collect::<Vec<_>>(),
+            "period":period,
+            "bookkeeping":bookkeeping::latest(client,tenant,company_id).await?,
+        }))
+    }
+
     /// Posts inside the record owner's audited transaction, leaving commit
     /// to that owner so its record and the entry stand or fall together.
     /// Applies the same authorization, company lock and validation as
@@ -1265,21 +1327,6 @@ impl Ledger {
         Ok(entry)
     }
 
-    /// Validates a posting on the caller's connection without writing or numbering it.
-    /// Returns normalized effects and the current context that makes them valid.
-    pub async fn preview_post_entry_on(
-        &self,
-        client: &dyn bilibi_agent_api::OperationClient,
-        scope: &Scope,
-        company_id: i64,
-        new: &NewEntry,
-        options: &PostOptions,
-    ) -> Result<Value> {
-        agent_operations::authorize_on(client, scope, company_id, POST_ENTRIES).await?;
-        let (book, valid) = prepare_post(client, scope.tenant(), company_id, new, options).await?;
-        posting_preview(client, scope.tenant(), company_id, &book, &valid).await
-    }
-
     /// Decides an approval without recording its exception. The exception includes
     /// its normalized reason and separation-change basis, not just its presence.
     pub async fn preview_approval_on(
@@ -1296,35 +1343,6 @@ impl Ledger {
             "approval_exception": exception,
             "duty_separation": separation_view(client, scope.tenant(), company_id).await?,
         }))
-    }
-
-    /// Validates an owner's exact mirror posting without recording a reversal.
-    pub async fn preview_owned_reversal_on(
-        &self,
-        client: &dyn bilibi_agent_api::OperationClient,
-        scope: &Scope,
-        company_id: i64,
-        entry_id: i64,
-        owner: &EntryOwner,
-        reversal: &Reversal,
-    ) -> Result<Value> {
-        agent_operations::authorize_on(client, scope, company_id, POST_ENTRIES).await?;
-        if !entries::owner_valid(owner) {
-            return Err(LedgerError::InvalidOption);
-        }
-        let (book, original, valid) = prepare_reverse(
-            client,
-            scope.tenant(),
-            company_id,
-            entry_id,
-            Some(owner),
-            reversal,
-        )
-        .await?;
-        let mut preview =
-            posting_preview(client, scope.tenant(), company_id, &book, &valid).await?;
-        preview["before"] = json!(original);
-        Ok(preview)
     }
 
     /// One posted entry with its lines (`finance.ledger.view`), or
@@ -2988,6 +3006,19 @@ impl Ledger {
 
 /// A write inside a caller's own transaction: the capability and company
 /// reach now, then the company's row lock on that transaction.
+async fn preview_lock(
+    client: &dyn bilibi_agent_api::OperationClient,
+    scope: &Scope,
+    company_id: i64,
+) -> Result<()> {
+    agent_operations::authorize_on(client, scope, company_id, POST_ENTRIES).await?;
+    let row = client.query_opt("SELECT status FROM companies WHERE tenant_id=$1 AND id=$2 AND deleted_at IS NULL FOR UPDATE NOWAIT", &[&scope.tenant(), &company_id]).await?.ok_or(LedgerError::CompanyNotFound)?;
+    if row.get::<_, String>(0) == "archived" {
+        return Err(LedgerError::CompanyArchived);
+    }
+    Ok(())
+}
+
 async fn join(
     tx: &MutationTransaction<'_>,
     scope: &Scope,
@@ -3081,23 +3112,6 @@ async fn prepare_post(
     .await?
     .map_err(LedgerError::Invalid)?;
     Ok((book, valid))
-}
-
-async fn posting_preview(
-    client: &dyn bilibi_agent_api::OperationClient,
-    tenant: i64,
-    company_id: i64,
-    book: &Book,
-    valid: &entries::ValidEntry,
-) -> Result<Value> {
-    Ok(json!({
-        "entry": valid,
-        "currency_code": book.currency_code,
-        "book": book,
-        "accounts": accounts::list(client, tenant, company_id).await?,
-        "periods": periods::state(client, tenant, company_id).await?.years,
-        "controlled_bookkeeping": controlled_view(client, tenant, company_id).await?,
-    }))
 }
 
 async fn prepare_reverse(

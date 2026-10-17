@@ -107,6 +107,9 @@ pub struct Details {
     pub original_code_number: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub original_document_uuid: Option<String>,
+    /// The month (`YYYY-MM`) a consolidated document reports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consolidation_month: Option<String>,
 }
 
 impl PartySnapshot {

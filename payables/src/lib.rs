@@ -1,6 +1,8 @@
 //! Company payables documents, mirroring Bilimbi.Finance.Payables.
 //! Records are immutable after creation; approval and posting advance their
-//! status, and corrections are debit notes. SQL and validation remain private.
+//! status, and corrections are debit notes. A bill naming order lines is
+//! matched against Payables' own copy of the order source, kept from domain
+//! events (`orders`). SQL and validation remain private.
 mod agent_operations;
 mod contributions;
 mod documents;
@@ -16,6 +18,8 @@ pub use balances::{
 };
 mod evidence;
 pub use evidence::EvidencePage;
+mod matching;
+mod orders;
 mod settings;
 mod source;
 mod store;
@@ -27,10 +31,11 @@ use bilibi_finance_ledger::{FieldError, Ledger, LedgerError, Money};
 use bilibi_module_registry::{Layer, Module, Service};
 use bilibi_tenancy::Scope;
 pub use contributions::{
-    APPROVE_DOCUMENTS, CAPABILITIES, CREATE_DOCUMENTS, MANAGE_SETTINGS, POST_DOCUMENTS,
-    POST_PAYMENTS, SUBMIT_PAYMENTS, VIEW,
+    APPROVE_DOCUMENTS, APPROVE_MATCH, CAPABILITIES, CREATE_DOCUMENTS, MANAGE_SETTINGS,
+    POST_DOCUMENTS, POST_PAYMENTS, SUBMIT_PAYMENTS, VIEW,
 };
 use jiff::civil::Date;
+pub use matching::{MATCH_EXCEPTION_CODES, MATCH_STATUSES};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -43,11 +48,16 @@ pub const DOCUMENT_SOURCE: &str = "finance/payables/document";
 
 inventory::submit! { Module {
     id: MODULE, layer: Layer::Domains,
-    dependencies: &["base/agent_api", "base/authz", "base/database", "base/party_ids", "base/tenancy", "core/company", "finance/attachments", "finance/ledger"],
-    migrations: &[("finance-payables-001-documents", include_str!("../migrations/001-documents.sql")), ("finance-payables-002-payments", include_str!("../migrations/002-payments.sql"))],
+    dependencies: &["base/agent_api", "base/authz", "base/database", "base/events", "base/party_ids", "base/tenancy", "core/company", "finance/attachments", "finance/ledger"],
+    migrations: &[
+        ("finance-payables-001-documents", include_str!("../migrations/001-documents.sql")),
+        ("finance-payables-002-payments", include_str!("../migrations/002-payments.sql")),
+        ("finance-payables-003-matching", include_str!("../migrations/003-matching.sql")),
+    ],
     services: &[Service { id: SERVICE, factory: |s| { let payables = Arc::new(Payables {
         db: s.get::<Db>("base/database.pool")?.as_ref().clone(),
         ledger: s.get(bilibi_finance_ledger::SERVICE)?,
+        order_source: orders::available(&*s.get::<bilibi_events::Events>(bilibi_events::SERVICE)?),
     }); agent_operations::bind(payables.clone(), s.get("base/tenancy.parties")?)?; Ok(payables) } }],
 } }
 
@@ -86,6 +96,17 @@ pub enum PayablesError {
     AlreadyReversed,
     #[error("A reversal cannot be reversed")]
     ReversalNotReversible,
+    /// A debit note takes back more of an order line than its bill billed.
+    #[error("The quantity exceeds what the bill billed on its order line")]
+    ExceedsBilledQuantity,
+    #[error("The bill is not held")]
+    NotHeld,
+    /// The bill's last hold is already approved; post it.
+    #[error("The bill's match exceptions are already approved")]
+    AlreadyApproved,
+    /// A hold was recorded since the one the approver saw.
+    #[error("The bill was held again since; review the new figures")]
+    StaleHold,
     #[error("Invalid option")]
     InvalidOption,
     #[error("Invalid input")]
@@ -248,6 +269,55 @@ pub struct Document {
     pub tax_lines: Vec<TaxLine>,
     pub debit_note_ids: Vec<i64>,
     pub outstanding: Option<Money>,
+    /// None unless a bill (not voided) names an order line; else one of
+    /// [`MATCH_STATUSES`], read from its latest match event.
+    pub match_status: Option<String>,
+    /// Every match attempt, oldest first.
+    pub match_events: Vec<MatchEvent>,
+}
+/// One append-only match record: `held`, `exception_approved` (naming the
+/// hold it approves, with a reason) or `posted`, with the database's time.
+#[derive(Clone, Debug, Serialize)]
+pub struct MatchEvent {
+    pub id: i64,
+    pub event: String,
+    pub reason: Option<String>,
+    pub held_event_id: Option<i64>,
+    pub actor_user_id: i64,
+    pub actor_impersonator_id: Option<i64>,
+    pub occurred_at: String,
+    /// One per bill line naming an order line; none for an approval.
+    pub lines: Vec<MatchLine>,
+}
+/// The figures one match compared for one bill line. Ordered and received
+/// figures are absent when the order source could not answer.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct MatchLine {
+    pub line_number: i32,
+    pub order_line_id: i64,
+    pub order_number: Option<i64>,
+    pub billed_quantity: Decimal,
+    pub billed_unit_price: Decimal,
+    pub previously_billed_quantity: Decimal,
+    pub ordered_quantity: Option<Decimal>,
+    pub ordered_unit_price: Option<Decimal>,
+    pub received_quantity: Option<Decimal>,
+    pub quantity_tolerance: Option<Tolerance>,
+    pub price_tolerance: Option<Tolerance>,
+    pub exceptions: Vec<MatchException>,
+}
+/// One of [`MATCH_EXCEPTION_CODES`] with its plain-language detail.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct MatchException {
+    pub code: String,
+    pub detail: String,
+}
+/// What `approve_match_exception` takes: the reason, and the `id` of the
+/// hold the approver saw in `match_events`.
+#[derive(Clone, Debug)]
+pub struct MatchApproval {
+    pub reason: String,
+    pub held_event_id: i64,
 }
 impl Document {
     pub fn label(&self) -> String {
@@ -315,8 +385,15 @@ pub struct DocumentPage {
 pub struct Payables {
     db: Db,
     ledger: Arc<Ledger>,
+    /// Whether every order-source event the copy reads is mounted.
+    order_source: bool,
 }
 impl Payables {
+    /// Whether an order source is mounted, so a bill line may name an order
+    /// line (Bilimbi `OrderSource.available?/0`).
+    pub fn order_source_available(&self) -> bool {
+        self.order_source
+    }
     async fn write<'c>(
         &self,
         client: &'c mut tokio_postgres::Client,

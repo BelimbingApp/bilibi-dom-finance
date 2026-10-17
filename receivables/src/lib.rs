@@ -1,5 +1,6 @@
 //! Receivables documents, settlements and figures, mirroring Bilimbi.Finance.Receivables.
-//! No pages or operations: the reference is facade-only (`web: nil`).
+//! H2 exposes reviewed agent operations; the reference has no pages (`web: nil`).
+mod agent_operations;
 mod configuration;
 mod contributions;
 mod documents;
@@ -40,14 +41,17 @@ pub const SERVICE: &str = "finance/receivables.receivables";
 inventory::submit! {
     Module {
         id: MODULE, layer: Layer::Domains,
-        dependencies: &["base/authz", "base/database", "base/tenancy", "core/company", "finance/ledger", "finance/attachments"],
+        dependencies: &["base/agent_api", "base/authz", "base/database", "base/party_ids", "base/tenancy", "core/company", "finance/ledger", "finance/attachments"],
         migrations: &[("finance-receivables-001-receivables", include_str!("../migrations/001-receivables.sql"))],
         services: &[Service { id: SERVICE, factory: |services| {
-            Ok(Arc::new(Receivables {
+            let receivables = Arc::new(Receivables {
                 db: services.get::<Db>("base/database.pool")?.as_ref().clone(),
                 ledger: services.get(bilibi_finance_ledger::SERVICE)?,
                 attachments: services.get(bilibi_finance_attachments::SERVICE)?,
-            }))
+                parties: services.get("base/tenancy.parties")?,
+            });
+            agent_operations::bind(receivables.clone())?;
+            Ok(receivables)
         }}],
     }
 }
@@ -133,9 +137,47 @@ pub struct Receivables {
     db: Db,
     ledger: Arc<Ledger>,
     attachments: Arc<Attachments>,
+    parties: Arc<bilibi_tenancy::PartyProofs>,
 }
 
 impl Receivables {
+    async fn authorize_on(
+        &self,
+        client: &dyn bilibi_agent_api::OperationClient,
+        scope: &Scope,
+        company: i64,
+        capability: &str,
+    ) -> Result<()> {
+        self.parties
+            .organisation_target(
+                client,
+                scope,
+                bilibi_party_ids::OrganisationId::new(company)
+                    .map_err(|_| ReceivableError::CompanyNotFound)?,
+                capability,
+            )
+            .await
+            .map(|_| ())
+            .map_err(refusal)
+    }
+
+    // No pooled side reads: preparation and execution share the handed client.
+    async fn join(
+        &self,
+        client: &dyn bilibi_agent_api::OperationClient,
+        scope: &Scope,
+        company: i64,
+        capability: &str,
+    ) -> Result<()> {
+        self.authorize_on(client, scope, company, capability)
+            .await?;
+        let row = client.query_opt("SELECT status FROM companies WHERE tenant_id=$1 AND id=$2 AND deleted_at IS NULL FOR UPDATE NOWAIT", &[&scope.tenant(), &company]).await?.ok_or(ReceivableError::CompanyNotFound)?;
+        if row.get::<_, String>(0) == "archived" {
+            return Err(ReceivableError::CompanyArchived);
+        }
+        Ok(())
+    }
+
     pub fn series_kinds() -> &'static [&'static str] {
         &["invoice", "credit_note", "payment"]
     }

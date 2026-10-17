@@ -1223,6 +1223,7 @@ async fn drafts_and_payloads(
             billing_period_description: valid.billing_period_description.clone(),
             original_code_number: None,
             original_document_uuid: None,
+            consolidation_month: None,
         },
         original_document_id: None,
         line_extension_amount: valid.line_extension_amount,
