@@ -57,17 +57,21 @@ async fn designated(
     Ok(row.as_ref().map(from_row))
 }
 
-/// The account's posted debits less its credits. Entries arrive in the next
-/// version of this module (`finance_ledger_entry_lines`); until then no
-/// account has postings, so every balance is zero.
-// TODO(finance/ledger 002 entries): sum finance_ledger_entry_lines for the account.
+/// The account's posted debits less its credits.
 async fn balance(
-    _client: &impl GenericClient,
-    _tenant: i64,
-    _company_id: i64,
-    _account_id: i64,
+    client: &impl GenericClient,
+    tenant: i64,
+    company_id: i64,
+    account_id: i64,
 ) -> Result<Money> {
-    Ok(Money::ZERO)
+    let row = client
+        .query_one(
+            "SELECT COALESCE(sum(debit) - sum(credit), 0) FROM finance_ledger_entry_lines \
+             WHERE tenant_id=$1 AND company_id=$2 AND account_id=$3",
+            &[&tenant, &company_id, &account_id],
+        )
+        .await?;
+    Ok(Money::stored(row.get(0)))
 }
 
 /// Whether grouping `account_id` under `parent_id` would place it under

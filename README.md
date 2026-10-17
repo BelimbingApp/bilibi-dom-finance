@@ -8,7 +8,7 @@ Bilibi checkout; it does not build on its own.
 
 | Module | Descriptor ID | Owns |
 | --- | --- | --- |
-| [`ledger/`](ledger/README.md) | `finance/ledger` | each company's book and currency, its chart of accounts, and the controlled-bookkeeping setting a new book opens with. Journal entries, periods, journals and the other controls follow in later versions of the module. |
+| [`ledger/`](ledger/README.md) | `finance/ledger` | each company's book and currency, its chart of accounts, and the controlled-bookkeeping setting a new book opens with, and its journal entries (append-only, numbered without gaps, balanced at commit, optionally owned by another module's record) with posting notices that announce only committed entries. Periods, journals and the other controls follow in later versions of the module. |
 
 Every other Finance module of Bilimbi (attachments, receivables, payables,
 e-invoice, fixed assets, payroll, reconciliation, SST, reports) lands beside
@@ -43,9 +43,12 @@ DATABASE_URL=postgres://…/disposable cargo run -p bilibi-finance-walkthrough-f
 ```
 
 It migrates a fresh disposable database, installs the fixtures, and prints
-the facade's answers to accepted and refused books, accounts, reach
-(grants, affiliation, tenancy, archival), money finer than the book allows,
-and the database's own refusals of edits to the ledger's tables.
+the facade's answers to accepted and refused books, accounts, entries (owners,
+settlement accounts, concurrent posts, paged reads), reach (grants,
+affiliation, tenancy, archival), money finer than the book allows, the
+database's own refusals (edits to posted entries, unbalanced or lineless
+entries, cross-company keys) and the posting notices a commit, a rollback and
+a refusal do and do not send.
 
 ## Naming
 

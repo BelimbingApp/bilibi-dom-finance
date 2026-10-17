@@ -21,4 +21,5 @@ bilibi-module-registry.workspace = true
 bilibi-tenancy.workspace = true
 bilibi-walkthrough-fixture = { path = "../../../../../fixtures/walkthrough" }
 inventory.workspace = true
+jiff = "0.2.38"
 tokio.workspace = true

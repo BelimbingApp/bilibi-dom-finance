@@ -67,6 +67,20 @@ they govern this code and are not copied here.
   Bilimbi); a Finance module with pages uses only `bilibi_ui` components and
   `FlexTable` for every list, per `apps/base/ui/AGENTS.md`.
 
+- Post an entry only through `Ledger::post_entry` and read it through
+  `get_entry`/`list_entries`; never insert into or select from
+  `finance_ledger_entries`/`_entry_lines` from a sibling. Pass `owner` for an
+  entry a module's record recognises (the database allows one original entry
+  per record and refuses a reversal by anyone but the owner), and
+  `settlement_account_ids` only to settle a document posted earlier on an
+  account deactivated since. The database numbers entries, so never send or
+  compute an `entry_number`.
+- Learn of a posting through `Ledger::subscribe_postings`, never your own
+  LISTEN: the relay shares one connection, and a notice carries identifiers
+  only. On `PostingEvent::Refresh` read again instead of trusting the stream.
+  `TODO(platform)`: the relay opens its connection from `DATABASE_URL` because
+  `base/database` exposes only the pool.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.

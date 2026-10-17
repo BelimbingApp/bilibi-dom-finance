@@ -26,7 +26,9 @@ mod accounts;
 mod bookkeeping;
 mod books;
 mod contributions;
+mod entries;
 mod money;
+mod postings;
 
 pub use contributions::{
     APPROVE_JOURNALS, CAPABILITIES, LOCK_PERIODS, MANAGE_ACCOUNTS, MANAGE_CONTROLLED_BOOKKEEPING,
@@ -39,6 +41,7 @@ use bilibi_company::{organisation, WriteError};
 use bilibi_database::{Change, Db, Error, MutationBoundary, MutationTransaction};
 use bilibi_module_registry::{Layer, Module, Service};
 use bilibi_tenancy::Scope;
+use jiff::{civil::Date, Timestamp};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio_postgres::GenericClient;
@@ -52,10 +55,15 @@ inventory::submit! {
     Module {
         id: MODULE, layer: Layer::Domains,
         dependencies: &["base/authz", "base/database", "base/tenancy", "core/company"],
-        migrations: &[("finance-ledger-001-books-and-accounts", include_str!("../migrations/001-books-and-accounts.sql"))],
+        migrations: &[
+            ("finance-ledger-001-books-and-accounts", include_str!("../migrations/001-books-and-accounts.sql")),
+            ("finance-ledger-002-entries", include_str!("../migrations/002-entries.sql")),
+            ("finance-ledger-003-posting-notices", include_str!("../migrations/003-posting-notices.sql")),
+        ],
         services: &[Service { id: SERVICE, factory: |services| Ok(Arc::new(Ledger {
             db: services.get::<Db>("base/database.pool")?.as_ref().clone(),
             mutations: services.get("base/database.mutations")?,
+            postings: postings::Relay::new(),
         })) }],
     }
 }
@@ -80,6 +88,15 @@ pub enum LedgerError {
     BookAlreadyOpen,
     #[error("Not found")]
     AccountNotFound,
+    #[error("Not found")]
+    EntryNotFound,
+    /// An option the call does not accept: an `owner` or settlement account
+    /// of another shape, or a limit, cursor or bound out of range.
+    #[error("Invalid option")]
+    InvalidOption,
+    /// The relay's database connection could not be made to listen.
+    #[error("Posting notices are unavailable")]
+    NoticesUnavailable,
     /// Refused values, in the words a form shows beside each field.
     #[error("Invalid input")]
     Invalid(Vec<FieldError>),
@@ -93,13 +110,21 @@ pub enum LedgerError {
 pub struct FieldError {
     pub field: &'static str,
     pub message: String,
+    /// The 1-based line of an entry the refusal is about, when it is about one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<usize>,
 }
 impl FieldError {
     pub fn new(field: &'static str, message: impl Into<String>) -> Self {
         Self {
             field,
             message: message.into(),
+            line: None,
         }
+    }
+    pub(crate) fn on_line(mut self, line: usize) -> Self {
+        self.line = Some(line);
+        self
     }
 }
 
@@ -198,10 +223,144 @@ pub struct AccountChange {
     pub retained_earnings: Option<bool>,
 }
 
+/// The module and record an entry belongs to: `module` is the owner's
+/// descriptor id (`finance/receivables`) and `record` a kind and a positive
+/// integer in the owner's own terms (`payment:17`). A manual entry has none.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct EntryOwner {
+    pub module: String,
+    pub record: String,
+}
+
+/// One line of a new entry: an account and exactly one positive side.
+#[derive(Clone, Debug)]
+pub struct NewLine {
+    pub account_id: i64,
+    pub debit: Money,
+    pub credit: Money,
+    pub description: Option<String>,
+}
+impl NewLine {
+    pub fn debit(account_id: i64, amount: Money) -> Self {
+        Self {
+            account_id,
+            debit: amount,
+            credit: Money::ZERO,
+            description: None,
+        }
+    }
+    pub fn credit(account_id: i64, amount: Money) -> Self {
+        Self {
+            account_id,
+            debit: Money::ZERO,
+            credit: amount,
+            description: None,
+        }
+    }
+    pub fn described(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+}
+/// What posts an entry: `entry_date`, `description` (1 to 500 characters),
+/// an optional `reference` (at most 100) and at least two `lines`.
+#[derive(Clone, Debug)]
+pub struct NewEntry {
+    pub entry_date: Date,
+    pub description: String,
+    pub reference: Option<String>,
+    pub lines: Vec<NewLine>,
+}
+/// Options of [`Ledger::post_entry`] (Bilimbi's keyword options).
+#[derive(Clone, Debug, Default)]
+pub struct PostOptions {
+    /// Accounts that may be inactive in this entry only, for a module that
+    /// settles a document it posted earlier. Each must still be an account of
+    /// the company; every other line still needs an active account.
+    pub settlement_account_ids: Vec<i64>,
+    /// The module and record this entry recognises. The record has at most
+    /// one original entry in the company, and an owned entry is corrected
+    /// only through its owner.
+    pub owner: Option<EntryOwner>,
+}
+
+/// One line of a posted entry.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct EntryLine {
+    pub line_number: i32,
+    pub account_id: i64,
+    pub debit: Money,
+    pub credit: Money,
+    pub description: Option<String>,
+}
+/// A posted entry with its lines, as the database stored it. The number and
+/// time are the database's; `reversed_by_entry_id` names the later entry that
+/// reversed it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Entry {
+    pub id: i64,
+    pub entry_number: i64,
+    #[serde(serialize_with = "as_text")]
+    pub entry_date: Date,
+    pub description: String,
+    pub reference: Option<String>,
+    pub currency_code: String,
+    pub reverses_entry_id: Option<i64>,
+    pub owner: Option<EntryOwner>,
+    pub posted_by_user_id: i64,
+    pub posted_by_impersonator_id: Option<i64>,
+    #[serde(serialize_with = "as_text")]
+    pub posted_at: Timestamp,
+    pub reversed_by_entry_id: Option<i64>,
+    pub lines: Vec<EntryLine>,
+}
+/// Dates and instants are written as their ISO 8601 text, so the Domain
+/// does not switch on a serde feature of the shared `jiff` crate.
+fn as_text<T: std::fmt::Display, S: serde::Serializer>(
+    value: &T,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error> {
+    serializer.collect_str(value)
+}
+/// Bounds of [`Ledger::list_entries`]; `Default` lists the first 100.
+#[derive(Clone, Debug, Default)]
+pub struct EntryQuery {
+    /// Entry dates, both inclusive.
+    pub from: Option<Date>,
+    pub to: Option<Date>,
+    /// 1 to 500, 100 when absent.
+    pub limit: Option<u32>,
+    /// The `(entry_date, id)` of the last entry already read: only entries
+    /// after it come back.
+    pub after: Option<(Date, i64)>,
+    /// Entries with a line on this account.
+    pub account_id: Option<i64>,
+    /// Entries numbered up to this one, to reproduce an earlier read.
+    pub through_entry_number: Option<i64>,
+}
+
+/// What a [`PostingSubscription`] hears.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PostingEvent {
+    /// The entry numbered `entry_number` committed in the subscribed company.
+    Posted { company_id: i64, entry_number: i64 },
+    /// Notices may have been missed (the listening connection dropped, or the
+    /// subscriber fell behind): read the ledger again.
+    Refresh,
+}
+/// A company's posting notices, from [`Ledger::subscribe_postings`]; it ends
+/// when dropped.
+pub struct PostingSubscription {
+    tenant: i64,
+    company_id: i64,
+    receiver: tokio::sync::broadcast::Receiver<postings::Heard>,
+}
+
 /// The facade, resolved from the registry as [`SERVICE`].
 pub struct Ledger {
     db: Db,
     mutations: Arc<MutationBoundary>,
+    postings: postings::Relay,
 }
 
 impl Ledger {
@@ -389,6 +548,134 @@ impl Ledger {
             .await?;
         tx.commit().await?;
         Ok(account)
+    }
+
+    /// Posts a journal entry (`finance.ledger.entries.post`). It is refused
+    /// with [`LedgerError::Invalid`] unless it has at least two lines, its
+    /// debits equal its credits, and every line names an active account of the
+    /// company with exactly one positive amount no finer than the book's minor
+    /// units; `BookNotOpen` before the book is opened. The database numbers
+    /// the entry (1, 2, 3, ... per company, never skipping) and stamps it.
+    /// `options.owner` marks the entry as the one a module's record
+    /// recognises, and `settlement_account_ids` is the settlement exception to
+    /// the active-account rule; an `owner` or id of another shape is
+    /// `InvalidOption`.
+    // TODO(finance/ledger periods): refuse an entry dated in a closed or
+    // locked period, before the first fiscal year, or (for a controlled
+    // company) in no fiscal period, once periods land.
+    pub async fn post_entry(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        new: &NewEntry,
+        options: &PostOptions,
+    ) -> Result<Entry> {
+        if options
+            .owner
+            .as_ref()
+            .is_some_and(|owner| !entries::owner_valid(owner))
+            || options.settlement_account_ids.iter().any(|id| *id < 1)
+        {
+            return Err(LedgerError::InvalidOption);
+        }
+        let mut client = self.db.get().await.map_err(Error::from)?;
+        let mut tx = self
+            .write(
+                &mut client,
+                scope,
+                company_id,
+                POST_ENTRIES,
+                "finance.ledger.post_entry",
+            )
+            .await?;
+        let tenant = scope.tenant();
+        let book = books::find(tx.sql(), tenant, company_id)
+            .await?
+            .ok_or(LedgerError::BookNotOpen)?;
+        let valid = entries::validate(tx.sql(), tenant, company_id, book.minor_units, new, options)
+            .await?
+            .map_err(LedgerError::Invalid)?;
+        let actor = scope.user();
+        let impersonator = scope.impersonator().map(|operator| operator.user());
+        let entry = tx
+            .mutate(move |sql| {
+                Box::pin(async move {
+                    let posted = entries::insert(
+                        sql,
+                        tenant,
+                        company_id,
+                        &book.currency_code,
+                        actor,
+                        impersonator,
+                        &valid,
+                    )
+                    .await?;
+                    let mut changes = vec![Change {
+                        kind: "finance.ledger.entry".into(),
+                        id: posted.entry.id,
+                        old: serde_json::Value::Null,
+                        new: posted.entry_json,
+                    }];
+                    changes.extend(posted.lines.into_iter().map(|(id, json)| Change {
+                        kind: "finance.ledger.entry_line".into(),
+                        id,
+                        old: serde_json::Value::Null,
+                        new: json,
+                    }));
+                    Ok((posted.entry, changes))
+                })
+            })
+            .await?;
+        tx.commit().await?;
+        Ok(entry)
+    }
+
+    /// One posted entry with its lines (`finance.ledger.view`), or
+    /// `EntryNotFound` for a missing id or another company's.
+    pub async fn get_entry(&self, scope: &Scope, company_id: i64, entry_id: i64) -> Result<Entry> {
+        let client = self.db.get().await.map_err(Error::from)?;
+        authorize(&**client, scope, company_id, VIEW).await?;
+        entries::find(&**client, scope.tenant(), company_id, entry_id)
+            .await?
+            .ok_or(LedgerError::EntryNotFound)
+    }
+
+    /// Posted entries with their lines, ordered by entry date and then id
+    /// (`finance.ledger.view`). A caller pages by passing the last returned
+    /// entry's date and id as `after` until fewer than `limit` come back. An
+    /// out-of-range option is `InvalidOption`.
+    pub async fn list_entries(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        query: &EntryQuery,
+    ) -> Result<Vec<Entry>> {
+        let client = self.db.get().await.map_err(Error::from)?;
+        authorize(&**client, scope, company_id, VIEW).await?;
+        entries::list(&**client, scope.tenant(), company_id, query).await
+    }
+
+    /// Subscribes to the company's postings (`finance.ledger.view`). After
+    /// the transaction that posts an entry commits, the subscription hears
+    /// [`PostingEvent::Posted`] for it, from any process; a rolled-back post
+    /// announces nothing, and a post inside a caller's own transaction is
+    /// announced when that transaction commits. A notice carries no figures:
+    /// read them through this facade, which authorizes the read afresh. The
+    /// subscription listens before this returns, so it hears every posting
+    /// committed after.
+    pub async fn subscribe_postings(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+    ) -> Result<PostingSubscription> {
+        {
+            let client = self.db.get().await.map_err(Error::from)?;
+            authorize(&**client, scope, company_id, VIEW).await?;
+        }
+        self.postings
+            .subscribe(scope.tenant(), company_id)
+            .await
+            .ok_or(LedgerError::NoticesUnavailable)
     }
 
     /// Every write: the capability and company reach now, then the audited

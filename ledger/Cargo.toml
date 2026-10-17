@@ -12,10 +12,12 @@ bilibi-database.workspace = true
 bilibi-module-registry.workspace = true
 bilibi-tenancy.workspace = true
 inventory.workspace = true
+jiff = "0.2.38"
 rust_decimal.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
 tokio-postgres.workspace = true
 
 # The walkthrough fixture is an example-only crate: this dev-dependency is

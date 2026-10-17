@@ -68,6 +68,11 @@ impl Money {
         }
         Ok(Self(amount.normalize()))
     }
+    /// An amount read back from a `numeric(20,4)` column, which only stores
+    /// what [`Money::new`] accepted or a sum of such amounts.
+    pub(crate) fn stored(amount: Decimal) -> Self {
+        Self(amount.normalize())
+    }
     /// An amount written in decimal notation (`"12.50"`, `"-3"`).
     pub fn parse(text: &str, units: MinorUnits) -> Result<Self, MoneyError> {
         let amount = Decimal::from_str_exact(text.trim()).map_err(|_| MoneyError::Unparsable)?;
