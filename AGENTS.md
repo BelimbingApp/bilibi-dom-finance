@@ -75,6 +75,9 @@ they govern this code and are not copied here.
   `settlement_account_ids` only to settle a document posted earlier on an
   account deactivated since. The database numbers entries, so never send or
   compute an `entry_number`.
+- Use `Ledger::post_entry_in` inside `Ledger::write` when your record must
+  commit with its entry; never call standalone `post_entry` while holding
+  that company's lock on another connection, which would wait on itself.
 - A new book is controlled, so it posts only into a fiscal period opened with
   `Ledger::open_fiscal_year`: a fixture opens one before posting, and a sibling
   reports the ledger's `entry_date` refusal instead of picking another date. A

@@ -27,6 +27,7 @@ use jiff::civil::{date, Date};
 
 pub mod attachments;
 pub mod controls;
+pub mod payroll;
 pub mod periods;
 
 /// Every fixture account's password.
