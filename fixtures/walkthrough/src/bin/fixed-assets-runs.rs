@@ -358,8 +358,26 @@ async fn run(db: &Db, services: &Services) -> Outcome<()> {
         );
         tied(&report(&f, &s, date(2026, 2, 28)).await?);
     }
+    // A bad source is an exception, not a refusal of the live asset's charge.
+    let bad_source = acquire(
+        &f,
+        &l,
+        &s,
+        category.id,
+        (accounts[0], capital),
+        "300",
+        date(2026, 1, 17),
+    )
+    .await?;
+    reverse_source(&l, &s, bad_source.entry_id, date(2026, 3, 31)).await?;
     let march = f.depreciate(&s, COMPANY, date(2026, 3, 1)).await?;
     assert_eq!(march.total, m("50"));
+    assert_eq!(march.items.len(), 1);
+    assert_eq!(march.exceptions.len(), 1);
+    assert_eq!(march.exceptions[0].asset_id, bad_source.id);
+    assert_eq!(march.exceptions[0].reason, "acquisition_reversed");
+    f.void_acquisition(&s, COMPANY, bad_source.id, &event(date(2026, 3, 31)))
+        .await?;
     refused(
         f.reverse_run(&s, COMPANY, feb.id, &event(date(2026, 3, 31)))
             .await,
@@ -519,6 +537,9 @@ async fn run(db: &Db, services: &Services) -> Outcome<()> {
         l.close_period(&s, COMPANY, p.id, Some("NX2 closed period proof"))
             .await?;
     }
+    let consumed = f.depreciate(&s, COMPANY, date(2026, 1, 1)).await?;
+    assert_eq!(consumed.id, jan.id);
+    assert!(consumed.reversed);
     refused(
         f.void_acquisition(&s, COMPANY, zero.id, &event(date(2026, 5, 31)))
             .await,
