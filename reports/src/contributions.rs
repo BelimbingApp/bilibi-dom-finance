@@ -41,3 +41,21 @@ inventory::submit! { Contribution::new(VOCABULARY, "finance/reports", provenance
     }],
     system_principals: &[],
 }) }
+
+// Bilimbi reports/priv/web_routes.exs and Reports.Contributions.
+use bilibi_module_registry::contributions::{Access, Method, Route, ROUTES};
+inventory::submit! { Contribution::new(ROUTES, "finance/reports.index", provenance!(), &Route {
+    method: Method::Get, path: "/finance/reports", service: "finance/reports.pages",
+    operation: "reports", access: Access::Capability(crate::VIEW), framed: true,
+}) }
+inventory::submit! { Contribution::new(ROUTES, "finance/reports.activity", provenance!(), &Route {
+    method: Method::Get, path: "/finance/reports/accounts/{account_id}", service: "finance/reports.pages",
+    operation: "activity", access: Access::Capability(crate::VIEW), framed: true,
+}) }
+bilibi_menu::contribute!(
+    "finance/reports",
+    bilibi_menu::MenuItem::page("finance.reports", "Reports", "/finance/reports")
+        .under("finance")
+        .requires(bilibi_menu::Requirement::Capability(crate::VIEW))
+        .order(20)
+);

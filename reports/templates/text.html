@@ -1,0 +1,2 @@
+{# Small report labels retain the Bilimbi identifiers; values escape normally. #}
+{% if emphasis %}<strong{% if !id.is_empty() %} id="{{ id }}"{% endif %}>{{ text }}</strong>{% else %}<span{% if !id.is_empty() %} id="{{ id }}"{% endif %} class="tabular-nums">{{ text }}</span>{% endif %}

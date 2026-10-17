@@ -31,6 +31,7 @@ mod contributions;
 mod issued;
 mod layout;
 mod statement;
+mod web;
 
 pub use bilibi_finance_ledger::{PostingEvent, PostingSubscription};
 pub use configuration::SECTIONS;
@@ -75,7 +76,8 @@ inventory::submit! {
         // an issue can freeze, then the auditor pack's sources) lands with
         // the first call into that sibling, once the sibling exists.
         dependencies: &[
-            "base/authz", "base/database", "base/party_ids", "base/settings", "base/tenancy",
+            "base/authz", "base/database", "base/datetime", "base/locale", "base/menu",
+            "base/party_ids", "base/settings", "base/tenancy", "base/ui",
             "core/company", "finance/ledger",
         ],
         migrations: &[("finance-reports-001-issued", include_str!("../migrations/001-issued.sql"))],
@@ -84,7 +86,13 @@ inventory::submit! {
             mutations: services.get("base/database.mutations")?,
             settings: services.get("base/settings.store")?,
             ledger: services.get(bilibi_finance_ledger::SERVICE)?,
-        })) }],
+        })) }, Service { id: "finance/reports.pages", factory: |services| {
+            Ok(Arc::new(bilibi_ui::page::PageService::<Scope, Error>(Arc::new(web::Pages {
+                reports: services.get(SERVICE)?,
+                display: services.get("base/datetime.display")?,
+                locales: services.get("base/locale.locales")?,
+            }))))
+        } }],
     }
 }
 
