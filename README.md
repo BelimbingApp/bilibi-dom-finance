@@ -9,9 +9,10 @@ Bilibi checkout; it does not build on its own.
 | Module | Descriptor ID | Owns |
 | --- | --- | --- |
 | [`ledger/`](ledger/README.md) | `finance/ledger` | each company's book and currency, its chart of accounts, and the controlled-bookkeeping setting a new book opens with, and its journal entries (append-only, numbered without gaps, balanced at commit, optionally owned by another module's record) with posting notices that announce only committed entries. Periods, journals and the other controls follow in later versions of the module. |
+| [`einvoice/`](einvoice/README.md) | `finance/einvoice` | a company's fiscal documents for a clearance authority: the append-only schema (documents, lines, submissions, status events, consolidated sources and source links), the `finance.einvoice` settings (environment, format version, credentials, signing certificate and key, supplier profile, posting accounts) with encryption and PEM validators, the platform API and portal URLs, the `Authority` contract with MyInvois, and the authority's code lists with company overrides. Issuing, signing, submitting, posting and the pages follow in later versions of the module. |
 
 Every other Finance module of Bilimbi (attachments, receivables, payables,
-e-invoice, fixed assets, payroll, reconciliation, SST, reports) lands beside
+fixed assets, payroll, reconciliation, SST, reports) lands beside
 the ledger as a sibling module folder, in later slices of the port.
 
 ## Mount
@@ -39,7 +40,8 @@ book and chart of accounts through the ledger facade. Its binary is the
 running proof of this repository's facade:
 
 ```sh
-DATABASE_URL=postgres://…/disposable cargo run -p bilibi-finance-walkthrough-fixture
+DATABASE_URL=postgres://…/disposable BILIBI_SETTINGS_KEY=$(openssl rand -hex 32) \
+  cargo run -p bilibi-finance-walkthrough-fixture
 ```
 
 It migrates a fresh disposable database, installs the fixtures, and prints
@@ -48,7 +50,11 @@ settlement accounts, concurrent posts, paged reads), reach (grants,
 affiliation, tenancy, archival), money finer than the book allows, the
 database's own refusals (edits to posted entries, unbalanced or lineless
 entries, cross-company keys) and the posting notices a commit, a rollback and
-a refusal do and do not send.
+a refusal do and do not send. Its e-invoice section shows the code lists and
+their overrides, the company settings with their validators and encryption
+(it needs `BILIBI_SETTINGS_KEY`, 64 hex characters, and `openssl` for a
+throwaway certificate and key), the setup read, the authority's rules and the
+database's refusals on the e-invoice tables.
 
 ## Naming
 

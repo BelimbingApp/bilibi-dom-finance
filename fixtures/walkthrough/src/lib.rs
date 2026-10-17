@@ -133,3 +133,30 @@ macro_rules! walkthrough_ledger_roles {
         }) }
     };
 }
+
+/// What the Platform fixture's roles hold in e-invoicing, declared beside
+/// [`walkthrough_ledger_roles!`]: the manager every capability, staff and the
+/// viewer only the read.
+#[macro_export]
+macro_rules! walkthrough_einvoice_roles {
+    () => {
+        $crate::inventory::submit! { $crate::registry::Contribution::new($crate::authz::VOCABULARY, "walkthrough.fixture.finance.einvoice", $crate::registry::Provenance { module: "finance/einvoice", source: file!(), line: line!() }, &$crate::authz::VocabularyContribution {
+            domains: &[],
+            verbs: &[],
+            capabilities: &[],
+            roles: &[
+                $crate::authz::RoleDefinition { code: "manager", name: "manager", description: "Walkthrough fixture role", grant_all: false, capabilities: &[
+                    "finance.einvoice.view", "finance.einvoice.documents.issue", "finance.einvoice.documents.submit",
+                    "finance.einvoice.documents.cancel", "finance.einvoice.settings.manage",
+                ] },
+                $crate::authz::RoleDefinition { code: "staff", name: "staff", description: "Walkthrough fixture role", grant_all: false, capabilities: &[
+                    "finance.einvoice.view",
+                ] },
+                $crate::authz::RoleDefinition { code: "viewer", name: "viewer", description: "Walkthrough fixture role", grant_all: false, capabilities: &[
+                    "finance.einvoice.view",
+                ] },
+            ],
+            system_principals: &[],
+        }) }
+    };
+}

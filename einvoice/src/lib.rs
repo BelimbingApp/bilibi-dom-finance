@@ -189,7 +189,7 @@ pub struct Einvoice {
 
 impl Einvoice {
     /// The authority every company's documents are cleared with.
-    fn authority() -> impl Authority {
+    pub fn authority() -> impl Authority {
         myinvois::MyInvois
     }
 
