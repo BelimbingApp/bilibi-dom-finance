@@ -1,0 +1,153 @@
+//! Receivables setup and drafts, mirroring Bilimbi.Finance.Receivables.
+//! No pages or operations: the reference is facade-only (`web: nil`).
+mod configuration;
+mod contributions;
+mod documents;
+mod records;
+mod store;
+mod validation;
+
+pub use contributions::{
+    CAPABILITIES, ISSUE, MANAGE_CUSTOMERS, MANAGE_DOCUMENTS, MANAGE_SETUP, POST_PAYMENTS, VIEW,
+};
+pub use records::{
+    Customer, Document, DocumentLine, DocumentQuery, Page, Series, Setup, SetupChange, TaxCode,
+    TaxLine,
+};
+
+use bilibi_company::organisation;
+use bilibi_database::{Db, Error, MutationBoundary, MutationTransaction};
+use bilibi_finance_ledger::{Ledger, LedgerError};
+use bilibi_module_registry::{Layer, Module, Service};
+use bilibi_tenancy::Scope;
+use std::sync::Arc;
+use tokio_postgres::GenericClient;
+
+pub const MODULE: &str = "finance/receivables";
+pub const SERVICE: &str = "finance/receivables.receivables";
+
+inventory::submit! {
+    Module {
+        id: MODULE, layer: Layer::Domains,
+        dependencies: &["base/authz", "base/database", "base/tenancy", "core/company", "finance/ledger", "finance/attachments"],
+        migrations: &[("finance-receivables-001-receivables", include_str!("../migrations/001-receivables.sql"))],
+        services: &[Service { id: SERVICE, factory: |services| {
+            Ok(Arc::new(Receivables {
+                db: services.get::<Db>("base/database.pool")?.as_ref().clone(),
+                mutations: services.get("base/database.mutations")?,
+                ledger: services.get(bilibi_finance_ledger::SERVICE)?,
+            }))
+        }}],
+    }
+}
+
+pub type Result<T> = std::result::Result<T, ReceivableError>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum ReceivableError {
+    #[error("Access denied")]
+    Unauthorized,
+    #[error("Not found")]
+    CompanyNotFound,
+    #[error("This company is archived and read-only")]
+    CompanyArchived,
+    #[error("Receivables is not configured")]
+    NotConfigured,
+    #[error("Series not found")]
+    SeriesNotFound,
+    #[error("Tax code not found")]
+    TaxCodeNotFound,
+    #[error("Customer not found")]
+    CustomerNotFound,
+    #[error("Document not found")]
+    DocumentNotFound,
+    #[error("Not a draft")]
+    NotADraft,
+    #[error("Invalid option")]
+    InvalidOption,
+    #[error("Invalid input")]
+    Invalid(Vec<FieldError>),
+    #[error(transparent)]
+    Ledger(#[from] LedgerError),
+    #[error(transparent)]
+    Failed(#[from] Error),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct FieldError {
+    pub field: String,
+    /// One-based input line number, if this error belongs to a line.
+    pub line: Option<usize>,
+    pub message: String,
+}
+
+pub(crate) fn invalid(field: &str, message: impl Into<String>) -> ReceivableError {
+    ReceivableError::Invalid(vec![FieldError {
+        field: field.into(),
+        line: None,
+        message: message.into(),
+    }])
+}
+
+fn refusal(error: Error) -> ReceivableError {
+    match error {
+        Error::Forbidden | Error::Unauthorized => ReceivableError::Unauthorized,
+        Error::NotFound => ReceivableError::CompanyNotFound,
+        other => ReceivableError::Failed(other),
+    }
+}
+
+pub(crate) async fn authorize(
+    client: &impl GenericClient,
+    scope: &Scope,
+    company: i64,
+    capability: &str,
+) -> Result<()> {
+    organisation::authorize_target(client, scope, company, capability)
+        .await
+        .map(|_| ())
+        .map_err(refusal)
+}
+
+/// Each method authorizes the sealed scope and explicit target company.
+/// Attributes are JSON objects with Bilimbi's field names; immutable and
+/// unknown fields are ignored, and omitted fields preserve existing values.
+pub struct Receivables {
+    db: Db,
+    mutations: Arc<MutationBoundary>,
+    ledger: Arc<Ledger>,
+}
+
+impl Receivables {
+    pub fn series_kinds() -> &'static [&'static str] {
+        &["invoice", "credit_note", "payment"]
+    }
+    pub fn document_kinds() -> &'static [&'static str] {
+        &["invoice", "credit_note"]
+    }
+
+    async fn write<'c>(
+        &self,
+        client: &'c mut tokio_postgres::Client,
+        scope: &Scope,
+        company: i64,
+        capability: &str,
+        action: &str,
+    ) -> Result<MutationTransaction<'c>> {
+        authorize(client, scope, company, capability).await?;
+        let tx = self
+            .mutations
+            .begin(client, scope.mutation_context(action))
+            .await?;
+        organisation::require_writable(tx.sql(), scope, company, true)
+            .await
+            .map_err(|e| match e {
+                bilibi_company::WriteError::NotFound => ReceivableError::CompanyNotFound,
+                bilibi_company::WriteError::Archived => ReceivableError::CompanyArchived,
+                bilibi_company::WriteError::Access(e) => refusal(e),
+                _ => ReceivableError::Failed(Error::Internal),
+            })?;
+        authorize(tx.sql(), scope, company, capability).await?;
+        Ok(tx)
+    }
+}

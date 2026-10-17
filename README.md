@@ -11,9 +11,11 @@ Bilibi checkout; it does not build on its own.
 | [`ledger/`](ledger/README.md) | `finance/ledger` | each company's book and currency, its chart of accounts, its journal entries (append-only, numbered without gaps, balanced at commit, optionally owned by another module's record) with posting notices that announce only committed entries, its fiscal years of monthly periods with the closing log (close, reopen, lock, year-end close and reopen with closing entries), controlled bookkeeping and its changes, the late-recording report with its reviews, reversals (an owned entry only through its owner), the separation of duties (impersonation counted) with the approval exceptions log and its independent reviews, manual journals that post only once someone else approves them, the trial balance and account totals (also by owner) summed by PostgreSQL at a pinned entry, and the evidence datasets of the auditor's pack. |
 | [`attachments/`](attachments/README.md) | `finance/attachments` | source documents kept with the records they support: records-grade files in Base Artifacts, the company's retention years and their history, replace and remove while a record is a draft, legal holds, and the retention refresh job that follows a record's final date. The `Source` contract each record owner implements is here. |
 | [`einvoice/`](einvoice/README.md) | `finance/einvoice` | a company's fiscal documents for a clearance authority: the append-only schema (documents, lines, submissions, status events, consolidated sources and source links), the `finance.einvoice` settings (environment, format version, credentials, signing certificate and key, supplier profile, posting accounts) with encryption and PEM validators, the platform API and portal URLs, the `Authority` contract with MyInvois, and the authority's code lists with company overrides. Issuing, signing, submitting, posting and the pages follow in later versions of the module. |
+| [`payroll/`](payroll/README.md) | `finance/payroll` | posting accounts and component/claim mappings with their change logs, owned ledger posting and correction, attempts and five evidence datasets. People is absent: source lists and posting return `unavailable`, with a `TODO(domain events)` seam. Pages land in NY2. |
+| [`receivables/`](receivables/README.md) | `finance/receivables` | setup accounts and their immutable history, numbering series, immutable-rate tax codes, customers with flat party/address fields, and unnumbered invoice/credit-note drafts with per-line tax, atomic replacement and retained discard. Issuing and payments follow in NR2; like Bilimbi this module has no pages. |
 
-Every other Finance module of Bilimbi (receivables, payables,
-fixed assets, payroll, reconciliation, SST, reports) lands beside
+Every other Finance module of Bilimbi (payables,
+fixed assets, reconciliation, SST, reports) lands beside
 the ledger as a sibling module folder, in later slices of the port.
 
 The ledger also contributes 21 agent operations through Bilibi's shared `/api/v1` and `/mcp`: seven reads and fourteen reviewed writes for books, accounts, journals, reversals and fiscal closing. The [ledger contract](ledger/README.md#agent-operations) and [agent guide](ledger/guide.md) describe their inputs and controls. There are no ledger pages in Bilimbi or this port.
@@ -46,6 +48,8 @@ running proof of this repository's facade:
 DATABASE_URL=postgres://…/disposable BILIBI_SETTINGS_KEY=$(openssl rand -hex 32) \
   cargo run -p bilibi-finance-walkthrough-fixture
 ```
+
+Its NR1 section first exercises Receivables through the real facade: setup history and no-op configuration, immutable code identities, customer address normalization, checked decimal arithmetic and per-line half-up tax, empty/replace/keep/clear/discard drafts, invalid replacement rollback, inactive references, scoped reads and writes, paging, concurrent duplicate creation, archived-company refusal, SQL guards and audit capture. See the [Receivables contract](receivables/README.md) for input fields and the NR2 boundary.
 
 It migrates a fresh disposable database, installs the fixtures, and prints
 the facade's answers to accepted and refused books, accounts, entries (owners,
@@ -84,6 +88,8 @@ reproduces the earlier figures from the pinned entry number, compares an
 account's PostgreSQL totals with its listed lines, splits totals by owner,
 shows Company 002's closed year with and without its closing entries, and
 pages every evidence dataset.
+
+The Payroll section proves the People-absent `unavailable` result without any entry or attempt, posting account/mapping validation and no-op histories, scope isolation, atomic owner-posting rollback, correction of explicitly historical fixture entries (including a race and a failed-date attempt), all five evidence datasets, audited rows and the database's retention/uniqueness refusals. It does not claim People-backed recognition while that publisher is absent.
 
 ## Naming
 

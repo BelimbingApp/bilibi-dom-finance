@@ -22,6 +22,8 @@ bilibi_walkthrough_fixture::walkthrough_module_roles!();
 bilibi_finance_walkthrough_fixture::walkthrough_ledger_roles!();
 bilibi_finance_walkthrough_fixture::walkthrough_attachments_roles!();
 bilibi_finance_walkthrough_fixture::walkthrough_einvoice_roles!();
+bilibi_finance_walkthrough_fixture::walkthrough_payroll_roles!();
+bilibi_finance_walkthrough_fixture::walkthrough_receivables_roles!();
 
 /// An entry on one line: number, date, description, owner and `account:amount`
 /// per line (debits positive, credits negative).
@@ -104,6 +106,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     services.install(&modules)?;
 
     let installed = install(&db, &services).await?;
+    bilibi_finance_walkthrough_fixture::receivables::run(&db, &services).await?;
     println!("fixture book: {:?}", installed.book);
     for account in &installed.accounts {
         println!("fixture account: {account:?}");
@@ -1117,5 +1120,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     )
     .await?;
+    bilibi_finance_walkthrough_fixture::payroll::run(&db, &services).await?;
     Ok(())
 }

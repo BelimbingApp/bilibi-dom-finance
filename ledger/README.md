@@ -20,12 +20,14 @@ records (`Book`, `Account`, `Entry`, `FiscalYear`, `Period`, `ClosingEvent`,
 
 | Function | Capability | Does |
 | --- | --- | --- |
-| `get_book` | `finance.ledger.view` | The company's currency code and minor units, or `BookNotOpen` |
+| `get_book`, `get_book_on` | `finance.ledger.view` | The company's currency code and minor units, or `BookNotOpen`; `_on` uses the caller's connection |
 | `open_book` | `finance.ledger.accounts.manage` | Opens the book once with `currency_code` (three letters, trimmed and upcased) and `minor_units` (0 to 4); a second call is `BookAlreadyOpen`. A new company's book is controlled (see Controlled bookkeeping) |
-| `list_accounts` | `finance.ledger.view` | The chart of accounts by code |
+| `list_accounts`, `list_accounts_on` | `finance.ledger.view` | The chart of accounts by code; `_on` uses the caller's connection |
 | `create_account` | `finance.ledger.accounts.manage` | Adds an account: `code`, `name`, `account_type`, optional `parent_id`, `active`, `retained_earnings` |
 | `update_account` | `finance.ledger.accounts.manage` | Changes `name`, `parent_id`, `active` or `retained_earnings`; `AccountNotFound` for an id of another company |
 | `post_entry` | `finance.ledger.entries.post` | Posts a balanced entry of at least two lines (see Entries); `BookNotOpen` before the book is opened |
+| `post_entry_in` | `finance.ledger.entries.post` | Same posting inside the owner's `MutationTransaction`; leaves commit/rollback to the owner |
+| `write` | caller's supplied capabilities | Opens an audited writable-company transaction, reauthorizing inside it, for a Finance record owner |
 | `get_entry` | `finance.ledger.view` | One entry with its lines and the entry that reversed it; `EntryNotFound` for another company's id |
 | `list_entries` | `finance.ledger.view` | Entries by date then id, 100 by default and 500 at most, paged with `after`; bounded by `from`, `to`, `account_id` and `through_entry_number`; `exclude_closing` leaves out year-end closing entries and their reversals |
 | `reverse_entry` | `finance.ledger.entries.post` | Posts a manual entry's reversal (see Reversals) |
@@ -144,6 +146,8 @@ positive side (`a line has either a debit or a credit`) no finer than the
 book's minor units (`has more than N decimal places`), and each line names an
 active account of the company (`is not an account of this company`,
 `is inactive`). A `FieldError` about a line carries its 1-based `line`.
+
+When a Finance owner must record its own posting in the same commit, open `Ledger::write(client, scope, company_id, capabilities, action)` and call `post_entry_in(&mut tx, scope, company_id, new, options)`. Both its capability and Ledger's are checked; the owner returns every changed row as a `Change` and owns commit/rollback. Never call standalone `post_entry` while holding the company lock on another connection: it would wait on itself. `reverse_owned_entry` already joins that same owner transaction.
 
 `PostOptions` carries Bilimbi's two options. `settlement_account_ids` lists
 accounts that may be inactive in this entry only, for a module settling a
