@@ -1,4 +1,5 @@
 //! Bilimbi Finance.Einvoice.Web DocumentsLive, DocumentLive and PdfController.
+pub(crate) mod control;
 mod detail;
 mod index;
 mod messages;

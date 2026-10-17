@@ -135,6 +135,11 @@ inventory::submit! {
             )) },
             Service { id: workers::SUBMIT_SERVICE, factory: |services| workers::handler(services, workers::Job::Submit) },
             Service { id: workers::POLL_SERVICE, factory: |services| workers::handler(services, workers::Job::Poll) },
+            Service { id: web::control::SERVICE, factory: |services| Ok(Arc::new(bilibi_ui::page::PageService::<Scope, Error>(Arc::new(web::control::Pages {
+                einvoice: services.get(SERVICE)?,
+                display: services.get("base/datetime.display")?,
+                locales: services.get("base/locale.locales")?,
+            })))) },
         ],
     }
 }
