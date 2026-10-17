@@ -29,6 +29,7 @@ pub mod attachments;
 pub mod controls;
 pub mod payables;
 pub mod payroll;
+mod payroll_ui;
 pub mod periods;
 pub mod receivables;
 pub mod totals;

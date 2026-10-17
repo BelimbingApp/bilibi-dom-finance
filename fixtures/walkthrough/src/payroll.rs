@@ -245,7 +245,8 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
     ));
     tx.rollback().await?;
     let mut ids = Vec::new();
-    for source in [9001_i64, 9002] {
+    // The third historical original exercises the UI confirmation flow below.
+    for source in [9001_i64, 9002, 9003] {
         let mut tx = ledger
             .write(
                 &mut client,
@@ -449,5 +450,6 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         assert!(refused, "accepted {sql}");
     }
     println!("Payroll contracts passed: configuration/no-op, isolation, unavailable/no events, owner rollback, independent capability, historical reversal/race/mirror, five evidence datasets, audit and retention guards");
+    crate::payroll_ui::run(db, services, ids[2]).await?;
     Ok(())
 }

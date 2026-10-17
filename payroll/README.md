@@ -1,6 +1,14 @@
 # Payroll posting
 
-`finance/payroll` recognises finalised payroll runs and approved staff claims in the ledger. It mirrors Bilimbi `Bilimbi.Finance.Payroll` at `4abfaf829321f8540581d833752a086b21b45ba9`. It does not calculate payroll, submit statutory returns, pay salaries or settle reimbursements. NY1 is services only; the Postings and Setup pages belong to NY2.
+`finance/payroll` recognises finalised payroll runs and approved staff claims in the ledger. It mirrors Bilimbi `Bilimbi.Finance.Payroll` at `4abfaf829321f8540581d833752a086b21b45ba9`. It does not calculate payroll, submit statutory returns, pay salaries or settle reimbursements.
+
+## Pages
+
+`/finance/payroll` (“Payroll and claims”) shows the People-absent notice and local postings with standing and reversal reasons. `/finance/payroll/setup` (“Payroll posting accounts”) shows the company's posting accounts, component/category mappings and their two change histories. Both routes require `finance.payroll.view`; their menu item is “Payroll and claims” under Finance. Setup is linked from Postings, not a second menu item.
+
+All lists use shared FlexTable/ListColumns on ListState, with independent column arrangement and row-height controls. Bilimbi enables no sort, filter or pager here, so these pages add none. Active accounts of the required types populate the forms; retained records still label inactive accounts, and a reader without Ledger view sees `#ID`. Mapping “Change” fills the upsert-by-key form, not an ID-based edit. Claim categories always save direction `claim`. Refusals keep drafts and display field errors; typing never writes. Every write-shaped event reauthorizes before calling the facade.
+
+Reversal retains Bilimbi's reason/date form and adds the Platform-required ConfirmDialog. Its confirmation consumes the server-held posting ID, reason and validated optional date exactly once. Cancel, a stale confirmation or a revoked grant makes no change. Only a blank date selects the company's today. People-backed lists and posting controls remain absent until People publishes its event contract; historical correction does not prove recognition.
 
 ## People is unavailable
 
@@ -47,7 +55,7 @@ Preflight and duplicate refusals create no attempt. Other accounting refusals ro
 
 ## Evidence and bounds
 
-`evidence_datasets()` lists `mapping`, `mapping_change`, `posting_event`, `settings`, `settings_change`. `evidence_page(scope, company, dataset, limit, after)` exposes explicit field order, JSON rows and next cursor; IDs ascend, `limit` is 1–500 (default 500), `after` is nonnegative (default zero). A full final page returns its last ID, so the caller may need an empty follow-up. Exact decimal totals and ISO dates/times are strings. Each call is a live authorized read, not a pinned multi-page snapshot. Change/event convenience lists return their first 500 ID-ordered rows; use evidence cursors for complete history. Postings returns the latest 500 originals with standing. Mappings are ordered by kind/code/direction.
+`evidence_datasets()` lists `mapping`, `mapping_change`, `posting_event`, `settings`, `settings_change`. `evidence_page(scope, company, dataset, limit, after)` exposes explicit field order, JSON rows and next cursor; IDs ascend, `limit` is 1–500 (default 500), `after` is nonnegative (default zero). A full final page returns its last ID, so the caller may need an empty follow-up. Exact decimal totals and ISO dates/times are strings. Each call is a live authorized read, not a pinned multi-page snapshot. Change/event convenience lists traverse those pages in ascending ID order. The unpaged Postings page returns all originals with standing, newest first, so old originals remain reachable for correction. Mappings are ordered by kind/code/direction.
 
 ## Running proof
 
@@ -59,3 +67,5 @@ DATABASE_URL=postgres://…/disposable BILIBI_SETTINGS_KEY=$(openssl rand -hex 3
 ```
 
 The Payroll section asserts configuration/no-op histories, account roles, isolation and withheld writes, source `unavailable` without attempts, Ledger owner rollback and independent grants, an explicitly labelled historical posting's reasoned reversal, earlier-date failure and retry, concurrent reversal, mirrored lines, all five evidence cursors, audited affected rows, and PostgreSQL retention/uniqueness/event-shape refusals. No unit tests, provider stubs or production seeds.
+
+Its page scenarios run through the registered PageService: settings and mapping saves, change-only forms, a 400-character Unicode reason, field errors and retained drafts, independent column controls, Ledger-withheld labels, grants revoked after mount, malformed reversal dates, cancel and one-shot confirmation, and complete change history beyond 500 rows. Browser proof uses this disposable database and the real app; it never seeds a product installation.
