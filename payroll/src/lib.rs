@@ -1,12 +1,13 @@
 //! Payroll recognition, mirroring Bilimbi `Bilimbi.Finance.Payroll`.
 //! Only this facade is public. People is absent; no cross-domain calls or
-//! invented publisher contract are made (see `source.rs`). NY2 owns pages.
+//! invented publisher contract are made (see `source.rs`).
 mod configuration;
 mod contributions;
 mod evidence;
 mod posting;
 mod source;
 mod store;
+mod web;
 
 use bilibi_company::organisation;
 use bilibi_database::{Db, Error};
@@ -27,13 +28,19 @@ pub type Result<T> = std::result::Result<T, PayrollError>;
 inventory::submit! {
     Module {
         id: MODULE, layer: Layer::Domains,
-        dependencies: &["base/authz", "base/database", "base/datetime", "base/settings", "base/tenancy", "core/company", "finance/ledger"],
+        dependencies: &["base/authz", "base/database", "base/datetime", "base/locale", "base/menu", "base/settings", "base/tenancy", "base/ui", "core/company", "finance/ledger"],
         migrations: &[("finance-payroll-001-payroll", include_str!("../migrations/001-payroll.sql"))],
         services: &[Service { id: SERVICE, factory: |services| Ok(Arc::new(Payroll {
             db: services.get::<Db>("base/database.pool")?.as_ref().clone(),
             ledger: services.get(bilibi_finance_ledger::SERVICE)?,
             settings: services.get("base/settings.store")?,
-        })) }],
+        })) }, Service { id: "finance/payroll.pages", factory: |services| {
+            Ok(Arc::new(bilibi_ui::page::PageService::<Scope, Error>(Arc::new(web::Pages {
+                payroll: services.get(SERVICE)?,
+                display: services.get("base/datetime.display")?,
+                locales: services.get("base/locale.locales")?,
+            }))))
+        } }],
     }
 }
 
@@ -217,10 +224,20 @@ impl Payroll {
         self.log(scope, company, "mapping_change").await
     }
     async fn log(&self, scope: &Scope, company: i64, dataset: &str) -> Result<Vec<Value>> {
-        Ok(self
-            .evidence_page(scope, company, dataset, Some(500), None)
-            .await?
-            .rows)
+        // Bilimbi's unpaged operational histories are complete. Evidence
+        // retains its bounded contract; walk those pages inside the facade.
+        let mut rows = Vec::new();
+        let mut after = None;
+        loop {
+            let page = self
+                .evidence_page(scope, company, dataset, Some(500), after)
+                .await?;
+            rows.extend(page.rows);
+            after = page.next;
+            if after.is_none() {
+                return Ok(rows);
+            }
+        }
     }
 }
 

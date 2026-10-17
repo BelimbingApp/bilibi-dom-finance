@@ -7,14 +7,19 @@
 //! sits behind this trait in that authority's own module. This release clears
 //! documents with one authority, MyInvois (`myinvois.rs`).
 //!
-//! Only the callbacks whose types exist today are declared here. The ones that
-//! take or return a draft or a recorded document (draft validation, the
-//! payload builder and signer, the consolidated document, the consolidation
-//! refusal) join the trait with the MyInvois rules and builder, and the API
-//! callbacks (login, submit, progress, find, status, cancel) with the MyInvois
-//! client, each with the types it needs; none of them is invented before
-//! then.
+//! The callbacks that take a draft or a recorded document (draft validation
+//! and the payload) are here with their types; the API callbacks (login,
+//! submit, progress, find, status, cancel) join the trait with the MyInvois
+//! client, and the consolidated document's shape and refusal with
+//! consolidation, each with the types it needs; none of them is invented
+//! before then.
+use crate::code_lists::Codes;
+use crate::document::Document;
+use crate::draft::Draft;
+use crate::myinvois::signer::SigningKey;
+use crate::FieldError;
 use jiff::Timestamp;
+use std::collections::BTreeMap;
 
 /// A document format version a company may choose, and whether it carries a
 /// signature.
@@ -173,6 +178,65 @@ pub struct ConsolidationWindow {
     pub closes_at: Timestamp,
 }
 
+/// What the authority's draft validation reads beside the draft.
+#[derive(Clone, Copy, Debug)]
+pub struct ValidationContext<'a> {
+    /// The company's own profile, which is the supplier, or the buyer of a
+    /// self-billed document.
+    pub supplier: &'a Supplier,
+    /// The company's active codes, one entry per list the authority
+    /// publishes (`Einvoice::list_codes`); a list missing here knows no code.
+    pub codes: &'a BTreeMap<String, Codes>,
+    /// The document a note's `original_document_id` names, as the company
+    /// recorded it, or `None` when it names none of the company's.
+    pub original: Option<&'a Original>,
+    /// Whether the draft is a consolidated document built by consolidation.
+    pub consolidated: bool,
+}
+
+/// What draft validation needs of the original document a note corrects.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Original {
+    pub document_type: String,
+    pub currency_code: String,
+    /// The document's current status (`valid`, `rejected`, ...).
+    pub status: String,
+    /// The authority's UUID for it, once validated.
+    pub document_uuid: Option<String>,
+}
+
+/// How a document's payload is built.
+#[derive(Clone, Copy, Debug)]
+pub struct PayloadOptions<'a> {
+    /// The format version, one of [`Authority::document_versions`].
+    pub version: &'a str,
+    /// The company's certificate and key, for a version that is signed.
+    pub signing_key: Option<&'a SigningKey>,
+}
+
+/// A document's payload: the exact bytes to submit.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Payload {
+    /// `JSON` or `XML`.
+    pub format: &'static str,
+    pub version: String,
+    pub bytes: Vec<u8>,
+}
+
+/// Why a payload was not built.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum PayloadError {
+    /// The version is signed and no signing key was given.
+    #[error("signing key required")]
+    SigningKeyRequired,
+    /// Not a version the authority accepts.
+    #[error("unsupported version")]
+    UnsupportedVersion,
+    /// The private key did not sign.
+    #[error("the private key did not sign")]
+    SigningFailed,
+}
+
 /// What one clearance authority defines for the module.
 pub trait Authority {
     /// The authority's stable ID, stored on each document and code override.
@@ -230,4 +294,21 @@ pub trait Authority {
     /// The public link that shows a validated document on the authority's
     /// portal, whose base URL is `portal_url`.
     fn validation_url(&self, portal_url: &str, document_uuid: &str, long_id: &str) -> String;
+
+    /// The authority's own refusals of a draft, beside the shape check every
+    /// authority shares (`Draft::validate` runs both): codes outside the
+    /// company's code lists, fields its rules require, a company profile
+    /// missing what every document carries, and a note whose original is not
+    /// one the authority lets it reference.
+    fn validate(&self, draft: &Draft, context: &ValidationContext<'_>) -> Vec<FieldError>;
+
+    /// The payload for a recorded document in `options.version` of the
+    /// authority's format: its format, version and the exact bytes to submit,
+    /// signed at `signing_time` when the version is signed.
+    fn payload(
+        &self,
+        document: &Document,
+        options: &PayloadOptions<'_>,
+        signing_time: Timestamp,
+    ) -> Result<Payload, PayloadError>;
 }

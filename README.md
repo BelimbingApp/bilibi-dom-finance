@@ -10,13 +10,15 @@ Bilibi checkout; it does not build on its own.
 | --- | --- | --- |
 | [`ledger/`](ledger/README.md) | `finance/ledger` | each company's book and currency, its chart of accounts, its journal entries (append-only, numbered without gaps, balanced at commit, optionally owned by another module's record) with posting notices that announce only committed entries, its fiscal years of monthly periods with the closing log (close, reopen, lock, year-end close and reopen with closing entries), controlled bookkeeping and its changes, the late-recording report with its reviews, reversals (an owned entry only through its owner), the separation of duties (impersonation counted) with the approval exceptions log and its independent reviews, manual journals that post only once someone else approves them, the trial balance and account totals (also by owner) summed by PostgreSQL at a pinned entry, and the evidence datasets of the auditor's pack. |
 | [`attachments/`](attachments/README.md) | `finance/attachments` | source documents kept with the records they support: records-grade files in Base Artifacts, the company's retention years and their history, replace and remove while a record is a draft, legal holds, and the retention refresh job that follows a record's final date. The `Source` contract each record owner implements is here. |
-| [`einvoice/`](einvoice/README.md) | `finance/einvoice` | a company's fiscal documents for a clearance authority: the append-only schema (documents, lines, submissions, status events, consolidated sources and source links), the `finance.einvoice` settings (environment, format version, credentials, signing certificate and key, supplier profile, posting accounts) with encryption and PEM validators, the platform API and portal URLs, the `Authority` contract with MyInvois, and the authority's code lists with company overrides. Issuing, signing, submitting, posting and the pages follow in later versions of the module. |
+| [`einvoice/`](einvoice/README.md) | `finance/einvoice` | a company's fiscal documents for a clearance authority: the append-only schema (documents, lines, submissions, status events, consolidated sources and source links), the `finance.einvoice` settings (environment, format version, credentials, signing certificate and key, supplier profile, posting accounts) with encryption and PEM validators, the platform API and portal URLs, the `Authority` contract with MyInvois and its rules (the draft a caller asks to issue and its validation with derived amounts, the UBL 2.1 JSON builder with its byte-exact ordered writer, the JSON XAdES signer and verifier, the certificate's facts), and the authority's code lists with company overrides. Issuing, submitting, posting and the pages follow in later versions of the module. |
 | [`payables/`](payables/README.md) | `finance/payables` | settings and tax codes with change histories; immutable bills and debit notes; independent approval, void, and atomic owned ledger posting; source documents. Payment requests, independent payment approval/rejection, owned reversals, aged balances, tax totals, control-account tie-out and evidence. Matching and pages follow in NP2/NP4. |
-| [`payroll/`](payroll/README.md) | `finance/payroll` | posting accounts and component/claim mappings with their change logs, owned ledger posting and correction, attempts and five evidence datasets. People is absent: source lists and posting return `unavailable`, with a `TODO(domain events)` seam. Pages land in NY2. |
-| [`receivables/`](receivables/README.md) | `finance/receivables` | setup accounts and their immutable history, numbering series, immutable-rate tax codes, customers with flat party/address fields, and unnumbered invoice/credit-note drafts with per-line tax, atomic replacement and retained discard. Issuing and payments follow in NR2; like Bilimbi this module has no pages. |
+| [`payroll/`](payroll/README.md) | `finance/payroll` | the Payroll and claims Postings page and posting-account Setup page, component/claim mappings with their change logs, owned ledger posting and correction, attempts and five evidence datasets. People is absent: the page states this and source posting returns `unavailable`, with a `TODO(domain events)` seam. |
+| [`receivables/`](receivables/README.md) | `finance/receivables` | setup, series, tax codes and customers; invoice/credit-note drafts and numbered issuance with frozen party and owned posting; fully allocated receipts and owned reversals; dated/pinned aging, tax and received-tax totals, control-account tie-out, attachment sources and eleven evidence datasets. Like Bilimbi this module has no pages. |
 
 Every other Finance module of Bilimbi (fixed assets, reconciliation, SST, reports) lands beside
 the ledger as a sibling module folder, in later slices of the port.
+
+The ledger also contributes 21 agent operations through Bilibi's shared `/api/v1` and `/mcp`: seven reads and fourteen reviewed writes for books, accounts, journals, reversals and fiscal closing. The [ledger contract](ledger/README.md#agent-operations) and [agent guide](ledger/guide.md) describe their inputs and controls. There are no ledger pages in Bilimbi or this port.
 
 ## Mount
 
@@ -49,7 +51,7 @@ DATABASE_URL=postgres://…/disposable BILIBI_SETTINGS_KEY=$(openssl rand -hex 3
 
 The settings key is an ephemeral 32-byte key for the encrypted e-invoice settings proof; never reuse a production key.
 
-Its NR1 section first exercises Receivables through the real facade: setup history and no-op configuration, immutable code identities, customer address normalization, checked decimal arithmetic and per-line half-up tax, empty/replace/keep/clear/discard drafts, invalid replacement rollback, inactive references, scoped reads and writes, paging, concurrent duplicate creation, archived-company refusal, SQL guards and audit capture. See the [Receivables contract](receivables/README.md) for input fields and the NR2 boundary.
+Its NR1 section first exercises Receivables setup and drafts through the real facade. Its NR2 section runs last: issue-time snapshots and numbering races, multi-control receipts, owned reversals, inactive-control settlements, closed-period and late audit rollback, dated/pinned aging and tax boundaries, unrounded received-tax shares, competing payments/reversals, control tie-out differences, both attachment sources, eleven evidence exports, live grants, archival, SQL guards and complete row audits. See the [Receivables contract](receivables/README.md) for inputs and parity adaptations.
 
 It migrates a fresh disposable database, installs the fixtures, and prints
 the facade's answers to accepted and refused books, accounts, entries (owners,
@@ -80,8 +82,14 @@ preparer), races two approvals of one journal, and ends with the database's
 own journal and exception refusals. Its e-invoice section shows the code lists and
 their overrides, the company settings with their validators and encryption
 (it needs `BILIBI_SETTINGS_KEY`, 64 hex characters, and `openssl` for a
-throwaway certificate and key), the setup read, the authority's rules and the
-database's refusals on the e-invoice tables.
+throwaway certificate and key), the setup read with the certificate's facts,
+the authority's shapes and rules, drafts accepted with their derived amounts
+and refused in Bilimbi's words (invoices, notes and their originals,
+self-billed and consolidated documents), the payload a recorded document
+becomes (unsigned, and signed, verified and tampered with), and the
+database's refusals on the e-invoice tables. The e-invoice crate's
+`sdk_samples` example rebuilds the authority's four SDK samples byte for byte
+and verifies their signatures (see `einvoice/README.md`).
 Its totals section reads Company 001's
 trial balance (balanced, refused out of reach), posts a backdated entry and
 reproduces the earlier figures from the pinned entry number, compares an

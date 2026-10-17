@@ -30,8 +30,10 @@ pub mod controls;
 pub mod payables;
 pub mod payments;
 pub mod payroll;
+mod payroll_ui;
 pub mod periods;
 pub mod receivables;
+pub mod receivables_documents;
 pub mod totals;
 
 /// Every fixture account's password.

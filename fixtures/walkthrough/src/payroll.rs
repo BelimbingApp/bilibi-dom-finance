@@ -245,7 +245,9 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
     ));
     tx.rollback().await?;
     let mut ids = Vec::new();
-    for source in [9001_i64, 9002] {
+    // The third exercises page confirmation; the fourth stays available for
+    // the browser walkthrough. Neither is a recognition of People facts.
+    for source in [9001_i64, 9002, 9003, 9004] {
         let mut tx = ledger
             .write(
                 &mut client,
@@ -364,7 +366,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         .await?
         .iter()
         .any(|r| r["event"] == "reversal_failed"));
-    assert_eq!(payroll.list_postings(&viewer, 1).await?.len(), 2);
+    assert_eq!(payroll.list_postings(&viewer, 1).await?.len(), 4);
     for dataset in Payroll::evidence_datasets() {
         for (limit, after) in [(-1, 0), (0, 0), (501, 0), (1, -1)] {
             assert!(matches!(
@@ -449,5 +451,6 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         assert!(refused, "accepted {sql}");
     }
     println!("Payroll contracts passed: configuration/no-op, isolation, unavailable/no events, owner rollback, independent capability, historical reversal/race/mirror, five evidence datasets, audit and retention guards");
+    crate::payroll_ui::run(db, services, ids[2]).await?;
     Ok(())
 }

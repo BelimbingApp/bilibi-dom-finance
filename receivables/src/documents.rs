@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use tokio_postgres::GenericClient;
 
 // A single statement gives headers and children the same MVCC snapshot.
-const READ: &str = "SELECT to_jsonb(d) || jsonb_build_object(
+pub(crate) const READ: &str = "SELECT to_jsonb(d) || jsonb_build_object(
  'outstanding',CASE WHEN d.kind='invoice' AND d.status='issued' THEN finance_receivables_outstanding(d.id) ELSE NULL END,
  'lines',COALESCE((SELECT jsonb_agg(to_jsonb(l) ORDER BY line_number) FROM finance_receivables_document_lines l WHERE l.tenant_id=$1 AND l.company_id=$2 AND l.document_id=d.id),'[]'::jsonb),
  'tax_lines',COALESCE((SELECT jsonb_agg(to_jsonb(t) ORDER BY tax_code) FROM finance_receivables_document_tax_lines t WHERE t.tenant_id=$1 AND t.company_id=$2 AND t.document_id=d.id),'[]'::jsonb))
@@ -294,7 +294,12 @@ async fn draft(client: &impl GenericClient, tenant: i64, company: i64, id: i64) 
     }
     Ok(document)
 }
-async fn read(client: &impl GenericClient, tenant: i64, company: i64, id: i64) -> Result<Document> {
+pub(crate) async fn read(
+    client: &impl GenericClient,
+    tenant: i64,
+    company: i64,
+    id: i64,
+) -> Result<Document> {
     let row = client
         .query_opt(&format!("{READ} AND d.id=$3"), &[&tenant, &company, &id])
         .await
@@ -382,8 +387,8 @@ fn calculate_line(
     )?;
     v::text(&mut line, "description", true, 500)?;
     let limit = Decimal::from(10_000_000_000_000_000_i64);
-    let quantity = v::decimal(&mut line, "quantity", true, limit)?;
-    let price = v::decimal(&mut line, "unit_price", false, limit)?;
+    let quantity = v::decimal(&mut line, "quantity", true, limit, 4)?;
+    let price = v::decimal(&mut line, "unit_price", false, limit, 4)?;
     v::integer(&mut line, "account_id", false)?;
     if line["account_id"].is_null() {
         line["account_id"] = setup["income_account_id"].clone();

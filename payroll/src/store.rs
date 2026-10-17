@@ -114,8 +114,8 @@ pub(crate) async fn postings(
     tenant: i64,
     company: i64,
 ) -> Result<Vec<Posting>> {
-    // Bound the operational list; complete history is paged through evidence.
-    let ids = client.query("SELECT id FROM finance_payroll_posting_events WHERE tenant_id=$1 AND company_id=$2 AND event='posted' ORDER BY id DESC LIMIT 500", &[&tenant, &company]).await?;
+    // The unpaged Postings page must keep older originals reachable for correction.
+    let ids = client.query("SELECT id FROM finance_payroll_posting_events WHERE tenant_id=$1 AND company_id=$2 AND event='posted' ORDER BY id DESC", &[&tenant, &company]).await?;
     let mut result = Vec::new();
     for id in ids {
         result.push(posting(client, tenant, company, id.get(0)).await?);

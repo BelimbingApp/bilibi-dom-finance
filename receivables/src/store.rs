@@ -138,6 +138,7 @@ pub(crate) fn decode<T: DeserializeOwned>(value: Value) -> Result<T> {
                         "outstanding",
                         "lines",
                         "tax_lines",
+                        "allocations",
                     ]
                     .contains(&key.as_str())
                     {

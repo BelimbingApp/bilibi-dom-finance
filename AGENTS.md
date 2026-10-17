@@ -66,6 +66,7 @@ they govern this code and are not copied here.
 - The ledger owns no CSS, JavaScript, pages or menu items (`web: nil` in
   Bilimbi); a Finance module with pages uses only `bilibi_ui` components and
   `FlexTable` for every list, per `apps/base/ui/AGENTS.md`.
+- Agent writes join the shared plan's audited transaction through the ledger's private `*_on` methods, never the pool-owning public wrappers: nested commits would escape plan rollback. Preview on the handed `OperationClient`; retain the transaction-local review fence because the pinned engine previews every step before executing any.
 
 - Post an entry only through `Ledger::post_entry` and read it through
   `get_entry`/`list_entries`; never insert into or select from
@@ -145,7 +146,19 @@ they govern this code and are not copied here.
   while holding the company lock can exhaust the pool behind waiting writers.
 - Change receivable drafts through `Receivables`, not its tables: null/missing
   lines preserve snapshots, an array replaces them atomically, and discard
-  keeps them. Issuing, payments and attachment sources belong to NR2.
+  keeps them. Issue through `issue_document` and settle through `record_payment`
+  / `reverse_payment`: they retain each invoice's original control after setup
+  changes and commit its record with the owned entry. Read dated figures with
+  the report facade at one entry pin, never the unbounded document outstanding.
+- Validate a document to issue with `Draft::validate` (the shape every
+  authority shares, then `Authority::validate`), never with checks of your own
+  on the facade: it derives every amount and answers `FieldError`s at the
+  field's path in Bilimbi's words. Write the authority's JSON only through
+  `myinvois::json::Json` and build and sign it only through `myinvois::ubl`
+  and `myinvois::signer` (or `Authority::payload`), never `serde_json`: the
+  authority hashes and signs exact bytes, and `serde_json`'s maps sort keys
+  and reformat numbers. Read a certificate's facts with `Certificate::parse`
+  and report them, never the PEM.
 
 ## Maintaining this file
 

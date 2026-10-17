@@ -4,6 +4,7 @@
 //! company's book opens controlled. The facade authorizes and holds the
 //! company lock; these run inside it.
 use crate::{BookkeepingChange, FieldError};
+use bilibi_agent_api::OperationClient;
 use bilibi_database::Result;
 use serde_json::{json, Value};
 use tokio_postgres::{GenericClient, Row};
@@ -15,7 +16,7 @@ const COLUMNS: &str =
 
 /// Whether the company is controlled by its latest change (`false` with none).
 pub(crate) async fn controlled(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     tenant: i64,
     company_id: i64,
 ) -> Result<bool> {
@@ -26,7 +27,7 @@ pub(crate) async fn controlled(
 
 /// The company's latest change, or `None` before any.
 pub(crate) async fn latest(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     tenant: i64,
     company_id: i64,
 ) -> Result<Option<BookkeepingChange>> {

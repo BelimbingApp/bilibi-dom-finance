@@ -1,4 +1,4 @@
-//! Mirrors Bilimbi Payroll.Contributions; pages/menu ship in NY2.
+//! Mirrors Bilimbi Payroll.Contributions and priv/web_routes.exs.
 use crate::MODULE;
 use bilibi_authz::{CapabilityDefinition as C, RoleDefinition, VocabularyContribution, VOCABULARY};
 use bilibi_module_registry::{Contribution, Provenance};
@@ -11,3 +11,19 @@ inventory::submit! { Contribution::new(VOCABULARY, MODULE, Provenance { module: 
     roles: &[RoleDefinition { code: "tenant_owner", name: "Tenant Owner", description: "Contributed system role; reconciled explicitly", grant_all: false, capabilities: &CAPABILITIES }],
     system_principals: &[],
 }) }
+
+use bilibi_module_registry::contributions::{Access, Method, Route, ROUTES};
+inventory::submit! { Contribution::new(ROUTES, "finance/payroll.postings", Provenance { module: MODULE, source: file!(), line: line!() }, &Route {
+    method: Method::Get, path: "/finance/payroll", service: "finance/payroll.pages", operation: "postings", access: Access::Capability(VIEW), framed: true,
+}) }
+inventory::submit! { Contribution::new(ROUTES, "finance/payroll.setup", Provenance { module: MODULE, source: file!(), line: line!() }, &Route {
+    method: Method::Get, path: "/finance/payroll/setup", service: "finance/payroll.pages", operation: "setup", access: Access::Capability(VIEW), framed: true,
+}) }
+bilibi_menu::contribute!(
+    "finance/payroll",
+    bilibi_menu::MenuItem::page("finance.payroll", "Payroll and claims", "/finance/payroll")
+        .under("finance")
+        .icon("users")
+        .requires(bilibi_menu::Requirement::Capability(VIEW))
+        .order(12)
+);

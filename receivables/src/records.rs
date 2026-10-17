@@ -128,6 +128,49 @@ pub struct Document {
     pub discarded_at: Option<String>,
     pub lines: Vec<DocumentLine>,
     pub tax_lines: Vec<TaxLine>,
+    /// Present only on issue: `queued`, `none`, or `error: unauthorized`
+    /// when the issuer cannot view the source (issuance still succeeds).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retention_refresh: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Allocation {
+    pub document_id: i64,
+    #[serde(deserialize_with = "money")]
+    pub amount: Money,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaymentReversal {
+    pub reversal_date: String,
+    pub reason: String,
+    pub ledger_entry_id: i64,
+    pub ledger_entry_number: i64,
+    pub reversed_by_user_id: i64,
+    pub reversed_by_impersonator_id: Option<i64>,
+    pub reversed_at: String,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Payment {
+    pub id: i64,
+    pub series_id: i64,
+    pub customer_id: i64,
+    pub payment_number: i64,
+    pub payment_reference: String,
+    pub payment_date: String,
+    #[serde(deserialize_with = "money")]
+    pub amount: Money,
+    pub currency_code: String,
+    pub deposit_account_id: i64,
+    pub reference: Option<String>,
+    pub description: Option<String>,
+    pub ledger_entry_id: i64,
+    pub ledger_entry_number: i64,
+    pub recorded_by_user_id: i64,
+    pub recorded_by_impersonator_id: Option<i64>,
+    pub recorded_at: String,
+    pub allocations: Vec<Allocation>,
+    pub reversal: Option<PaymentReversal>,
 }
 
 // Storage has already enforced numeric(20,4); arithmetic uses the actual
@@ -170,5 +213,11 @@ pub struct DocumentQuery {
     pub page: Page,
     pub kind: Option<String>,
     pub status: Option<String>,
+    pub customer_id: Option<i64>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct PaymentQuery {
+    pub page: Page,
     pub customer_id: Option<i64>,
 }

@@ -271,7 +271,7 @@ impl Receivables {
             }
             v::range(&mut data, "payment_terms_days", 0, 3650)?;
         } else if tax {
-            v::decimal(&mut data, "rate", false, Decimal::from(1000))?;
+            v::decimal(&mut data, "rate", false, Decimal::from(1000), 4)?;
             let chart = self
                 .ledger
                 .list_accounts_on(tx.sql(), scope, company)

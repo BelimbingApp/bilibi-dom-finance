@@ -74,6 +74,45 @@ and a company's ledger writes run one at a time. Refused values come back as
 (`can't be blank`, `has already been taken`, `must be an equity account`,
 `would place the account under itself`, ...).
 
+## Agent operations
+
+H1 makes the facade-only writes reachable through the Platform's shared `/api/v1` and `/mcp` contracts. Discover and describe `finance.ledger.*` and read the `finance.ledger` guide before writing. All inputs name `company_id`; tenant, actor and impersonator come from the sealed credential. Keys, titles and schemas use meta-terms; company-specific discovery wording belongs in `keywords` (none are hardcoded here).
+
+| Suffix under `finance.ledger.` | Contract |
+| --- | --- |
+| `book.get` | Book or null, controlled-bookkeeping and duty-separation changes |
+| `account.list` | Database-code-ordered chart; `after_code`, `next_after_code` |
+| `journal.get`, `journal.list` | Lines and decision; list by number with optional `status`, `after`, `next_after` |
+| `entry.get`, `entry.list` | Immutable lines and ownership/reversal identifiers; list filters `from`, `to`, `account_id`, `through_entry_number`, `exclude_closing`; cursor pair `after_date`, `after_id` in `next_after` |
+| `fiscal_year.list` | Years with periods/statuses; `after_start_date`, `next_after_start_date` |
+| `book.open`, `account.create`, `account.update` | Reviewed book/chart changes; account update preserves omitted fields and uses `clear_parent` to remove a grouping |
+| `journal.submit`, `journal.approve`, `journal.reject` | Submission does not post; approval posts once with separation of duties; rejection records a reason without posting |
+| `entry.reverse` | Mirror a manual entry once, never an owned or closing entry |
+| `fiscal_year.open`, `fiscal_year.close`, `fiscal_year.reopen`, `fiscal_year.lock` | Open monthly periods, close with computed entry, reopen with closing reversal, or atomically lock all remaining closed periods |
+| `period.close`, `period.reopen`, `period.lock` | Existing facade ordering, reason and permanent-lock rules |
+
+The seven reads return at most `page_size` records (1–100, default 100) on list operations. The fourteen writes require shared plan preview/commit; direct calls refuse writes. Preview validates normalized/defaulted values on the caller's connection, without business mutations, and shows exact proposed entry lines, current accounts/periods and consequential designation changes. Amounts are decimal strings, never binary floats. Commit reauthorizes and joins the shared audited transaction through private facade methods; all operations and audit rows roll back together on refusal. A successful record response has `path: null`: this module has no pages.
+
+The pinned Platform previews every step before executing any. A transaction-local FIFO of review hashes rechecks each step immediately before mutation, so earlier steps cannot silently change later reviewed facts. Dependent steps need separate plans. Same-company account edits conservatively review the full chart, so even independent account edits need separate plans. Whole-year lock composes existing period locks in date order on the same transaction; it adds no year-lock event. No operation exposes direct posting, owner/settlement bypasses or disabling controls. See [guide.md](guide.md) for consent, staleness and safe ordering.
+
+### Live HTTP and MCP proof
+
+Use a new disposable PostgreSQL 18 database and run these commands from the mounted Platform root. The bootstrap installs only fixture records, issues real device/API and resource-bound PKCE/MCP credentials for two independent people and another tenant, and saves them with mode 0600 using `create_new`. Do not use a production database or print the credential file. The existing facade walkthrough remains the default binary.
+
+```sh
+export DATABASE_URL=postgres://…/empty_agent_proof
+export BILIBI_AGENT_PROOF=disposable
+export BILIBI_AGENT_CREDENTIALS=/tmp/ledger-agent-credentials.json
+export APP_ORIGIN=http://localhost:3100
+cargo run -p bilibi-finance-walkthrough-fixture --bin agent-operations
+cargo build -p bilibi-web
+amp orb service start ledger-proof --port 3100 --command \
+  'BIND_ADDR=127.0.0.1:3100 ./target/debug/bilibi-web run'
+python3 apps/domains/finance/fixtures/walkthrough/agent-operations.py
+```
+
+The wire walkthrough exercises all writes over both transports, observes preview non-mutation and code non-consumption on rollback, checks exact approval/reversal/closing amounts, traverses mixed-case/non-ASCII account cursors, and refuses precision, balance, same-person approval, closed/locked periods, double reversal, cross-tenant reads and actor spoofing. Two defaulted year opens in one plan prove the intra-plan fence and rollback of the first insert. Credentials expire after one hour; rerun on another fresh database for another proof.
+
 ## Capabilities
 
 Twelve keys, verbatim from Bilimbi, under the `finance` domain, all granted to

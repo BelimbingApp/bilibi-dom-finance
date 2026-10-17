@@ -1,0 +1,7 @@
+{# Mirrors Bilimbi Payroll.Web.PostingsLive and SetupLive; shared fragments own markup. #}
+{% import "components.html" as ui %}
+{% import "feedback.html" as feedback %}
+{% call ui::page(id=id) %}
+{% call feedback::flash_group(messages=flash) %}{% endcall %}
+{% for part in parts %}{{ part }}{% endfor %}
+{% endcall %}

@@ -1,22 +1,33 @@
-//! Receivables setup and drafts, mirroring Bilimbi.Finance.Receivables.
+//! Receivables documents, settlements and figures, mirroring Bilimbi.Finance.Receivables.
 //! No pages or operations: the reference is facade-only (`web: nil`).
 mod configuration;
 mod contributions;
 mod documents;
+mod evidence;
+mod posting;
 mod records;
+mod reports;
+mod sources;
 mod store;
 mod validation;
 
 pub use contributions::{
     CAPABILITIES, ISSUE, MANAGE_CUSTOMERS, MANAGE_DOCUMENTS, MANAGE_SETUP, POST_PAYMENTS, VIEW,
 };
+pub use evidence::EvidencePage;
 pub use records::{
-    Customer, Document, DocumentLine, DocumentQuery, Page, Series, Setup, SetupChange, TaxCode,
-    TaxLine,
+    Allocation, Customer, Document, DocumentLine, DocumentQuery, Page, Payment, PaymentQuery,
+    PaymentReversal, Series, Setup, SetupChange, TaxCode, TaxLine,
+};
+pub use reports::{
+    AgedCustomer, AgedDocument, AgedReceivables, AgingBucket, AgingOptions, ControlAccountTieOut,
+    ControlAccountsTieOut, OtherPosting, ReceivedTaxOptions, ReceivedTaxTotal, TaxOptions,
+    TaxTotal,
 };
 
 use bilibi_company::organisation;
-use bilibi_database::{Db, Error, MutationBoundary, MutationTransaction};
+use bilibi_database::{Db, Error, MutationTransaction};
+use bilibi_finance_attachments::Attachments;
 use bilibi_finance_ledger::{Ledger, LedgerError};
 use bilibi_module_registry::{Layer, Module, Service};
 use bilibi_tenancy::Scope;
@@ -34,8 +45,8 @@ inventory::submit! {
         services: &[Service { id: SERVICE, factory: |services| {
             Ok(Arc::new(Receivables {
                 db: services.get::<Db>("base/database.pool")?.as_ref().clone(),
-                mutations: services.get("base/database.mutations")?,
                 ledger: services.get(bilibi_finance_ledger::SERVICE)?,
+                attachments: services.get(bilibi_finance_attachments::SERVICE)?,
             }))
         }}],
     }
@@ -63,6 +74,12 @@ pub enum ReceivableError {
     DocumentNotFound,
     #[error("Not a draft")]
     NotADraft,
+    #[error("Payment not found")]
+    PaymentNotFound,
+    #[error("Already reversed")]
+    AlreadyReversed,
+    #[error(transparent)]
+    Attachment(#[from] bilibi_finance_attachments::AttachmentError),
     #[error("Invalid option")]
     InvalidOption,
     #[error("Invalid input")]
@@ -114,8 +131,8 @@ pub(crate) async fn authorize(
 /// unknown fields are ignored, and omitted fields preserve existing values.
 pub struct Receivables {
     db: Db,
-    mutations: Arc<MutationBoundary>,
     ledger: Arc<Ledger>,
+    attachments: Arc<Attachments>,
 }
 
 impl Receivables {
@@ -136,16 +153,14 @@ impl Receivables {
     ) -> Result<MutationTransaction<'c>> {
         authorize(client, scope, company, capability).await?;
         let tx = self
-            .mutations
-            .begin(client, scope.mutation_context(action))
-            .await?;
-        organisation::require_writable(tx.sql(), scope, company, true)
+            .ledger
+            .write(client, scope, company, &[capability], action)
             .await
             .map_err(|e| match e {
-                bilibi_company::WriteError::NotFound => ReceivableError::CompanyNotFound,
-                bilibi_company::WriteError::Archived => ReceivableError::CompanyArchived,
-                bilibi_company::WriteError::Access(e) => refusal(e),
-                _ => ReceivableError::Failed(Error::Internal),
+                LedgerError::CompanyNotFound => ReceivableError::CompanyNotFound,
+                LedgerError::CompanyArchived => ReceivableError::CompanyArchived,
+                LedgerError::Unauthorized => ReceivableError::Unauthorized,
+                other => ReceivableError::Ledger(other),
             })?;
         authorize(tx.sql(), scope, company, capability).await?;
         Ok(tx)

@@ -3,6 +3,7 @@
 # product dependency; `ledger`'s dev-dependency makes it a workspace member.
 [package]
 name = "bilibi-finance-walkthrough-fixture"
+default-run = "bilibi-finance-walkthrough-fixture"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -28,10 +29,11 @@ bilibi-party-ids.workspace = true
 bilibi-queue.workspace = true
 bilibi-settings.workspace = true
 bilibi-tenancy.workspace = true
+bilibi-ui.workspace = true
 bilibi-walkthrough-fixture = { path = "../../../../../fixtures/walkthrough" }
 inventory.workspace = true
 jiff = "0.2.38"
-serde_json.workspace = true
 rust_decimal.workspace = true
+serde_json.workspace = true
 tokio-postgres.workspace = true
 tokio.workspace = true
