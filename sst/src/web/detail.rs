@@ -459,7 +459,8 @@ impl Return {
                             .iter()
                             .find(|c| c.key == b.key)
                             .map_or_else(String::new, |c| money(c.tax_change.or(c.taxable_change)));
-                        row = row.cell("change", Cell::text(change));
+                        // Blank when unchanged, as Bilimbi; an empty cell would read as "—".
+                        row = row.slot("change", Html::text(&change));
                     }
                     rows.push(row);
                 }
