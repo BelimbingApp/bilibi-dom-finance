@@ -18,6 +18,10 @@ evidence datasets. The documents pages are available; consolidation,
 reconciliation and setup pages follow in NE6. Other modules and
 Domains never read its tables.
 
+## Reviewed operations (H4)
+
+H4 exposes `finance.einvoice.document.issue`, `.get` and `.list` through the shared HTTP API and MCP registry, without adding pages. Issue requires a Receivables or Payables source entry and an explicit whole-second `issued_at`. The fiscal draft is supplied by the caller; the source proves accounting ownership, currency and total, not line-by-line equivalence. Issuing does not submit to MyInvois or post another entry. Writes use a reviewed plan and join its audited transaction.
+
 ## Public API
 
 Resolve the `Einvoice` service (`finance/einvoice.einvoice`) from the registry
