@@ -417,8 +417,19 @@ impl Payables {
     }
     pub async fn get_document(&self, s: &Scope, company: i64, id: i64) -> Result<Document> {
         let c = self.db.get().await.map_err(Error::from)?;
-        authorize(&**c, s, company, VIEW).await?;
-        store::document(&**c, s.tenant(), company, id)
+        self.get_document_on(&**c, s, company, id).await
+    }
+    /// Read and authorize on a sibling's transaction, without taking another
+    /// pool connection while the caller holds the company write lock.
+    pub async fn get_document_on(
+        &self,
+        c: &impl GenericClient,
+        s: &Scope,
+        company: i64,
+        id: i64,
+    ) -> Result<Document> {
+        authorize(c, s, company, VIEW).await?;
+        store::document(c, s.tenant(), company, id)
             .await?
             .ok_or(PayablesError::DocumentNotFound)
     }
