@@ -5,8 +5,9 @@ Source documents kept with the Finance records they support: a supplier's
 invoice scan behind a bill, a remittance behind a payment, a contract behind an
 invoice, a voucher behind a manual journal, the bank's own file behind an
 imported statement. This version is the services; the Source documents page,
-the download route and the embeddable panel follow in the UI slice, and the
-manual-journal source follows the ledger's journals.
+the download route and the embeddable panel are being added by the UI slice
+(NA2, in progress), and the manual-journal source follows the ledger's
+journals.
 
 Depends on `finance/ledger` (the financial year a document's retention counts
 from is the ledger's), Core Company, Base Artifacts, Base Queue and Base
