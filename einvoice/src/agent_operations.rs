@@ -438,7 +438,7 @@ fn list() -> Value {
     )
 }
 fn output() -> Value {
-    json!({"type":"object","description":"Immutable fiscal document with exact decimal strings and ISO instants, a newest-first summary cursor page, or reviewed immutable issue snapshots. No credentials. Issuance path is null until document pages mount."})
+    json!({"type":"object","description":"Immutable fiscal document with exact decimal strings and ISO instants, a newest-first summary cursor page, or reviewed immutable issue snapshots. No credentials. Issuance returns a null navigation path."})
 }
 
 inventory::submit! { Contribution::new(DEFINITIONS,"finance/einvoice.operations",Provenance {module:MODULE,source:file!(),line:line!()},&Definitions {
