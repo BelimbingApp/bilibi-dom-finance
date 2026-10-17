@@ -38,7 +38,10 @@ NR2 owns issuing, numbering, party snapshots, owned ledger posting, payments/all
 From the mounted Platform root, on an empty disposable PostgreSQL 18 database:
 
 ```sh
-DATABASE_URL=postgres://…/disposable cargo run -p bilibi-finance-walkthrough-fixture
+DATABASE_URL=postgres://…/disposable BILIBI_SETTINGS_KEY=$(openssl rand -hex 32) \
+  cargo run -p bilibi-finance-walkthrough-fixture
 ```
+
+The disposable encryption key is required by the shared walkthrough's e-invoice section, not by Receivables. Never replace a production encryption key with this specimen command.
 
 The NR1 section asserts setup history/no-op behavior, identity and uniqueness, address normalization, schema-default resets, scientific notation, exact large JSON decimals, precision and overflow, per-line half-up tax, empty/replace/keep/clear/discard semantics, invalid replacement and audit-capture failure rollback, inactive records, paging, tenant/capability refusals (including a direct deny applied to an already-sealed scope), concurrent duplicate creation, archived-company refusal, database guards and complete replacement audit rows under one trace. It precedes the existing ledger/attachments/periods/controls proof and restores shared setup/account state. The mounted release gate remains the Platform's `scripts/domain-ci.sh`, without unit tests.
