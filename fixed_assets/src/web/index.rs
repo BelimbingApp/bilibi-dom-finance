@@ -131,6 +131,7 @@ struct View<'a> {
 #[template(path = "reconciliation.html")]
 struct ReconciliationView<'a> {
     report: &'a RegisterReport,
+    heading: String,
     reproduce: String,
     rows: Vec<String>,
 }
@@ -330,16 +331,16 @@ impl Index {
                 help: "",
                 fields: vec![
                     self.reverse
-                        .field("run_id", "Run ID", InputKind::Number, true, "run-reversal"),
+                        .field("run_id", "Run ID", InputKind::Number, true, "asset"),
                     self.reverse.field(
                         "effective_date",
                         "Reversal date in an open period",
                         InputKind::Date,
                         true,
-                        "run-reversal",
+                        "asset",
                     ),
                     self.reverse
-                        .field("reason", "Reason", InputKind::Text, true, "run-reversal"),
+                        .field("reason", "Reason", InputKind::Text, true, "asset"),
                 ],
             })?
         } else {
@@ -509,6 +510,7 @@ impl Index {
             }
             render(ReconciliationView {
                 report: r,
+                heading: format!("Ledger reconciliation as of {}", r.as_of),
                 reproduce: params::address("/finance/fixed-assets/register", &query),
                 rows: r
                     .reconciliation
@@ -606,7 +608,7 @@ impl Index {
         Ok(None)
     }
     async fn event(&mut self, s: &Scope, v: &serde_json::Value) -> Result<()> {
-        let event = v["event"].as_str().unwrap_or("");
+        let event = v["type"].as_str().unwrap_or("");
         let clock = self.clock(s).await?;
         if let Some(outcome) = self.period.as_mut().and_then(|p| p.event(event, v, &clock)) {
             if let Outcome::Applied(p) = outcome {

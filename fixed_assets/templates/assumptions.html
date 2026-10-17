@@ -1,6 +1,6 @@
 {% import "components.html" as ui %}
 {% call ui::card(class="mt-4") %}
-{% call ui::section_heading(title=format!("#{} {}",detail.asset.asset_number,detail.asset.description)) %}{% endcall %}
+{% call ui::section_heading(title=heading) %}{% endcall %}
 <p>Cost {{ detail.asset.cost }}; residual {{ detail.asset.residual_value }}.</p>
 <p>Acquired {{ detail.asset.acquisition_date }}; in service {{ detail.asset.in_service_date }}.</p>
 <p>{{ method }}; {{ detail.asset.assumptions.life_months }} months. Category revision {{ detail.revision.id }}.</p>

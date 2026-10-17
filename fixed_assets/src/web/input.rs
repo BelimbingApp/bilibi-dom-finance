@@ -30,7 +30,11 @@ impl Draft {
         prefix: &str,
     ) -> Field {
         let mut f = Field::in_form("asset", key)
-            .id(format!("{prefix}-{}", key.replace('_', "-")))
+            .id(if prefix == "asset" {
+                format!("asset_{key}")
+            } else {
+                format!("{prefix}-{}", key.replace('_', "-"))
+            })
             .label(label)
             .kind(kind)
             .value(self.value(key))

@@ -38,6 +38,7 @@ struct View<'a> {
 struct AssumptionsView<'a> {
     detail: &'a AssetDetail,
     method: &'static str,
+    heading: String,
     actor: String,
     recorded: Html,
 }
@@ -117,9 +118,9 @@ impl Detail {
         }
         let (date_id, date_label, reason_id, verb) = match op {
             "dispose" => (
-                "asset-disposal-date",
+                "asset_effective_date",
                 "Disposal date",
-                "asset-disposal-reason",
+                "asset_reason",
                 "Post disposal",
             ),
             "reverse" => (
@@ -135,7 +136,11 @@ impl Detail {
                 "Void acquisition",
             ),
         };
-        let prefix = format!("asset-{op}");
+        let prefix = if op == "dispose" {
+            "asset".into()
+        } else {
+            format!("asset-{op}")
+        };
         let mut fields = vec![d
             .field("effective_date", date_label, InputKind::Date, true, &prefix)
             .id(date_id)];
@@ -190,6 +195,7 @@ impl Detail {
         if let Some(d) = &detail {
             assumptions = render(AssumptionsView {
                 detail: d,
+                heading: format!("#{} {}", d.asset.asset_number, d.asset.description),
                 method: input::method(d.asset.assumptions.method),
                 actor: actor(
                     d.asset.recorded_by_user_id,
@@ -318,7 +324,7 @@ impl Detail {
         Ok(())
     }
     async fn event(&mut self, s: &Scope, v: &serde_json::Value) -> Result<()> {
-        let event = v["event"].as_str().unwrap_or("");
+        let event = v["type"].as_str().unwrap_or("");
         match event {
             "schedule_grid" => {
                 self.schedule.handle(&params::string_values(v));

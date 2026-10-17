@@ -1,6 +1,6 @@
 # Fixed assets
 
-`finance/fixed_assets` mirrors Bilimbi's `Bilimbi.Finance.FixedAssets` at `4abfaf829321f8540581d833752a086b21b45ba9`: immutable categories and acquisitions (NX1), monthly depreciation, corrections, reconciled reports and evidence (NX2). Pages belong to NX3. This module currently contributes no routes, menu items, agent operations, CSS or JavaScript.
+`finance/fixed_assets` mirrors Bilimbi's `Bilimbi.Finance.FixedAssets` at `4abfaf829321f8540581d833752a086b21b45ba9`: immutable categories and acquisitions (NX1), monthly depreciation, corrections, reconciled reports and evidence (NX2). The four NX3 pages compose shared Base UI components and contribute the three reference menu items. This module owns no CSS or JavaScript.
 
 ## Facade
 
@@ -13,7 +13,7 @@ Resolve `FixedAssets` at `finance/fixed_assets.fixed_assets`. Every data call ta
 | `list_categories(scope, company)` | `finance.fixed-assets.view` | Name-ordered categories, latest revision and full ID-ordered history. |
 | `acquire_from_bill(scope, company, bill_id, line_number, AcquisitionInput)` | `finance.fixed-assets.finance-asset-acquire` | Asset registered from a posted supplier bill's net debit line. Also requires Payables and Ledger view. |
 | `acquire_from_entry(scope, company, entry_id, line_number, AcquisitionInput)` | same | Asset registered from a live original debit. Also requires Ledger view. |
-| `get_asset(scope, company, id)` | `finance.fixed-assets.view` | Asset, original category revision and complete projected schedule. Also requires Ledger view to read book precision. |
+| `get_asset(scope, company, id)` | `finance.fixed-assets.view` | Asset, original category revision, projected schedule, posted charges with their earliest reversal/void, asset events and permanent void state, all on one repeatable-read snapshot. Also requires Ledger view to read book precision. |
 | `depreciate(scope, company, month)` | `finance.fixed-assets.finance-asset-depreciate` | One immutable monthly run, items and skipped-asset exceptions; one owned ledger entry unless empty. |
 | `reverse_run(scope, company, run_id, EventInput)` | `finance.fixed-assets.finance-asset-reverse` | Reverse the latest live charges without reversing previously voided assets twice. |
 | `dispose(scope, company, asset_id, DisposalInput)` | `finance.fixed-assets.finance-asset-dispose` | Sale or write-off, with an owned posting and immutable event. |
@@ -93,3 +93,22 @@ DATABASE_URL=postgres://…/disposable cargo run -p bilibi-finance-walkthrough-f
 ```
 
 This proves concurrent first-run creation/retries, posting-authority rollback, asymmetric 100/50 charges, void/partial/whole reversals and catch-up, gain/loss/break-even/write-off disposal, unrelated standing-disposal dependencies, historical reproduction, year-end closing/reopening reconciliation, skipped-only/empty consumed months, closed-period entryless void refusal, scope/archive refusals, all seven evidence datasets, audited business rows and SQL immutability/sealing/aggregate guards. It exits with `NX2: runs, corrections, reports, evidence, audit and database fences passed`.
+
+
+## Pages
+
+The view capability guards `/finance/fixed-assets/register`, `/categories`, `/runs` and `/register/{id}`. The first three share one page adapter mirroring Bilimbi `FixedAssets.Web.ListPage`, with search and URL pagination (`page_size` 25, 50 or 100). Register uses the shared period filter and shows the dated report's ledger reconciliation. “Keep this report's recorded boundary” retains all four report pins; filtering, paging and period changes preserve explicitly supplied boundaries. Categories and runs retain the reference's full facade ordering and do not acquire extra status filters or sort controls.
+
+Every list, including the asset's projected schedule, posted charges and events, uses `FlexTable` with `ListColumns` for column arrangement and compact rows. Register links and the asset page's announcement support workspace following. Timestamps use the company/browser/UTC display policy.
+
+The shared Record form registers a manual-entry or posted-bill debit, creates/revises category defaults, or records a monthly run. Runs show skipped acquisitions individually and keep the reference's warning after an otherwise successful run. The asset page shows its frozen assumptions, acquisition provenance, recorded actor, projected schedule, posted charges and correction history, then disposal, void and reversal forms. Void waits for the shared `ConfirmDialog`; Cancel writes nothing. The form disappears permanently after a successful void. The facade decides all lifecycle and accounting refusals.
+
+Each write event checks its current capability and the facade checks again inside its audited write. A refusal preserves the submitted draft and presents field errors; missing permissions show the reference's withheld-control sentence. `record_asset` is the submit event because the Platform reserves `save` for Company inline edits.
+
+On a third fresh disposable database, run the NX3 page proof:
+
+```sh
+DATABASE_URL=postgres://…/disposable cargo run -p bilibi-finance-walkthrough-fixture --bin fixed-assets-ui
+```
+
+It drives the actual mounted Page/LiveState adapters against facade records: create/revise category defaults, search, page and page size, acquisition and field refusals, escaping and workspace markers, run skips, disposal/reversal, void confirmation/cancel, charge correction history, grants revoked after mount, withheld controls and column/compact controls. Add `serve` with matching `APP_ORIGIN` and `BIND_ADDR` to keep that disposable app available for browser proof; the fixture manager can write and contractor can view.

@@ -107,7 +107,7 @@ fn table(
     t.suggestions = columns.flex_suggestions();
     t.add_query = &columns.add_query;
     t.caption = caption;
-    t.framed = false;
+    t.framed = true;
     t.empty = Some(TableEmpty::Content(Html::text(empty)));
     render(t)
 }
