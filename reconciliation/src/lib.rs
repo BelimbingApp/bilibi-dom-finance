@@ -41,8 +41,10 @@ mod csv;
 mod evidence;
 mod import;
 mod mapping;
+mod opening;
 mod source;
 mod statements;
+mod web;
 
 pub use contributions::{
     CAPABILITIES, FINALISE_RECONCILIATIONS, IMPORT_STATEMENTS, MANAGE_BANK_ACCOUNTS,
@@ -53,6 +55,7 @@ pub use import::MAX_LINES;
 pub use mapping::{
     Column, ImportMapping, AMOUNT_SIGNS, DATE_FORMATS, DECIMAL_SEPARATORS, DELIMITERS,
 };
+pub use opening::{NewReconciliation, ReconciliationRecord};
 pub use source::STATEMENT_SOURCE;
 
 use bilibi_company::{organisation, WriteError};
@@ -61,6 +64,7 @@ use bilibi_finance_attachments::{AttachmentError, Attachments, NewFile};
 use bilibi_finance_ledger::{Ledger, LedgerError, Money};
 use bilibi_module_registry::{Layer, Module, Service};
 use bilibi_tenancy::Scope;
+use bilibi_ui::page::PageService;
 use jiff::{civil::Date, Timestamp};
 use serde::Serialize;
 use serde_json::Value;
@@ -75,7 +79,7 @@ inventory::submit! {
     Module {
         id: MODULE, layer: Layer::Domains,
         dependencies: &[
-            "base/authz", "base/database", "base/tenancy", "core/company", "finance/attachments", "finance/ledger",
+            "base/authz", "base/database", "base/datetime", "base/locale", "base/menu", "base/tenancy", "base/ui", "core/company", "finance/attachments", "finance/ledger",
         ],
         migrations: &[("finance-reconciliation-001-reconciliation", include_str!("../migrations/001-reconciliation.sql"))],
         services: &[Service { id: SERVICE, factory: |services| Ok(Arc::new(Reconciliation {
@@ -83,7 +87,14 @@ inventory::submit! {
             mutations: services.get("base/database.mutations")?,
             ledger: services.get(bilibi_finance_ledger::SERVICE)?,
             attachments: services.get(bilibi_finance_attachments::SERVICE)?,
-        })) }],
+        })) }, Service { id: web::PAGES, factory: |services| Ok(Arc::new(PageService::<Scope, Error>(Arc::new(web::Pages {
+            db: services.get::<Db>("base/database.pool")?.as_ref().clone(),
+            reconciliation: services.get(SERVICE)?,
+            ledger: services.get(bilibi_finance_ledger::SERVICE)?,
+            attachments: services.get(bilibi_finance_attachments::SERVICE)?,
+            display: services.get("base/datetime.display")?,
+            locales: services.get("base/locale.locales")?,
+        })))) }],
     }
 }
 
