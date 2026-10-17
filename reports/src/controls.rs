@@ -475,7 +475,13 @@ impl State {
                     .get_controlled_bookkeeping(scope, company)
                     .await
                     .map(|s| s.fiscal_years == 0);
-                match (date("start_date"), date("end_date"), first) {
+                // Bilimbi ignores the last day when the first is blank.
+                let start = date("start_date");
+                let end = match start {
+                    Ok(None) => Ok(None),
+                    _ => date("end_date"),
+                };
+                match (start, end, first) {
                     (_, _, Err(error)) => self.refused(error),
                     (Ok(start), Ok(end), Ok(first)) if start.is_some() || !first => {
                         match ledger.open_fiscal_year(scope, company, &NewFiscalYear { start_date: start, end_date: end }).await {
@@ -680,10 +686,7 @@ impl State {
                     )?
                 }
             } else {
-                html(
-                    EmptyState::forbidden("change controlled bookkeeping")
-                        .id("controlled-bookkeeping-manage-forbidden"),
-                )?
+                Html::EMPTY
             },
         })?;
         if controlled.controlled && controlled.fiscal_years == 0 {
@@ -702,8 +705,8 @@ impl State {
                 }
             )
         };
-        let year_action = if can_year {
-            button(
+        if can_year {
+            let year_action = button(
                 "fiscal-year-open",
                 "open_dialog",
                 "dialog",
@@ -718,14 +721,12 @@ impl State {
                 } else {
                     ButtonVariant::Secondary
                 },
-            )?
-        } else {
-            html(EmptyState::forbidden("open fiscal years").id("fiscal-year-open-forbidden"))?
-        };
-        content.push(&html(YearView {
-            count: &years,
-            action: year_action,
-        })?);
+            )?;
+            content.push(&html(YearView {
+                count: &years,
+                action: year_action,
+            })?);
+        }
         if !changes.is_empty() {
             let rows = changes
                 .iter()
@@ -864,12 +865,6 @@ impl State {
             )?,
             true,
         )?);
-        if !can_review {
-            parts.push(html(
-                EmptyState::forbidden("review late recordings")
-                    .id("late-recordings-review-forbidden"),
-            )?);
-        }
         if entries.len() == 100 {
             parts.push(self.next(
                 "late-recordings-next",
@@ -951,10 +946,7 @@ impl State {
                     },
                 )?
             } else {
-                html(
-                    EmptyState::forbidden("change separation of duties")
-                        .id("duty-separation-manage-forbidden"),
-                )?
+                Html::EMPTY
             },
         })?;
         if !changes.is_empty() {
@@ -1081,12 +1073,6 @@ impl State {
             )?,
             true,
         )?);
-        if !can_review {
-            parts.push(html(
-                EmptyState::forbidden("review approval exceptions")
-                    .id("exceptions-review-forbidden"),
-            )?);
-        }
         if exceptions.len() == 100 {
             parts.push(self.next(
                 "exceptions-next",
@@ -1115,11 +1101,10 @@ impl State {
     fn next(&self, id: &str, after: i64, label: &str) -> Result<Html> {
         let mut query = self.query();
         query.insert("after".into(), after.to_string());
-        html(Button {
+        html(NextLink {
             id,
             href: &params::address(self.path(), &query),
-            body: Html::text(label),
-            ..Button::default()
+            label,
         })
     }
     fn table(
@@ -1499,6 +1484,17 @@ struct FiltersView<'a> {
     id: &'a str,
     class: &'a str,
     content: Html,
+}
+/// Bilimbi's plain "Later …" patch link under a capped list.
+#[derive(Template)]
+#[template(
+    source = r#"<div class="mt-3"><a id="{{ id }}" href="{{ href }}" data-patch class="text-action hover:underline">{{ label }}</a></div>"#,
+    ext = "html"
+)]
+struct NextLink<'a> {
+    id: &'a str,
+    href: &'a str,
+    label: &'a str,
 }
 #[derive(Template)]
 #[template(path = "control_year.html")]

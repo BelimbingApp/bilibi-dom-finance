@@ -415,13 +415,10 @@ impl State {
                 ("Documents", Html::text(&c.documents.len().to_string())),
                 (
                     "Tax exclusive",
-                    Html::text(&c.line_extension_amount.normalize().to_string()),
+                    Html::text(&c.line_extension_amount.to_string()),
                 ),
-                ("Tax", Html::text(&c.tax_amount.normalize().to_string())),
-                (
-                    "Payable",
-                    Html::text(&c.payable_amount.normalize().to_string()),
-                ),
+                ("Tax", Html::text(&c.tax_amount.to_string())),
+                ("Payable", Html::text(&c.payable_amount.to_string())),
             ],
         )?;
         if c.open && !c.documents.is_empty() && self.allowed(scope, ISSUE).await? {
@@ -881,8 +878,7 @@ fn document_row(d: &DocumentSummary, row_id: &str, framed: bool) -> Result<FlexR
     row.dom_id = Some(row_id.into());
     let kind = match d.status.as_str() {
         "valid" => BadgeKind::Success,
-        "submitted" | "consolidated" => BadgeKind::Plain,
-        "issued" | "released" => BadgeKind::Neutral,
+        "submitted" | "consolidated" | "issued" | "released" => BadgeKind::Plain,
         "cancelled" | "rejected" => BadgeKind::Warning,
         _ => BadgeKind::Danger,
     };
@@ -891,7 +887,7 @@ fn document_row(d: &DocumentSummary, row_id: &str, framed: bool) -> Result<FlexR
             "number",
             render(RecordLink {
                 workspace: framed,
-                kind: "finance.einvoice.document",
+                kind: "finance/einvoice",
                 record_id: &d.id.to_string(),
                 href: &format!("/finance/einvoice/documents/{}", d.id),
                 body: Html::text(&d.code_number),
@@ -901,11 +897,7 @@ fn document_row(d: &DocumentSummary, row_id: &str, framed: bool) -> Result<FlexR
         .slot("status", render(Badge::status(kind, &d.status))?)
         .slot(
             "payable",
-            Html::text(&format!(
-                "{} {}",
-                d.payable_amount.normalize(),
-                d.currency_code
-            )),
+            Html::text(&format!("{} {}", d.payable_amount, d.currency_code)),
         ))
 }
 

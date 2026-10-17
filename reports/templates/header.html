@@ -2,5 +2,7 @@
 {% import "workspace.html" as workspace %}
 {% if let Some(account_id) = account_id %}{% call workspace::announce(kind="finance/ledger", record_id=account_id) %}{% endcall %}{% endif %}
 {{ back }}
+{% if !missing %}
 {% let details = subtitle %}
 {% call ui::header(subtitle_html=details, actions=actions) %}{{ title }}{% endcall %}
+{% endif %}

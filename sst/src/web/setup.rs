@@ -637,11 +637,11 @@ impl Setup {
                 Ok(false)
             }
             "registration_change" => {
-                self.registration_form.values = params::form_values(v, "registration");
+                self.registration_form.values = form_fields(v, "registration");
                 Ok(false)
             }
             "mapping_change" => {
-                self.mapping_form.values = params::form_values(v, "mapping");
+                self.mapping_form.values = form_fields(v, "mapping");
                 Ok(false)
             }
             action @ ("register" | "map") => {
@@ -650,11 +650,11 @@ impl Setup {
                     return Ok(false);
                 }
                 if action == "register" {
-                    self.registration_form.values = params::form_values(v, "registration");
+                    self.registration_form.values = form_fields(v, "registration");
                     self.registration_form.errors.clear();
                     self.register(scope).await
                 } else {
-                    self.mapping_form.values = params::form_values(v, "mapping");
+                    self.mapping_form.values = form_fields(v, "mapping");
                     self.mapping_form.errors.clear();
                     self.map(scope).await
                 }
@@ -725,4 +725,23 @@ struct CodesView {
     count: Option<usize>,
     table: Html,
     fields: Option<Vec<Field>>,
+}
+
+/// A posted form's fields in full: `params::form_values` drops a value over
+/// 1 KiB, and a 500 character reason can take 2 KiB; the facade bounds it.
+fn form_fields(v: &serde_json::Value, form: &str) -> HashMap<String, String> {
+    let Some(object) = v.as_object() else {
+        return HashMap::new();
+    };
+    object
+        .iter()
+        .filter_map(|(key, value)| {
+            let key = key
+                .strip_prefix(form)?
+                .strip_prefix('[')?
+                .strip_suffix(']')?;
+            Some((key.to_owned(), value.as_str()?.to_owned()))
+        })
+        .take(64)
+        .collect()
 }

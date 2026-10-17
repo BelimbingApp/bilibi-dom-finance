@@ -54,11 +54,21 @@ pub(super) struct Index {
 #[derive(Template)]
 #[template(path = "documents.html")]
 struct View {
+    actions: Html,
     toolbar: Html,
     table: Html,
     pagination: Html,
     unavailable: bool,
 }
+
+/// Bilimbi's header links to the two other document views.
+#[derive(Template)]
+#[template(
+    source = r#"<a id="einvoice-documents-consolidation" href="/finance/einvoice/consolidation">Consolidation</a>
+<a id="einvoice-documents-reconciliation" href="/finance/einvoice/reconciliation">Reconciliation</a>"#,
+    ext = "html"
+)]
+struct HeaderLinks;
 
 impl Index {
     pub fn new(pages: &Pages, query: &HashMap<String, String>, framed: bool) -> Result<Self> {
@@ -195,7 +205,7 @@ impl Index {
                     .slot(
                         "document_type",
                         render(Badge {
-                            kind: BadgeKind::Plain,
+                            kind: BadgeKind::Neutral,
                             dot: false,
                             class: "",
                             body: Html::text(&type_label(&d.document_type)),
@@ -242,6 +252,7 @@ impl Index {
             Html::EMPTY
         };
         View {
+            actions: render(HeaderLinks)?,
             toolbar: render(toolbar)?,
             table: render(grid)?,
             pagination,

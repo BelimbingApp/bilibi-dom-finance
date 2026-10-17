@@ -21,6 +21,7 @@ pub(super) struct Detail {
 #[derive(Template)]
 #[template(path = "detail.html")]
 struct View<'a> {
+    register_link: Html,
     detail: Option<&'a AssetDetail>,
     unavailable: Html,
     flash: FlashMap<'a>,
@@ -33,6 +34,13 @@ struct View<'a> {
     reverse: Html,
     confirm: Html,
 }
+/// Bilimbi's plain header link back to the register.
+#[derive(Template)]
+#[template(
+    source = r#"<a href="/finance/fixed-assets/register">Register</a>"#,
+    ext = "html"
+)]
+struct RegisterLink;
 #[derive(Template)]
 #[template(path = "assumptions.html")]
 struct AssumptionsView<'a> {
@@ -296,7 +304,7 @@ impl Detail {
             )?;
         }
         let visible = detail.is_some();
-        View {detail:detail.as_ref(),unavailable,flash:flash_map(&self.flash),assumptions,schedule,charges,events,dispose:if visible {self.form(s,"dispose").await?}else{Html::EMPTY},void:if detail.as_ref().is_some_and(|d|!d.voided){self.form(s,"void").await?}else{Html::EMPTY},reverse:if visible{self.form(s,"reverse").await?}else{Html::EMPTY},confirm:if self.pending_void.is_some(){render(ConfirmDialog {id:"asset-void-confirm",consequence:"Void acquisition",detail:"Depreciation already posted for this asset is reversed; other assets keep theirs. This cannot be undone.",confirm:"Void acquisition",working:"Recording…",confirm_event:"confirm_void",cancel_event:"cancel_void"})?}else{Html::EMPTY}}.render().map_err(|_|Error::Internal)
+        View {register_link:render(RegisterLink)?,detail:detail.as_ref(),unavailable,flash:flash_map(&self.flash),assumptions,schedule,charges,events,dispose:if visible {self.form(s,"dispose").await?}else{Html::EMPTY},void:if detail.as_ref().is_some_and(|d|!d.voided){self.form(s,"void").await?}else{Html::EMPTY},reverse:if visible{self.form(s,"reverse").await?}else{Html::EMPTY},confirm:if self.pending_void.is_some(){render(ConfirmDialog {id:"asset-void-confirm",consequence:"Void acquisition",detail:"Depreciation already posted for this asset is reversed; other assets keep theirs. This cannot be undone.",confirm:"Void acquisition",working:"Recording…",confirm_event:"confirm_void",cancel_event:"cancel_void"})?}else{Html::EMPTY}}.render().map_err(|_|Error::Internal)
     }
     async fn perform(&self, s: &Scope, op: &str, d: &Draft) -> crate::Result<()> {
         let c = company(s).ok_or(FixedAssetsError::CompanyNotFound)?;

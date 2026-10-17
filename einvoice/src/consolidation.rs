@@ -254,8 +254,12 @@ pub(crate) async fn view(
     Ok((sources, holder))
 }
 
+/// Starts at 0.00, as Bilimbi's reduce does, so an empty month reads "0.00".
 fn sum(documents: &[Recorded], field: impl Fn(&Recorded) -> Decimal) -> Decimal {
-    documents.iter().map(field).sum()
+    documents
+        .iter()
+        .map(field)
+        .fold(Decimal::new(0, 2), |total, amount| total + amount)
 }
 
 impl Einvoice {

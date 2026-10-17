@@ -30,10 +30,10 @@ bilibi_menu::contribute!(
         "E-invoices",
         "/finance/einvoice/documents"
     )
-    .icon("document-check")
+    .icon("circle-stack")
     .under("finance")
     .requires(bilibi_menu::Requirement::Capability(crate::VIEW))
-    .order(30)
+    .order(8)
 );
 
 inventory::submit! { Contribution::new(ROUTES, "finance/einvoice.documents", provenance!(), &Route {
@@ -73,8 +73,7 @@ fn status_badge(status: &str) -> Result<Html> {
     render(Badge {
         kind: match status {
             "valid" => BadgeKind::Success,
-            "submitted" | "consolidated" => BadgeKind::Plain,
-            "issued" | "released" => BadgeKind::Neutral,
+            "submitted" | "consolidated" | "issued" | "released" => BadgeKind::Plain,
             "cancelled" | "rejected" => BadgeKind::Warning,
             _ => BadgeKind::Danger,
         },

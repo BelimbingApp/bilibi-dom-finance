@@ -445,9 +445,15 @@ async fn main() -> Outcome<()> {
                 input: LiveInput::Event(&event),
             })
             .await?;
+        // Bilimbi's page asks for the export grant first and answers its own
+        // denial; a missing source grant gets the auditor-access sentence.
         assert!(body
             .html
-            .contains("Auditor packs require read access to every Finance module."));
+            .contains(if cap == bilibi_finance_reports::EXPORT {
+                "You do not have permission for that action."
+            } else {
+                "Auditor packs require read access to every Finance module."
+            }));
         grants.set_direct(&admin, 1, cap, None).await?;
     }
     println!("Every revoked source grant/export blocks facade, download and already-mounted page");

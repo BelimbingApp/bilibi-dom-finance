@@ -428,11 +428,10 @@ impl State {
         parts.push(render(Header {
             title: Html::text(title),
             subtitle,
-            actions: render(Button {
+            actions: render(HeaderLink {
                 id: link_id,
                 href: link,
-                body: Html::text(label),
-                ..Button::default()
+                label,
             })?,
             ..Header::default()
         })?);
@@ -1225,4 +1224,16 @@ impl LiveState<Scope, Error> for State {
             })
         })
     }
+}
+
+/// Bilimbi's plain header link between Postings and Setup.
+#[derive(Template)]
+#[template(
+    source = r#"<a id="{{ id }}" href="{{ href }}">{{ label }}</a>"#,
+    ext = "html"
+)]
+struct HeaderLink<'a> {
+    id: &'a str,
+    href: &'a str,
+    label: &'a str,
 }

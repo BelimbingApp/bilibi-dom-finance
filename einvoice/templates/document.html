@@ -39,7 +39,7 @@
   {% endcall %}
   {% if !d.sources.is_empty() %}
   {% call ui::card(id="einvoice-document-sources", inner_class="p-0", role="region", labelledby="einvoice-document-sources-heading") %}
-    {% call ui::section_heading(id="einvoice-document-sources-heading", title="Covered documents", count=Some(d.sources.len()), class="p-5 pb-0") %}{% endcall %}
+    {% call ui::section_heading(id="einvoice-document-sources-heading", title=format!("Covered documents ({})", d.sources.len()), class="p-5 pb-0") %}{% endcall %}
     {{ sources }}
   {% endcall %}
   {% endif %}

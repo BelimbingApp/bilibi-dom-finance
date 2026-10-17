@@ -48,7 +48,6 @@ struct Actions {
     submit: bool,
     refresh: bool,
     cancel: bool,
-    withheld: bool,
     pdf_href: Option<String>,
 }
 
@@ -268,10 +267,12 @@ impl Detail {
                 return Ok(false);
             }
             "cancel_reason" | "review_cancel" => {
-                self.reason = params::form_values(value, "cancel")
-                    .get("reason")
-                    .cloned()
-                    .unwrap_or_default();
+                // In full: `form_values` drops a value over 1 KiB, and a 300
+                // character reason can take 1.2 KiB; the facade bounds it.
+                self.reason = value["cancel[reason]"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned();
                 if action == "cancel_reason" {
                     return Ok(false);
                 }
@@ -406,7 +407,6 @@ impl Detail {
                         && crate::documents::RELEASING.contains(&d.status.as_str())),
                 refresh: can_submit && d.document_uuid.is_some(),
                 cancel: can_cancel && ["valid", "rejected"].contains(&d.status.as_str()),
-                withheld: !can_submit || !can_cancel,
                 pdf_href: d
                     .pdf_artifact_id
                     .as_ref()
@@ -634,7 +634,16 @@ impl LiveState<Scope, Error> for Detail {
         Box::pin(async move {
             let reload = match request.input {
                 LiveInput::Event(value) => {
-                    self.flash = None;
+                    // Bilimbi keeps a flash across table, copy and typing
+                    // events; only an action replaces it.
+                    let action = value.get("type").and_then(serde_json::Value::as_str);
+                    if !matches!(
+                        action,
+                        Some("lines_grid" | "sources_grid" | "events_grid")
+                            | Some("link-copied" | "cancel_reason" | "close_cancel")
+                    ) {
+                        self.flash = None;
+                    }
                     self.event(request.scope, value).await?
                 }
                 _ => true,

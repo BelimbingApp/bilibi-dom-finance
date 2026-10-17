@@ -190,20 +190,18 @@ impl Index {
         }
         Ok(())
     }
+    /// A filter, page or period change keeps the list state and period but
+    /// drops the report pins, as Bilimbi's `patch_state` does.
     fn canonical(&self) -> HashMap<String, String> {
         let mut query = self.list.to_params();
-        // The reference preserves these boundaries on filter/page changes too.
-        for key in PINS {
-            if let Some(v) = self.query.get(key) {
-                if v.parse::<i64>().is_ok_and(|n| n >= 0) {
-                    query.insert(key.into(), v.clone());
-                }
-            }
-        }
-        if let Some(p) = &self.period {
-            query.extend(p.period.params().map(|(k, v)| (k.into(), v)));
-        }
+        query.extend(self.period_params());
         query
+    }
+    fn period_params(&self) -> HashMap<String, String> {
+        self.period
+            .iter()
+            .flat_map(|p| p.period.params().map(|(k, v)| (k.into(), v)))
+            .collect()
     }
     fn fields(&self) -> Vec<Field> {
         use InputKind::{Date, Number, Select, Text};
@@ -350,10 +348,13 @@ impl Index {
                 "Ask your company administrator for asset reversal permission.",
             )?
         };
+        let mut body = render(CardHeading {
+            text: "Reverse a run",
+        })?;
+        body.push(&form);
         render(bilibi_ui::Card {
-            title: "Reverse a run",
             class: "mt-4",
-            body: form,
+            body,
             ..Default::default()
         })
     }
@@ -499,7 +500,8 @@ impl Index {
         let mut pager = Pagination::new("assets-pagination", counts, &[25, 50, 100]);
         pager.filters_event = "filter";
         let reconciliation = if let Some(r) = &report {
-            let mut query = self.canonical();
+            // The reproduce link carries the period and pins only.
+            let mut query = self.period_params();
             for (key, value) in PINS.into_iter().zip([
                 r.through_entry_number,
                 r.through_asset_number,
@@ -562,23 +564,14 @@ impl Index {
                 }
             }
             Kind::Register => {
+                // Bilimbi refuses a missing source before any other field.
+                let (id, line) = if d.value("source") == "bill" {
+                    d.source("bill_id", "bill_line_number")?
+                } else {
+                    d.source("entry_id", "entry_line_number")?
+                };
                 let units = self.pages.ledger.get_book(s, c).await?.minor_units;
                 let input = d.acquisition(units)?;
-                let (id, line) = if d.value("source") == "bill" {
-                    (d.id("bill_id")?, d.id("bill_line_number")?)
-                } else {
-                    (d.id("entry_id")?, d.id("entry_line_number")?)
-                };
-                let line = i32::try_from(line).map_err(|_| {
-                    crate::invalid(
-                        if d.value("source") == "bill" {
-                            "bill_line_number"
-                        } else {
-                            "entry_line_number"
-                        },
-                        "is invalid",
-                    )
-                })?;
                 if d.value("source") == "bill" {
                     self.pages
                         .assets
@@ -713,4 +706,11 @@ impl LiveState<Scope, Error> for Index {
             })
         })
     }
+}
+
+/// Bilimbi's plain card heading (`<h2 class="font-medium">`), not a title bar.
+#[derive(Template)]
+#[template(source = r#"<h2 class="font-medium">{{ text }}</h2>"#, ext = "html")]
+struct CardHeading<'a> {
+    text: &'a str,
 }

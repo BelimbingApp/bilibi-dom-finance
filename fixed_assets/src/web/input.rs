@@ -12,9 +12,25 @@ pub(super) struct Draft {
     pub errors: Vec<FieldError>,
 }
 impl Draft {
+    /// Every posted field in full: `params::form_values` drops a value over
+    /// 1 KiB, and a 500 character description or reason can take 2 KiB; the
+    /// facade bounds it.
     pub fn posted(payload: &serde_json::Value) -> Self {
+        let values = payload
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter_map(|(key, value)| {
+                let key = key
+                    .strip_prefix("asset")?
+                    .strip_prefix('[')?
+                    .strip_suffix(']')?;
+                Some((key.to_owned(), value.as_str()?.to_owned()))
+            })
+            .take(64)
+            .collect();
         Self {
-            values: params::form_values(payload, "asset"),
+            values,
             errors: vec![],
         }
     }
@@ -112,55 +128,96 @@ impl Draft {
             .map_err(|_| crate::invalid(key, "is invalid"))
     }
     fn money(&self, key: &'static str, units: MinorUnits) -> crate::Result<Money> {
+        if self.value(key).trim().is_empty() {
+            return Err(crate::invalid(key, "can't be blank"));
+        }
         Money::parse(self.value(key), units).map_err(|e| crate::invalid(key, e.to_string()))
     }
+    /// An acquisition's source record and line, both reported together and
+    /// before any other field, as Bilimbi checks them first.
+    pub fn source(&self, id: &'static str, line: &'static str) -> crate::Result<(i64, i32)> {
+        let mut c = Collect::default();
+        let id = c.take(self.id(id))?;
+        let line = c.take(
+            self.id(line)
+                .and_then(|n| i32::try_from(n).map_err(|_| crate::invalid(line, "is invalid"))),
+        )?;
+        c.finish()?;
+        Ok((got(id)?, got(line)?))
+    }
     pub fn revision(&self) -> crate::Result<RevisionInput> {
-        let method = match self.value("method") {
-            "" | "straight_line" => Method::StraightLine,
-            "reducing_balance" => Method::ReducingBalance,
-            _ => return Err(crate::invalid("method", "is invalid")),
-        };
+        let mut c = Collect::default();
+        let method = c.take(match self.value("method") {
+            "" | "straight_line" => Ok(Method::StraightLine),
+            "reducing_balance" => Ok(Method::ReducingBalance),
+            _ => Err(crate::invalid("method", "is invalid")),
+        })?;
+        let cost = c.take(self.id("cost_account_id"))?;
+        let accumulated = c.take(self.id("accumulated_account_id"))?;
+        let expense = c.take(self.id("expense_account_id"))?;
+        let gain = c.take(self.id("gain_account_id"))?;
+        let loss = c.take(self.id("loss_account_id"))?;
+        let life = c.take(self.id("life_months").and_then(|n| {
+            i32::try_from(n).map_err(|_| crate::invalid("life_months", "is invalid"))
+        }))?;
+        let rate = c.take(self.decimal("annual_rate"))?;
+        c.finish()?;
         Ok(RevisionInput {
-            cost_account_id: self.id("cost_account_id")?,
-            accumulated_account_id: self.id("accumulated_account_id")?,
-            expense_account_id: self.id("expense_account_id")?,
-            gain_account_id: self.id("gain_account_id")?,
-            loss_account_id: self.id("loss_account_id")?,
+            cost_account_id: got(cost)?,
+            accumulated_account_id: got(accumulated)?,
+            expense_account_id: got(expense)?,
+            gain_account_id: got(gain)?,
+            loss_account_id: got(loss)?,
             assumptions: Assumptions {
-                method,
-                life_months: i32::try_from(self.id("life_months")?)
-                    .map_err(|_| crate::invalid("life_months", "is invalid"))?,
-                annual_rate: self.decimal("annual_rate")?,
+                method: got(method)?,
+                life_months: got(life)?,
+                annual_rate: got(rate)?,
             },
             reason: self.value("reason").into(),
         })
     }
     pub fn acquisition(&self, units: MinorUnits) -> crate::Result<AcquisitionInput> {
+        let mut c = Collect::default();
+        let revision = c.take(self.id("category_revision_id"))?;
+        let in_service = c.take(self.date("in_service_date"))?;
+        let residual = c.take(if self.value("residual_value").trim().is_empty() {
+            Ok(None)
+        } else {
+            self.money("residual_value", units).map(Some)
+        })?;
+        c.finish()?;
         Ok(AcquisitionInput {
-            category_revision_id: self.id("category_revision_id")?,
+            category_revision_id: got(revision)?,
             description: self.value("description").into(),
-            in_service_date: self.date("in_service_date")?,
-            residual_value: if self.value("residual_value").trim().is_empty() {
-                None
-            } else {
-                Some(self.money("residual_value", units)?)
-            },
+            in_service_date: got(in_service)?,
+            residual_value: got(residual)?,
             method: None,
             life_months: None,
             annual_rate: None,
         })
     }
     pub fn event(&self) -> crate::Result<EventInput> {
+        let mut c = Collect::default();
+        let date = c.take(self.date("effective_date"))?;
+        if self.value("reason").trim().is_empty() {
+            c.0.push(FieldError::new("reason", "can't be blank"));
+        }
+        c.finish()?;
         Ok(EventInput {
-            effective_date: self.date("effective_date")?,
+            effective_date: got(date)?,
             reason: self.value("reason").into(),
         })
     }
     pub fn disposal(&self, units: MinorUnits) -> crate::Result<DisposalInput> {
+        let mut c = Collect::default();
+        let event = c.take(self.event())?;
+        let proceeds = c.take(self.money("proceeds", units))?;
+        let settlement = c.take(self.optional_id("settlement_account_id"))?;
+        c.finish()?;
         Ok(DisposalInput {
-            event: self.event()?,
-            proceeds: self.money("proceeds", units)?,
-            settlement_account_id: self.optional_id("settlement_account_id")?,
+            event: got(event)?,
+            proceeds: got(proceeds)?,
+            settlement_account_id: got(settlement)?,
         })
     }
     pub fn refused(&mut self, e: &FixedAssetsError) {
@@ -176,4 +233,35 @@ pub(super) fn method(m: Method) -> &'static str {
         Method::StraightLine => "straight_line",
         Method::ReducingBalance => "reducing_balance",
     }
+}
+
+/// Bilimbi's changesets report every bad field at once, so a form gathers
+/// each field's refusal instead of stopping at the first.
+#[derive(Default)]
+struct Collect(Vec<FieldError>);
+impl Collect {
+    fn take<T>(&mut self, result: crate::Result<T>) -> crate::Result<Option<T>> {
+        match result {
+            Ok(value) => Ok(Some(value)),
+            Err(FixedAssetsError::Invalid(fields)) => {
+                self.0.extend(fields);
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
+    }
+    /// Fields in Bilimbi's order: its flash joins `traverse_errors`' map,
+    /// whose keys come out sorted.
+    fn finish(mut self) -> crate::Result<()> {
+        if self.0.is_empty() {
+            Ok(())
+        } else {
+            self.0.sort_by_key(|error| error.field);
+            Err(FixedAssetsError::Invalid(self.0))
+        }
+    }
+}
+/// A value `Collect::finish` has already proven present.
+fn got<T>(value: Option<T>) -> crate::Result<T> {
+    value.ok_or_else(|| FixedAssetsError::Invalid(vec![]))
 }

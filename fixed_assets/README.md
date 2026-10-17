@@ -97,7 +97,7 @@ This proves concurrent first-run creation/retries, posting-authority rollback, a
 
 ## Pages
 
-The view capability guards `/finance/fixed-assets/register`, `/categories`, `/runs` and `/register/{id}`. The first three share one page adapter mirroring Bilimbi `FixedAssets.Web.ListPage`, with search and URL pagination (`page_size` 25, 50 or 100). Register uses the shared period filter and shows the dated report's ledger reconciliation. “Keep this report's recorded boundary” retains all four report pins; filtering, paging and period changes preserve explicitly supplied boundaries. Categories and runs retain the reference's full facade ordering and do not acquire extra status filters or sort controls.
+The view capability guards `/finance/fixed-assets/register`, `/categories`, `/runs` and `/register/{id}`. The first three share one page adapter mirroring Bilimbi `FixedAssets.Web.ListPage`, with search and URL pagination (`page_size` 25, 50 or 100). Register uses the shared period filter and shows the dated report's ledger reconciliation. “Keep this report's recorded boundary” links to the period with all four report pins; filtering, paging and period changes keep the list state and period and drop the pins, as the reference does. Categories and runs retain the reference's full facade ordering and do not acquire extra status filters or sort controls.
 
 Every list, including the asset's projected schedule, posted charges and events, uses `FlexTable` with `ListColumns` for column arrangement and compact rows. Register links and the asset page's announcement support workspace following. Timestamps use the company/browser/UTC display policy.
 

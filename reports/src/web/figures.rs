@@ -93,7 +93,7 @@ impl Report {
                     group(&mut grouped, "balance-sheet", g, &r.header, framed)?;
                     if g.account_type == AccountType::Equity {
                         let last = grouped.pop().expect("group total");
-                        grouped.push(total(
+                        grouped.push(extra(
                             "balance-sheet-earnings",
                             "Income less expenses not yet closed",
                             &r.earnings,
@@ -223,12 +223,15 @@ pub(super) fn header(
             ..Button::default()
         })?);
     }
+    // Bilimbi shows only the back link above a refused account's empty state.
+    let missing = activity && !matches!(report, Some(Report::Activity(_)));
     render(HeaderView {
         title: &title,
         subtitle,
         actions,
         back,
         account_id: account_id.as_deref(),
+        missing,
     })
 }
 
@@ -444,6 +447,21 @@ fn total(id: &str, label: &str, values: &[Money], units: MinorUnits) -> Result<F
         row = row.slot(&format!("v{i}"), text("", &amount(*value, units), true)?);
     }
     Ok(row)
+}
+
+/// A group's extra line (Bilimbi `group.extras`): an italic label and plain
+/// amounts, not a bold total.
+fn extra(id: &str, label: &str, values: &[Money], units: MinorUnits) -> Result<FlexRow> {
+    let mut row = row(id).slot("account", render(Italic { text: label })?);
+    for (i, value) in values.iter().enumerate() {
+        row = row.slot(&format!("v{i}"), text("", &amount(*value, units), false)?);
+    }
+    Ok(row)
+}
+#[derive(Template)]
+#[template(source = r#"<em>{{ text }}</em>"#, ext = "html")]
+struct Italic<'a> {
+    text: &'a str,
 }
 
 fn statement(
@@ -728,6 +746,7 @@ struct HeaderView<'a> {
     actions: Html,
     back: Html,
     account_id: Option<&'a str>,
+    missing: bool,
 }
 #[derive(Template)]
 #[template(path = "overview.html")]

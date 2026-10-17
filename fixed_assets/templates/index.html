@@ -6,7 +6,7 @@
 {% call ui::header(subtitle="Permanent accounting records for this company.") %}{{ title }}{% endcall %}
 {{ toolbar }}{{ period }}{{ unavailable }}{{ table }}{{ pager }}{{ reconciliation }}
 {% call ui::card(class="mt-4") %}
-{% call ui::section_heading(title=heading) %}{% endcall %}
+<h2 class="font-medium">{{ heading }}</h2>
 {{ form }}
 {% endcall %}
 {{ reverse }}

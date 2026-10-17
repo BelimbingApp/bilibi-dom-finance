@@ -239,7 +239,16 @@ impl State {
             return Ok(());
         }
         if kind == "export_auditor_pack" {
-            // A mounted control is never authority: every event asks again.
+            // A mounted control is never authority: every event asks again,
+            // and a missing export grant gets Bilimbi's generic denial, not
+            // the facade's auditor-access sentence about source modules.
+            if !self.may_export(scope).await? {
+                self.flash = Some((
+                    StatusKind::Error,
+                    "You do not have permission for that action.".into(),
+                ));
+                return Ok(());
+            }
             self.reclock(scope).await?;
             let result = match company(scope) {
                 Ok(company) => {
@@ -488,8 +497,8 @@ impl LiveState<Scope, Error> for State {
         Box::pin(async move {
             match request.input {
                 LiveInput::Params(query) => {
+                    // A patch keeps the flash, as Bilimbi's handle_params does.
                     self.auditor_pack = None;
-                    self.flash = None;
                     self.query = query.clone();
                     self.list = ListState::parse(query, self.list.spec().clone().into())
                         .map_err(|_| Error::Internal)?;
@@ -516,6 +525,27 @@ impl LiveState<Scope, Error> for State {
                 ..LiveBody::default()
             })
         })
+    }
+}
+
+impl State {
+    async fn may_export(&self, scope: &Scope) -> Result<bool> {
+        let Ok(company) = company(scope) else {
+            return Ok(false);
+        };
+        let client = self.pages.reports.db.get().await?;
+        match bilibi_company::organisation::authorize_target(
+            &**client,
+            scope,
+            company,
+            crate::EXPORT,
+        )
+        .await
+        {
+            Ok(_) => Ok(true),
+            Err(Error::Forbidden | Error::Unauthorized | Error::NotFound) => Ok(false),
+            Err(error) => Err(error),
+        }
     }
 }
 
