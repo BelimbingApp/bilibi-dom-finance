@@ -6,7 +6,8 @@ use crate::{
     validation as v, Document, Payment, PaymentQuery, ReceivableError as R, Receivables, Result,
     ISSUE, MODULE, POST_PAYMENTS, VIEW,
 };
-use bilibi_database::Error;
+use bilibi_agent_api::OperationClient;
+use bilibi_database::{Error, MutationTransaction};
 use bilibi_finance_attachments::{AttachmentError, Refresh};
 use bilibi_finance_ledger::{
     Account, AccountType, EntryOwner, MinorUnits, Money, NewEntry, NewLine, PostOptions, Reversal,
@@ -16,7 +17,27 @@ use jiff::civil::Date;
 use rust_decimal::Decimal;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
-use tokio_postgres::GenericClient;
+
+pub(super) struct PreparedIssue {
+    pub before: Value,
+    pub after: Value,
+    pub entry: NewEntry,
+    pub options: PostOptions,
+    pub facts: Value,
+}
+pub(super) struct PreparedPayment {
+    pub after: Value,
+    pub allocations: Vec<Value>,
+    pub entry: NewEntry,
+    pub options: PostOptions,
+    pub facts: Value,
+}
+pub(super) struct PreparedReversal {
+    pub before: Payment,
+    pub after: Value,
+    pub owner: EntryOwner,
+    pub reversal: Reversal,
+}
 
 const ISSUED: Table = Table {
     columns: &[
@@ -86,7 +107,7 @@ const REVERSALS: Table = Table {
     ],
     timestamps: false,
 };
-const PAYMENT_READ: &str = "SELECT to_jsonb(p) || jsonb_build_object(
+pub(super) const PAYMENT_READ: &str = "SELECT to_jsonb(p) || jsonb_build_object(
  'allocations',COALESCE((SELECT jsonb_agg(to_jsonb(a) ORDER BY a.id) FROM finance_receivables_allocations a WHERE a.tenant_id=$1 AND a.company_id=$2 AND a.payment_id=p.id),'[]'::jsonb),
  'reversal',(SELECT to_jsonb(r) FROM finance_receivables_payment_reversals r WHERE r.tenant_id=$1 AND r.company_id=$2 AND r.payment_id=p.id))
  FROM finance_receivables_payments p WHERE p.tenant_id=$1 AND p.company_id=$2";
@@ -105,33 +126,37 @@ impl Receivables {
                 "finance.receivables.issue_document",
             )
             .await?;
+        let result = self.issue_document_on(&mut tx, scope, company, id).await?;
+        tx.commit().await?;
+        Ok(result)
+    }
+
+    pub(super) async fn prepare_issue(
+        &self,
+        client: &dyn OperationClient,
+        scope: &Scope,
+        company: i64,
+        id: i64,
+    ) -> Result<PreparedIssue> {
+        self.join(client, scope, company, ISSUE).await?;
         let tenant = scope.tenant();
-        self.ledger.get_book_on(tx.sql(), scope, company).await?;
-        let setup = store::find(tx.sql(), SETUPS, tenant, company, None)
+        self.ledger.get_book_on(client, scope, company).await?;
+        let setup = store::find(client, SETUPS, tenant, company, None)
             .await?
             .ok_or(R::NotConfigured)?;
-        let chart = self
-            .ledger
-            .list_accounts_on(tx.sql(), scope, company)
-            .await?;
-        let draft = documents::read(tx.sql(), tenant, company, id).await?;
+        let chart = self.ledger.list_accounts_on(client, scope, company).await?;
+        let draft = documents::read(client, tenant, company, id).await?;
         if draft.status != "draft" {
             return Err(R::NotADraft);
         }
-        let old = store::find(tx.sql(), DOCUMENTS, tenant, company, Some(id))
+        let old = store::find(client, DOCUMENTS, tenant, company, Some(id))
             .await?
             .ok_or(R::DocumentNotFound)?;
         let mut data = old.clone();
-        let customer = store::find(
-            tx.sql(),
-            CUSTOMERS,
-            tenant,
-            company,
-            Some(draft.customer_id),
-        )
-        .await?
-        .ok_or(R::CustomerNotFound)?;
-        let series = store::find(tx.sql(), SERIES, tenant, company, Some(draft.series_id))
+        let customer = store::find(client, CUSTOMERS, tenant, company, Some(draft.customer_id))
+            .await?
+            .ok_or(R::CustomerNotFound)?;
+        let series = store::find(client, SERIES, tenant, company, Some(draft.series_id))
             .await?
             .ok_or(R::SeriesNotFound)?;
         let date: Date = draft
@@ -153,9 +178,10 @@ impl Receivables {
             return Err(invalid("total", "must be greater than zero"));
         }
         let credit = draft.kind == "credit_note";
+        let mut credited = None;
         let control = if credit {
             let invoice = documents::read(
-                tx.sql(),
+                client,
                 tenant,
                 company,
                 draft.credited_document_id.ok_or(R::DocumentNotFound)?,
@@ -173,7 +199,9 @@ impl Receivables {
                     "exceeds what the credited invoice still owes",
                 ));
             }
-            invoice.receivable_account_id.ok_or(R::DocumentNotFound)?
+            let control = invoice.receivable_account_id.ok_or(R::DocumentNotFound)?;
+            credited = Some(invoice);
+            control
         } else {
             setup["receivable_account_id"]
                 .as_i64()
@@ -198,7 +226,7 @@ impl Receivables {
                 .map_err(|_| invalid("due_date", "is invalid"))?
                 .to_string());
         }
-        let (number, reference) = next_number(tx.sql(), tenant, company, &series, false).await?;
+        let (number, reference) = next_number(client, tenant, company, &series, false).await?;
         data["status"] = json!("issued");
         data["document_number"] = json!(number);
         data["document_reference"] = json!(reference);
@@ -241,27 +269,47 @@ impl Receivables {
                 }
             }
         }
+        let entry = NewEntry {
+            entry_date: date,
+            description: format!(
+                "{} {reference} to {}",
+                if credit { "Credit note" } else { "Invoice" },
+                customer["name"].as_str().ok_or(Error::Internal)?
+            ),
+            reference: Some(reference),
+            lines,
+        };
+        let options = PostOptions {
+            owner: Some(owner("document", id)),
+            settlement_account_ids: if credit { vec![control] } else { vec![] },
+        };
+        Ok(PreparedIssue {
+            before: old,
+            after: data,
+            entry,
+            options,
+            facts: json!({"draft":draft,"customer":customer,"series":series,"setup":setup,"credited_invoice":credited}),
+        })
+    }
+
+    pub(super) async fn issue_document_on(
+        &self,
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company: i64,
+        id: i64,
+    ) -> Result<Document> {
+        let PreparedIssue {
+            before: old,
+            after: mut data,
+            entry,
+            options,
+            ..
+        } = self.prepare_issue(tx.sql(), scope, company, id).await?;
+        let tenant = scope.tenant();
         let entry = self
             .ledger
-            .post_entry_in(
-                &mut tx,
-                scope,
-                company,
-                &NewEntry {
-                    entry_date: date,
-                    description: format!(
-                        "{} {reference} to {}",
-                        if credit { "Credit note" } else { "Invoice" },
-                        customer["name"].as_str().ok_or(Error::Internal)?
-                    ),
-                    reference: Some(reference),
-                    lines,
-                },
-                &PostOptions {
-                    owner: Some(owner("document", id)),
-                    settlement_account_ids: if credit { vec![control] } else { vec![] },
-                },
-            )
+            .post_entry_in(tx, scope, company, &entry, &options)
             .await?;
         data["ledger_entry_id"] = json!(entry.id);
         data["ledger_entry_number"] = json!(entry.entry_number);
@@ -278,7 +326,7 @@ impl Receivables {
         // A failed queue write must still roll back a potentially poisoned tx.
         let refresh = match self
             .attachments
-            .refresh_retention(&mut tx, scope, company, "finance/receivables/document", id)
+            .refresh_retention(tx, scope, company, "finance/receivables/document", id)
             .await
         {
             Ok(Refresh::Queued) => "queued",
@@ -288,7 +336,6 @@ impl Receivables {
         };
         let mut result = documents::read(tx.sql(), tenant, company, id).await?;
         result.retention_refresh = Some(refresh.into());
-        tx.commit().await?;
         Ok(result)
     }
 
@@ -309,15 +356,27 @@ impl Receivables {
                 "finance.receivables.record_payment",
             )
             .await?;
+        let result = self
+            .record_payment_on(&mut tx, scope, company, attrs)
+            .await?;
+        tx.commit().await?;
+        Ok(result)
+    }
+
+    pub(super) async fn prepare_payment(
+        &self,
+        client: &dyn OperationClient,
+        scope: &Scope,
+        company: i64,
+        attrs: &Value,
+    ) -> Result<PreparedPayment> {
+        self.join(client, scope, company, POST_PAYMENTS).await?;
         let tenant = scope.tenant();
-        let book = self.ledger.get_book_on(tx.sql(), scope, company).await?;
-        store::find(tx.sql(), SETUPS, tenant, company, None)
+        let book = self.ledger.get_book_on(client, scope, company).await?;
+        store::find(client, SETUPS, tenant, company, None)
             .await?
             .ok_or(R::NotConfigured)?;
-        let chart = self
-            .ledger
-            .list_accounts_on(tx.sql(), scope, company)
-            .await?;
+        let chart = self.ledger.list_accounts_on(client, scope, company).await?;
         let mut data = v::merge(
             None,
             attrs,
@@ -340,7 +399,7 @@ impl Receivables {
         v::text(&mut data, "description", false, 500)?;
         v::account(&mut data, "deposit_account_id", &chart, AccountType::Asset)?;
         let customer = store::find(
-            tx.sql(),
+            client,
             CUSTOMERS,
             tenant,
             company,
@@ -348,15 +407,9 @@ impl Receivables {
         )
         .await?
         .ok_or_else(|| invalid("customer_id", "is not a customer of this company"))?;
-        let series = store::find(
-            tx.sql(),
-            SERIES,
-            tenant,
-            company,
-            data["series_id"].as_i64(),
-        )
-        .await?
-        .ok_or_else(|| invalid("series_id", "is not a series of this company"))?;
+        let series = store::find(client, SERIES, tenant, company, data["series_id"].as_i64())
+            .await?
+            .ok_or_else(|| invalid("series_id", "is not a series of this company"))?;
         if series["kind"] != "payment" {
             return Err(invalid("series_id", "does not number payments"));
         }
@@ -374,6 +427,7 @@ impl Receivables {
         let mut seen = BTreeSet::new();
         let mut allocations = Vec::new();
         let mut credits = Vec::new();
+        let mut invoices = Vec::new();
         let mut total = Money::ZERO;
         for (index, input) in inputs.iter().enumerate() {
             let allocation = async {
@@ -383,7 +437,7 @@ impl Receivables {
                 if !seen.insert(id) {
                     return Err(invalid("document_id", "is allocated twice"));
                 }
-                let invoice = match documents::read(tx.sql(), tenant, company, id).await {
+                let invoice = match documents::read(client, tenant, company, id).await {
                     Err(R::DocumentNotFound) => {
                         return Err(invalid(
                             "document_id",
@@ -420,11 +474,11 @@ impl Receivables {
                         "document_id",
                         format!(
                             "{} cannot be settled: its receivable account {p}",
-                            invoice.document_reference.unwrap_or_default()
+                            invoice.document_reference.as_deref().unwrap_or_default()
                         ),
                     )
                 })?;
-                Ok((a, control, allocated))
+                Ok((a, control, allocated, invoice))
             }
             .await
             .map_err(|e| match e {
@@ -439,6 +493,7 @@ impl Receivables {
             total = total + allocation.2;
             credits.push((allocation.1, allocation.2));
             allocations.push(allocation.0);
+            invoices.push(allocation.3);
         }
         if total != amount {
             return Err(invalid(
@@ -446,18 +501,7 @@ impl Receivables {
                 "do not add up to the payment amount",
             ));
         }
-        let (number, reference) = next_number(tx.sql(), tenant, company, &series, true).await?;
-        // Reserve only the table identity; series numbers roll back with the
-        // whole write. No incomplete append-only payment is ever inserted.
-        let id: i64 = tx
-            .sql()
-            .query_one(
-                "SELECT nextval(pg_get_serial_sequence('finance_receivables_payments','id'))",
-                &[],
-            )
-            .await
-            .map_err(Error::from)?
-            .get(0);
+        let (number, reference) = next_number(client, tenant, company, &series, true).await?;
         let credits = group(credits);
         let settlement_account_ids = credits.keys().copied().collect();
         let mut lines = vec![NewLine::debit(
@@ -469,35 +513,69 @@ impl Receivables {
                 .into_iter()
                 .map(|(id, amount)| NewLine::credit(id, amount)),
         );
-        let entry = self
-            .ledger
-            .post_entry_in(
-                &mut tx,
-                scope,
-                company,
-                &NewEntry {
-                    entry_date: date,
-                    description: format!(
-                        "Payment {reference} from {}",
-                        customer["name"].as_str().ok_or(Error::Internal)?
-                    ),
-                    reference: Some(reference.clone()),
-                    lines,
-                },
-                &PostOptions {
-                    owner: Some(owner("payment", id)),
-                    settlement_account_ids,
-                },
-            )
-            .await?;
-        data["id"] = json!(id);
+        let entry = NewEntry {
+            entry_date: date,
+            description: format!(
+                "Payment {reference} from {}",
+                customer["name"].as_str().ok_or(Error::Internal)?
+            ),
+            reference: Some(reference.clone()),
+            lines,
+        };
+        let options = PostOptions {
+            owner: None,
+            settlement_account_ids,
+        };
         data["payment_number"] = json!(number);
         data["payment_reference"] = json!(reference);
         data["currency_code"] = json!(book.currency_code);
-        data["ledger_entry_id"] = json!(entry.id);
-        data["ledger_entry_number"] = json!(entry.entry_number);
         data["recorded_by_user_id"] = json!(scope.user());
         data["recorded_by_impersonator_id"] = json!(scope.impersonator().map(|s| s.user()));
+        Ok(PreparedPayment {
+            after: data,
+            allocations,
+            entry,
+            options,
+            facts: json!({"book":book,"customer":customer,"series":series,"invoices":invoices,"owner":{"module":MODULE,"record":"payment:<allocated at commit>"}}),
+        })
+    }
+
+    pub(super) async fn record_payment_on(
+        &self,
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company: i64,
+        attrs: &Value,
+    ) -> Result<Payment> {
+        let PreparedPayment {
+            after: mut data,
+            allocations,
+            entry,
+            mut options,
+            ..
+        } = self
+            .prepare_payment(tx.sql(), scope, company, attrs)
+            .await?;
+        let tenant = scope.tenant();
+        // Business preview never calls nextval. Only execution reserves the
+        // identity; the series reference still rolls back with the whole plan.
+        let id: i64 = tx
+            .sql()
+            .query_one(
+                "SELECT nextval(pg_get_serial_sequence('finance_receivables_payments','id'))",
+                &[],
+            )
+            .await
+            .map_err(Error::from)?
+            .get(0);
+        options.owner = Some(owner("payment", id));
+        let entry = self
+            .ledger
+            .post_entry_in(tx, scope, company, &entry, &options)
+            .await?;
+        data["id"] = json!(id);
+        data["ledger_entry_id"] = json!(entry.id);
+        data["ledger_entry_number"] = json!(entry.entry_number);
         tx.mutate(move |sql| {
             Box::pin(async move {
                 let mut changes = Vec::new();
@@ -520,7 +598,6 @@ impl Receivables {
         })
         .await?;
         let result = read_payment(tx.sql(), tenant, company, id).await?;
-        tx.commit().await?;
         Ok(result)
     }
 
@@ -541,8 +618,23 @@ impl Receivables {
                 "finance.receivables.reverse_payment",
             )
             .await?;
-        let tenant = scope.tenant();
-        let payment = read_payment(tx.sql(), tenant, company, id).await?;
+        let result = self
+            .reverse_payment_on(&mut tx, scope, company, id, attrs)
+            .await?;
+        tx.commit().await?;
+        Ok(result)
+    }
+
+    pub(super) async fn prepare_reversal(
+        &self,
+        client: &dyn OperationClient,
+        scope: &Scope,
+        company: i64,
+        id: i64,
+        attrs: &Value,
+    ) -> Result<PreparedReversal> {
+        self.join(client, scope, company, POST_PAYMENTS).await?;
+        let payment = read_payment(client, scope.tenant(), company, id).await?;
         if payment.reversal.is_some() {
             return Err(R::AlreadyReversed);
         }
@@ -555,19 +647,45 @@ impl Receivables {
                 "cannot be before the payment date",
             ));
         }
+        let reversal = Reversal {
+            entry_date: date,
+            description: format!("Reversal of payment {}", payment.payment_reference),
+            reference: None,
+        };
+        Ok(PreparedReversal {
+            before: payment,
+            after: data,
+            owner: owner("payment", id),
+            reversal,
+        })
+    }
+
+    pub(super) async fn reverse_payment_on(
+        &self,
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company: i64,
+        id: i64,
+        attrs: &Value,
+    ) -> Result<Payment> {
+        let PreparedReversal {
+            before: payment,
+            after: mut data,
+            owner,
+            reversal,
+        } = self
+            .prepare_reversal(tx.sql(), scope, company, id, attrs)
+            .await?;
+        let tenant = scope.tenant();
         let entry = self
             .ledger
             .reverse_owned_entry(
-                &mut tx,
+                tx,
                 scope,
                 company,
                 payment.ledger_entry_id,
-                &owner("payment", id),
-                &Reversal {
-                    entry_date: date,
-                    description: format!("Reversal of payment {}", payment.payment_reference),
-                    reference: None,
-                },
+                &owner,
+                &reversal,
             )
             .await?;
         data["payment_id"] = json!(id);
@@ -584,7 +702,6 @@ impl Receivables {
         })
         .await?;
         let result = read_payment(tx.sql(), tenant, company, id).await?;
-        tx.commit().await?;
         Ok(result)
     }
 
@@ -679,7 +796,7 @@ fn input_money(data: &mut Value, units: MinorUnits) -> Result<Money> {
     Ok(amount)
 }
 async fn next_number(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     tenant: i64,
     company: i64,
     series: &Value,
@@ -691,7 +808,7 @@ async fn next_number(
         (DOCUMENTS.name, "document_number")
     };
     let id = series["id"].as_i64().ok_or(Error::Internal)?;
-    let number: i64 = client.query_one(&format!("SELECT COALESCE(max({column}),0)+1 FROM {table} WHERE tenant_id=$1 AND company_id=$2 AND series_id=$3"), &[&tenant, &company, &id]).await.map_err(Error::from)?.get(0);
+    let number: i64 = client.query_opt(&format!("SELECT COALESCE(max({column}),0)+1 FROM {table} WHERE tenant_id=$1 AND company_id=$2 AND series_id=$3"), &[&tenant, &company, &id]).await?.ok_or(Error::Internal)?.get(0);
     let width = series["number_width"].as_u64().ok_or(Error::Internal)? as usize;
     Ok((
         number,
@@ -702,8 +819,8 @@ async fn next_number(
         ),
     ))
 }
-async fn read_payment(
-    client: &impl GenericClient,
+pub(super) async fn read_payment(
+    client: &dyn OperationClient,
     tenant: i64,
     company: i64,
     id: i64,
@@ -713,8 +830,7 @@ async fn read_payment(
             &format!("{PAYMENT_READ} AND p.id=$3"),
             &[&tenant, &company, &id],
         )
-        .await
-        .map_err(Error::from)?
+        .await?
         .ok_or(R::PaymentNotFound)?;
     Ok(store::decode(row.get(0))?)
 }

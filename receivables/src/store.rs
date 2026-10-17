@@ -1,5 +1,6 @@
 //! Private row persistence for Bilimbi Receivables schemas. Identifiers come
 //! only from these module-owned constants; values always use bind parameters.
+use bilibi_agent_api::OperationClient;
 use bilibi_database::{Change, Error, Result};
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
@@ -159,7 +160,7 @@ pub(crate) fn decode<T: DeserializeOwned>(value: Value) -> Result<T> {
     serde_json::from_value(value).map_err(|_| Error::Internal)
 }
 pub(crate) async fn find(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     table: Table,
     tenant: i64,
     company: i64,
@@ -168,7 +169,7 @@ pub(crate) async fn find(
     Ok(client.query_opt(&format!("SELECT to_jsonb(r) FROM {} r WHERE tenant_id=$1 AND company_id=$2 AND ($3::bigint IS NULL OR id=$3)", table.name), &[&tenant, &company, &id]).await?.map(|r| r.get(0)))
 }
 pub(crate) async fn list(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     table: Table,
     tenant: i64,
     company: i64,
@@ -187,14 +188,14 @@ pub(crate) async fn list(
         .collect())
 }
 pub(crate) async fn taken(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     table: Table,
     tenant: i64,
     company: i64,
     field: &'static str,
     value: &Value,
 ) -> Result<bool> {
-    Ok(client.query_one(&format!("SELECT EXISTS(SELECT 1 FROM {} r WHERE tenant_id=$1 AND company_id=$2 AND to_jsonb(r)->$3=$4)", table.name), &[&tenant, &company, &field, value]).await?.get(0))
+    Ok(client.query_opt(&format!("SELECT EXISTS(SELECT 1 FROM {} r WHERE tenant_id=$1 AND company_id=$2 AND to_jsonb(r)->$3=$4)", table.name), &[&tenant, &company, &field, value]).await?.ok_or(Error::Internal)?.get(0))
 }
 pub(crate) async fn save(
     client: &impl GenericClient,

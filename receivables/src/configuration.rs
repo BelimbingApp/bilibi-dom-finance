@@ -6,12 +6,19 @@ use crate::{
     validation as v, Customer, Page, ReceivableError as R, Receivables, Result, Series, Setup,
     SetupChange, TaxCode, MANAGE_CUSTOMERS, MANAGE_SETUP, VIEW,
 };
-use bilibi_database::Error;
-use bilibi_finance_ledger::AccountType;
+use bilibi_agent_api::OperationClient;
+use bilibi_database::{Error, MutationTransaction};
+use bilibi_finance_ledger::{Account, AccountType};
 use bilibi_tenancy::Scope;
 use rust_decimal::Decimal;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
+
+pub(super) struct Prepared {
+    pub before: Option<Value>,
+    pub after: Value,
+    pub accounts: Vec<Account>,
+}
 
 impl Receivables {
     pub async fn get_setup(&self, scope: &Scope, company: i64) -> Result<Setup> {
@@ -35,13 +42,23 @@ impl Receivables {
                 "finance.receivables.configure",
             )
             .await?;
+        let setup = self.configure_on(&mut tx, scope, company, attrs).await?;
+        tx.commit().await?;
+        Ok(setup)
+    }
+
+    pub(super) async fn prepare_setup(
+        &self,
+        client: &dyn OperationClient,
+        scope: &Scope,
+        company: i64,
+        attrs: &Value,
+    ) -> Result<Prepared> {
+        self.join(client, scope, company, MANAGE_SETUP).await?;
         let tenant = scope.tenant();
-        let old = store::find(tx.sql(), SETUPS, tenant, company, None).await?;
+        let old = store::find(client, SETUPS, tenant, company, None).await?;
         let mut data = v::merge(old.as_ref(), attrs, SETUPS.columns)?;
-        let chart = self
-            .ledger
-            .list_accounts_on(tx.sql(), scope, company)
-            .await?;
+        let chart = self.ledger.list_accounts_on(client, scope, company).await?;
         v::account(
             &mut data,
             "receivable_account_id",
@@ -49,6 +66,34 @@ impl Receivables {
             AccountType::Asset,
         )?;
         v::account(&mut data, "income_account_id", &chart, AccountType::Income)?;
+        let accounts = chart
+            .into_iter()
+            .filter(|a| {
+                ["receivable_account_id", "income_account_id"]
+                    .iter()
+                    .any(|field| data[*field].as_i64() == Some(a.id))
+            })
+            .collect();
+        Ok(Prepared {
+            before: old,
+            after: data,
+            accounts,
+        })
+    }
+
+    pub(super) async fn configure_on(
+        &self,
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company: i64,
+        attrs: &Value,
+    ) -> Result<Setup> {
+        let Prepared {
+            before: old,
+            after: data,
+            ..
+        } = self.prepare_setup(tx.sql(), scope, company, attrs).await?;
+        let tenant = scope.tenant();
         let fields: Vec<_> = SETUPS
             .columns
             .iter()
@@ -70,7 +115,6 @@ impl Receivables {
             })).await?
         };
         let setup = store::decode(result)?;
-        tx.commit().await?;
         Ok(setup)
     }
 
@@ -202,10 +246,39 @@ impl Receivables {
         let mut tx = self
             .write(&mut client, scope, company, capability, &action)
             .await?;
+        let record = self
+            .save_code_on(&mut tx, scope, company, table, id, attrs)
+            .await?;
+        tx.commit().await?;
+        Ok(record)
+    }
+
+    pub(super) async fn prepare_code(
+        &self,
+        client: &dyn OperationClient,
+        scope: &Scope,
+        company: i64,
+        table: Table,
+        id: Option<i64>,
+        attrs: &Value,
+    ) -> Result<Prepared> {
+        let customer = table.name == CUSTOMERS.name;
+        let tax = table.name == TAX.name;
+        self.join(
+            client,
+            scope,
+            company,
+            if customer {
+                MANAGE_CUSTOMERS
+            } else {
+                MANAGE_SETUP
+            },
+        )
+        .await?;
         let tenant = scope.tenant();
         let old = if let Some(id) = id {
             Some(
-                store::find(tx.sql(), table, tenant, company, Some(id))
+                store::find(client, table, tenant, company, Some(id))
                     .await?
                     .ok_or(if customer {
                         R::CustomerNotFound
@@ -246,6 +319,7 @@ impl Receivables {
         v::text(&mut data, "code", true, 50)?;
         v::text(&mut data, "name", true, 200)?;
         v::flag(&mut data, "active")?;
+        let mut chart = Vec::new();
         if customer {
             for (field, max) in [
                 ("tax_identifier", 50),
@@ -272,10 +346,7 @@ impl Receivables {
             v::range(&mut data, "payment_terms_days", 0, 3650)?;
         } else if tax {
             v::decimal(&mut data, "rate", false, Decimal::from(1000), 4)?;
-            let chart = self
-                .ledger
-                .list_accounts_on(tx.sql(), scope, company)
-                .await?;
+            chart = self.ledger.list_accounts_on(client, scope, company).await?;
             v::integer(&mut data, "account_id", true)?;
             if old.as_ref().map(|o| &o["account_id"]) != Some(&data["account_id"]) {
                 v::account(&mut data, "account_id", &chart, AccountType::Liability)?;
@@ -299,11 +370,39 @@ impl Receivables {
             } else {
                 &["code"][..]
             } {
-                if store::taken(tx.sql(), table, tenant, company, field, &data[*field]).await? {
+                if store::taken(client, table, tenant, company, field, &data[*field]).await? {
                     return Err(invalid(field, "has already been taken"));
                 }
             }
         }
+        let accounts = chart
+            .into_iter()
+            .filter(|a| data["account_id"].as_i64() == Some(a.id))
+            .collect();
+        Ok(Prepared {
+            before: old,
+            after: data,
+            accounts,
+        })
+    }
+
+    pub(super) async fn save_code_on<T: DeserializeOwned>(
+        &self,
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company: i64,
+        table: Table,
+        id: Option<i64>,
+        attrs: &Value,
+    ) -> Result<T> {
+        let Prepared {
+            before: old,
+            after: data,
+            ..
+        } = self
+            .prepare_code(tx.sql(), scope, company, table, id, attrs)
+            .await?;
+        let tenant = scope.tenant();
         let new = tx
             .mutate(move |sql| {
                 Box::pin(async move {
@@ -315,7 +414,6 @@ impl Receivables {
             })
             .await?;
         let record = store::decode(new)?;
-        tx.commit().await?;
         Ok(record)
     }
 }

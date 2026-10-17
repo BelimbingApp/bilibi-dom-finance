@@ -44,7 +44,7 @@ fn invalid(error: LedgerError) -> bilibi_agent_api::Error {
     }
 }
 
-async fn authorize_on(
+pub(super) async fn authorize_on(
     client: &dyn OperationClient,
     scope: &Scope,
     company: i64,

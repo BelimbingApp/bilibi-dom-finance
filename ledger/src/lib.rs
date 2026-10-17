@@ -961,11 +961,11 @@ impl Ledger {
     /// holding the company lock never needs a second pool connection.
     pub async fn get_book_on(
         &self,
-        client: &(impl GenericClient + Sync),
+        client: &dyn bilibi_agent_api::OperationClient,
         scope: &Scope,
         company_id: i64,
     ) -> Result<Book> {
-        authorize(client, scope, company_id, VIEW).await?;
+        agent_operations::authorize_on(client, scope, company_id, VIEW).await?;
         books::find(client, scope.tenant(), company_id)
             .await?
             .ok_or(LedgerError::BookNotOpen)
@@ -1050,11 +1050,11 @@ impl Ledger {
     /// owner validates account choices while holding its company write lock.
     pub async fn list_accounts_on(
         &self,
-        client: &(impl GenericClient + Sync),
+        client: &dyn bilibi_agent_api::OperationClient,
         scope: &Scope,
         company_id: i64,
     ) -> Result<Vec<Account>> {
-        authorize(client, scope, company_id, VIEW).await?;
+        agent_operations::authorize_on(client, scope, company_id, VIEW).await?;
         Ok(accounts::list(client, scope.tenant(), company_id).await?)
     }
 
@@ -1223,6 +1223,89 @@ impl Ledger {
             .await?;
         tx.commit().await?;
         Ok(entry)
+    }
+
+    /// Validate a proposed owned posting on the caller's review connection,
+    /// without allocating an identity or number. Requires posting authority,
+    /// not view. The deterministic JSON contains the normalized entry, book,
+    /// referenced accounts and posting controls; compare it again at execution.
+    /// For a record not yet allocated, pass no owner and describe its future
+    /// ownership in the caller's review. The real post still checks that owner.
+    pub async fn preview_post_entry_on(
+        &self,
+        client: &dyn bilibi_agent_api::OperationClient,
+        scope: &Scope,
+        company_id: i64,
+        new: &NewEntry,
+        options: &PostOptions,
+    ) -> Result<serde_json::Value> {
+        preview_lock(client, scope, company_id).await?;
+        if options
+            .owner
+            .as_ref()
+            .is_some_and(|o| !entries::owner_valid(o))
+            || options.settlement_account_ids.iter().any(|id| *id < 1)
+        {
+            return Err(LedgerError::InvalidOption);
+        }
+        let tenant = scope.tenant();
+        let book = books::find(client, tenant, company_id)
+            .await?
+            .ok_or(LedgerError::BookNotOpen)?;
+        let valid = entries::validate(
+            client,
+            tenant,
+            company_id,
+            book.minor_units,
+            new,
+            options.owner.as_ref(),
+            entries::Inactive::Listed(&options.settlement_account_ids),
+        )
+        .await?
+        .map_err(LedgerError::Invalid)?;
+        let calendar = periods::state(client, tenant, company_id).await?;
+        let period = calendar
+            .periods()
+            .find(|p| p.start_date <= valid.entry_date && valid.entry_date <= p.end_date);
+        Ok(serde_json::json!({
+            "book":book,"entry":valid,
+            "accounts":accounts::list(client,tenant,company_id).await?.into_iter().filter(|a|new.lines.iter().any(|l|l.account_id==a.id)).collect::<Vec<_>>(),
+            "period":period,
+            "bookkeeping":bookkeeping::latest(client,tenant,company_id).await?,
+            "settlement_account_ids":options.settlement_account_ids,
+        }))
+    }
+
+    /// Preview the owner's correction on the handed review connection. Uses
+    /// the same owner, date, period and double-reversal checks as execution;
+    /// returns the original and normalized mirror with its posting controls.
+    /// Like the correction itself, this does not require ledger view.
+    pub async fn preview_reverse_owned_entry_on(
+        &self,
+        client: &dyn bilibi_agent_api::OperationClient,
+        scope: &Scope,
+        company_id: i64,
+        entry_id: i64,
+        owner: &EntryOwner,
+        reversal: &Reversal,
+    ) -> Result<serde_json::Value> {
+        preview_lock(client, scope, company_id).await?;
+        if !entries::owner_valid(owner) {
+            return Err(LedgerError::InvalidOption);
+        }
+        let tenant = scope.tenant();
+        let (book, original, valid) =
+            prepare_reverse(client, tenant, company_id, entry_id, Some(owner), reversal).await?;
+        let calendar = periods::state(client, tenant, company_id).await?;
+        let period = calendar
+            .periods()
+            .find(|p| p.start_date <= valid.entry_date && valid.entry_date <= p.end_date);
+        Ok(serde_json::json!({
+            "book":book,"original":original,"entry":valid,
+            "accounts":accounts::list(client,tenant,company_id).await?.into_iter().filter(|a|original.lines.iter().any(|l|l.account_id==a.id)).collect::<Vec<_>>(),
+            "period":period,
+            "bookkeeping":bookkeeping::latest(client,tenant,company_id).await?,
+        }))
     }
 
     /// Posts inside the record owner's audited transaction, leaving commit
@@ -2946,6 +3029,19 @@ impl Ledger {
 
 /// A write inside a caller's own transaction: the capability and company
 /// reach now, then the company's row lock on that transaction.
+async fn preview_lock(
+    client: &dyn bilibi_agent_api::OperationClient,
+    scope: &Scope,
+    company_id: i64,
+) -> Result<()> {
+    agent_operations::authorize_on(client, scope, company_id, POST_ENTRIES).await?;
+    let row = client.query_opt("SELECT status FROM companies WHERE tenant_id=$1 AND id=$2 AND deleted_at IS NULL FOR UPDATE NOWAIT", &[&scope.tenant(), &company_id]).await?.ok_or(LedgerError::CompanyNotFound)?;
+    if row.get::<_, String>(0) == "archived" {
+        return Err(LedgerError::CompanyArchived);
+    }
+    Ok(())
+}
+
 async fn join(
     tx: &MutationTransaction<'_>,
     scope: &Scope,
