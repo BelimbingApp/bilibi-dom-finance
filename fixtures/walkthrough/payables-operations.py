@@ -5,6 +5,7 @@ through the wire.
 """
 import json
 import os
+from pathlib import Path
 import subprocess
 import urllib.error
 import urllib.request
@@ -105,6 +106,12 @@ def counters(company):
     return sql(f"SELECT (SELECT count(*) FROM finance_payables_settings_changes WHERE company_id={company}), (SELECT count(*) FROM finance_ledger_entries WHERE company_id={company}), (SELECT count(*) FROM base_audit_mutations), (SELECT count(*) FROM base_agent_api_plans WHERE used_at IS NOT NULL)")
 
 
+def control(*args):
+    platform = Path(__file__).resolve().parents[5]
+    binary = Path(os.environ.get("CARGO_TARGET_DIR", platform / "target")) / "debug" / "agent-operations"
+    subprocess.run([str(binary), "payables-control", *map(str, args)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 for channel, company in [("api", 1), ("mcp", 2)]:
     print(f"\n== {channel}: company {company}", flush=True)
     require(read(channel, "settings.get", company)["settings"] is None, "needs fresh database")
@@ -122,6 +129,15 @@ for channel, company in [("api", 1), ("mcp", 2)]:
     write(channel, "settings.put", company, reason="No change")
     require(read(channel, "settings.get", company)["settings"] == original, "omission did not preserve settings")
     require(sql(f"SELECT count(*) FROM finance_payables_settings_changes WHERE company_id={company}") == before, "no-op made history")
+    for cap in ["finance.payables.settings.manage", "finance.ledger.view"]:
+        ops = [op("settings.put", company, reason="Reprove authorization")]
+        review = plan(channel, ops)
+        control("grant", cap, "false")
+        before = counters(company)
+        require("error" in commit(channel, ops, review), "revoked primary or secondary capability accepted")
+        require(counters(company) == before, "revoked-capability commit changed rows or consumed code")
+        control("grant", cap, "true")
+        record(commit(channel, ops, review))
     write(channel, "settings.put", company, clear_quantity_tolerance=True)
     settings = read(channel, "settings.get", company)["settings"]
     require(settings["quantity_tolerance"] is None and settings["price_tolerance"] == original["price_tolerance"], "clear lost unrelated value")
@@ -245,6 +261,51 @@ for channel, company in [("api", 1), ("mcp", 2)]:
     require(counters(company) == before and read(channel, "payment_request.get", company, request_id=a["id"])["status"] == "submitted", "first payment/audit/code escaped rollback")
     print("future minimum, not current balance, enforced; changed control and competing capacity plans roll back every row/audit/code; failed codes remain usable", flush=True)
 
+    notes = []
+    for amount in ["10", "20"]:
+        n = write(channel, "debit_note.create", company, bill_id=bill["id"], document_date="2026-02-10", lines=[{"description": "Capacity review", "account_id": accounts["X"], "amount": amount}])
+        write(channel, "document.approve", company, who="approver", document_id=n["id"])
+        notes.append(n)
+    ops = [op("document.post", company, document_id=n["id"]) for n in notes]
+    review = plan(channel, ops)
+    require(review.get("valid") is True and changes(review)["capacity"]["lowest_outstanding"] == "95", "note review omitted dated capacity")
+    before = counters(company)
+    require(commit(channel, ops, review).get("error") == "stale_plan" and counters(company) == before, "two-note capacity drift escaped rollback while both still fit")
+    ops = [op("document.post", company, document_id=notes[0]["id"])]
+    review = plan(channel, ops)
+    write(channel, "payment.approve", company, who="approver", request_id=a["id"])
+    before = counters(company)
+    require(commit(channel, ops, review).get("error") == "stale_plan" and counters(company) == before, "note-post review ignored intervening payment")
+    ops = [op("debit_note.create", company, bill_id=bill["id"], document_date="2026-02-10", lines=[{"description": "Creation capacity", "account_id": accounts["X"], "amount": "1"}])]
+    review = plan(channel, ops)
+    require(changes(review)["capacity"]["lowest_outstanding"] == "85", "note-create capacity is not independently expected 85")
+    write(channel, "payment.approve", company, who="approver", request_id=b["id"])
+    before = counters(company)
+    require(commit(channel, ops, review).get("error") == "stale_plan" and counters(company) == before, "note-create review ignored intervening payment")
+    corrections, cursor = [], 0
+    while True:
+        page = read(channel, "document.list", company, corrects_document_id=bill["id"], page_size=1, after_id=cursor)
+        require(len(page["records"]) <= 1, "correction page unbounded")
+        corrections.extend(n["id"] for n in page["records"])
+        cursor = page["next_after_id"]
+        if cursor is None:
+            break
+    require(corrections == [note["id"], *[n["id"] for n in notes]], "bounded correction cursor skipped records")
+    require("debit_note_ids" not in read(channel, "document.get", company, document_id=bill["id"]), "document still embeds unbounded corrections")
+    print("note creation/posting bind dated capacity; two-note plan and intervening payments require fresh review even when amounts still fit; corrections traverse bounded pages", flush=True)
+
+    # Turning separation off requires audited evidence; the approved exception
+    # must match the reviewed reason and retain the authenticated person.
+    same_person = write(channel, "payment.submit", company, **{**payment, "payment_date": "2026-02-12", "allocations": [{"document_id": bill["id"], "amount": "1"}]})
+    control("duties", company, "false")
+    ops = [op("payment.approve", company, request_id=same_person["id"], override_reason="Explicit H3 evidence")]
+    review = plan(channel, ops)
+    exception = changes(review)["posting"]["approval"]["approval_exception"]
+    require(exception["same_person"] is True and exception["overrides"] is True and exception["reason"] == "Explicit H3 evidence", "review omitted exception evidence")
+    record(commit(channel, ops, review))
+    require(sql(f"SELECT count(*) FROM finance_ledger_approval_exceptions WHERE company_id={company} AND reason='Explicit H3 evidence' AND same_person AND override AND prepared_by_user_id=1 AND approved_by_user_id=1") == "1", "reviewed approval exception was not retained")
+    control("duties", company, "true")
+
     for key, table in [("tax_code.list", "tax_codes"), ("document.list", "documents"), ("payment_request.list", "payment_requests"), ("payment.list", "payments")]:
         ids, cursor = [], 0
         while True:
@@ -264,6 +325,13 @@ for channel, company in [("api", 1), ("mcp", 2)]:
     pending = write(channel, "bill.create", company, **{**draft, "party_document_number": "CLOSED", "lines": [{"description": "Closed period", "account_id": accounts["X"], "amount": "2"}]})
     write(channel, "document.approve", company, who="approver", document_id=pending["id"])
     refused(channel, "document.post", company, "closed period", document_id=pending["id"])
+    if company == 2:
+        ops = [op("settings.put", company, reason="Archive fence")]
+        review = plan(channel, ops)
+        control("archive")
+        before = counters(company)
+        require("error" in commit(channel, ops, review) and counters(company) == before, "archive between preview/commit accepted or consumed code")
+        refused(channel, "settings.put", company, "archived")
     print("every read and cursor exercised; filters, cross-tenant denial, closed-period posting refusal; draft creation/approval remain available in closed period", flush=True)
 
 print("\nHTTP and MCP Payables walkthrough completed; all observed records matched independently expected effects.", flush=True)

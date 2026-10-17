@@ -29,8 +29,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::var("BILIBI_AGENT_PROOF").as_deref() != Ok("disposable") {
         return Err(Error::Invalid.into());
     }
-    let path = std::env::var("BILIBI_AGENT_CREDENTIALS")?;
-    let origin = std::env::var("APP_ORIGIN")?;
     bilibi_base::link();
     bilibi_core::link();
     bilibi_domains::link();
@@ -43,10 +41,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         bilibi_extensions::MODULES,
     )?;
     bilibi_database::migrate(&db, &modules).await?;
-    bilibi_walkthrough_fixture::install(&db).await?;
     let mut services = Services::default();
     services.provide("bootstrap.database", Arc::new(db.clone()))?;
     services.install(&modules)?;
+    if std::env::args().nth(1).as_deref() == Some("payables-control") {
+        return payables_control(&db, &services).await;
+    }
+    let path = std::env::var("BILIBI_AGENT_CREDENTIALS")?;
+    let origin = std::env::var("APP_ORIGIN")?;
+    bilibi_walkthrough_fixture::install(&db).await?;
     let grants = services.get::<Grants>("base/authz.grants")?;
     grants.reconcile().await?;
     let admin = sign_in(&db, &services, 1, 4).await?;
@@ -145,5 +148,76 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .open(path)?;
     file.write_all(serde_json::to_string(&credentials)?.as_bytes())?;
     println!("Disposable fixture ready: empty ledgers; real manager, independent approver and other-tenant OAuth credentials saved privately.");
+    Ok(())
+}
+
+// H3: real administrative facades for changing eligibility between wire
+// preview and commit. Never writes business tables directly or reconciles
+// grants, and refuses any database other than the installed disposable proof.
+async fn payables_control(
+    db: &bilibi_database::Db,
+    services: &Services,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let c = db.get().await?;
+    if c.query_opt(
+        "SELECT 1 FROM users WHERE id=1 AND tenant_id=1 AND email='manager@example.test'",
+        &[],
+    )
+    .await?
+    .is_none()
+    {
+        return Err(Error::Invalid.into());
+    }
+    drop(c);
+    let args: Vec<_> = std::env::args().skip(2).collect();
+    let admin = sign_in(db, services, 1, 4).await?;
+    match args
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .as_slice()
+    {
+        ["grant", key, enabled]
+            if bilibi_finance_payables::CAPABILITIES.contains(key)
+                || [
+                    bilibi_finance_ledger::VIEW,
+                    bilibi_finance_ledger::POST_ENTRIES,
+                ]
+                .contains(key) =>
+        {
+            let enabled: bool = enabled.parse()?;
+            services
+                .get::<Grants>("base/authz.grants")?
+                .set_direct(&admin, 1, key, Some(enabled))
+                .await?;
+        }
+        ["duties", company, required] => {
+            let company: i64 = company.parse()?;
+            if ![1, 2].contains(&company) {
+                return Err(Error::Invalid.into());
+            }
+            services
+                .get::<bilibi_finance_ledger::Ledger>(bilibi_finance_ledger::SERVICE)?
+                .set_duty_separation(
+                    &admin,
+                    company,
+                    required.parse()?,
+                    Some("Disposable H3 small-team control"),
+                )
+                .await?;
+        }
+        ["archive"] => {
+            services
+                .get::<bilibi_company::CompanyService>("core/company.companies")?
+                .archive_company(
+                    &admin,
+                    2,
+                    Some("Disposable H3 archive between review and commit"),
+                )
+                .await?;
+        }
+        _ => return Err(Error::Invalid.into()),
+    }
+    println!("Disposable H3 administrative control recorded through its facade.");
     Ok(())
 }
