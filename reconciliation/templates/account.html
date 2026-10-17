@@ -14,8 +14,10 @@
 {% call ui::section_heading(id="statement-import-heading", title="Import a statement", description=mapping) %}{% endcall %}
 {{ import_forbidden|safe }}
 {% if let Some(upload) = upload %}
-<form id="statement-import-form" data-event="validate_upload" data-change data-submit-event="import" class="mt-4 space-y-3">
-{% call form::file_input(input=upload) %}{% endcall %}
+{# FileUpload owns preflight, progress and refusal rendering; like the
+   Design Library specimen, this form reports only the import submit. #}
+<form id="statement-import-form" data-event="import" class="mt-4 space-y-3">
+{{ upload|safe }}
 {% call ui::button(id="statement-import-submit", button_type="submit", variant=bilibi_ui::ButtonVariant::Primary, working="Importing…") %}Import statement{% endcall %}
 </form>
 {% endif %}

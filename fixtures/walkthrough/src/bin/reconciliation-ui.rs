@@ -176,6 +176,72 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .read_attachment(&manager, COMPANY, source[0].id)
         .await?;
     assert_eq!(downloaded.bytes, csv);
+    // Exercise the real mounted page's upload rendering, including its
+    // owner refresh after the host refuses a file before receiving bytes.
+    let pages = services.get::<bilibi_ui::page::PageService<bilibi_tenancy::Scope, Error>>(
+        "finance/reconciliation.pages",
+    )?;
+    let path = std::collections::HashMap::from([("id".into(), account.id.to_string())]);
+    let query = std::collections::HashMap::new();
+    let mut mounted = pages
+        .0
+        .mount(bilibi_ui::page::PageRequest {
+            operation: "account",
+            scope: Some(&manager),
+            path: &path,
+            query: &query,
+            body: &[],
+            framed: false,
+        })
+        .await?
+        .ok_or(Error::Internal)?;
+    let mut next = 0;
+    for number in 1..=2 {
+        let name = format!("oversize-{number}.csv");
+        let registered = mounted
+            .uploads()
+            .ok_or(Error::Internal)?
+            .register(
+                "statement",
+                vec![bilibi_ui::ClientEntry {
+                    client_ref: number.to_string(),
+                    name: name.clone(),
+                    size: 5 * 1024 * 1024 + 1,
+                    content_type: "text/csv".into(),
+                }],
+                &mut next,
+            )
+            .ok_or(Error::Internal)?;
+        assert!(matches!(
+            registered.as_slice(),
+            [bilibi_ui::Registration::Refused {
+                error: bilibi_ui::UploadError::TooLarge,
+                ..
+            }]
+        ));
+        let body = mounted
+            .update(bilibi_ui::page::LiveRequest {
+                scope: &manager,
+                credential: "",
+                input: bilibi_ui::page::LiveInput::Refresh,
+            })
+            .await?;
+        assert!(body.html.contains(&name));
+        assert!(body
+            .html
+            .contains("The file is larger than this page accepts."));
+        assert_eq!(
+            mounted
+                .uploads()
+                .ok_or(Error::Internal)?
+                .entries("statement")
+                .next()
+                .ok_or(Error::Internal)?
+                .received(),
+            0
+        );
+    }
+    println!("NC3 mounted upload proof passed: oversized filenames and per-entry refusal render twice before receiving any bytes.");
     println!("NC3 proof passed: import/skipped rows, duplicate file, source bytes, permissions, tenant isolation, Money precision, opening and duplicate-open refusal.");
     println!(
         "Bank account page: {origin}/finance/reconciliation/accounts/{}",

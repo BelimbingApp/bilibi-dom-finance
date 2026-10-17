@@ -15,9 +15,9 @@ use bilibi_finance_attachments::{AttachmentError, AttachmentQuery, NewFile};
 use bilibi_finance_ledger::LedgerError;
 use bilibi_tenancy::Scope;
 use bilibi_ui::{
-    page::*, params, Badge, BadgeKind, BuiltinColumn, Cell, EmptyState, Field, FileInput, FlashMap,
-    FlexRow, FlexTable, Html, InputKind, Instant, ListColumns, ListSpec, ListState, StatusKind,
-    TableEmpty, UploadSpec, Uploads,
+    page::*, params, Badge, BadgeKind, BuiltinColumn, Cell, EmptyState, Field, FlashMap, FlexRow,
+    FlexTable, Html, InputKind, Instant, ListColumns, ListSpec, ListState, StatusKind, TableEmpty,
+    UploadSpec, Uploads,
 };
 use std::{
     collections::HashMap,
@@ -67,7 +67,7 @@ struct View<'a> {
     matching: Html,
     statement_count: Option<usize>,
     reconciliation_count: Option<usize>,
-    upload: Option<FileInput<'a>>,
+    upload: Option<Html>,
     import_forbidden: Html,
     open_forbidden: Html,
     statements: Html,
@@ -370,7 +370,9 @@ impl Account {
         )));
         view.reconciliations = render(table)?;
         if self.pages.allowed(scope, IMPORT_STATEMENTS).await? {
-            view.upload = Some(self.uploads.input(UPLOAD, "statement-file"));
+            // Render the typed control independently, as the Design Library
+            // does, so its entry/error fragment owns its complete context.
+            view.upload = Some(render(self.uploads.input(UPLOAD, "statement-file"))?);
         } else {
             view.import_forbidden = render(
                 EmptyState::forbidden("import statements").id("statement-import-forbidden"),
@@ -418,7 +420,6 @@ impl Account {
             "reconciliations_grid" => {
                 self.reconciliations.handle(&params::string_values(value));
             }
-            "validate_upload" => {}
             "reconciliation_change" => self.draft = params::form_values(value, "reconciliation"),
             "import" => {
                 if !self.pages.allowed(scope, IMPORT_STATEMENTS).await? {
