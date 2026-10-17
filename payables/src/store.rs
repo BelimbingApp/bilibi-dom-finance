@@ -13,6 +13,11 @@ pub(crate) enum Table {
     Documents,
     Lines,
     TaxLines,
+    Allocations,
+    Requests,
+    RequestAllocations,
+    RequestEvents,
+
 }
 impl Table {
     pub(crate) fn name(self) -> &'static str {
@@ -24,6 +29,11 @@ impl Table {
             Self::Documents => "finance_payables_documents",
             Self::Lines => "finance_payables_document_lines",
             Self::TaxLines => "finance_payables_document_tax_lines",
+            Self::Allocations => "finance_payables_payment_allocations",
+            Self::Requests => "finance_payables_payment_requests",
+            Self::RequestAllocations => "finance_payables_payment_request_allocations",
+            Self::RequestEvents => "finance_payables_payment_request_events",
+
         }
     }
     fn kind(self) -> &'static str {
@@ -35,6 +45,11 @@ impl Table {
             Self::Documents => "finance.payables.document",
             Self::Lines => "finance.payables.document_line",
             Self::TaxLines => "finance.payables.document_tax_line",
+            Self::Allocations => "finance.payables.allocation",
+            Self::Requests => "finance.payables.payment_request",
+            Self::RequestAllocations => "finance.payables.payment_request_allocation",
+            Self::RequestEvents => "finance.payables.payment_request_event",
+
         }
     }
 }
@@ -121,7 +136,7 @@ pub(crate) async fn taxes(
 ) -> DbResult<Vec<TaxCode>> {
     Ok(c.query("SELECT id,code,name,rate,account_id,active FROM finance_payables_tax_codes WHERE tenant_id=$1 AND company_id=$2 ORDER BY code",&[&tenant,&company]).await?.iter().map(|r| TaxCode {id:r.get(0),code:r.get(1),name:r.get(2),rate:r.get(3),account_id:r.get(4),active:r.get(5)}).collect())
 }
-fn money(d: Decimal) -> DbResult<Money> {
+pub(crate) fn money(d: Decimal) -> DbResult<Money> {
     Money::new(
         d,
         bilibi_finance_ledger::MinorUnits::new(4).ok_or(Error::Invalid)?,
@@ -215,14 +230,7 @@ pub(crate) async fn document(
         outstanding,
     }))
 }
-/// With only documents in NP1, debit notes are the reductions. NP3 extends
-/// this date-window minimum with allocations and reversal events.
-pub(crate) async fn outstanding(
-    c: &impl GenericClient,
-    tenant: i64,
-    company: i64,
-    bill: i64,
-) -> DbResult<Money> {
-    let r=c.query_one("SELECT b.total-COALESCE(sum(n.total),0) FROM finance_payables_documents b LEFT JOIN finance_payables_documents n ON n.tenant_id=b.tenant_id AND n.company_id=b.company_id AND n.corrects_document_id=b.id AND n.status='posted' WHERE b.tenant_id=$1 AND b.company_id=$2 AND b.id=$3 GROUP BY b.total",&[&tenant,&company,&bill]).await?;
-    money(r.get(0))
+/// Current balance uses the same temporal calculation as reports and writes.
+pub(crate) async fn outstanding(c: &impl GenericClient, tenant: i64, company: i64, bill: i64) -> DbResult<Money> {
+    crate::balances::owed(c, tenant, company, bill, jiff::civil::date(9999,12,31), i64::MAX).await
 }

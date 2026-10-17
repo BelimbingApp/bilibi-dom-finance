@@ -3,6 +3,12 @@
 //! status, and corrections are debit notes. SQL and validation remain private.
 mod contributions;
 mod documents;
+mod payments;
+pub use payments::{Allocation, AllocationInput, NewPayment, Payment, PaymentDecision, PaymentQuery, PaymentRequest, PaymentRequestQuery};
+mod balances;
+pub use balances::{AgedDocument, AgedParty, AgedPayables, AgingQuery, ControlAccount, OtherPosting, TaxQuery, TaxTotal, TieOut};
+mod evidence;
+pub use evidence::EvidencePage;
 mod settings;
 mod source;
 mod store;
@@ -13,7 +19,7 @@ use bilibi_finance_ledger::{FieldError, Ledger, LedgerError, Money};
 use bilibi_module_registry::{Layer, Module, Service};
 use bilibi_tenancy::Scope;
 pub use contributions::{
-    APPROVE_DOCUMENTS, CAPABILITIES, CREATE_DOCUMENTS, MANAGE_SETTINGS, POST_DOCUMENTS, VIEW,
+    APPROVE_DOCUMENTS, CAPABILITIES, CREATE_DOCUMENTS, MANAGE_SETTINGS, POST_DOCUMENTS, POST_PAYMENTS, SUBMIT_PAYMENTS, VIEW,
 };
 use jiff::civil::Date;
 use rust_decimal::Decimal;
@@ -23,12 +29,13 @@ use tokio_postgres::GenericClient;
 
 pub const MODULE: &str = "finance/payables";
 pub const SERVICE: &str = "finance/payables.payables";
+pub const PAYMENT_SOURCE: &str = "finance/payables/payment";
 pub const DOCUMENT_SOURCE: &str = "finance/payables/document";
 
 inventory::submit! { Module {
     id: MODULE, layer: Layer::Domains,
     dependencies: &["base/authz", "base/database", "base/tenancy", "core/company", "finance/attachments", "finance/ledger"],
-    migrations: &[("finance-payables-001-documents", include_str!("../migrations/001-documents.sql"))],
+    migrations: &[("finance-payables-001-documents", include_str!("../migrations/001-documents.sql")), ("finance-payables-002-payments", include_str!("../migrations/002-payments.sql"))],
     services: &[Service { id: SERVICE, factory: |s| Ok(Arc::new(Payables {
         db: s.get::<Db>("base/database.pool")?.as_ref().clone(),
         ledger: s.get(bilibi_finance_ledger::SERVICE)?,
@@ -60,6 +67,16 @@ pub enum PayablesError {
     NotPostedBill,
     #[error("The amount exceeds what is outstanding")]
     ExceedsOutstanding,
+    #[error("Not found")]
+    PaymentRequestNotFound,
+    #[error("The payment request is already decided")]
+    PaymentRequestDecided,
+    #[error("Not found")]
+    PaymentNotFound,
+    #[error("The payment is already reversed")]
+    AlreadyReversed,
+    #[error("A reversal cannot be reversed")]
+    ReversalNotReversible,
     #[error("Invalid option")]
     InvalidOption,
     #[error("Invalid input")]

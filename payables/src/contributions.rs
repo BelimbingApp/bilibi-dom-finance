@@ -7,14 +7,16 @@ pub const MANAGE_SETTINGS: &str = "finance.payables.settings.manage";
 pub const CREATE_DOCUMENTS: &str = "finance.payables.documents.create";
 pub const APPROVE_DOCUMENTS: &str = "finance.payables.documents.approve";
 pub const POST_DOCUMENTS: &str = "finance.payables.documents.post";
+pub const SUBMIT_PAYMENTS: &str = "finance.payables.payments.submit";
+pub const POST_PAYMENTS: &str = "finance.payables.payments.post";
 pub const CAPABILITIES: [&str; 8] = [
     VIEW,
     MANAGE_SETTINGS,
     CREATE_DOCUMENTS,
     APPROVE_DOCUMENTS,
     POST_DOCUMENTS,
-    "finance.payables.payments.submit",
-    "finance.payables.payments.post",
+    SUBMIT_PAYMENTS,
+    POST_PAYMENTS,
     "finance.payables.match.approve",
 ];
 inventory::submit! { Contribution::new(VOCABULARY,MODULE,Provenance {module:MODULE,source:file!(),line:line!()},&VocabularyContribution {
