@@ -405,6 +405,10 @@ impl Bill {
     async fn event(&mut self, scope: &Scope, v: &serde_json::Value) -> Result<bool> {
         let event = v["type"].as_str().ok_or(Error::Invalid)?;
         match event {
+            "clear-flash" => {
+                self.flash = None;
+                return Ok(false);
+            }
             "lines_grid" | "matches_grid" | "events_grid" => {
                 let columns = match event {
                     "lines_grid" => &mut self.lines,
@@ -446,6 +450,7 @@ impl Bill {
             return Ok(true);
         }
         if event == "open_dialog" {
+            self.flash = None;
             self.dialog = match action {
                 "void" => Some(Dialog::Void),
                 "approve_exception" => self
@@ -527,7 +532,6 @@ impl Bill {
 impl LiveState<Scope, Error> for Bill {
     fn update<'a>(&'a mut self, r: LiveRequest<'a, Scope>) -> LiveFuture<'a, Error> {
         Box::pin(async move {
-            self.flash = None;
             let reload = match r.input {
                 LiveInput::Refresh | LiveInput::Params(_) => true,
                 LiveInput::Event(v) => self.event(r.scope, v).await?,

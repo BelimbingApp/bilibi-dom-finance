@@ -6,8 +6,8 @@ use bilibi_database::{Error, Result};
 use bilibi_tenancy::Scope;
 use bilibi_ui::{
     page::{LiveBody, LiveFuture, LiveInput, LiveRequest, LiveState},
-    params, BadgeKind, BuiltinColumn, Button, Cell, Choice, EmptyState, Filter, FilterToolbar,
-    FlexRow, FlexTable, Html, ListColumns, ListSpec, ListState, PageCounts, Pagination, RecordLink,
+    params, BadgeKind, BuiltinColumn, Cell, Choice, EmptyState, Filter, FilterToolbar, FlexRow,
+    FlexTable, Html, ListColumns, ListSpec, ListState, PageCounts, Pagination, RecordLink,
     TableEmpty, ToolbarControl,
 };
 use std::{
@@ -121,13 +121,53 @@ impl Bills {
     pub(super) fn body(&self) -> Result<String> {
         let mut held = self.list.clone();
         held.apply_filters(&HashMap::from([("status".into(), "held".into())]));
-        let actions = render(Button {
-            id: "payables-bills-held",
-            href: &params::address(INDEX, &held.to_params()),
-            body: Html::text("Held bills"),
-            ..Button::default()
+        let actions = render(HeldLink {
+            href: params::address(INDEX, &held.to_params()),
         })?;
         let mut content = Html::EMPTY;
+        let mut toolbar = FilterToolbar::new(
+            "payables-bills-filters",
+            vec![
+                ToolbarControl::search(
+                    "payables-bills-search",
+                    "search",
+                    "Search bills",
+                    &self.list.search,
+                    "Search by party or party's number…",
+                ),
+                ToolbarControl::select(
+                    "payables-bills-status",
+                    "status",
+                    "Filter by status",
+                    &self.list.filters["status"],
+                    [
+                        ("All statuses", ""),
+                        ("draft", "draft"),
+                        ("approved", "approved"),
+                        ("held", "held"),
+                        ("posted", "posted"),
+                        ("voided", "voided"),
+                    ]
+                    .map(|(l, v)| Choice::new(l, v))
+                    .to_vec(),
+                ),
+                ToolbarControl::select(
+                    "payables-bills-type",
+                    "document_type",
+                    "Filter by type",
+                    &self.list.filters["document_type"],
+                    [
+                        ("All types", ""),
+                        ("Bill", "bill"),
+                        ("Debit note", "debit_note"),
+                    ]
+                    .map(|(l, v)| Choice::new(l, v))
+                    .to_vec(),
+                ),
+            ],
+        );
+        toolbar.event = "filter";
+        content.push(&render(toolbar)?);
         if self.unavailable {
             let mut empty = EmptyState::missing(
                 "Bills unavailable",
@@ -136,49 +176,6 @@ impl Bills {
             empty.id = "payables-bills-unavailable".into();
             content.push(&render(empty)?);
         } else {
-            let mut toolbar = FilterToolbar::new(
-                "payables-bills-filters",
-                vec![
-                    ToolbarControl::search(
-                        "payables-bills-search",
-                        "search",
-                        "Search bills",
-                        &self.list.search,
-                        "Search by party or party's number…",
-                    ),
-                    ToolbarControl::select(
-                        "payables-bills-status",
-                        "status",
-                        "Filter by status",
-                        &self.list.filters["status"],
-                        [
-                            ("All statuses", ""),
-                            ("draft", "draft"),
-                            ("approved", "approved"),
-                            ("held", "held"),
-                            ("posted", "posted"),
-                            ("voided", "voided"),
-                        ]
-                        .map(|(l, v)| Choice::new(l, v))
-                        .to_vec(),
-                    ),
-                    ToolbarControl::select(
-                        "payables-bills-type",
-                        "document_type",
-                        "Filter by type",
-                        &self.list.filters["document_type"],
-                        [
-                            ("All types", ""),
-                            ("Bill", "bill"),
-                            ("Debit note", "debit_note"),
-                        ]
-                        .map(|(l, v)| Choice::new(l, v))
-                        .to_vec(),
-                    ),
-                ],
-            );
-            toolbar.event = "filter";
-            content.push(&render(toolbar)?);
             let mut rows = Vec::new();
             for d in &self.documents {
                 let mut row = FlexRow::new(d.id.to_string());
@@ -248,6 +245,17 @@ impl Bills {
 struct View {
     actions: Html,
     content: Html,
+}
+
+// Base UI's Button link has no patch attribute. This is Bilimbi's plain
+// patch link; the platform transport owns in-place Params navigation.
+#[derive(Template)]
+#[template(
+    source = r#"<a id="payables-bills-held" href="{{ href }}" data-patch>Held bills</a>"#,
+    ext = "html"
+)]
+struct HeldLink {
+    href: String,
 }
 
 impl LiveState<Scope, Error> for Bills {
