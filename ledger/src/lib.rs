@@ -971,6 +971,18 @@ impl Ledger {
                 "finance.ledger.open_book",
             )
             .await?;
+        let book = Self::open_book_on(&mut tx, scope, company_id, new).await?;
+        tx.commit().await?;
+        Ok(book)
+    }
+
+    async fn open_book_on(
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company_id: i64,
+        new: &NewBook,
+    ) -> Result<Book> {
+        join(tx, scope, company_id, MANAGE_ACCOUNTS).await?;
         let tenant = scope.tenant();
         if books::find(tx.sql(), tenant, company_id).await?.is_some() {
             return Err(LedgerError::BookAlreadyOpen);
@@ -1011,7 +1023,6 @@ impl Ledger {
                 })
             })
             .await?;
-        tx.commit().await?;
         Ok(book)
     }
 
@@ -1041,6 +1052,18 @@ impl Ledger {
                 "finance.ledger.create_account",
             )
             .await?;
+        let account = Self::create_account_on(&mut tx, scope, company_id, new).await?;
+        tx.commit().await?;
+        Ok(account)
+    }
+
+    async fn create_account_on(
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company_id: i64,
+        new: &NewAccount,
+    ) -> Result<Account> {
+        join(tx, scope, company_id, MANAGE_ACCOUNTS).await?;
         let tenant = scope.tenant();
         let valid = accounts::validate_new(tx.sql(), tenant, company_id, new)
             .await?
@@ -1066,7 +1089,6 @@ impl Ledger {
                 })
             })
             .await?;
-        tx.commit().await?;
         Ok(account)
     }
 
@@ -1091,6 +1113,20 @@ impl Ledger {
                 "finance.ledger.update_account",
             )
             .await?;
+        let account =
+            Self::update_account_on(&mut tx, scope, company_id, account_id, change).await?;
+        tx.commit().await?;
+        Ok(account)
+    }
+
+    async fn update_account_on(
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company_id: i64,
+        account_id: i64,
+        change: &AccountChange,
+    ) -> Result<Account> {
+        join(tx, scope, company_id, MANAGE_ACCOUNTS).await?;
         let tenant = scope.tenant();
         let current = accounts::find(tx.sql(), tenant, company_id, account_id)
             .await?
@@ -1124,7 +1160,6 @@ impl Ledger {
                 })
             })
             .await?;
-        tx.commit().await?;
         Ok(account)
     }
 
@@ -1711,6 +1746,18 @@ impl Ledger {
                 "finance.ledger.submit_journal",
             )
             .await?;
+        let journal = Self::submit_journal_on(&mut tx, scope, company_id, new).await?;
+        tx.commit().await?;
+        Ok(journal)
+    }
+
+    async fn submit_journal_on(
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company_id: i64,
+        new: &NewEntry,
+    ) -> Result<Journal> {
+        join(tx, scope, company_id, SUBMIT_JOURNALS).await?;
         let tenant = scope.tenant();
         let book = books::find(tx.sql(), tenant, company_id)
             .await?
@@ -1742,7 +1789,6 @@ impl Ledger {
                 })
             })
             .await?;
-        tx.commit().await?;
         Ok(journal)
     }
 
@@ -1772,6 +1818,18 @@ impl Ledger {
                 "finance.ledger.approve_journal",
             )
             .await?;
+        let journal = Self::approve_journal_on(&mut tx, scope, company_id, journal_id).await?;
+        tx.commit().await?;
+        Ok(journal)
+    }
+
+    async fn approve_journal_on(
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company_id: i64,
+        journal_id: i64,
+    ) -> Result<Journal> {
+        join(tx, scope, company_id, APPROVE_JOURNALS).await?;
         let tenant = scope.tenant();
         let book = books::find(tx.sql(), tenant, company_id)
             .await?
@@ -1838,7 +1896,6 @@ impl Ledger {
         let journal = journals::find(tx.sql(), tenant, company_id, journal_id)
             .await?
             .ok_or(Error::Internal)?;
-        tx.commit().await?;
         Ok(journal)
     }
 
@@ -1863,6 +1920,20 @@ impl Ledger {
                 "finance.ledger.reject_journal",
             )
             .await?;
+        let journal =
+            Self::reject_journal_on(&mut tx, scope, company_id, journal_id, reason).await?;
+        tx.commit().await?;
+        Ok(journal)
+    }
+
+    async fn reject_journal_on(
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company_id: i64,
+        journal_id: i64,
+        reason: &str,
+    ) -> Result<Journal> {
+        join(tx, scope, company_id, APPROVE_JOURNALS).await?;
         let tenant = scope.tenant();
         submitted_journal(tx.sql(), tenant, company_id, journal_id).await?;
         let reason = journals::validate_reason(reason).map_err(LedgerError::Invalid)?;
@@ -1887,7 +1958,6 @@ impl Ledger {
         let journal = journals::find(tx.sql(), tenant, company_id, journal_id)
             .await?
             .ok_or(Error::Internal)?;
-        tx.commit().await?;
         Ok(journal)
     }
 
@@ -2139,6 +2209,18 @@ impl Ledger {
                 "finance.ledger.open_fiscal_year",
             )
             .await?;
+        let year = Self::open_fiscal_year_on(&mut tx, scope, company_id, new).await?;
+        tx.commit().await?;
+        Ok(year)
+    }
+
+    async fn open_fiscal_year_on(
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company_id: i64,
+        new: &NewFiscalYear,
+    ) -> Result<FiscalYear> {
+        join(tx, scope, company_id, MANAGE_PERIODS).await?;
         let tenant = scope.tenant();
         books::find(tx.sql(), tenant, company_id)
             .await?
@@ -2155,7 +2237,6 @@ impl Ledger {
             })
             .await?;
         let year = fiscal_year(tx.sql(), tenant, company_id, year_id).await?;
-        tx.commit().await?;
         Ok(year)
     }
 
@@ -2216,7 +2297,7 @@ impl Ledger {
         reason: Option<&str>,
     ) -> Result<Period> {
         let mut client = self.db.get().await.map_err(Error::from)?;
-        let tx = self
+        let mut tx = self
             .write(
                 &mut client,
                 scope,
@@ -2225,6 +2306,19 @@ impl Ledger {
                 "finance.ledger.close_period",
             )
             .await?;
+        let period = Self::close_period_on(&mut tx, scope, company_id, period_id, reason).await?;
+        tx.commit().await?;
+        Ok(period)
+    }
+
+    async fn close_period_on(
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company_id: i64,
+        period_id: i64,
+        reason: Option<&str>,
+    ) -> Result<Period> {
+        join(tx, scope, company_id, MANAGE_PERIODS).await?;
         let state = periods::state(tx.sql(), scope.tenant(), company_id).await?;
         let period = state.period(period_id).ok_or(LedgerError::PeriodNotFound)?;
         let (previous, _) = state.neighbours(period_id);
@@ -2267,7 +2361,7 @@ impl Ledger {
         reason: &str,
     ) -> Result<Period> {
         let mut client = self.db.get().await.map_err(Error::from)?;
-        let tx = self
+        let mut tx = self
             .write(
                 &mut client,
                 scope,
@@ -2276,6 +2370,19 @@ impl Ledger {
                 "finance.ledger.reopen_period",
             )
             .await?;
+        let period = Self::reopen_period_on(&mut tx, scope, company_id, period_id, reason).await?;
+        tx.commit().await?;
+        Ok(period)
+    }
+
+    async fn reopen_period_on(
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company_id: i64,
+        period_id: i64,
+        reason: &str,
+    ) -> Result<Period> {
+        join(tx, scope, company_id, REOPEN_PERIODS).await?;
         let state = periods::state(tx.sql(), scope.tenant(), company_id).await?;
         let period = state.period(period_id).ok_or(LedgerError::PeriodNotFound)?;
         let (_, next) = state.neighbours(period_id);
@@ -2326,7 +2433,7 @@ impl Ledger {
         reason: Option<&str>,
     ) -> Result<Period> {
         let mut client = self.db.get().await.map_err(Error::from)?;
-        let tx = self
+        let mut tx = self
             .write(
                 &mut client,
                 scope,
@@ -2335,6 +2442,19 @@ impl Ledger {
                 "finance.ledger.lock_period",
             )
             .await?;
+        let period = Self::lock_period_on(&mut tx, scope, company_id, period_id, reason).await?;
+        tx.commit().await?;
+        Ok(period)
+    }
+
+    async fn lock_period_on(
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company_id: i64,
+        period_id: i64,
+        reason: Option<&str>,
+    ) -> Result<Period> {
+        join(tx, scope, company_id, LOCK_PERIODS).await?;
         let state = periods::state(tx.sql(), scope.tenant(), company_id).await?;
         let period = state.period(period_id).ok_or(LedgerError::PeriodNotFound)?;
         let (previous, _) = state.neighbours(period_id);
@@ -2387,6 +2507,21 @@ impl Ledger {
                 "finance.ledger.close_fiscal_year",
             )
             .await?;
+        let year =
+            Self::close_fiscal_year_on(&mut tx, scope, company_id, fiscal_year_id, close).await?;
+        tx.commit().await?;
+        Ok(year)
+    }
+
+    async fn close_fiscal_year_on(
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company_id: i64,
+        fiscal_year_id: i64,
+        close: &YearClose,
+    ) -> Result<FiscalYear> {
+        join(tx, scope, company_id, MANAGE_PERIODS).await?;
+        authorize(tx.sql(), scope, company_id, POST_ENTRIES).await?;
         let tenant = scope.tenant();
         let book = books::find(tx.sql(), tenant, company_id)
             .await?
@@ -2397,7 +2532,6 @@ impl Ledger {
             .ok_or(LedgerError::FiscalYearNotFound)?
             .clone();
         if year.status == YearStatus::Closed {
-            tx.rollback().await?;
             return Ok(year);
         }
         let open: Vec<Period> = year
@@ -2502,7 +2636,6 @@ impl Ledger {
         })
         .await?;
         let year = fiscal_year(tx.sql(), tenant, company_id, fiscal_year_id).await?;
-        tx.commit().await?;
         Ok(year)
     }
 
@@ -2530,6 +2663,21 @@ impl Ledger {
                 "finance.ledger.reopen_fiscal_year",
             )
             .await?;
+        let year =
+            Self::reopen_fiscal_year_on(&mut tx, scope, company_id, fiscal_year_id, reason).await?;
+        tx.commit().await?;
+        Ok(year)
+    }
+
+    async fn reopen_fiscal_year_on(
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company_id: i64,
+        fiscal_year_id: i64,
+        reason: &str,
+    ) -> Result<FiscalYear> {
+        join(tx, scope, company_id, REOPEN_PERIODS).await?;
+        authorize(tx.sql(), scope, company_id, POST_ENTRIES).await?;
         let tenant = scope.tenant();
         let book = books::find(tx.sql(), tenant, company_id)
             .await?
@@ -2654,7 +2802,6 @@ impl Ledger {
         })
         .await?;
         let year = fiscal_year(tx.sql(), tenant, company_id, fiscal_year_id).await?;
-        tx.commit().await?;
         Ok(year)
     }
 
@@ -2663,7 +2810,7 @@ impl Ledger {
     async fn change_period(
         scope: &Scope,
         company_id: i64,
-        mut tx: MutationTransaction<'_>,
+        tx: &mut MutationTransaction<'_>,
         period: Period,
         action: ClosingAction,
         reason: Option<String>,
@@ -2709,7 +2856,6 @@ impl Ledger {
                 })
             })
             .await?;
-        tx.commit().await?;
         Ok(changed)
     }
 
