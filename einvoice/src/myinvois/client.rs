@@ -93,7 +93,9 @@ fn cache_key(connection: &Connection<'_>) -> TokenKey {
 }
 
 fn cached_token(key: &TokenKey) -> Option<String> {
-    let tokens = TOKENS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let tokens = TOKENS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     tokens
         .get(key)
         .filter(|(_, expires_at)| expires_at - MARGIN_SECONDS > unix_now())
@@ -101,18 +103,25 @@ fn cached_token(key: &TokenKey) -> Option<String> {
 }
 
 fn keep_token(key: TokenKey, token: String, expires_in: i64) {
-    let mut tokens = TOKENS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut tokens = TOKENS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     tokens.insert(key, (token, unix_now() + expires_in));
 }
 
 fn drop_token(key: &TokenKey) {
-    let mut tokens = TOKENS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut tokens = TOKENS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     tokens.remove(key);
 }
 
 /// Whether the credentials name a client ID and secret.
 fn complete(credentials: &Credentials) -> bool {
-    credentials.client_id.as_deref().is_some_and(|id| !id.is_empty())
+    credentials
+        .client_id
+        .as_deref()
+        .is_some_and(|id| !id.is_empty())
         && credentials
             .client_secret
             .as_deref()
@@ -202,7 +211,10 @@ pub(crate) async fn document_details(connection: &Connection<'_>, uuid: &str) ->
     authorized(
         connection,
         "documents.details",
-        Outgoing::get(url(connection, &format!("/api/v1.0/documents/{uuid}/details"))),
+        Outgoing::get(url(
+            connection,
+            &format!("/api/v1.0/documents/{uuid}/details"),
+        )),
     )
     .await
 }
@@ -227,7 +239,10 @@ pub(crate) async fn recent_documents(
     authorized(
         connection,
         "documents.recent",
-        Outgoing::get(url(connection, &format!("/api/v1.0/documents/recent?{params}"))),
+        Outgoing::get(url(
+            connection,
+            &format!("/api/v1.0/documents/recent?{params}"),
+        )),
     )
     .await
 }
@@ -251,7 +266,10 @@ pub(crate) async fn cancel_document(
         "documents.cancel",
         Outgoing::new(
             http::Method::PUT,
-            url(connection, &format!("/api/v1.0/documents/state/{uuid}/state")),
+            url(
+                connection,
+                &format!("/api/v1.0/documents/state/{uuid}/state"),
+            ),
         )
         .header("Content-Type", "application/json")
         .bytes(body.encode().into_bytes()),
@@ -295,7 +313,10 @@ async fn authorized(connection: &Connection<'_>, operation: &str, request: Outgo
 async fn fetch_token(connection: &Connection<'_>) -> Result {
     let credentials = connection.credentials;
     let form = query(&[
-        ("client_id", credentials.client_id.clone().unwrap_or_default()),
+        (
+            "client_id",
+            credentials.client_id.clone().unwrap_or_default(),
+        ),
         (
             "client_secret",
             credentials.client_secret.clone().unwrap_or_default(),

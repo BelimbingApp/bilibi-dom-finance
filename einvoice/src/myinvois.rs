@@ -373,7 +373,11 @@ impl Authority for MyInvois {
         api::find_submission(connection, lookup).await
     }
 
-    async fn document_status(&self, connection: &Connection<'_>, document_uuid: &str) -> StatusRead {
+    async fn document_status(
+        &self,
+        connection: &Connection<'_>,
+        document_uuid: &str,
+    ) -> StatusRead {
         api::document_status(connection, document_uuid).await
     }
 

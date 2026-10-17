@@ -296,4 +296,13 @@ Migrations `finance-einvoice-001-documents`, `-002-consolidation` and
 Prove it with `fixtures/walkthrough` on a disposable database (see the
 repository README); its e-invoice section prints the facade's answers, the
 drafts accepted and refused, the payload a recorded document becomes (unsigned
-and signed, verified, and tampered) and each database refusal.
+and signed, verified, and tampered) and each database refusal. Its clearance
+section (last) serves a stand-in for the MyInvois API on the loopback for the
+run, which checks each submission's hash and verifies its signature and
+answers by the code number, then clears Company 002's documents through the
+facade and the real submit and poll jobs: valid, refused, invalid, rate
+limited, a duplicate found and one not found, a lost answer found again, the
+72-hour overdue notice and recovery, an expired token, a rejection request, a
+portal cancellation, and cancellations accepted and refused; then the stored
+submissions, the database's refusals, the exchanges Base Integration recorded
+(without bodies or the secret) and the audit actions.

@@ -211,9 +211,9 @@ fn submission_outcome(code_number: &str, status: u16, body: Value) -> SubmitOutc
             ..base
         }),
         (None, Some(rejected)) => SubmitOutcome::Refused(Answer {
-            reason: rejected.get("error").and_then(|error| {
-                error_message(&serde_json::json!({ "error": error.clone() }))
-            }),
+            reason: rejected
+                .get("error")
+                .and_then(|error| error_message(&serde_json::json!({ "error": error.clone() }))),
             ..base
         }),
         (None, None) => SubmitOutcome::Refused(Answer {
@@ -283,14 +283,17 @@ pub(crate) async fn find_submission(connection: &Connection<'_>, lookup: &Lookup
             .max_by_key(|entry| {
                 entry
                     .get("dateTimeReceived")
-                    .map(|received| received.as_str().map_or_else(|| received.to_string(), str::to_owned))
+                    .map(|received| {
+                        received
+                            .as_str()
+                            .map_or_else(|| received.to_string(), str::to_owned)
+                    })
                     .unwrap_or_default()
             });
         if let Some(entry) = found {
-            if let (Some(uuid), Some(uid)) = (
-                text(entry.get("uuid")),
-                text(entry.get("submissionUid")),
-            ) {
+            if let (Some(uuid), Some(uid)) =
+                (text(entry.get("uuid")), text(entry.get("submissionUid")))
+            {
                 return Search::Found(Answer {
                     submission_uid: Some(uid),
                     document_uuid: Some(uuid),
@@ -316,7 +319,10 @@ pub(crate) async fn find_submission(connection: &Connection<'_>, lookup: &Lookup
     }
 }
 
-pub(crate) async fn document_status(connection: &Connection<'_>, document_uuid: &str) -> StatusRead {
+pub(crate) async fn document_status(
+    connection: &Connection<'_>,
+    document_uuid: &str,
+) -> StatusRead {
     match client::document_details(connection, document_uuid).await {
         Ok(Reply { status, body }) => {
             let Some(name) = body.get("status") else {
@@ -365,7 +371,9 @@ pub(crate) async fn cancel(
 ) -> CancelOutcome {
     match client::cancel_document(connection, document_uuid, reason).await {
         Ok(Reply { status, body }) => CancelOutcome::Cancelled(answer(status, body)),
-        Err(CallError::Http { status, body, .. }) if (400..500).contains(&status) && status != 429 => {
+        Err(CallError::Http { status, body, .. })
+            if (400..500).contains(&status) && status != 429 =>
+        {
             let code = match error_code(&body) {
                 Some("OperationPeriodOver") => CancelRefusal::PeriodOver,
                 Some("IncorrectState") => CancelRefusal::IncorrectState,

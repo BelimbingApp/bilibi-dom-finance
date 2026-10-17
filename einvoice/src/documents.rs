@@ -3,7 +3,7 @@
 //! (Bilimbi `Bilimbi.Finance.Einvoice.Documents`). Every query names the
 //! tenant and company; callers authorize first. Every write is a `mutate` of
 //! the caller's audited transaction, returning each row as a `Change`.
-use crate::authority::Authority;
+use crate::authority::{Authority, Payload};
 use crate::document::{Details, Document, DocumentLine, PartySnapshot};
 use crate::draft::ValidDraft;
 use bilibi_database::{Change, Error, MutationTransaction, Result};
@@ -527,7 +527,10 @@ pub(crate) async fn unresolved_attempts(
 
 /// Who a recorded row names: the scope's user and any impersonator.
 fn actor(scope: &Scope) -> (i64, Option<i64>) {
-    (scope.user(), scope.impersonator().map(|operator| operator.user()))
+    (
+        scope.user(),
+        scope.impersonator().map(|operator| operator.user()),
+    )
 }
 
 /// A status event to record.
@@ -683,19 +686,22 @@ async fn release_sources(
     Ok(())
 }
 
-/// Stores a submission's exact bytes before the authority sees them; the
-/// database checks the hash against the bytes.
+/// Stores a submission's exact bytes before the authority sees them, with
+/// their hex SHA-256; the database checks the hash against the bytes.
 pub(crate) async fn store_submission(
     tx: &mut MutationTransaction<'_>,
     scope: &Scope,
     company_id: i64,
     document: &Document,
-    format: &'static str,
-    version: String,
-    bytes: Vec<u8>,
+    payload: &Payload,
     sha256: String,
 ) -> Result<Attempt> {
     let tenant = scope.tenant();
+    let (format, version, bytes) = (
+        payload.format,
+        payload.version.clone(),
+        payload.bytes.clone(),
+    );
     let (user, impersonator) = actor(scope);
     let (document_id, environment) = (document.id, document.environment.clone());
     tx.mutate(move |sql| {
@@ -775,7 +781,7 @@ pub(crate) async fn insert_document(
                          tax_amount, tax_inclusive_amount, payable_amount, issued_by_user_id, \
                          issued_by_impersonator_id) \
                          VALUES ($1, $2, $3, $4, $5, $6, \
-                         ($7::timestamptz AT TIME ZONE 'UTC')::timestamp(0), \
+                         ($7::text::timestamptz AT TIME ZONE 'UTC')::timestamp(0), \
                          $8, $9, $10, $11, $12, $13, $14, $14, $15, $16, $16, $17, $18) \
                          RETURNING id",
                         &[
@@ -815,7 +821,7 @@ pub(crate) async fn insert_document(
                         "payable_amount": total.to_string(),
                     }),
                 }];
-                for (number, line) in (1..).zip(&draft.lines) {
+                for (number, line) in (1_i32..).zip(&draft.lines) {
                     let row = sql
                         .query_one(
                             "INSERT INTO finance_einvoice_document_lines (tenant_id, company_id, \
@@ -829,7 +835,7 @@ pub(crate) async fn insert_document(
                                 &tenant,
                                 &company_id,
                                 &id,
-                                &(number as i32),
+                                &number,
                                 &line.description,
                                 &line.classification_code,
                                 &line.tariff_code,

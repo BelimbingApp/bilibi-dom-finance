@@ -18,8 +18,8 @@
 //! `TODO(NE4 ledger bridge)`.
 use crate::authority::{
     Answer, Authority, AuthorityStatus, CancelOutcome, CancelRefusal, Connection, Credentials,
-    DocumentStatus, LoginOutcome, Lookup, Original, PayloadError, PayloadOptions, Progress,
-    Search, StatusRead, SubmitOutcome, ValidationContext,
+    DocumentStatus, LoginOutcome, Lookup, Original, PayloadError, PayloadOptions, Progress, Search,
+    StatusRead, SubmitOutcome, ValidationContext,
 };
 use crate::code_lists::{self, Codes};
 use crate::document::{Details, PartySnapshot};
@@ -550,7 +550,10 @@ impl Einvoice {
         if !submittable(recorded.status()) {
             return Outcome::Completed;
         }
-        match self.submit_recorded(scope, company_id, recorded, now, writer).await {
+        match self
+            .submit_recorded(scope, company_id, recorded, now, writer)
+            .await
+        {
             Ok(outcome) | Err(outcome) => outcome,
         }
     }
@@ -613,8 +616,16 @@ impl Einvoice {
             Search::Unavailable(answer) => Decided::Deferred("unavailable", answer),
             Search::Refused(answer) => Decided::Deferred("refused", answer),
         };
-        self.record_outcome(scope, company_id, &recorded, attempts[0].id, decided, now, writer)
-            .await
+        self.record_outcome(
+            scope,
+            company_id,
+            &recorded,
+            attempts[0].id,
+            decided,
+            now,
+            writer,
+        )
+        .await
     }
 
     async fn send(
@@ -677,18 +688,10 @@ impl Einvoice {
             return Ok(Outcome::Cancel("source_taken"));
         }
         let sha256 = crate::myinvois::sha256_hex(&payload.bytes);
-        let attempt = documents::store_submission(
-            &mut tx,
-            scope,
-            company_id,
-            document,
-            payload.format,
-            payload.version.clone(),
-            payload.bytes.clone(),
-            sha256,
-        )
-        .await
-        .map_err(|_| retry_database())?;
+        let attempt =
+            documents::store_submission(&mut tx, scope, company_id, document, &payload, sha256)
+                .await
+                .map_err(|_| retry_database())?;
         tx.commit().await.map_err(|_| retry_database())?;
         drop(client);
 
@@ -703,8 +706,10 @@ impl Einvoice {
         let decided = self
             .recover(scope, company_id, &connection, recorded, outcome)
             .await;
-        self.record_outcome(scope, company_id, recorded, attempt.id, decided, now, writer)
-            .await
+        self.record_outcome(
+            scope, company_id, recorded, attempt.id, decided, now, writer,
+        )
+        .await
     }
 
     // A duplicate, or an outage that may have hidden an accepted request,
@@ -1113,7 +1118,9 @@ impl Einvoice {
         let settled = ["valid", "rejected", "cancelled"].contains(&status.as_str());
         let rejected = answer.rejection_requested_at.is_some();
         Ok(match answer.status {
-            AuthorityStatus::Valid if rejected && !["rejected", "cancelled"].contains(&status.as_str()) => {
+            AuthorityStatus::Valid
+                if rejected && !["rejected", "cancelled"].contains(&status.as_str()) =>
+            {
                 if !settled {
                     let event = common("valid", AuthorityStatus::Valid);
                     documents::record_event(tx, scope, company_id, document.id, event).await?;
@@ -1230,7 +1237,10 @@ impl Einvoice {
         let credentials = self
             .read_credentials(client, scope, company_id, environment)
             .await?;
-        if !credentials.client_id.as_deref().is_some_and(|id| !id.is_empty())
+        if !credentials
+            .client_id
+            .as_deref()
+            .is_some_and(|id| !id.is_empty())
             || !credentials
                 .client_secret
                 .as_deref()
@@ -1291,7 +1301,8 @@ impl Einvoice {
         ) else {
             return Ok(None);
         };
-        let (Ok(certificate), Ok(key)) = (Certificate::parse(&certificate), PrivateKey::parse(&key))
+        let (Ok(certificate), Ok(key)) =
+            (Certificate::parse(&certificate), PrivateKey::parse(&key))
         else {
             return Ok(None);
         };
@@ -1377,7 +1388,10 @@ impl Einvoice {
         let client = self.db.get().await.map_err(Error::from)?;
         let url = self
             .settings
-            .get_global(&**client, &format!("finance.einvoice.{environment}.api_url"))
+            .get_global(
+                &**client,
+                &format!("finance.einvoice.{environment}.api_url"),
+            )
             .await?;
         Ok(url.as_str().unwrap_or_default().to_owned())
     }
@@ -1453,7 +1467,12 @@ impl Einvoice {
 
     /// Whether the company can be written to, asked before an irreversible
     /// call to the authority so its outcome can still be recorded.
-    async fn ensure_writable(&self, scope: &Scope, company_id: i64, writer: Writer<'_>) -> Result<()> {
+    async fn ensure_writable(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        writer: Writer<'_>,
+    ) -> Result<()> {
         let mut client = self.db.get().await.map_err(Error::from)?;
         let tx = self
             .begin(
@@ -1601,8 +1620,14 @@ async fn answer_action(
         }
     };
     put("http_status", answer.http_status.map(Value::from));
-    put("submission_uid", answer.submission_uid.clone().map(Value::from));
-    put("document_uuid", answer.document_uuid.clone().map(Value::from));
+    put(
+        "submission_uid",
+        answer.submission_uid.clone().map(Value::from),
+    );
+    put(
+        "document_uuid",
+        answer.document_uuid.clone().map(Value::from),
+    );
     put("reason", answer.reason.clone().map(Value::from));
     payload.retain(|_, value| !value.is_null());
     action(tx, event, Value::Object(payload)).await

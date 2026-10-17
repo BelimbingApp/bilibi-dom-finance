@@ -18,8 +18,7 @@ use crate::{Einvoice, MODULE, SUBMIT};
 use bilibi_database::{Error, Result};
 use bilibi_module_registry::{Contribution, Provenance};
 use bilibi_queue::execution::{
-    Execution, Handler, HandlerBinding, HandlerFuture, HandlerService, Identity, Outcome,
-    HANDLERS,
+    Execution, Handler, HandlerBinding, HandlerFuture, HandlerService, Identity, Outcome, HANDLERS,
 };
 use bilibi_queue::{Worker, WORKERS};
 use jiff::Timestamp;
@@ -34,12 +33,7 @@ pub(crate) const POLL_SERVICE: &str = "finance/einvoice.poll_job";
 /// An exact allowlist: the two identifiers and nothing else reach the queue.
 fn validate_args(args: Value) -> Result<Value> {
     let object = args.as_object().ok_or(Error::Invalid)?;
-    let id = |key: &str| {
-        object
-            .get(key)
-            .and_then(Value::as_i64)
-            .filter(|id| *id > 0)
-    };
+    let id = |key: &str| object.get(key).and_then(Value::as_i64).filter(|id| *id > 0);
     match (object.len(), id("company_id"), id("document_id")) {
         (2, Some(company_id), Some(document_id)) => {
             Ok(json!({ "company_id": company_id, "document_id": document_id }))

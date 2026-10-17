@@ -235,7 +235,10 @@ async fn submit(State(standin): Shared, headers: HeaderMap, Json(body): Json<Val
         return refused;
     }
     let document = &body["documents"][0];
-    let code = document["codeNumber"].as_str().unwrap_or_default().to_owned();
+    let code = document["codeNumber"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
     let bytes = BASE64
         .decode(document["document"].as_str().unwrap_or_default())
         .unwrap_or_default();
@@ -290,10 +293,12 @@ async fn submit(State(standin): Shared, headers: HeaderMap, Json(body): Json<Val
         let n = standin.next();
         return (
             StatusCode::ACCEPTED,
-            Json(json!({"submissionUid": format!("SUBMISSION-{n:04}"), "acceptedDocuments": [],
+            Json(
+                json!({"submissionUid": format!("SUBMISSION-{n:04}"), "acceptedDocuments": [],
                 "rejectedDocuments": [{"invoiceCodeNumber": code, "error": {"code": "CF321",
                 "message": "Document issue date is in the future",
-                "details": [{"message": "issueDate is after the submission time"}]}}]})),
+                "details": [{"message": "issueDate is after the submission time"}]}}]}),
+            ),
         )
             .into_response();
     }
@@ -344,7 +349,11 @@ async fn submission_status(
         *count
     };
     // The first read of each submission finds it still processing.
-    let overall = if reads == 1 { "In Progress" } else { first.status };
+    let overall = if reads == 1 {
+        "In Progress"
+    } else {
+        first.status
+    };
     standin.note(format!("submission {uid} read {reads}: {overall}"));
     Json(json!({"submissionUid": uid, "documentCount": 1, "overallStatus": overall,
         "documentSummary": [{"uuid": first.uuid, "internalId": first.code, "status": first.status}]}))
@@ -452,7 +461,10 @@ async fn serve(standin: Arc<StandIn>) -> Outcome<String> {
     let app = Router::new()
         .route("/connect/token", post(token))
         .route("/api/v1.0/documentsubmissions/", post(submit))
-        .route("/api/v1.0/documentsubmissions/{uid}", get(submission_status))
+        .route(
+            "/api/v1.0/documentsubmissions/{uid}",
+            get(submission_status),
+        )
         .route("/api/v1.0/documents/recent", get(recent))
         .route("/api/v1.0/documents/{uuid}/details", get(details))
         .route("/api/v1.0/documents/state/{uuid}/state", put(cancel))
@@ -661,8 +673,14 @@ pub async fn run(
 
     println!("\n-- The sandbox API URL: https, or a stand-in on this machine's loopback");
     for (key, value) in [
-        ("finance.einvoice.sandbox.api_url", json!("http://example.com")),
-        ("finance.einvoice.sandbox.api_url", json!(format!("{url}/path"))),
+        (
+            "finance.einvoice.sandbox.api_url",
+            json!("http://example.com"),
+        ),
+        (
+            "finance.einvoice.sandbox.api_url",
+            json!(format!("{url}/path")),
+        ),
         ("finance.einvoice.production.api_url", json!(url.clone())),
         ("finance.einvoice.sandbox.api_url", json!(url.clone())),
     ] {
@@ -682,7 +700,10 @@ pub async fn run(
             json!("201901234567"),
         ),
         ("finance.einvoice.supplier.industry_code", json!("47111")),
-        ("finance.einvoice.supplier.business_activity", json!("Retail")),
+        (
+            "finance.einvoice.supplier.business_activity",
+            json!("Retail"),
+        ),
         ("finance.einvoice.supplier.phone", json!("+60123456789")),
         (
             "finance.einvoice.supplier.address_line1",
@@ -695,7 +716,9 @@ pub async fn run(
     for (key, value) in profile {
         save(db, services, manager, company, key, value).await?;
     }
-    println!("manager saved the sandbox environment, version 1.1 (signed) and the supplier profile");
+    println!(
+        "manager saved the sandbox environment, version 1.1 (signed) and the supplier profile"
+    );
     show(
         "test connection without credentials",
         einvoice.test_connection(manager, COMPANY).await,
@@ -709,7 +732,9 @@ pub async fn run(
     .ok_or(Error::Internal)?;
     show(
         "manager submits it without credentials",
-        einvoice.submit_document(manager, COMPANY, first.document.id).await,
+        einvoice
+            .submit_document(manager, COMPANY, first.document.id)
+            .await,
     );
     save(
         db,
@@ -752,7 +777,9 @@ pub async fn run(
     );
     show(
         "manager submits version 1.1 without a signing certificate",
-        einvoice.submit_document(manager, COMPANY, first.document.id).await,
+        einvoice
+            .submit_document(manager, COMPANY, first.document.id)
+            .await,
     );
     let (certificate, key) = certificate()?;
     save(
@@ -804,20 +831,28 @@ pub async fn run(
     println!("\n-- Submit: the queued jobs run as the manager");
     show(
         "viewer submits NE3-INV-0001",
-        einvoice.submit_document(viewer, COMPANY, first.document.id).await,
+        einvoice
+            .submit_document(viewer, COMPANY, first.document.id)
+            .await,
     );
     let mark = last_job(&raw).await?;
     show(
         "manager submits NE3-INV-0001",
-        einvoice.submit_document(manager, COMPANY, first.document.id).await,
+        einvoice
+            .submit_document(manager, COMPANY, first.document.id)
+            .await,
     );
     show(
         "manager submits it again while the job waits",
-        einvoice.submit_document(manager, COMPANY, first.document.id).await,
+        einvoice
+            .submit_document(manager, COMPANY, first.document.id)
+            .await,
     );
     shown(
         "before the executor runs",
-        einvoice.get_document(manager, COMPANY, first.document.id).await,
+        einvoice
+            .get_document(manager, COMPANY, first.document.id)
+            .await,
     );
     let executor = Executor::from_services(
         services,
@@ -835,12 +870,16 @@ pub async fn run(
     println!("stand-in saw:\n  {}", standin.drain().join("\n  "));
     let first = shown(
         "after the jobs",
-        einvoice.get_document(manager, COMPANY, first.document.id).await,
+        einvoice
+            .get_document(manager, COMPANY, first.document.id)
+            .await,
     )
     .ok_or(Error::Internal)?;
     show(
         "manager submits the valid document",
-        einvoice.submit_document(manager, COMPANY, first.document.id).await,
+        einvoice
+            .submit_document(manager, COMPANY, first.document.id)
+            .await,
     );
 
     println!("\n-- Every outcome of a submission");
@@ -901,7 +940,12 @@ pub async fn run(
         "attempt again 71 hours on",
         Ok::<_, EinvoiceError>(
             einvoice
-                .run_submission(manager, COMPANY, outage, now + SignedDuration::from_hours(71))
+                .run_submission(
+                    manager,
+                    COMPANY,
+                    outage,
+                    now + SignedDuration::from_hours(71),
+                )
                 .await,
         ),
     );
@@ -909,7 +953,12 @@ pub async fn run(
         "attempt again 73 hours on",
         Ok::<_, EinvoiceError>(
             einvoice
-                .run_submission(manager, COMPANY, outage, now + SignedDuration::from_hours(73))
+                .run_submission(
+                    manager,
+                    COMPANY,
+                    outage,
+                    now + SignedDuration::from_hours(73),
+                )
                 .await,
         ),
     );
@@ -917,7 +966,12 @@ pub async fn run(
         "attempt again 80 hours on (already noticed)",
         Ok::<_, EinvoiceError>(
             einvoice
-                .run_submission(manager, COMPANY, outage, now + SignedDuration::from_hours(80))
+                .run_submission(
+                    manager,
+                    COMPANY,
+                    outage,
+                    now + SignedDuration::from_hours(80),
+                )
                 .await,
         ),
     );
@@ -953,7 +1007,9 @@ pub async fn run(
     );
     shown(
         "refresh it again",
-        einvoice.refresh_status(manager, COMPANY, first.document.id).await,
+        einvoice
+            .refresh_status(manager, COMPANY, first.document.id)
+            .await,
     );
     println!(
         "logins: {} before, {} after",
@@ -985,7 +1041,9 @@ pub async fn run(
     standin.set("NE3-INV-0001", |held| held.rejection_requested = true);
     shown(
         "the buyer asked for NE3-INV-0001's rejection; refresh",
-        einvoice.refresh_status(manager, COMPANY, first.document.id).await,
+        einvoice
+            .refresh_status(manager, COMPANY, first.document.id)
+            .await,
     );
     standin.set("NE3-PORTAL-1", |held| held.status = "Cancelled");
     shown(
@@ -1010,7 +1068,9 @@ pub async fn run(
     jobs_settle(&raw).await?;
     shown(
         "the credit note after its jobs",
-        einvoice.get_document(manager, COMPANY, note.document.id).await,
+        einvoice
+            .get_document(manager, COMPANY, note.document.id)
+            .await,
     );
     show(
         "cancel NE3-RATE-1, which the valid note references",
