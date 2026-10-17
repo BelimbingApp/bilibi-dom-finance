@@ -7,7 +7,7 @@
 //! figures and items it was finalised with, which never change. Every write is
 //! a facade call that re-asks its capability.
 use super::{
-    company, event_type, flash_map,
+    clear_flash, company, event_type, flash_map,
     format::{amount, told},
     render, Follow, Pages,
 };
@@ -107,7 +107,7 @@ struct Controls {
 
 #[derive(Template)]
 #[template(
-    source = r#"{% import "components.html" as ui %}{% if let Some(line) = charge %}{% call ui::button(id="item-{}-post-charge"|format(line), button_type="button", event="post_charge", name="line", value=line.to_string(), working="Posting…") %}Post as bank charge{% endcall %}{% endif %}{% if let Some(line) = interest %}{% call ui::button(id="item-{}-post-interest"|format(line), button_type="button", event="post_interest", name="line", value=line.to_string(), working="Posting…") %}Post as interest{% endcall %}{% endif %}"#,
+    source = r#"{% import "components.html" as ui %}<span class="whitespace-nowrap">{% if let Some(line) = charge %}{% call ui::button(id="item-{}-post-charge"|format(line), button_type="button", event="post_charge", name="line", value=line.to_string(), working="Posting…") %}Post as bank charge{% endcall %}{% endif %}{% if let Some(line) = interest %}{% call ui::button(id="item-{}-post-interest"|format(line), button_type="button", event="post_interest", name="line", value=line.to_string(), working="Posting…") %}Post as interest{% endcall %}{% endif %}</span>"#,
     ext = "html"
 )]
 struct Post {
@@ -259,6 +259,10 @@ impl Detail {
     async fn event(&mut self, scope: &Scope, v: &serde_json::Value) -> Result<bool> {
         let r = self.pages.reconciliation.clone();
         match event_type(v)? {
+            "clear-flash" => {
+                clear_flash(&mut self.flash, v);
+                Ok(false)
+            }
             grid @ ("items_grid" | "events_grid") => {
                 let columns = if grid == "items_grid" {
                     &mut self.items
@@ -569,7 +573,6 @@ impl LiveState<Scope, Error> for Detail {
     }
     fn update<'a>(&'a mut self, request: LiveRequest<'a, Scope>) -> LiveFuture<'a, Error> {
         Box::pin(async move {
-            self.flash = None;
             let reload = match request.input {
                 // The mount's first read, or a posting notice: an open
                 // reconciliation follows the books; a finalised one cannot

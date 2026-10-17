@@ -2,11 +2,8 @@
 //! `Bilimbi.Finance.Reconciliation.Contributions`): the eight capability keys
 //! verbatim, the verbs `import` and `finalise`, and the `tenant_owner` role
 //! holding all of them. The `finance` domain and the `post` verb are the
-//! ledger's, `view` and `manage` are Base's.
-//!
-//! `TODO(menu)`: Bilimbi's menu item `finance.reconciliation` ("Bank
-//! reconciliation", route `/finance/reconciliation`) lands with the bank
-//! accounts page; a menu item must not point at a route that is not mounted.
+//! ledger's, `view` and `manage` are Base's. The menu item is contributed
+//! beside the pages (`web`).
 use crate::MODULE;
 use bilibi_authz::{CapabilityDefinition as C, RoleDefinition, VocabularyContribution, VOCABULARY};
 use bilibi_module_registry::{Contribution, Provenance};

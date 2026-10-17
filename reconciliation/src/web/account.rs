@@ -416,6 +416,8 @@ impl Account {
     }
     async fn event(&mut self, scope: &Scope, value: &serde_json::Value) -> Result<Option<String>> {
         match event_type(value)? {
+            // The page clears its message on every update already.
+            "clear-flash" => {}
             "statements_grid" => {
                 self.statements.handle(&params::string_values(value));
             }

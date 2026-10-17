@@ -298,6 +298,16 @@ fn record_id(value: &serde_json::Value) -> Option<i64> {
         })
         .filter(|id| *id > 0)
 }
+/// Clears the page's message when the browser dismisses it or it times out
+/// (Bilimbi `lv:clear-flash`); a posting notice's refresh keeps it.
+fn clear_flash(message: &mut Option<(bilibi_ui::StatusKind, String)>, v: &serde_json::Value) {
+    if message
+        .as_ref()
+        .is_some_and(|(kind, _)| v["key"].as_str() == Some(kind.name()))
+    {
+        *message = None;
+    }
+}
 fn flash_map(flash: &Option<(bilibi_ui::StatusKind, String)>) -> bilibi_ui::FlashMap<'_> {
     let mut map = bilibi_ui::NO_FLASH;
     if let Some((kind, text)) = flash {

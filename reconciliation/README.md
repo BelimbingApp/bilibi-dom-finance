@@ -6,9 +6,9 @@ bank statements imported for them, immutable once imported; the matches
 between statement lines and the ledger's postings on that account; the
 reconciliations of an account as of a statement end date; and the bank charges
 and interest posted from statement lines. This version is the whole schema
-(eleven tables, fourteen trigger functions) with the whole facade, plus the
-bank account and account pages (`NC3`); the matching and reconciliation pages
-follow (`NC4`).
+(eleven tables, fourteen trigger functions) with the whole facade and all four
+of Bilimbi's pages: bank accounts and an account's statements (`NC3`), and
+matching and one reconciliation (`NC4`).
 
 Depends on `finance/ledger` (the chart a bank account maps and the book a
 statement's amounts are held to) and `finance/attachments` (the bank's own
@@ -289,19 +289,13 @@ A statement's `import_mapping` is NOT NULL here: a fresh Bilibi schema has no
 statement imported before the mapping was kept (Bilimbi's column is nullable
 for those).
 
-## Not ported yet
-
-- The matching and reconciliation pages refreshing on posting notices
-  (`NC4`). The error variants added for matching, reconciling and posting
-  display Bilimbi's flash texts (`Web.Format.refusal`) for those pages.
-
 ## Bank account pages (NC3)
 
 `/finance/reconciliation` contributes the **Bank reconciliation** menu item and shows the company's accounts in a FlexTable. Its add/change form keeps the ledger mapping fixed after creation, selects active accounts of the appropriate type, and edits the bank's CSV mapping. Edit and activation events recheck `finance.reconciliation.bank-accounts.manage`; the facade checks it again in `Ledger::write`. Reads of the chart inside that write use `Ledger::list_accounts_on` on the handed transaction.
 
 `/finance/reconciliation/accounts/{id}` shows statements newest first, their bank files through the authorized Attachments download route, and reconciliations newest first. The live upload accepts one CSV/text file up to 5 MiB and consumes its bytes once in the import event. A successful import reports the dates, line count and skipped zero rows. The next reconciliation form suggests the latest statement's end date and closing balance while preserving an entered draft. Withheld controls name the missing permission; facade refusals preserve the live page and form.
 
-The account page lists and opens reconciliations through the facade's `list_reconciliations` and `open_reconciliation` (see Reconciliations), which return `BankReconciliation` records with their typed `ReconciliationStatus`. Matching links and the successful opening's destination are the NC4 routes; that slice supplies those pages.
+The account page lists and opens reconciliations through the facade's `list_reconciliations` and `open_reconciliation` (see Reconciliations), which return `BankReconciliation` records with their typed `ReconciliationStatus`. Its matching link and the successful opening land on the NC4 pages below.
 
 The bank account, statement and reconciliation lists all use Base UI's FlexTable and ListColumns for column arrangement and compact rows. Bilimbi enables no list filter, sort or pager on these pages, so the source ordering and facade bounds are retained. Statement reads traverse every 500-row facade page; attachment lookups use batches of at most 100 statement IDs.
 
@@ -317,3 +311,24 @@ cargo run -p bilibi-finance-walkthrough-fixture --bin bilibi-finance-reconciliat
 
 It proves the facade's import/skipped rows, duplicate-file refusal, original download bytes, denied/restricted scopes, Money precision, and concurrent opening refusal before serving the app. The walkthrough's manager, staff and viewer accounts exercise full control, import-only and read-only states; use the fixture's `PASSWORD`. The operating account is left ready for browser imports and opening, and the reserve account has one open reconciliation. These are disposable fixture facts, never production seeds.
 `evidence_page_on` is the same authorized evidence contract on a caller-supplied PostgreSQL client or transaction. Use it for every page of one repeatable-read export (Reports auditor pack); the pooled `evidence_page` wrapper is a live read per page. Schema helpers remain private.
+
+## Matching and reconciliation pages (NC4)
+
+`/finance/reconciliation/accounts/{id}/matching` (Bilimbi `MatchingLive`) shows the account's statement lines with no standing match beside the ledger entries on its account with none (`unmatched_items`), each line's suggested entry with **Accept**, and the standing matches newest first with **Unmatch**. Ticking lines and entries updates the selected counts and totals; **Match selected** sends the ticked ids and the note to `record_match`, and Accept matches a suggestion the page last read, never an id of the browser's choosing. Unmatch opens a dialog for the match the page shows and sends the reason to `unmatch`. Every one of these events asks `finance.reconciliation.matches.manage` again, and the facade asks once more. A bank account out of reach redirects to `/finance/reconciliation` with the refusal, as Bilimbi does.
+
+The checkboxes sit in FlexTable rows and join the match form through `form="matching-form"`: a FlexTable carries forms of its own (the column add box), which cannot nest inside another form, and `live.js` reads a control's `form` owner, so the selection still raises the form's change event. They are Bilimbi's bare checkboxes, not `forms.html`'s, which posts `true` with a hidden `false` companion rather than an id.
+
+`/finance/reconciliation/reconciliations/{id}` (Bilimbi `ReconciliationLive`) shows the reconciliation's figures (balance per statement, per books, the unexplained difference with its badge), the items explaining the difference, and its history. While it is open, **Post as bank charge** (money out) and **Post as interest** (money in) post a statement line the books lack through `post_statement_line` (asking `finance.reconciliation.statement-lines.post` and `finance.ledger.entries.post`), **Finalise** is enabled once the difference is zero, and **Abandon** asks for a reason in a dialog. A finalised reconciliation shows the figures and items it was finalised with; an abandoned one only its statement balance and history.
+
+Both pages follow the ledger's posting notices while connected (`web::Follow`, over `Ledger::subscribe_postings`): every notice since the last read wakes the page once and it reads again through the facade; an open reconciliation follows the books, a finalised or abandoned one does not change. A page's message stays until the browser dismisses it or it times out (`clear-flash`), so a refresh from the page's own posting keeps its success message. Lists are FlexTables with ListColumns; Bilimbi enables no filter, sort or pager on these pages.
+
+Run the NC4 disposable proof from the mounted Platform with an empty database and `NC4_STORAGE_ROOT` naming a private task directory. It drives both mounted pages through their own events and posting subscriptions (matching, suggestions, unmatching, refusals, withheld controls for a viewer, a notice waking another session, posting a charge and interest, finalising by someone other than the opener, abandoning), then serves the app with an unmatched account and an open reconciliation for the browser:
+
+```sh
+DATABASE_URL=postgres://postgres@localhost:5433/bilibi_bilibi_dom_nc4 \
+APP_ORIGIN=http://127.0.0.1:4874 BIND_ADDR=127.0.0.1:4874 \
+NC4_STORAGE_ROOT=/tmp/nc4-source-documents \
+cargo run -p bilibi-finance-walkthrough-fixture --bin bilibi-finance-reconciliation-pages
+```
+
+Sign in as `manager@example.test` (every control), `staff@example.test` (finalise only, granted by the proof) or `viewer@example.test` (read only) with the fixture's `PASSWORD`.

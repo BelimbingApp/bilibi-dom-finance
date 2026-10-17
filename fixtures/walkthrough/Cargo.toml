@@ -73,3 +73,8 @@ path = "src/bin/reconciliation-ui.rs"
 # NT4: inspect the archive returned by the real Reports facade.
 [dependencies.zip]
 workspace = true
+
+# NC4: disposable proof of the matching and reconciliation pages.
+[[bin]]
+name = "bilibi-finance-reconciliation-pages"
+path = "src/bin/reconciliation-pages.rs"

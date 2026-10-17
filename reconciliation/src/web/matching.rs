@@ -6,7 +6,7 @@
 //! capability, and the dialog holds the match it unmatches, never an id the
 //! browser sends with the reason.
 use super::{
-    company, event_type, flash_map,
+    clear_flash, company, event_type, flash_map,
     format::{amount, told},
     record_id, render, Follow, Pages, DENIED,
 };
@@ -349,6 +349,7 @@ impl Matching {
 
     async fn event(&mut self, scope: &Scope, v: &serde_json::Value) -> Result<()> {
         match event_type(v)? {
+            "clear-flash" => clear_flash(&mut self.flash, v),
             grid @ ("lines_grid" | "entries_grid" | "matches_grid") => {
                 let columns = match grid {
                     "lines_grid" => &mut self.lines_columns,
@@ -666,7 +667,6 @@ impl LiveState<Scope, Error> for Matching {
     }
     fn update<'a>(&'a mut self, request: LiveRequest<'a, Scope>) -> LiveFuture<'a, Error> {
         Box::pin(async move {
-            self.flash = None;
             match request.input {
                 // The mount's first read, or a posting on the account, which
                 // changes the ledger side.
