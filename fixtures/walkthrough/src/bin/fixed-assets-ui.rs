@@ -202,6 +202,7 @@ async fn main() -> Outcome<()> {
     assert_eq!(filtered.query["page_size"], "50");
     assert_eq!(filtered.query["page"], "1");
     has(&filtered, "Equipment &#60;record&#62;");
+    println!("NX3: category creation/revision, escaping, search and pagination passed");
     let query = HashMap::from([
         ("period".into(), "custom".into()),
         ("from".into(), "2026-01-01".into()),
@@ -267,6 +268,7 @@ async fn main() -> Outcome<()> {
     has(&first, "asset-schedule");
     has(&first, "No depreciation charges posted.");
     has(&first, "Equipment &#60;one&#62;");
+    println!("NX3: acquisition form and asset assumptions/schedule rendered");
     let boundary = refresh(&mut register, &manager).await?;
     has(&boundary, "assets-report-reproduce");
     let bad=event(&mut register,&manager,json!({"type":"record_asset","asset[source]":"bill","asset[bill_id]":"nope","asset[category_revision_id]":original.revision.id.to_string(),"asset[description]":"Keep draft","asset[in_service_date]":"2026-02-01"})).await?;
@@ -336,6 +338,7 @@ async fn main() -> Outcome<()> {
             .reversal
             .is_some()
     );
+    println!("NX3: run skips, disposal/reversal, void confirmation and charge corrections passed");
     let grants = services.get::<Grants>("base/authz.grants")?;
     grants
         .set_direct(&admin, 1, bilibi_finance_fixed_assets::ACQUIRE, Some(false))

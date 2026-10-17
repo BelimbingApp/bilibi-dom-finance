@@ -113,13 +113,16 @@ fn table(
 }
 fn time_cell(display: &DisplayContext, value: &str) -> Result<Cell> {
     let at = value
-        .parse::<jiff::Timestamp>()
+        .parse::<jiff::civil::DateTime>()
         .map_err(|_| Error::Invalid)?;
-    let r = display.render(
-        at,
-        bilibi_datetime::Format::DateTime,
-        bilibi_datetime::Precision::Minute,
-    );
+    // The schema stores naive UTC, as DisplayContext::render_naive_utc defines.
+    let r = display
+        .render_naive_utc(
+            at,
+            bilibi_datetime::Format::DateTime,
+            bilibi_datetime::Precision::Minute,
+        )
+        .ok_or(Error::Invalid)?;
     Ok(Cell::instant(Instant::new(
         &r.iso,
         &r.text,
