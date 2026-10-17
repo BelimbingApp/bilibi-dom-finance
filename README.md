@@ -9,8 +9,9 @@ Bilibi checkout; it does not build on its own.
 | Module | Descriptor ID | Owns |
 | --- | --- | --- |
 | [`ledger/`](ledger/README.md) | `finance/ledger` | each company's book and currency, its chart of accounts, and the controlled-bookkeeping setting a new book opens with, and its journal entries (append-only, numbered without gaps, balanced at commit, optionally owned by another module's record) with posting notices that announce only committed entries. Periods, journals and the other controls follow in later versions of the module. |
+| [`attachments/`](attachments/README.md) | `finance/attachments` | source documents kept with the records they support: records-grade files in Base Artifacts, the company's retention years and their history, replace and remove while a record is a draft, legal holds, and the retention refresh job that follows a record's final date. The `Source` contract each record owner implements is here. |
 
-Every other Finance module of Bilimbi (attachments, receivables, payables,
+Every other Finance module of Bilimbi (receivables, payables,
 e-invoice, fixed assets, payroll, reconciliation, SST, reports) lands beside
 the ledger as a sibling module folder, in later slices of the port.
 
@@ -48,7 +49,13 @@ settlement accounts, concurrent posts, paged reads), reach (grants,
 affiliation, tenancy, archival), money finer than the book allows, the
 database's own refusals (edits to posted entries, unbalanced or lineless
 entries, cross-company keys) and the posting notices a commit, a rollback and
-a refusal do and do not send.
+a refusal do and do not send. Its attachments section does the same for
+source documents: the company's retention years, attaching and capturing
+files, replacing and removing on a draft record, a final record that keeps its
+files, retention extensions and legal holds (including a change made in Base
+Artifacts out of band), the retention refresh job as its system principal
+before and after a tenant grants it, evidence pages, restricted sources, an
+archived company and the database's own refusals.
 
 ## Naming
 

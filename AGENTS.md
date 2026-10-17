@@ -81,6 +81,21 @@ they govern this code and are not copied here.
   `TODO(platform)`: the relay opens its connection from `DATABASE_URL` because
   `base/database` exposes only the pool.
 
+- Keep a record's source documents through `Attachments` (`attach`, or
+  `capture_file` then `attach_capture` inside your own transaction), never
+  through `bilibi_artifacts` or the `finance_attachments*` tables: the facade
+  is what links the bytes to the record, applies the company's retention years,
+  numbers and audits the attachment, and records holds. Describe your record
+  with a `Source` contributed to `finance/attachments.sources` under
+  `<your module id>/<kind>` that reads it on the connection it is handed; do
+  not hand the attachments module a facade of yours, which would make a cycle.
+  Call `refresh_retention` in the transaction that finalises a record whose
+  date can change while it is a draft; never extend retention yourself.
+- Name a system principal as one lowercase hyphenated segment
+  (`finance-attachments-retention-refresh`): Bilibi's vocabulary refuses
+  Bilimbi's dotted names. Declaring one grants nothing; a tenant administrator
+  grants it (`Grants::set_system`) or its jobs cancel as `actor_refused`.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.
