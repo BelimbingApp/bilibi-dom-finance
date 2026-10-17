@@ -11,6 +11,7 @@ use crate::{
     entries::ValidEntry, Approval, EntryLine, FieldError, Journal, JournalDecision, JournalQuery,
     JournalStatus, LedgerError, Money, NewEntry, NewLine, Preparer,
 };
+use bilibi_agent_api::OperationClient;
 use bilibi_database::{Change, Result};
 use jiff::civil::Date;
 use rust_decimal::Decimal;
@@ -35,7 +36,7 @@ const FROM: &str = "FROM finance_ledger_journals j \
 
 /// Inserts the journal and its lines; the database numbers and stamps it.
 pub(crate) async fn insert(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     currency_code: &str,
@@ -205,7 +206,7 @@ pub(crate) fn entry(journal: &Journal) -> NewEntry {
 
 /// One journal of the company with its lines and decision.
 pub(crate) async fn find(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     tenant: i64,
     company_id: i64,
     journal_id: i64,
@@ -224,7 +225,7 @@ pub(crate) async fn find(
 
 /// Journals by number, as the query bounds them.
 pub(crate) async fn list(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     tenant: i64,
     company_id: i64,
     query: &JournalQuery,
@@ -252,12 +253,15 @@ pub(crate) async fn list(
                 &i64::from(limit),
             ],
         )
-        .await
-        .map_err(bilibi_database::Error::from)?;
+        .await?;
     Ok(hydrate(client, tenant, rows).await?)
 }
 
-async fn hydrate(client: &impl GenericClient, tenant: i64, rows: Vec<Row>) -> Result<Vec<Journal>> {
+async fn hydrate(
+    client: &dyn OperationClient,
+    tenant: i64,
+    rows: Vec<Row>,
+) -> Result<Vec<Journal>> {
     let ids: Vec<i64> = rows.iter().map(|row| row.get(0)).collect();
     if ids.is_empty() {
         return Ok(Vec::new());

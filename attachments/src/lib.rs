@@ -71,6 +71,7 @@ mod retain;
 mod retention;
 mod source;
 mod store;
+mod web;
 
 pub use contributions::{CAPABILITIES, CREATE, DELETE, MANAGE_RETENTION, REFRESH_PRINCIPAL, VIEW};
 pub use evidence::EvidencePage;
@@ -80,12 +81,14 @@ pub use retention::DEFAULT_YEARS;
 pub use source::{
     Source, SourceClient, SourceDefinition, SourceDocument, SourceFuture, SourceRefusal, SOURCES,
 };
+pub use web::EMBED as PANEL_EMBED;
 
 use bilibi_artifacts::{Artifacts, Error as StorageError};
 use bilibi_database::{Db, Error, MutationBoundary};
 use bilibi_module_registry::{Catalog, Layer, Module, Service};
 use bilibi_queue::{execution::HandlerService, Queue};
-use bilibi_tenancy::Authentication;
+use bilibi_tenancy::{Authentication, Scope};
+use bilibi_ui::{download::DownloadService, page::PageService};
 use jiff::{civil::Date, Timestamp};
 use serde::Serialize;
 use serde_json::json;
@@ -100,8 +103,8 @@ inventory::submit! {
     Module {
         id: MODULE, layer: Layer::Domains,
         dependencies: &[
-            "base/artifacts", "base/authz", "base/database", "base/queue", "base/tenancy",
-            "core/company", "finance/ledger",
+            "base/artifacts", "base/authz", "base/database", "base/datetime", "base/locale",
+            "base/menu", "base/queue", "base/tenancy", "base/ui", "core/company", "finance/ledger",
         ],
         migrations: &[("finance-attachments-001-attachments", include_str!("../migrations/001-attachments.sql"))],
         services: &[
@@ -115,6 +118,27 @@ inventory::submit! {
                     authentication: services.get("base/tenancy.authentication")?,
                     sources: Sources::from_catalog(&catalog)?,
                 }))
+            } },
+            Service { id: web::PAGES, factory: |services| {
+                Ok(Arc::new(PageService::<Scope, Error>(Arc::new(web::Pages {
+                    db: services.get::<Db>("base/database.pool")?.as_ref().clone(),
+                    attachments: services.get(SERVICE)?,
+                    display: services.get("base/datetime.display")?,
+                    locales: services.get("base/locale.locales")?,
+                }))))
+            } },
+            Service { id: web::FILES, factory: |services| {
+                Ok(Arc::new(DownloadService::<Scope, Error>(Arc::new(web::Downloads {
+                    attachments: services.get(SERVICE)?,
+                }))))
+            } },
+            Service { id: web::PANELS, factory: |services| {
+                Ok(Arc::new(PageService::<Scope, Error>(Arc::new(web::Panels {
+                    db: services.get::<Db>("base/database.pool")?.as_ref().clone(),
+                    attachments: services.get(SERVICE)?,
+                    display: services.get("base/datetime.display")?,
+                    locales: services.get("base/locale.locales")?,
+                }))))
             } },
             Service { id: refresh::REFRESH_SERVICE, factory: |services| {
                 Ok(Arc::new(HandlerService(Arc::new(refresh::RefreshJob {

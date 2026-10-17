@@ -3,6 +3,7 @@
 //! the account's identity, since entries are posted against them; the
 //! facade authorizes and holds the company lock, and these run inside it.
 use crate::{Account, AccountChange, AccountType, FieldError, Money, NewAccount};
+use bilibi_agent_api::OperationClient;
 use bilibi_database::Result;
 use serde_json::{json, Value};
 use tokio_postgres::{GenericClient, Row};
@@ -13,7 +14,7 @@ const NAME_LIMIT: usize = 200;
 
 /// The company's accounts, ordered by code.
 pub(crate) async fn list(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     tenant: i64,
     company_id: i64,
 ) -> Result<Vec<Account>> {
@@ -26,9 +27,26 @@ pub(crate) async fn list(
     Ok(rows.iter().map(from_row).collect())
 }
 
+/// Keep the cursor comparison and ordering on the database's collation.
+pub(crate) async fn page(
+    client: &dyn OperationClient,
+    tenant: i64,
+    company_id: i64,
+    after: Option<&str>,
+    limit: i64,
+) -> Result<Vec<Account>> {
+    let rows = client
+        .query(
+            &format!("SELECT {COLUMNS} FROM finance_ledger_accounts WHERE tenant_id=$1 AND company_id=$2 AND ($3::text IS NULL OR code > $3) ORDER BY code LIMIT $4"),
+            &[&tenant, &company_id, &after, &limit],
+        )
+        .await?;
+    Ok(rows.iter().map(from_row).collect())
+}
+
 /// One account of the company, or `None` for a missing or other company's id.
 pub(crate) async fn find(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     tenant: i64,
     company_id: i64,
     account_id: i64,
@@ -44,7 +62,7 @@ pub(crate) async fn find(
 
 /// The account that carries the retained-earnings designation, if any.
 async fn designated(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     tenant: i64,
     company_id: i64,
 ) -> Result<Option<Account>> {
@@ -59,25 +77,26 @@ async fn designated(
 
 /// The account's posted debits less its credits.
 async fn balance(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     tenant: i64,
     company_id: i64,
     account_id: i64,
 ) -> Result<Money> {
     let row = client
-        .query_one(
+        .query_opt(
             "SELECT COALESCE(sum(debit) - sum(credit), 0) FROM finance_ledger_entry_lines \
              WHERE tenant_id=$1 AND company_id=$2 AND account_id=$3",
             &[&tenant, &company_id, &account_id],
         )
-        .await?;
+        .await?
+        .ok_or(bilibi_database::Error::Internal)?;
     Ok(Money::stored(row.get(0)))
 }
 
 /// Whether grouping `account_id` under `parent_id` would place it under
 /// itself: the parent's chain of parents reaches the account.
 async fn cycles(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     tenant: i64,
     company_id: i64,
     parent_id: i64,
@@ -110,7 +129,7 @@ pub(crate) struct ValidAccount {
     pub retained_earnings: bool,
 }
 pub(crate) async fn validate_new(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     tenant: i64,
     company_id: i64,
     new: &NewAccount,
@@ -175,7 +194,7 @@ pub(crate) async fn validate_new(
 /// over the current row, with the facade's parent and deactivation rules),
 /// or the field errors.
 pub(crate) async fn validate_change(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     tenant: i64,
     company_id: i64,
     current: &Account,
@@ -244,7 +263,7 @@ pub(crate) async fn validate_change(
 /// Why `parent_id` cannot group an account of `account_type`: it groups
 /// accounts of its own type, in this company, without a cycle.
 async fn parent_error(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     tenant: i64,
     company_id: i64,
     parent_id: i64,
@@ -289,7 +308,7 @@ fn name(value: &str) -> std::result::Result<String, FieldError> {
 }
 
 async fn find_by_code(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     tenant: i64,
     company_id: i64,
     code: &str,
@@ -307,7 +326,7 @@ async fn find_by_code(
 /// another releases the current one first, in the same transaction. Returns
 /// the released account's `(id, before, after)` for the audit record.
 pub(crate) async fn release_designation(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     except: Option<i64>,
@@ -401,7 +420,7 @@ pub(crate) fn to_json(account: &Account) -> Value {
     })
 }
 
-fn from_row(row: &Row) -> Account {
+pub(crate) fn from_row(row: &Row) -> Account {
     let account_type: String = row.get("account_type");
     Account {
         id: row.get("id"),

@@ -11,6 +11,8 @@ use bilibi_finance_ledger::{
     SERVICE,
 };
 use bilibi_finance_walkthrough_fixture::{install, sign_in, COMPANY};
+
+mod einvoice;
 use bilibi_module_registry::{verify_composition, Services};
 use jiff::civil::date;
 use std::{fmt::Debug, sync::Arc, time::Duration};
@@ -19,6 +21,11 @@ bilibi_walkthrough_fixture::walkthrough_vocabulary!();
 bilibi_walkthrough_fixture::walkthrough_module_roles!();
 bilibi_finance_walkthrough_fixture::walkthrough_ledger_roles!();
 bilibi_finance_walkthrough_fixture::walkthrough_attachments_roles!();
+bilibi_finance_walkthrough_fixture::walkthrough_payables_roles!();
+bilibi_finance_walkthrough_fixture::walkthrough_einvoice_roles!();
+bilibi_finance_walkthrough_fixture::walkthrough_payroll_roles!();
+bilibi_finance_walkthrough_fixture::walkthrough_receivables_roles!();
+bilibi_finance_walkthrough_fixture::walkthrough_reports_roles!();
 bilibi_finance_walkthrough_fixture::walkthrough_reconciliation_roles!();
 
 /// An entry on one line: number, date, description, owner and `account:amount`
@@ -102,6 +109,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     services.install(&modules)?;
 
     let installed = install(&db, &services).await?;
+    bilibi_finance_walkthrough_fixture::receivables::run(&db, &services).await?;
     println!("fixture book: {:?}", installed.book);
     for account in &installed.accounts {
         println!("fixture account: {account:?}");
@@ -1100,8 +1108,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .get(0);
     println!("audit mutations recorded for finance.ledger.*: {audited}");
     bilibi_finance_walkthrough_fixture::attachments::run(&db, &services).await?;
+    bilibi_finance_walkthrough_fixture::payables::run(&db, &services).await?;
+    bilibi_finance_walkthrough_fixture::payments::run(&db, &services).await?;
+    bilibi_finance_walkthrough_fixture::matching::run(&db, &services).await?;
     bilibi_finance_walkthrough_fixture::periods::run(&db, &services).await?;
     bilibi_finance_walkthrough_fixture::controls::run(&db, &services).await?;
+    bilibi_finance_walkthrough_fixture::totals::run(&db, &services).await?;
+    bilibi_finance_walkthrough_fixture::reports::run(&db, &services).await?;
+
+    einvoice::prove(
+        &db,
+        &services,
+        &einvoice::Actors {
+            manager: &manager,
+            viewer: &viewer,
+            contractor: &contractor,
+            other_tenant: &other,
+        },
+    )
+    .await?;
+    bilibi_finance_walkthrough_fixture::payroll::run(&db, &services).await?;
+    bilibi_finance_walkthrough_fixture::receivables_documents::run(&db, &services).await?;
+
+    bilibi_finance_walkthrough_fixture::clearance::run(&db, &services, &manager, &viewer, &admin)
+        .await?;
     bilibi_finance_walkthrough_fixture::reconciliation::run(&db, &services).await?;
     Ok(())
 }

@@ -130,6 +130,35 @@ async fn job_states(client: &Client) -> Outcome<String> {
         .join("\n  "))
 }
 
+/// What an operator sets in Operator Settings before Base Artifacts keeps a
+/// file: the private storage root and a 30-day ordinary-document policy.
+pub async fn configure_storage(
+    db: &Db,
+    services: &Services,
+    admin: &Scope,
+    root: &str,
+) -> Outcome<()> {
+    let boundary = services.get::<MutationBoundary>("base/database.mutations")?;
+    let settings = services.get::<Settings>("base/settings.store")?;
+    for (key, value) in [
+        ("artifacts.storage_root", json!(root)),
+        ("artifacts.retention_days", json!(30)),
+    ] {
+        let mut client = db.get().await?;
+        let mut tx = boundary
+            .begin(
+                &mut client,
+                admin.mutation_context("attachments.walkthrough.configure"),
+            )
+            .await?;
+        settings
+            .put(&mut tx, admin, Target::Global, key, value)
+            .await?;
+        tx.commit().await?;
+    }
+    Ok(())
+}
+
 pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
     let attachments = services.get::<Attachments>(SERVICE)?;
     let boundary = services.get::<MutationBoundary>("base/database.mutations")?;
@@ -180,23 +209,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
     });
     std::fs::create_dir_all(&root)?;
     std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))?;
-    let settings = services.get::<Settings>("base/settings.store")?;
-    for (key, value) in [
-        ("artifacts.storage_root", json!(root)),
-        ("artifacts.retention_days", json!(30)),
-    ] {
-        let mut client = db.get().await?;
-        let mut tx = boundary
-            .begin(
-                &mut client,
-                admin.mutation_context("attachments.walkthrough.configure"),
-            )
-            .await?;
-        settings
-            .put(&mut tx, &admin, Target::Global, key, value)
-            .await?;
-        tx.commit().await?;
-    }
+    configure_storage(db, services, &admin, &root).await?;
     println!("operator configured storage root {root} and a 30-day ordinary-document policy");
 
     println!("\n== Retention setting");

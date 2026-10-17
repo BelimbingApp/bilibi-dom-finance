@@ -13,6 +13,7 @@ use crate::{
     same_person, Approval, ApprovalException, ApprovalExceptionQuery, ApprovalExceptionReview,
     DutySeparationChange, FieldError, LedgerError,
 };
+use bilibi_agent_api::OperationClient;
 use bilibi_database::{Change, Result};
 use serde_json::{json, Value};
 use tokio_postgres::{GenericClient, Row};
@@ -38,7 +39,7 @@ fn change_columns() -> String {
 
 /// The company's latest change, or `None` before any.
 pub(crate) async fn latest_change(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     tenant: i64,
     company_id: i64,
 ) -> Result<Option<DutySeparationChange>> {
@@ -147,6 +148,7 @@ fn change_from_row(row: &Row) -> Result<DutySeparationChange> {
 // Approvals
 
 /// An approval exception to append: what [`decide`] found the approval to be.
+#[derive(serde::Serialize)]
 pub(crate) struct NewException {
     source: String,
     action: String,
@@ -168,7 +170,7 @@ pub(crate) struct NewException {
 /// it does not; an override is always recorded with its own reason. Anything
 /// else records nothing (`Ok(None)`).
 pub(crate) async fn decide(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     tenant: i64,
     company_id: i64,
     approver: (i64, Option<i64>),

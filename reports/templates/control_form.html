@@ -1,0 +1,10 @@
+{# Bilimbi Reports control/review dialogs; shared components own every control. #}
+{% import "components.html" as ui %}
+{% import "forms.html" as form %}
+<form id="{{ id }}" data-change data-event="text" data-submit-event="{{ submit }}">
+{% for field in fields %}{% call form::input(field=field) %}{% endcall %}{% endfor %}
+<div class="mt-4 flex justify-end gap-2">
+{% call ui::button(id=cancel_id, button_type="button", event="close_dialog") %}Cancel{% endcall %}
+{% call ui::button(id=confirm_id, button_type="submit", variant=variant, working=working) %}{{ label }}{% endcall %}
+</div>
+</form>

@@ -1,0 +1,17 @@
+{# Mirrors Bilimbi ReportsLive and AccountActivityLive; shared components own UI markup. #}
+{% import "components.html" as ui %}
+{% import "forms.html" as forms %}
+{% call ui::page(id=id, variant=bilibi_ui::PageVariant::Detail) %}
+{% for part in before %}{{ part }}{% endfor %}
+{% if let Some(filter) = filter %}
+<div id="report-period-region" data-hook="BrowserTimeZone" data-timezone-request="{{ timezone_request }}" class="mt-3 mb-3 flex flex-wrap items-center gap-4">
+  {{ filter }}
+  {% if let Some(compare) = compare %}
+  <form id="report-compare" data-event="compare" data-change="true">
+    {% call forms::input(field=compare) %}{% endcall %}
+  </form>
+  {% endif %}
+</div>
+{% endif %}
+{% for part in after %}{{ part }}{% endfor %}
+{% endcall %}

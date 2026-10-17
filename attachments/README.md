@@ -4,9 +4,9 @@ Module ID: `finance/attachments` (Bilimbi `Bilimbi.Finance.Attachments`).
 Source documents kept with the Finance records they support: a supplier's
 invoice scan behind a bill, a remittance behind a payment, a contract behind an
 invoice, a voucher behind a manual journal, the bank's own file behind an
-imported statement. This version is the services; the Source documents page,
-the download route and the embeddable panel follow in the UI slice, and the
-manual-journal source follows the ledger's journals.
+imported statement. The module is the services (below) and their pages: the
+Source documents page, the download route and the panel a record's page
+embeds. The manual-journal source follows the ledger's journals.
 
 Depends on `finance/ledger` (the financial year a document's retention counts
 from is the ledger's), Core Company, Base Artifacts, Base Queue and Base
@@ -96,6 +96,50 @@ removed account cancels the job; any other failure retries.
 `TODO(platform)`: Base Artifacts accepts only a user's scope, so the job reaches
 it through the finaliser's live scope (proved again on every attempt) and Base's
 history names that person; the module's own events name the principal.
+
+## Pages
+
+| Page | Route | Access | Mirrors |
+| --- | --- | --- | --- |
+| Source documents | `/finance/attachments` (menu "Source documents" under Finance, order 18) | `finance.attachments.view` | Bilimbi `Web.IndexLive` |
+| Download | `/finance/attachments/{id}/download` | `finance.attachments.view`, asked again by `read_attachment` on every request | Bilimbi `Web.DownloadController` |
+| Panel | embed `finance.attachments-panel` | signed in; every read and write asks the facade | Bilimbi `Web.Panel` |
+
+**Source documents** shows the company's retention (the years in force and the
+latest change; holders of `finance.attachments.retention.manage` get the
+Lengthen retention form, which re-asks the capability, and the change history)
+and every attachment by number in a FlexTable (column settings, compact rows)
+with the record it supports, file and size, SHA-256, kept-until date and legal
+hold, capture time and standing. The kind-of-record and standing selects
+(`source`, `status` in the URL; standing by default) keep to the address, and
+"Show more" reads the next 200 after the last attachment number. Attaching a
+file happens on the record's own page.
+
+**Panel.** A record's page mounts it as a panel (`LiveState::panels`):
+
+```rust
+PanelSpec {
+    id: "payables-bill-attachments".into(),
+    embed: bilibi_finance_attachments::PANEL_EMBED.into(), // "finance.attachments-panel"
+    path: HashMap::from([
+        ("panel".into(), "payables-bill-attachments".into()), // the spec's own id
+        ("source".into(), "finance/payables/bill".into()),    // the source id
+        ("document".into(), bill_id.to_string()),
+    ]),
+    query: HashMap::new(),
+}
+```
+
+It lists the record's standing attachments with a download link each, a live
+file input (one file, up to `MAX_FILE_BYTES`) to attach the next, and, while
+the record is not final, Replace and Remove (with a reason) per attachment.
+Unlike Bilimbi, which takes `final?` from the page, the panel asks the
+record's `Source` whether it is final on every render, so a page cannot offer
+replace or remove for a record that has just become final. Controls show by
+the live capability, an absent control is not explained away by a silent
+`if` (a reader who cannot attach and finds nothing sees "No source
+documents"), and every action asks the facade again. The company is the
+signed-in account's own, as in Bilimbi.
 
 ## Tables
 

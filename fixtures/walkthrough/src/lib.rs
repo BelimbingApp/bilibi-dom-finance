@@ -27,8 +27,21 @@ use jiff::civil::{date, Date};
 
 pub mod attachments;
 pub mod controls;
+pub mod matching;
+pub mod payables;
+pub mod payments;
+pub mod payroll;
+mod payroll_ui;
 pub mod periods;
+pub mod receivables;
 pub mod reconciliation;
+pub mod receivables_documents;
+pub mod reports;
+pub mod totals;
+
+pub mod clearance;
+
+mod einvoice_bridge;
 
 /// Every fixture account's password.
 pub use bilibi_walkthrough_fixture::PASSWORD;
@@ -334,6 +347,54 @@ macro_rules! walkthrough_attachments_roles {
                 ] },
                 $crate::authz::RoleDefinition { code: "viewer", name: "viewer", description: "Walkthrough fixture role", grant_all: false, capabilities: &[
                     "finance.attachments.view",
+                ] },
+            ],
+            system_principals: &[],
+        }) }
+    };
+}
+
+/// What the Platform fixture's roles hold in e-invoicing, declared beside
+/// [`walkthrough_ledger_roles!`]: the manager every capability, staff and the
+/// viewer only the read.
+#[macro_export]
+macro_rules! walkthrough_einvoice_roles {
+    () => {
+        $crate::inventory::submit! { $crate::registry::Contribution::new($crate::authz::VOCABULARY, "walkthrough.fixture.finance.einvoice", $crate::registry::Provenance { module: "finance/einvoice", source: file!(), line: line!() }, &$crate::authz::VocabularyContribution {
+            domains: &[],
+            verbs: &[],
+            capabilities: &[],
+            roles: &[
+                $crate::authz::RoleDefinition { code: "manager", name: "manager", description: "Walkthrough fixture role", grant_all: false, capabilities: &[
+                    "finance.einvoice.view", "finance.einvoice.documents.issue", "finance.einvoice.documents.submit",
+                    "finance.einvoice.documents.cancel", "finance.einvoice.settings.manage",
+                ] },
+                $crate::authz::RoleDefinition { code: "staff", name: "staff", description: "Walkthrough fixture role", grant_all: false, capabilities: &[
+                    "finance.einvoice.view",
+                ] },
+                $crate::authz::RoleDefinition { code: "viewer", name: "viewer", description: "Walkthrough fixture role", grant_all: false, capabilities: &[
+                    "finance.einvoice.view",
+                ] },
+            ],
+            system_principals: &[],
+        }) }
+    };
+}
+
+/// What the Platform fixture's roles hold in the reports module, declared
+/// beside [`walkthrough_ledger_roles!`]: the manager issues reports and
+/// exports the auditor pack; staff and the viewer read reports through the
+/// ledger's view capability only.
+#[macro_export]
+macro_rules! walkthrough_reports_roles {
+    () => {
+        $crate::inventory::submit! { $crate::registry::Contribution::new($crate::authz::VOCABULARY, "walkthrough.fixture.finance.reports", $crate::registry::Provenance { module: "finance/reports", source: file!(), line: line!() }, &$crate::authz::VocabularyContribution {
+            domains: &[],
+            verbs: &[],
+            capabilities: &[],
+            roles: &[
+                $crate::authz::RoleDefinition { code: "manager", name: "manager", description: "Walkthrough fixture role", grant_all: false, capabilities: &[
+                    "finance.reports.issue", "finance.reports.reports-export",
                 ] },
             ],
             system_principals: &[],

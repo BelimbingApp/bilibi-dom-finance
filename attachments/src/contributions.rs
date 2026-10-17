@@ -2,7 +2,7 @@
 //! `Bilimbi.Finance.Attachments.Contributions`): its four capability keys
 //! verbatim, the `tenant_owner` role holding them, the system principal of
 //! the retention refresh and its queue worker. The "Source documents" menu
-//! item and page arrive with the UI slice.
+//! item, route, download and panel embed are contributed in `web/mod.rs`.
 use crate::{
     refresh::{validate_args, REFRESH_SERVICE, WORKER_ID},
     MODULE,

@@ -53,24 +53,34 @@
 //! submitted and posts only once someone approves it
 //! ([`Ledger::submit_journal`], [`Ledger::approve_journal`]).
 //!
+//! Figures are summed by PostgreSQL ([`Ledger::trial_balance`],
+//! [`Ledger::account_totals`], [`Ledger::account_totals_by_owner`]) and name
+//! the last entry number they count, which reproduces them exactly: entries
+//! are numbered in posting order and never change. [`Ledger::evidence_page`]
+//! exports each table for the auditor's pack.
+//!
 //! Results are plain records; the schema, SQL and validation stay private.
 mod accounts;
+mod agent_operations;
 mod bookkeeping;
 mod books;
 mod contributions;
 mod duties;
 mod entries;
+mod evidence;
 mod journals;
 mod late_recordings;
 mod money;
 mod periods;
 mod postings;
+mod totals;
 
 pub use contributions::{
     APPROVE_JOURNALS, CAPABILITIES, LOCK_PERIODS, MANAGE_ACCOUNTS, MANAGE_CONTROLLED_BOOKKEEPING,
     MANAGE_DUTY_SEPARATION, MANAGE_PERIODS, POST_ENTRIES, REOPEN_PERIODS, REVIEW_EXCEPTIONS,
     REVIEW_LATE_RECORDINGS, SUBMIT_JOURNALS, VIEW,
 };
+pub use evidence::EvidencePage;
 pub use money::{MinorUnits, Money, MoneyError};
 
 use bilibi_company::{organisation, WriteError};
@@ -79,6 +89,7 @@ use bilibi_module_registry::{Layer, Module, Service};
 use bilibi_tenancy::Scope;
 use jiff::{civil::Date, Timestamp};
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio_postgres::GenericClient;
 
@@ -90,7 +101,7 @@ pub const SERVICE: &str = "finance/ledger.ledger";
 inventory::submit! {
     Module {
         id: MODULE, layer: Layer::Domains,
-        dependencies: &["base/authz", "base/database", "base/tenancy", "core/company"],
+        dependencies: &["base/agent_api", "base/authz", "base/database", "base/party_ids", "base/tenancy", "core/company"],
         migrations: &[
             ("finance-ledger-001-books-and-accounts", include_str!("../migrations/001-books-and-accounts.sql")),
             ("finance-ledger-002-entries", include_str!("../migrations/002-entries.sql")),
@@ -98,11 +109,13 @@ inventory::submit! {
             ("finance-ledger-004-periods", include_str!("../migrations/004-periods.sql")),
             ("finance-ledger-005-journals", include_str!("../migrations/005-journals.sql")),
         ],
-        services: &[Service { id: SERVICE, factory: |services| Ok(Arc::new(Ledger {
+        services: &[Service { id: SERVICE, factory: |services| {
+            agent_operations::bind(services.get("base/tenancy.parties")?)?;
+            Ok(Arc::new(Ledger {
             db: services.get::<Db>("base/database.pool")?.as_ref().clone(),
             mutations: services.get("base/database.mutations")?,
             postings: postings::Relay::new(),
-        })) }],
+        })) } }],
     }
 }
 
@@ -824,6 +837,90 @@ pub struct JournalQuery {
     pub after: Option<i64>,
 }
 
+/// Bounds of [`Ledger::account_totals`] and [`Ledger::account_totals_by_owner`].
+#[derive(Clone, Debug, Default)]
+pub struct TotalsQuery {
+    /// Entry dates, both inclusive; `from` after `to` is `InvalidOption`.
+    pub from: Option<Date>,
+    pub to: Option<Date>,
+    /// Counts entries numbered up to this one (0 or more), to reproduce an
+    /// earlier read; the company's last entry when absent.
+    pub through_entry_number: Option<i64>,
+    /// Leaves out year-end closing entries and their reversals, so income
+    /// and expense over a closed year show its activity.
+    pub exclude_closing: bool,
+}
+/// One account's debit and credit totals over a window.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct AccountTotal {
+    #[serde(flatten)]
+    pub account: Account,
+    pub debits: Money,
+    pub credits: Money,
+}
+/// One account's totals from the entries of one owner module (its descriptor
+/// id, `None` for entries with no owner).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct OwnerTotal {
+    #[serde(flatten)]
+    pub account: Account,
+    pub owner_module: Option<String>,
+    pub debits: Money,
+    pub credits: Money,
+}
+/// Account totals over a window, counted through `through_entry_number`:
+/// [`AccountTotals`] or [`OwnerTotals`]. Account names, parents and active
+/// flags are as they are now.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Totals<R> {
+    pub company_id: i64,
+    #[serde(serialize_with = "as_optional_text")]
+    pub from: Option<Date>,
+    #[serde(serialize_with = "as_optional_text")]
+    pub to: Option<Date>,
+    pub through_entry_number: i64,
+    pub currency_code: String,
+    pub minor_units: MinorUnits,
+    pub rows: Vec<R>,
+}
+pub type AccountTotals = Totals<AccountTotal>;
+pub type OwnerTotals = Totals<OwnerTotal>;
+/// One account of a trial balance: its totals and its balance on one side
+/// (the other is zero).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct TrialBalanceRow {
+    #[serde(flatten)]
+    pub account: Account,
+    pub debits: Money,
+    pub credits: Money,
+    pub debit_balance: Money,
+    pub credit_balance: Money,
+}
+/// Every account with a posting dated on or before `as_of`, by code, counted
+/// through `through_entry_number`. `total_debit` equals `total_credit`,
+/// because every posted entry balances.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct TrialBalance {
+    pub company_id: i64,
+    #[serde(serialize_with = "as_text")]
+    pub as_of: Date,
+    pub through_entry_number: i64,
+    pub currency_code: String,
+    pub minor_units: MinorUnits,
+    pub rows: Vec<TrialBalanceRow>,
+    pub total_debit: Money,
+    pub total_credit: Money,
+}
+fn as_optional_text<T: std::fmt::Display, S: serde::Serializer>(
+    value: &Option<T>,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error> {
+    match value {
+        Some(value) => serializer.collect_str(value),
+        None => serializer.serialize_none(),
+    }
+}
+
 /// What a [`PostingSubscription`] hears.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PostingEvent {
@@ -858,8 +955,19 @@ impl Ledger {
     /// [`Ledger::open_book`].
     pub async fn get_book(&self, scope: &Scope, company_id: i64) -> Result<Book> {
         let client = self.db.get().await.map_err(Error::from)?;
-        authorize(&**client, scope, company_id, VIEW).await?;
-        books::find(&**client, scope.tenant(), company_id)
+        self.get_book_on(&**client, scope, company_id).await
+    }
+
+    /// The same authorized book read on the caller's connection, so an owner
+    /// holding the company lock never needs a second pool connection.
+    pub async fn get_book_on(
+        &self,
+        client: &dyn bilibi_agent_api::OperationClient,
+        scope: &Scope,
+        company_id: i64,
+    ) -> Result<Book> {
+        agent_operations::authorize_on(client, scope, company_id, VIEW).await?;
+        books::find(client, scope.tenant(), company_id)
             .await?
             .ok_or(LedgerError::BookNotOpen)
     }
@@ -878,6 +986,18 @@ impl Ledger {
                 "finance.ledger.open_book",
             )
             .await?;
+        let book = Self::open_book_on(&mut tx, scope, company_id, new).await?;
+        tx.commit().await?;
+        Ok(book)
+    }
+
+    async fn open_book_on(
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company_id: i64,
+        new: &NewBook,
+    ) -> Result<Book> {
+        join(tx, scope, company_id, MANAGE_ACCOUNTS).await?;
         let tenant = scope.tenant();
         if books::find(tx.sql(), tenant, company_id).await?.is_some() {
             return Err(LedgerError::BookAlreadyOpen);
@@ -918,15 +1038,25 @@ impl Ledger {
                 })
             })
             .await?;
-        tx.commit().await?;
         Ok(book)
     }
 
     /// The company's accounts, ordered by code (`finance.ledger.view`).
     pub async fn list_accounts(&self, scope: &Scope, company_id: i64) -> Result<Vec<Account>> {
         let client = self.db.get().await.map_err(Error::from)?;
-        authorize(&**client, scope, company_id, VIEW).await?;
-        Ok(accounts::list(&**client, scope.tenant(), company_id).await?)
+        self.list_accounts_on(&**client, scope, company_id).await
+    }
+
+    /// The same authorized chart read on the caller's connection. A record
+    /// owner validates account choices while holding its company write lock.
+    pub async fn list_accounts_on(
+        &self,
+        client: &dyn bilibi_agent_api::OperationClient,
+        scope: &Scope,
+        company_id: i64,
+    ) -> Result<Vec<Account>> {
+        agent_operations::authorize_on(client, scope, company_id, VIEW).await?;
+        Ok(accounts::list(client, scope.tenant(), company_id).await?)
     }
 
     /// Adds an account (`finance.ledger.accounts.manage`). `retained_earnings`
@@ -948,6 +1078,18 @@ impl Ledger {
                 "finance.ledger.create_account",
             )
             .await?;
+        let account = Self::create_account_on(&mut tx, scope, company_id, new).await?;
+        tx.commit().await?;
+        Ok(account)
+    }
+
+    async fn create_account_on(
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company_id: i64,
+        new: &NewAccount,
+    ) -> Result<Account> {
+        join(tx, scope, company_id, MANAGE_ACCOUNTS).await?;
         let tenant = scope.tenant();
         let valid = accounts::validate_new(tx.sql(), tenant, company_id, new)
             .await?
@@ -973,7 +1115,6 @@ impl Ledger {
                 })
             })
             .await?;
-        tx.commit().await?;
         Ok(account)
     }
 
@@ -998,6 +1139,20 @@ impl Ledger {
                 "finance.ledger.update_account",
             )
             .await?;
+        let account =
+            Self::update_account_on(&mut tx, scope, company_id, account_id, change).await?;
+        tx.commit().await?;
+        Ok(account)
+    }
+
+    async fn update_account_on(
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company_id: i64,
+        account_id: i64,
+        change: &AccountChange,
+    ) -> Result<Account> {
+        join(tx, scope, company_id, MANAGE_ACCOUNTS).await?;
         let tenant = scope.tenant();
         let current = accounts::find(tx.sql(), tenant, company_id, account_id)
             .await?
@@ -1031,7 +1186,6 @@ impl Ledger {
                 })
             })
             .await?;
-        tx.commit().await?;
         Ok(account)
     }
 
@@ -1055,14 +1209,6 @@ impl Ledger {
         new: &NewEntry,
         options: &PostOptions,
     ) -> Result<Entry> {
-        if options
-            .owner
-            .as_ref()
-            .is_some_and(|owner| !entries::owner_valid(owner))
-            || options.settlement_account_ids.iter().any(|id| *id < 1)
-        {
-            return Err(LedgerError::InvalidOption);
-        }
         let mut client = self.db.get().await.map_err(Error::from)?;
         let mut tx = self
             .write(
@@ -1073,21 +1219,91 @@ impl Ledger {
                 "finance.ledger.post_entry",
             )
             .await?;
+        let entry = self
+            .post_entry_in(&mut tx, scope, company_id, new, options)
+            .await?;
+        tx.commit().await?;
+        Ok(entry)
+    }
+
+    /// Validate a proposed owned posting on the caller's review connection,
+    /// without allocating an identity or number. Requires posting authority,
+    /// not view. The deterministic JSON contains the normalized entry, book,
+    /// referenced accounts and posting controls; compare it again at execution.
+    /// For a record not yet allocated, pass no owner and describe its future
+    /// ownership in the caller's review. The real post still checks that owner.
+    pub async fn preview_post_entry_on(
+        &self,
+        client: &dyn bilibi_agent_api::OperationClient,
+        scope: &Scope,
+        company_id: i64,
+        new: &NewEntry,
+        options: &PostOptions,
+    ) -> Result<serde_json::Value> {
+        preview_lock(client, scope, company_id).await?;
         let tenant = scope.tenant();
-        let book = books::find(tx.sql(), tenant, company_id)
-            .await?
-            .ok_or(LedgerError::BookNotOpen)?;
-        let valid = entries::validate(
-            tx.sql(),
-            tenant,
-            company_id,
-            book.minor_units,
-            new,
-            options.owner.as_ref(),
-            entries::Inactive::Listed(&options.settlement_account_ids),
-        )
-        .await?
-        .map_err(LedgerError::Invalid)?;
+        let (book, valid) = prepare_post(client, tenant, company_id, new, options).await?;
+        let calendar = periods::state(client, tenant, company_id).await?;
+        let period = calendar
+            .periods()
+            .find(|p| p.start_date <= valid.entry_date && valid.entry_date <= p.end_date);
+        Ok(serde_json::json!({
+            "book":book,"entry":valid,
+            "accounts":accounts::list(client,tenant,company_id).await?.into_iter().filter(|a|new.lines.iter().any(|l|l.account_id==a.id)).collect::<Vec<_>>(),
+            "period":period,
+            "bookkeeping":bookkeeping::latest(client,tenant,company_id).await?,
+            "settlement_account_ids":options.settlement_account_ids,
+        }))
+    }
+
+    /// Preview the owner's correction on the handed review connection. Uses
+    /// the same owner, date, period and double-reversal checks as execution;
+    /// returns the original and normalized mirror with its posting controls.
+    /// Like the correction itself, this does not require ledger view.
+    pub async fn preview_reverse_owned_entry_on(
+        &self,
+        client: &dyn bilibi_agent_api::OperationClient,
+        scope: &Scope,
+        company_id: i64,
+        entry_id: i64,
+        owner: &EntryOwner,
+        reversal: &Reversal,
+    ) -> Result<serde_json::Value> {
+        preview_lock(client, scope, company_id).await?;
+        if !entries::owner_valid(owner) {
+            return Err(LedgerError::InvalidOption);
+        }
+        let tenant = scope.tenant();
+        let (book, original, valid) =
+            prepare_reverse(client, tenant, company_id, entry_id, Some(owner), reversal).await?;
+        let calendar = periods::state(client, tenant, company_id).await?;
+        let period = calendar
+            .periods()
+            .find(|p| p.start_date <= valid.entry_date && valid.entry_date <= p.end_date);
+        Ok(serde_json::json!({
+            "book":book,"original":original,"entry":valid,
+            "accounts":accounts::list(client,tenant,company_id).await?.into_iter().filter(|a|original.lines.iter().any(|l|l.account_id==a.id)).collect::<Vec<_>>(),
+            "period":period,
+            "bookkeeping":bookkeeping::latest(client,tenant,company_id).await?,
+        }))
+    }
+
+    /// Posts inside the record owner's audited transaction, leaving commit
+    /// to that owner so its record and the entry stand or fall together.
+    /// Applies the same authorization, company lock and validation as
+    /// [`Ledger::post_entry`]; never call the standalone method while holding
+    /// the company lock on another connection.
+    pub async fn post_entry_in(
+        &self,
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company_id: i64,
+        new: &NewEntry,
+        options: &PostOptions,
+    ) -> Result<Entry> {
+        join(tx, scope, company_id, POST_ENTRIES).await?;
+        let tenant = scope.tenant();
+        let (book, valid) = prepare_post(tx.sql(), tenant, company_id, new, options).await?;
         let actor = scope.user();
         let impersonator = scope.impersonator().map(|operator| operator.user());
         let entry = tx
@@ -1108,16 +1324,46 @@ impl Ledger {
                 })
             })
             .await?;
-        tx.commit().await?;
         Ok(entry)
+    }
+
+    /// Decides an approval without recording its exception. The exception includes
+    /// its normalized reason and separation-change basis, not just its presence.
+    pub async fn preview_approval_on(
+        &self,
+        client: &dyn bilibi_agent_api::OperationClient,
+        scope: &Scope,
+        company_id: i64,
+        approval: &Approval,
+    ) -> Result<Value> {
+        agent_operations::authorize_on(client, scope, company_id, VIEW).await?;
+        let exception =
+            duties::decide(client, scope.tenant(), company_id, people(scope), approval).await?;
+        Ok(json!({
+            "approval_exception": exception,
+            "duty_separation": separation_view(client, scope.tenant(), company_id).await?,
+        }))
     }
 
     /// One posted entry with its lines (`finance.ledger.view`), or
     /// `EntryNotFound` for a missing id or another company's.
     pub async fn get_entry(&self, scope: &Scope, company_id: i64, entry_id: i64) -> Result<Entry> {
         let client = self.db.get().await.map_err(Error::from)?;
-        authorize(&**client, scope, company_id, VIEW).await?;
-        entries::find(&**client, scope.tenant(), company_id, entry_id)
+        self.get_entry_on(&**client, scope, company_id, entry_id)
+            .await
+    }
+
+    /// Authorized entry read on the caller's connection, including inside a
+    /// sibling write holding the company lock. Never acquire a second pool slot.
+    pub async fn get_entry_on(
+        &self,
+        client: &(impl GenericClient + Sync),
+        scope: &Scope,
+        company_id: i64,
+        entry_id: i64,
+    ) -> Result<Entry> {
+        authorize(client, scope, company_id, VIEW).await?;
+        entries::find(client, scope.tenant(), company_id, entry_id)
             .await?
             .ok_or(LedgerError::EntryNotFound)
     }
@@ -1159,6 +1405,170 @@ impl Ledger {
             .subscribe(scope.tenant(), company_id)
             .await
             .ok_or(LedgerError::NoticesUnavailable)
+    }
+
+    // Totals
+
+    /// The trial balance as of a date (`finance.ledger.view`): every account
+    /// with a posting dated on or before `as_of`, by code, with its debit and
+    /// credit totals and its balance on one side. An account reports its own
+    /// postings only; `parent_id` lets a reader group rows without counting a
+    /// parent twice. The result names `through_entry_number`, the last entry
+    /// it counts: passing it back with the same `as_of` reproduces the
+    /// figures exactly, even after an entry is posted later with an earlier
+    /// date. A negative number is `InvalidOption`; `BookNotOpen` before the
+    /// book is opened.
+    pub async fn trial_balance(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        as_of: Date,
+        through_entry_number: Option<i64>,
+    ) -> Result<TrialBalance> {
+        let window = totals::Window::new(&TotalsQuery {
+            to: Some(as_of),
+            through_entry_number,
+            ..TotalsQuery::default()
+        })?;
+        let client = self.db.get().await.map_err(Error::from)?;
+        authorize(&**client, scope, company_id, VIEW).await?;
+        let tenant = scope.tenant();
+        let book = books::find(&**client, tenant, company_id)
+            .await?
+            .ok_or(LedgerError::BookNotOpen)?;
+        let (through, totals) = totals::by_account(&**client, tenant, company_id, &window).await?;
+        let rows: Vec<TrialBalanceRow> = totals
+            .into_iter()
+            .map(|total| {
+                let net = total.debits - total.credits;
+                TrialBalanceRow {
+                    debit_balance: if net.is_positive() { net } else { Money::ZERO },
+                    credit_balance: if (-net).is_positive() {
+                        -net
+                    } else {
+                        Money::ZERO
+                    },
+                    account: total.account,
+                    debits: total.debits,
+                    credits: total.credits,
+                }
+            })
+            .collect();
+        Ok(TrialBalance {
+            company_id,
+            as_of,
+            through_entry_number: through,
+            currency_code: book.currency_code,
+            minor_units: book.minor_units,
+            total_debit: rows.iter().map(|row| row.debit_balance).sum(),
+            total_credit: rows.iter().map(|row| row.credit_balance).sum(),
+            rows,
+        })
+    }
+
+    /// Each account's debit and credit totals over the entries dated `from`
+    /// through `to` (`finance.ledger.view`): every account with a posting in
+    /// that window, by code, summed by PostgreSQL. The result names
+    /// `through_entry_number`, the last entry it counts; several windows read
+    /// with the same number describe one state of the ledger, which is how a
+    /// report keeps its columns consistent. `exclude_closing` leaves out
+    /// year-end closing entries and their reversals (a profit and loss reads
+    /// this way, a balance sheet counts them). A negative number or a `from`
+    /// after `to` is `InvalidOption`; `BookNotOpen` before the book is opened.
+    pub async fn account_totals(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        query: &TotalsQuery,
+    ) -> Result<AccountTotals> {
+        let client = self.db.get().await.map_err(Error::from)?;
+        self.account_totals_on(&**client, scope, company_id, query)
+            .await
+    }
+
+    /// Authorized aggregate read on the caller's snapshot or write transaction.
+    pub async fn account_totals_on(
+        &self,
+        client: &(impl GenericClient + Sync),
+        scope: &Scope,
+        company_id: i64,
+        query: &TotalsQuery,
+    ) -> Result<AccountTotals> {
+        let window = totals::Window::new(query)?;
+        authorize(client, scope, company_id, VIEW).await?;
+        let tenant = scope.tenant();
+        let book = books::find(client, tenant, company_id)
+            .await?
+            .ok_or(LedgerError::BookNotOpen)?;
+        let (through, rows) = totals::by_account(client, tenant, company_id, &window).await?;
+        Ok(Totals {
+            company_id,
+            from: window.from,
+            to: window.to,
+            through_entry_number: through,
+            currency_code: book.currency_code,
+            minor_units: book.minor_units,
+            rows,
+        })
+    }
+
+    /// [`Ledger::account_totals`] split by owner (`finance.ledger.view`): one
+    /// row per account and owner module that posted to it in the window, by
+    /// code and then owner, entries with no owner first. The same query and
+    /// the same `through_entry_number` reproduce the same figures. A control
+    /// account ties out when its owner module's rows are the whole account:
+    /// any other row is a posting the owner's own records do not know, shown
+    /// as a difference, never netted away.
+    pub async fn account_totals_by_owner(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        query: &TotalsQuery,
+    ) -> Result<OwnerTotals> {
+        let window = totals::Window::new(query)?;
+        let client = self.db.get().await.map_err(Error::from)?;
+        authorize(&**client, scope, company_id, VIEW).await?;
+        let tenant = scope.tenant();
+        let book = books::find(&**client, tenant, company_id)
+            .await?
+            .ok_or(LedgerError::BookNotOpen)?;
+        let (through, rows) = totals::by_owner(&**client, tenant, company_id, &window).await?;
+        Ok(Totals {
+            company_id,
+            from: window.from,
+            to: window.to,
+            through_entry_number: through,
+            currency_code: book.currency_code,
+            minor_units: book.minor_units,
+            rows,
+        })
+    }
+
+    // Evidence
+
+    /// The datasets [`Ledger::evidence_page`] exports, one per table this
+    /// module owns, sorted.
+    pub fn evidence_datasets() -> Vec<&'static str> {
+        evidence::datasets()
+    }
+
+    /// One ID-ordered evidence page of `dataset` with explicit fields, rows
+    /// and next cursor (`finance.ledger.view`), for the auditor's pack.
+    /// `limit` is 1 to 500 (500 when absent) and `after` the last id of the
+    /// previous page; an unknown dataset or an option out of range is
+    /// `InvalidOption`. Each page is a live read on its own connection, so
+    /// pages read across a posting are not one snapshot of the ledger.
+    pub async fn evidence_page(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        dataset: &str,
+        limit: Option<i64>,
+        after: Option<i64>,
+    ) -> Result<EvidencePage> {
+        let client = self.db.get().await.map_err(Error::from)?;
+        authorize(&**client, scope, company_id, VIEW).await?;
+        evidence::page(&**client, scope.tenant(), company_id, dataset, limit, after).await
     }
 
     // Reversals
@@ -1466,6 +1876,18 @@ impl Ledger {
                 "finance.ledger.submit_journal",
             )
             .await?;
+        let journal = Self::submit_journal_on(&mut tx, scope, company_id, new).await?;
+        tx.commit().await?;
+        Ok(journal)
+    }
+
+    async fn submit_journal_on(
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company_id: i64,
+        new: &NewEntry,
+    ) -> Result<Journal> {
+        join(tx, scope, company_id, SUBMIT_JOURNALS).await?;
         let tenant = scope.tenant();
         let book = books::find(tx.sql(), tenant, company_id)
             .await?
@@ -1497,7 +1919,6 @@ impl Ledger {
                 })
             })
             .await?;
-        tx.commit().await?;
         Ok(journal)
     }
 
@@ -1527,6 +1948,18 @@ impl Ledger {
                 "finance.ledger.approve_journal",
             )
             .await?;
+        let journal = Self::approve_journal_on(&mut tx, scope, company_id, journal_id).await?;
+        tx.commit().await?;
+        Ok(journal)
+    }
+
+    async fn approve_journal_on(
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company_id: i64,
+        journal_id: i64,
+    ) -> Result<Journal> {
+        join(tx, scope, company_id, APPROVE_JOURNALS).await?;
         let tenant = scope.tenant();
         let book = books::find(tx.sql(), tenant, company_id)
             .await?
@@ -1593,7 +2026,6 @@ impl Ledger {
         let journal = journals::find(tx.sql(), tenant, company_id, journal_id)
             .await?
             .ok_or(Error::Internal)?;
-        tx.commit().await?;
         Ok(journal)
     }
 
@@ -1618,6 +2050,20 @@ impl Ledger {
                 "finance.ledger.reject_journal",
             )
             .await?;
+        let journal =
+            Self::reject_journal_on(&mut tx, scope, company_id, journal_id, reason).await?;
+        tx.commit().await?;
+        Ok(journal)
+    }
+
+    async fn reject_journal_on(
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company_id: i64,
+        journal_id: i64,
+        reason: &str,
+    ) -> Result<Journal> {
+        join(tx, scope, company_id, APPROVE_JOURNALS).await?;
         let tenant = scope.tenant();
         submitted_journal(tx.sql(), tenant, company_id, journal_id).await?;
         let reason = journals::validate_reason(reason).map_err(LedgerError::Invalid)?;
@@ -1642,7 +2088,6 @@ impl Ledger {
         let journal = journals::find(tx.sql(), tenant, company_id, journal_id)
             .await?
             .ok_or(Error::Internal)?;
-        tx.commit().await?;
         Ok(journal)
     }
 
@@ -1894,6 +2339,18 @@ impl Ledger {
                 "finance.ledger.open_fiscal_year",
             )
             .await?;
+        let year = Self::open_fiscal_year_on(&mut tx, scope, company_id, new).await?;
+        tx.commit().await?;
+        Ok(year)
+    }
+
+    async fn open_fiscal_year_on(
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company_id: i64,
+        new: &NewFiscalYear,
+    ) -> Result<FiscalYear> {
+        join(tx, scope, company_id, MANAGE_PERIODS).await?;
         let tenant = scope.tenant();
         books::find(tx.sql(), tenant, company_id)
             .await?
@@ -1910,7 +2367,6 @@ impl Ledger {
             })
             .await?;
         let year = fiscal_year(tx.sql(), tenant, company_id, year_id).await?;
-        tx.commit().await?;
         Ok(year)
     }
 
@@ -1923,8 +2379,19 @@ impl Ledger {
         company_id: i64,
     ) -> Result<Vec<FiscalYear>> {
         let client = self.db.get().await.map_err(Error::from)?;
-        authorize(&**client, scope, company_id, VIEW).await?;
-        Ok(periods::state(&**client, scope.tenant(), company_id)
+        self.list_fiscal_years_on(&**client, scope, company_id)
+            .await
+    }
+
+    /// Authorized period states on the caller's connection, including its writes.
+    pub async fn list_fiscal_years_on(
+        &self,
+        client: &(impl GenericClient + Sync),
+        scope: &Scope,
+        company_id: i64,
+    ) -> Result<Vec<FiscalYear>> {
+        authorize(client, scope, company_id, VIEW).await?;
+        Ok(periods::state(client, scope.tenant(), company_id)
             .await?
             .years)
     }
@@ -1971,7 +2438,7 @@ impl Ledger {
         reason: Option<&str>,
     ) -> Result<Period> {
         let mut client = self.db.get().await.map_err(Error::from)?;
-        let tx = self
+        let mut tx = self
             .write(
                 &mut client,
                 scope,
@@ -1980,6 +2447,19 @@ impl Ledger {
                 "finance.ledger.close_period",
             )
             .await?;
+        let period = Self::close_period_on(&mut tx, scope, company_id, period_id, reason).await?;
+        tx.commit().await?;
+        Ok(period)
+    }
+
+    async fn close_period_on(
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company_id: i64,
+        period_id: i64,
+        reason: Option<&str>,
+    ) -> Result<Period> {
+        join(tx, scope, company_id, MANAGE_PERIODS).await?;
         let state = periods::state(tx.sql(), scope.tenant(), company_id).await?;
         let period = state.period(period_id).ok_or(LedgerError::PeriodNotFound)?;
         let (previous, _) = state.neighbours(period_id);
@@ -2022,7 +2502,7 @@ impl Ledger {
         reason: &str,
     ) -> Result<Period> {
         let mut client = self.db.get().await.map_err(Error::from)?;
-        let tx = self
+        let mut tx = self
             .write(
                 &mut client,
                 scope,
@@ -2031,6 +2511,19 @@ impl Ledger {
                 "finance.ledger.reopen_period",
             )
             .await?;
+        let period = Self::reopen_period_on(&mut tx, scope, company_id, period_id, reason).await?;
+        tx.commit().await?;
+        Ok(period)
+    }
+
+    async fn reopen_period_on(
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company_id: i64,
+        period_id: i64,
+        reason: &str,
+    ) -> Result<Period> {
+        join(tx, scope, company_id, REOPEN_PERIODS).await?;
         let state = periods::state(tx.sql(), scope.tenant(), company_id).await?;
         let period = state.period(period_id).ok_or(LedgerError::PeriodNotFound)?;
         let (_, next) = state.neighbours(period_id);
@@ -2081,7 +2574,7 @@ impl Ledger {
         reason: Option<&str>,
     ) -> Result<Period> {
         let mut client = self.db.get().await.map_err(Error::from)?;
-        let tx = self
+        let mut tx = self
             .write(
                 &mut client,
                 scope,
@@ -2090,6 +2583,19 @@ impl Ledger {
                 "finance.ledger.lock_period",
             )
             .await?;
+        let period = Self::lock_period_on(&mut tx, scope, company_id, period_id, reason).await?;
+        tx.commit().await?;
+        Ok(period)
+    }
+
+    async fn lock_period_on(
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company_id: i64,
+        period_id: i64,
+        reason: Option<&str>,
+    ) -> Result<Period> {
+        join(tx, scope, company_id, LOCK_PERIODS).await?;
         let state = periods::state(tx.sql(), scope.tenant(), company_id).await?;
         let period = state.period(period_id).ok_or(LedgerError::PeriodNotFound)?;
         let (previous, _) = state.neighbours(period_id);
@@ -2142,6 +2648,21 @@ impl Ledger {
                 "finance.ledger.close_fiscal_year",
             )
             .await?;
+        let year =
+            Self::close_fiscal_year_on(&mut tx, scope, company_id, fiscal_year_id, close).await?;
+        tx.commit().await?;
+        Ok(year)
+    }
+
+    async fn close_fiscal_year_on(
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company_id: i64,
+        fiscal_year_id: i64,
+        close: &YearClose,
+    ) -> Result<FiscalYear> {
+        join(tx, scope, company_id, MANAGE_PERIODS).await?;
+        authorize(tx.sql(), scope, company_id, POST_ENTRIES).await?;
         let tenant = scope.tenant();
         let book = books::find(tx.sql(), tenant, company_id)
             .await?
@@ -2152,7 +2673,6 @@ impl Ledger {
             .ok_or(LedgerError::FiscalYearNotFound)?
             .clone();
         if year.status == YearStatus::Closed {
-            tx.rollback().await?;
             return Ok(year);
         }
         let open: Vec<Period> = year
@@ -2257,7 +2777,6 @@ impl Ledger {
         })
         .await?;
         let year = fiscal_year(tx.sql(), tenant, company_id, fiscal_year_id).await?;
-        tx.commit().await?;
         Ok(year)
     }
 
@@ -2285,6 +2804,21 @@ impl Ledger {
                 "finance.ledger.reopen_fiscal_year",
             )
             .await?;
+        let year =
+            Self::reopen_fiscal_year_on(&mut tx, scope, company_id, fiscal_year_id, reason).await?;
+        tx.commit().await?;
+        Ok(year)
+    }
+
+    async fn reopen_fiscal_year_on(
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company_id: i64,
+        fiscal_year_id: i64,
+        reason: &str,
+    ) -> Result<FiscalYear> {
+        join(tx, scope, company_id, REOPEN_PERIODS).await?;
+        authorize(tx.sql(), scope, company_id, POST_ENTRIES).await?;
         let tenant = scope.tenant();
         let book = books::find(tx.sql(), tenant, company_id)
             .await?
@@ -2409,7 +2943,6 @@ impl Ledger {
         })
         .await?;
         let year = fiscal_year(tx.sql(), tenant, company_id, fiscal_year_id).await?;
-        tx.commit().await?;
         Ok(year)
     }
 
@@ -2418,7 +2951,7 @@ impl Ledger {
     async fn change_period(
         scope: &Scope,
         company_id: i64,
-        mut tx: MutationTransaction<'_>,
+        tx: &mut MutationTransaction<'_>,
         period: Period,
         action: ClosingAction,
         reason: Option<String>,
@@ -2464,14 +2997,14 @@ impl Ledger {
                 })
             })
             .await?;
-        tx.commit().await?;
         Ok(changed)
     }
 
-    /// Every write: each capability and company reach now, then the audited
-    /// transaction holding the company's row lock (Bilimbi `write/4` with
-    /// `lock_writable_company/2`).
-    async fn write<'c>(
+    /// Opens a Finance record owner's audited write, holding the company's
+    /// row lock and rechecking its capabilities inside the transaction.
+    /// The owner records every changed row and owns commit/rollback; ledger
+    /// posting and reversal independently check their own capabilities.
+    pub async fn write<'c>(
         &self,
         client: &'c mut tokio_postgres::Client,
         scope: &Scope,
@@ -2487,12 +3020,28 @@ impl Ledger {
             .begin(client, scope.mutation_context(action))
             .await?;
         lock(&tx, scope, company_id).await?;
+        for capability in capabilities {
+            authorize(tx.sql(), scope, company_id, capability).await?;
+        }
         Ok(tx)
     }
 }
 
 /// A write inside a caller's own transaction: the capability and company
 /// reach now, then the company's row lock on that transaction.
+async fn preview_lock(
+    client: &dyn bilibi_agent_api::OperationClient,
+    scope: &Scope,
+    company_id: i64,
+) -> Result<()> {
+    agent_operations::authorize_on(client, scope, company_id, POST_ENTRIES).await?;
+    let row = client.query_opt("SELECT status FROM companies WHERE tenant_id=$1 AND id=$2 AND deleted_at IS NULL FOR UPDATE NOWAIT", &[&scope.tenant(), &company_id]).await?.ok_or(LedgerError::CompanyNotFound)?;
+    if row.get::<_, String>(0) == "archived" {
+        return Err(LedgerError::CompanyArchived);
+    }
+    Ok(())
+}
+
 async fn join(
     tx: &MutationTransaction<'_>,
     scope: &Scope,
@@ -2531,51 +3080,8 @@ async fn reverse(
     reversal: &Reversal,
 ) -> Result<Entry> {
     let tenant = scope.tenant();
-    let book = books::find(tx.sql(), tenant, company_id)
-        .await?
-        .ok_or(LedgerError::BookNotOpen)?;
-    let original = entries::find(tx.sql(), tenant, company_id, entry_id)
-        .await?
-        .ok_or(LedgerError::EntryNotFound)?;
-    if original.reverses_entry_id.is_some() {
-        return Err(LedgerError::ReversalNotReversible);
-    }
-    if original.reversed_by_entry_id.is_some() {
-        return Err(LedgerError::AlreadyReversed);
-    }
-    if periods::closing_entry(tx.sql(), company_id, original.id).await? {
-        return Err(LedgerError::ClosingEntry);
-    }
-    match (&original.owner, owner) {
-        (Some(owned), None) => return Err(LedgerError::OwnedBy(owned.clone())),
-        (None, Some(_)) => return Err(LedgerError::NotOwned),
-        (Some(owned), Some(owner)) if owned != owner => return Err(LedgerError::NotTheOwner),
-        _ => {}
-    }
-    let new = NewEntry {
-        reference: reversal.reference.clone(),
-        ..entries::mirror(&original, reversal.entry_date, reversal.description.clone())
-    };
-    let validated = entries::validate(
-        tx.sql(),
-        tenant,
-        company_id,
-        book.minor_units,
-        &new,
-        None,
-        entries::Inactive::Any,
-    )
-    .await?;
-    let valid = if reversal.entry_date < original.entry_date {
-        let early = FieldError::new("entry_date", "cannot be before the reversed entry's date");
-        let mut errors = validated.err().unwrap_or_default();
-        errors.insert(0, early);
-        return Err(LedgerError::Invalid(errors));
-    } else {
-        validated
-            .map_err(LedgerError::Invalid)?
-            .reversing(&original)
-    };
+    let (book, _, valid) =
+        prepare_reverse(tx.sql(), tenant, company_id, entry_id, owner, reversal).await?;
     let (actor, impersonator) = people(scope);
     let entry = tx
         .mutate(move |sql| {
@@ -2598,9 +3104,98 @@ async fn reverse(
     Ok(entry)
 }
 
+/// Shared posting preparation for execution and owner previews; never inserts.
+async fn prepare_post(
+    client: &dyn bilibi_agent_api::OperationClient,
+    tenant: i64,
+    company_id: i64,
+    new: &NewEntry,
+    options: &PostOptions,
+) -> Result<(Book, entries::ValidEntry)> {
+    if options
+        .owner
+        .as_ref()
+        .is_some_and(|owner| !entries::owner_valid(owner))
+        || options.settlement_account_ids.iter().any(|id| *id < 1)
+    {
+        return Err(LedgerError::InvalidOption);
+    }
+    let book = books::find(client, tenant, company_id)
+        .await?
+        .ok_or(LedgerError::BookNotOpen)?;
+    let valid = entries::validate(
+        client,
+        tenant,
+        company_id,
+        book.minor_units,
+        new,
+        options.owner.as_ref(),
+        entries::Inactive::Listed(&options.settlement_account_ids),
+    )
+    .await?
+    .map_err(LedgerError::Invalid)?;
+    Ok((book, valid))
+}
+
+async fn prepare_reverse(
+    client: &dyn bilibi_agent_api::OperationClient,
+    tenant: i64,
+    company_id: i64,
+    entry_id: i64,
+    owner: Option<&EntryOwner>,
+    reversal: &Reversal,
+) -> Result<(Book, Entry, entries::ValidEntry)> {
+    let book = books::find(client, tenant, company_id)
+        .await?
+        .ok_or(LedgerError::BookNotOpen)?;
+    let original = entries::find(client, tenant, company_id, entry_id)
+        .await?
+        .ok_or(LedgerError::EntryNotFound)?;
+    if original.reverses_entry_id.is_some() {
+        return Err(LedgerError::ReversalNotReversible);
+    }
+    if original.reversed_by_entry_id.is_some() {
+        return Err(LedgerError::AlreadyReversed);
+    }
+    if periods::closing_entry(client, company_id, original.id).await? {
+        return Err(LedgerError::ClosingEntry);
+    }
+    match (&original.owner, owner) {
+        (Some(owned), None) => return Err(LedgerError::OwnedBy(owned.clone())),
+        (None, Some(_)) => return Err(LedgerError::NotOwned),
+        (Some(owned), Some(owner)) if owned != owner => return Err(LedgerError::NotTheOwner),
+        _ => {}
+    }
+    let new = NewEntry {
+        reference: reversal.reference.clone(),
+        ..entries::mirror(&original, reversal.entry_date, reversal.description.clone())
+    };
+    let validated = entries::validate(
+        client,
+        tenant,
+        company_id,
+        book.minor_units,
+        &new,
+        None,
+        entries::Inactive::Any,
+    )
+    .await?;
+    let valid = if reversal.entry_date < original.entry_date {
+        let early = FieldError::new("entry_date", "cannot be before the reversed entry's date");
+        let mut errors = validated.err().unwrap_or_default();
+        errors.insert(0, early);
+        return Err(LedgerError::Invalid(errors));
+    } else {
+        validated
+            .map_err(LedgerError::Invalid)?
+            .reversing(&original)
+    };
+    Ok((book, original, valid))
+}
+
 /// A journal of the company that is still submitted.
 async fn submitted_journal(
-    client: &impl GenericClient,
+    client: &dyn bilibi_agent_api::OperationClient,
     tenant: i64,
     company_id: i64,
     journal_id: i64,
@@ -2615,7 +3210,7 @@ async fn submitted_journal(
 }
 
 async fn separation_view(
-    client: &impl GenericClient,
+    client: &dyn bilibi_agent_api::OperationClient,
     tenant: i64,
     company_id: i64,
 ) -> Result<DutySeparation> {
@@ -2701,7 +3296,7 @@ fn side(account_id: i64, net: rust_decimal::Decimal) -> NewLine {
 }
 
 async fn fiscal_year(
-    client: &impl GenericClient,
+    client: &dyn bilibi_agent_api::OperationClient,
     tenant: i64,
     company_id: i64,
     fiscal_year_id: i64,
@@ -2715,7 +3310,7 @@ async fn fiscal_year(
 }
 
 async fn controlled_view(
-    client: &impl GenericClient,
+    client: &dyn bilibi_agent_api::OperationClient,
     tenant: i64,
     company_id: i64,
 ) -> Result<ControlledBookkeeping> {

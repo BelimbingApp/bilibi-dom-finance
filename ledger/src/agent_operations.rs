@@ -1,0 +1,1053 @@
+//! H1 reach for Bilimbi.Finance.Ledger's facade-only actions. The shared
+//! agent API owns transport, plan identity, expiry, replay and outer commit.
+use super::*;
+use bilibi_agent_api::{
+    Definitions, Guide, Handler, Operation, OperationClient, OperationFuture, ReadHandler,
+    WriteHandler, DEFINITIONS,
+};
+use bilibi_module_registry::{Contribution, Provenance, RegistryError};
+use bilibi_party_ids::OrganisationId;
+use bilibi_tenancy::PartyProofs;
+use serde_json::{json, Value};
+use std::{collections::BTreeMap, sync::OnceLock};
+
+static PARTIES: OnceLock<Arc<PartyProofs>> = OnceLock::new();
+pub(super) fn bind(parties: Arc<PartyProofs>) -> bilibi_module_registry::Result<()> {
+    PARTIES
+        .set(parties)
+        .map_err(|_| RegistryError::Service("duplicate ledger operation binding".into()))
+}
+
+fn invalid(error: LedgerError) -> bilibi_agent_api::Error {
+    use bilibi_agent_api::Error as E;
+    match error {
+        LedgerError::Unauthorized => E::Forbidden,
+        LedgerError::CompanyNotFound
+        | LedgerError::AccountNotFound
+        | LedgerError::EntryNotFound
+        | LedgerError::JournalNotFound
+        | LedgerError::FiscalYearNotFound
+        | LedgerError::PeriodNotFound => E::NotFound,
+        LedgerError::Failed(error) => error.into(),
+        LedgerError::Invalid(errors) => {
+            let mut fields: BTreeMap<String, Vec<String>> = BTreeMap::new();
+            for e in errors {
+                let field = e.line.map_or_else(
+                    || e.field.into(),
+                    |line| format!("lines.{}.{}", line - 1, e.field),
+                );
+                fields.entry(field).or_default().push(e.message);
+            }
+            E::InvalidInput(fields)
+        }
+        other => E::InvalidInput(BTreeMap::from([("base".into(), vec![other.to_string()])])),
+    }
+}
+
+pub(super) async fn authorize_on(
+    client: &dyn OperationClient,
+    scope: &Scope,
+    company: i64,
+    capability: &str,
+) -> Result<()> {
+    PARTIES
+        .get()
+        .ok_or(Error::Internal)?
+        .organisation_target(
+            client,
+            scope,
+            OrganisationId::new(company).map_err(|_| LedgerError::CompanyNotFound)?,
+            capability,
+        )
+        .await
+        .map(|_| ())
+        .map_err(refusal)
+}
+
+fn id(input: &Value, field: &str) -> Result<i64> {
+    input[field]
+        .as_i64()
+        .filter(|id| *id > 0)
+        .ok_or(LedgerError::InvalidOption)
+}
+fn text<'a>(input: &'a Value, field: &str) -> Result<&'a str> {
+    input[field].as_str().ok_or(LedgerError::InvalidOption)
+}
+fn date(input: &Value, field: &str) -> Result<Date> {
+    text(input, field)?.parse().map_err(|_| {
+        LedgerError::Invalid(vec![FieldError::new("entry_date", "has invalid format")])
+    })
+}
+fn optional_date(input: &Value, field: &str) -> Result<Option<Date>> {
+    input.get(field).map(|_| date(input, field)).transpose()
+}
+fn opt_text(input: &Value, field: &str) -> Option<String> {
+    input[field].as_str().map(str::to_owned)
+}
+fn new_account(input: &Value) -> Result<NewAccount> {
+    Ok(NewAccount {
+        code: text(input, "code")?.into(),
+        name: text(input, "name")?.into(),
+        account_type: AccountType::parse(text(input, "account_type")?)
+            .ok_or(LedgerError::InvalidOption)?,
+        parent_id: input
+            .get("parent_id")
+            .map(|_| id(input, "parent_id"))
+            .transpose()?,
+        active: input["active"].as_bool().unwrap_or(true),
+        retained_earnings: input["retained_earnings"].as_bool().unwrap_or(false),
+    })
+}
+fn account_change(input: &Value) -> Result<AccountChange> {
+    Ok(AccountChange {
+        name: opt_text(input, "name"),
+        parent_id: if input["clear_parent"].as_bool() == Some(true) {
+            if input.get("parent_id").is_some() {
+                return Err(LedgerError::Invalid(vec![FieldError::new(
+                    "parent_id",
+                    "cannot be set with clear_parent",
+                )]));
+            }
+            Some(None)
+        } else {
+            input
+                .get("parent_id")
+                .map(|_| id(input, "parent_id").map(Some))
+                .transpose()?
+        },
+        active: input["active"].as_bool(),
+        retained_earnings: input["retained_earnings"].as_bool(),
+    })
+}
+fn new_year(input: &Value) -> Result<NewFiscalYear> {
+    Ok(NewFiscalYear {
+        start_date: optional_date(input, "start_date")?,
+        end_date: optional_date(input, "end_date")?,
+    })
+}
+fn year_close(input: &Value) -> YearClose {
+    YearClose {
+        description: opt_text(input, "description"),
+        reference: opt_text(input, "reference"),
+    }
+}
+fn reversal(input: &Value) -> Result<Reversal> {
+    Ok(Reversal {
+        entry_date: date(input, "entry_date")?,
+        description: text(input, "description")?.into(),
+        reference: opt_text(input, "reference"),
+    })
+}
+fn new_entry(input: &Value, units: MinorUnits) -> Result<NewEntry> {
+    let mut lines = Vec::new();
+    for (index, line) in input["lines"]
+        .as_array()
+        .ok_or(LedgerError::InvalidOption)?
+        .iter()
+        .enumerate()
+    {
+        let amount = |field: &'static str| -> Result<Money> {
+            line.get(field)
+                .map(|v| {
+                    Money::parse(v.as_str().ok_or(LedgerError::InvalidOption)?, units).map_err(
+                        |e| {
+                            LedgerError::Invalid(vec![
+                                FieldError::new(field, e.to_string()).on_line(index + 1)
+                            ])
+                        },
+                    )
+                })
+                .unwrap_or(Ok(Money::ZERO))
+        };
+        lines.push(NewLine {
+            account_id: id(line, "account_id")?,
+            debit: amount("debit")?,
+            credit: amount("credit")?,
+            description: opt_text(line, "description"),
+        });
+    }
+    Ok(NewEntry {
+        entry_date: date(input, "entry_date")?,
+        description: text(input, "description")?.into(),
+        reference: opt_text(input, "reference"),
+        lines,
+    })
+}
+
+#[derive(Clone, Copy)]
+enum Write {
+    OpenBook,
+    CreateAccount,
+    UpdateAccount,
+    Submit,
+    Approve,
+    Reject,
+    Reverse,
+    OpenYear,
+    ClosePeriod,
+    ReopenPeriod,
+    LockPeriod,
+    CloseYear,
+    ReopenYear,
+    LockYear,
+}
+impl Write {
+    fn capability(self) -> &'static str {
+        match self {
+            Self::OpenBook | Self::CreateAccount | Self::UpdateAccount => MANAGE_ACCOUNTS,
+            Self::Submit => SUBMIT_JOURNALS,
+            Self::Approve | Self::Reject => APPROVE_JOURNALS,
+            Self::Reverse => POST_ENTRIES,
+            Self::OpenYear | Self::ClosePeriod | Self::CloseYear => MANAGE_PERIODS,
+            Self::ReopenPeriod | Self::ReopenYear => REOPEN_PERIODS,
+            Self::LockPeriod | Self::LockYear => LOCK_PERIODS,
+        }
+    }
+    fn consequence(self) -> &'static str {
+        match self {
+            Self::OpenBook => "Open the book once; currency and minor units are permanent. Controlled bookkeeping starts on.",
+            Self::CreateAccount => "Create an account; its code and account type are permanent.",
+            Self::UpdateAccount => "Change the account; deactivation requires a zero balance. A new retained-earnings designation releases the previous one.",
+            Self::Submit => "Submit a manual journal for approval; no entry posts yet.",
+            Self::Approve => "Approve the journal and post its immutable entry; separation of duties still applies.",
+            Self::Reject => "Reject the journal permanently with this reason; no entry posts.",
+            Self::Reverse => "Post one mirror entry on the chosen date; the original remains. Owned and closing entries cannot use this action.",
+            Self::OpenYear => "Open the next fiscal year and its monthly periods; dates must be contiguous with the previous year.",
+            Self::ClosePeriod => "Close the period to posting until a privileged reopening.",
+            Self::ReopenPeriod => "Reopen the period to posting and record the control override with its reason.",
+            Self::LockPeriod => "Lock the closed period permanently; it can never reopen.",
+            Self::CloseYear => "Close the fiscal year and its open periods; post the computed year-end entry to the designated retained-earnings account, if needed.",
+            Self::ReopenYear => "Reopen the year and only its last period; reverse its closing entry at year-end and record the control override.",
+            Self::LockYear => "Lock every remaining closed period of this closed fiscal year permanently; the year can never reopen.",
+        }
+    }
+    async fn review(
+        self,
+        client: &dyn OperationClient,
+        scope: &Scope,
+        input: &Value,
+    ) -> Result<Value> {
+        let company = id(input, "company_id")?;
+        authorize_on(client, scope, company, self.capability()).await?;
+        if matches!(self, Self::CloseYear | Self::ReopenYear) {
+            authorize_on(client, scope, company, POST_ENTRIES).await?;
+        }
+        // Same connection as Plans, including uncommitted owner changes. NOWAIT
+        // refuses opposite-company lock orders rather than holding a deadlock.
+        let row = client.query_opt("SELECT status FROM companies WHERE tenant_id=$1 AND id=$2 AND deleted_at IS NULL FOR UPDATE NOWAIT", &[&scope.tenant(), &company]).await?.ok_or(LedgerError::CompanyNotFound)?;
+        if row.get::<_, String>(0) == "archived" {
+            return Err(LedgerError::CompanyArchived);
+        }
+        let tenant = scope.tenant();
+        let book = books::find(client, tenant, company).await?;
+        let changes = match self {
+            Self::OpenBook => {
+                if book.is_some() {
+                    return Err(LedgerError::BookAlreadyOpen);
+                }
+                let valid = books::validate(&NewBook {
+                    currency_code: text(input, "currency_code")?.into(),
+                    minor_units: input["minor_units"]
+                        .as_i64()
+                        .ok_or(LedgerError::InvalidOption)?,
+                })
+                .map_err(LedgerError::Invalid)?;
+                json!({"before":null,"after":{"company_id":company,"currency_code":valid.currency_code,"minor_units":valid.minor_units,"controlled":true}})
+            }
+            Self::CreateAccount | Self::UpdateAccount => {
+                let all = accounts::list(client, tenant, company).await?;
+                let (before, after) = if matches!(self, Self::CreateAccount) {
+                    let valid =
+                        accounts::validate_new(client, tenant, company, &new_account(input)?)
+                            .await?
+                            .map_err(LedgerError::Invalid)?;
+                    (
+                        Value::Null,
+                        json!({"code":valid.code,"name":valid.name,"account_type":valid.account_type,"parent_id":valid.parent_id,"active":valid.active,"retained_earnings":valid.retained_earnings}),
+                    )
+                } else {
+                    let current = accounts::find(client, tenant, company, id(input, "account_id")?)
+                        .await?
+                        .ok_or(LedgerError::AccountNotFound)?;
+                    let after = accounts::validate_change(
+                        client,
+                        tenant,
+                        company,
+                        &current,
+                        &account_change(input)?,
+                        book.as_ref().map_or(MinorUnits(0), |b| b.minor_units),
+                    )
+                    .await?
+                    .map_err(LedgerError::Invalid)?;
+                    (json!(current), json!(after))
+                };
+                let released = all.iter().find(|a| {
+                    a.retained_earnings
+                        && after["retained_earnings"] == true
+                        && after["id"].as_i64() != Some(a.id)
+                });
+                json!({"before":before,"after":after,"released_retained_earnings":released,"accounts":all})
+            }
+            Self::Submit | Self::Approve | Self::Reject => {
+                let current = if matches!(self, Self::Submit) {
+                    None
+                } else {
+                    Some(
+                        submitted_journal(client, tenant, company, id(input, "journal_id")?)
+                            .await?,
+                    )
+                };
+                if matches!(self, Self::Reject) {
+                    let reason = journals::validate_reason(text(input, "reason")?)
+                        .map_err(LedgerError::Invalid)?;
+                    json!({"before":current,"status":"rejected","reason":reason})
+                } else {
+                    let book = book.as_ref().ok_or(LedgerError::BookNotOpen)?;
+                    let exception = if let Some(journal) = &current {
+                        duties::decide(
+                            client,
+                            tenant,
+                            company,
+                            people(scope),
+                            &journals::approval(journal),
+                        )
+                        .await?
+                        .is_some()
+                    } else {
+                        false
+                    };
+                    let new = current.as_ref().map_or_else(
+                        || new_entry(input, book.minor_units),
+                        |j| Ok(journals::entry(j)),
+                    )?;
+                    let valid = entries::validate(
+                        client,
+                        tenant,
+                        company,
+                        book.minor_units,
+                        &new,
+                        None,
+                        entries::Inactive::Listed(&[]),
+                    )
+                    .await?
+                    .map_err(LedgerError::Invalid)?;
+                    json!({"before":current,"entry":valid,"posts":matches!(self,Self::Approve),"approval_exception":exception,"accounts":accounts::list(client,tenant,company).await?,"periods":periods::state(client,tenant,company).await?.years,"duty_separation":duties::latest_change(client,tenant,company).await?})
+                }
+            }
+            Self::Reverse => {
+                let (_, original, valid) = prepare_reverse(
+                    client,
+                    tenant,
+                    company,
+                    id(input, "entry_id")?,
+                    None,
+                    &reversal(input)?,
+                )
+                .await?;
+                json!({"before":original,"entry":valid})
+            }
+            Self::OpenYear => {
+                book.as_ref().ok_or(LedgerError::BookNotOpen)?;
+                let state = periods::state(client, tenant, company).await?;
+                let (start, end) = periods::validate_year(state.years.last(), &new_year(input)?)
+                    .map_err(LedgerError::Invalid)?;
+                json!({"previous":state.years.last(),"start_date":start.to_string(),"end_date":end.to_string(),"periods":"calendar months, all open"})
+            }
+            Self::ClosePeriod | Self::ReopenPeriod | Self::LockPeriod => {
+                let state = periods::state(client, tenant, company).await?;
+                let p = state
+                    .period(id(input, "period_id")?)
+                    .ok_or(LedgerError::PeriodNotFound)?;
+                let (previous, next) = state.neighbours(p.id);
+                let required = if matches!(self, Self::ReopenPeriod) {
+                    Some("is required to reopen")
+                } else {
+                    None
+                };
+                match self {
+                    Self::ClosePeriod => {
+                        if p.status != PeriodStatus::Open {
+                            return Err(LedgerError::PeriodNotOpen);
+                        }
+                        if previous.is_some_and(|p| p.status == PeriodStatus::Open) {
+                            return Err(LedgerError::EarlierPeriodOpen);
+                        }
+                        if state.year(p.fiscal_year_id).is_some_and(|y| {
+                            y.end_date == p.end_date && y.status != YearStatus::Closed
+                        }) {
+                            return Err(LedgerError::ClosesWithFiscalYear);
+                        }
+                    }
+                    Self::ReopenPeriod => {
+                        if p.status == PeriodStatus::Locked {
+                            return Err(LedgerError::PeriodLocked);
+                        }
+                        if p.status != PeriodStatus::Closed {
+                            return Err(LedgerError::PeriodNotClosed);
+                        }
+                        if state
+                            .year(p.fiscal_year_id)
+                            .is_some_and(|y| y.status == YearStatus::Closed)
+                        {
+                            return Err(LedgerError::FiscalYearClosed);
+                        }
+                        if next.is_some_and(|p| p.status != PeriodStatus::Open) {
+                            return Err(LedgerError::LaterPeriodClosed);
+                        }
+                    }
+                    _ => {
+                        if p.status == PeriodStatus::Locked {
+                            return Err(LedgerError::PeriodLocked);
+                        }
+                        if p.status != PeriodStatus::Closed {
+                            return Err(LedgerError::PeriodNotClosed);
+                        }
+                        if previous.is_some_and(|p| p.status != PeriodStatus::Locked) {
+                            return Err(LedgerError::EarlierPeriodUnlocked);
+                        }
+                    }
+                }
+                let reason = periods::reason(input["reason"].as_str(), required)
+                    .map_err(LedgerError::Invalid)?;
+                json!({"before":p,"reason":reason,"approval_exception":matches!(self,Self::ReopenPeriod)})
+            }
+            Self::CloseYear | Self::ReopenYear | Self::LockYear => {
+                self.review_year(client, scope, company, input).await?
+            }
+        };
+        Ok(json!({"company_id":company,"book":book,"summary":self.consequence(),"changes":changes}))
+    }
+
+    async fn review_year(
+        self,
+        client: &dyn OperationClient,
+        scope: &Scope,
+        company: i64,
+        input: &Value,
+    ) -> Result<Value> {
+        let tenant = scope.tenant();
+        let book = books::find(client, tenant, company)
+            .await?
+            .ok_or(LedgerError::BookNotOpen)?;
+        let state = periods::state(client, tenant, company).await?;
+        let year = state
+            .year(id(input, "fiscal_year_id")?)
+            .ok_or(LedgerError::FiscalYearNotFound)?;
+        let last = year.periods.last().ok_or(Error::Internal)?;
+        match self {
+            Self::LockYear => {
+                if year.status != YearStatus::Closed {
+                    return Err(LedgerError::FiscalYearNotClosed);
+                }
+                let first = year.periods.first().ok_or(Error::Internal)?;
+                if state
+                    .neighbours(first.id)
+                    .0
+                    .is_some_and(|p| p.status != PeriodStatus::Locked)
+                {
+                    return Err(LedgerError::EarlierPeriodUnlocked);
+                }
+                let reason = periods::reason(input["reason"].as_str(), None)
+                    .map_err(LedgerError::Invalid)?;
+                Ok(
+                    json!({"before":year,"lock_period_ids":year.periods.iter().filter(|p|p.status != PeriodStatus::Locked).map(|p|p.id).collect::<Vec<_>>(),"reason":reason}),
+                )
+            }
+            Self::CloseYear => {
+                if year.status == YearStatus::Closed {
+                    return Ok(json!({"before":year,"unchanged":true}));
+                }
+                let open = year
+                    .periods
+                    .iter()
+                    .find(|p| p.status == PeriodStatus::Open)
+                    .ok_or(Error::Internal)?;
+                if state
+                    .neighbours(open.id)
+                    .0
+                    .is_some_and(|p| p.status == PeriodStatus::Open)
+                {
+                    return Err(LedgerError::EarlierPeriodOpen);
+                }
+                let all = accounts::list(client, tenant, company).await?;
+                let retained = all
+                    .iter()
+                    .find(|a| a.retained_earnings && a.active)
+                    .ok_or(LedgerError::NoRetainedEarningsAccount)?;
+                let balances = periods::closing_balances(client, tenant, company, year).await?;
+                let closing = if balances.is_empty() {
+                    None
+                } else {
+                    let net: rust_decimal::Decimal = balances.iter().map(|(_, n)| *n).sum();
+                    let mut lines: Vec<_> = balances.iter().map(|(id, n)| side(*id, -*n)).collect();
+                    if !net.is_zero() {
+                        lines.push(side(retained.id, net));
+                    }
+                    let new = NewEntry {
+                        entry_date: year.end_date,
+                        description: opt_text(input, "description").unwrap_or_else(|| {
+                            format!("Close fiscal year {} to {}", year.start_date, year.end_date)
+                        }),
+                        reference: opt_text(input, "reference"),
+                        lines,
+                    };
+                    Some(
+                        entries::validate(
+                            client,
+                            tenant,
+                            company,
+                            book.minor_units,
+                            &new,
+                            None,
+                            entries::Inactive::Any,
+                        )
+                        .await?
+                        .map_err(LedgerError::Invalid)?,
+                    )
+                };
+                Ok(json!({"before":year,"retained_earnings":retained,"entry":closing}))
+            }
+            _ => {
+                if year.status == YearStatus::Open {
+                    return Err(LedgerError::FiscalYearNotClosed);
+                }
+                if last.status == PeriodStatus::Locked {
+                    return Err(LedgerError::PeriodLocked);
+                }
+                if state
+                    .neighbours(last.id)
+                    .1
+                    .is_some_and(|p| p.status != PeriodStatus::Open)
+                {
+                    return Err(LedgerError::LaterPeriodClosed);
+                }
+                let reason =
+                    periods::reason(input["reason"].as_str(), Some("is required to reopen"))
+                        .map_err(LedgerError::Invalid)?;
+                let reversal = if let Some(entry) = year.closing_entry_id {
+                    let original = entries::find(client, tenant, company, entry)
+                        .await?
+                        .ok_or(Error::Internal)?;
+                    let new = entries::mirror(
+                        &original,
+                        year.end_date,
+                        format!(
+                            "Reopen fiscal year {} to {}",
+                            year.start_date, year.end_date
+                        ),
+                    );
+                    Some(
+                        entries::validate_reopening(
+                            client,
+                            tenant,
+                            company,
+                            book.minor_units,
+                            &new,
+                            year,
+                        )
+                        .await?
+                        .map_err(LedgerError::Invalid)?
+                        .reversing(&original),
+                    )
+                } else {
+                    None
+                };
+                Ok(
+                    json!({"before":year,"entry":reversal,"reopen_period_id":last.id,"reason":reason,"approval_exception":true}),
+                )
+            }
+        }
+    }
+}
+
+// The pinned engine previews all operations before running any. Its digest
+// fences other transactions, but not an earlier operation in this same plan.
+// Keep only hashes in a transaction-local FIFO; compare again immediately
+// before each write. No persistent state, pooled side reads or business writes.
+async fn fence(
+    client: &dyn OperationClient,
+    value: &Value,
+    consume: bool,
+) -> bilibi_agent_api::Result<()> {
+    let encoded = value.to_string();
+    let row = client.query_opt("SELECT encode(sha256(convert_to($1,'UTF8')),'hex'), COALESCE(NULLIF(current_setting('finance.ledger_reviews',true),''),'[]')::jsonb", &[&encoded]).await?.ok_or(Error::Internal)?;
+    let digest: String = row.get(0);
+    let mut pending: Vec<String> =
+        serde_json::from_value(row.get(1)).map_err(|_| Error::Internal)?;
+    if consume {
+        if pending.first() != Some(&digest) {
+            return Err(bilibi_agent_api::Error::StalePlan);
+        }
+        pending.remove(0);
+    } else {
+        pending.push(digest);
+    }
+    client
+        .query_opt(
+            "SELECT set_config('finance.ledger_reviews',$1,true)",
+            &[&json!(pending).to_string()],
+        )
+        .await?;
+    Ok(())
+}
+
+impl WriteHandler for Write {
+    fn owner(&self) -> &'static str {
+        MODULE
+    }
+    fn preview<'a>(
+        &'a self,
+        client: &'a dyn OperationClient,
+        scope: &'a Scope,
+        input: &'a Value,
+    ) -> OperationFuture<'a> {
+        Box::pin(async move {
+            let review = self.review(client, scope, input).await.map_err(invalid)?;
+            fence(
+                client,
+                &json!({"action":self.consequence(),"input":input,"review":review}),
+                false,
+            )
+            .await?;
+            Ok(review.into())
+        })
+    }
+    fn commit<'a>(
+        &'a self,
+        tx: &'a mut MutationTransaction<'_>,
+        scope: &'a Scope,
+        input: &'a Value,
+    ) -> OperationFuture<'a> {
+        Box::pin(async move {
+            let company = id(input, "company_id").map_err(invalid)?;
+            join(tx, scope, company, self.capability())
+                .await
+                .map_err(invalid)?;
+            let review = self.review(tx.sql(), scope, input).await.map_err(invalid)?;
+            fence(
+                tx.sql(),
+                &json!({"action":self.consequence(),"input":input,"review":review}),
+                true,
+            )
+            .await?;
+            let record = match self {
+                Self::OpenBook => json!(Ledger::open_book_on(
+                    tx,
+                    scope,
+                    company,
+                    &NewBook {
+                        currency_code: text(input, "currency_code").map_err(invalid)?.into(),
+                        minor_units: input["minor_units"].as_i64().ok_or(Error::Invalid)?
+                    }
+                )
+                .await
+                .map_err(invalid)?),
+                Self::CreateAccount => json!(Ledger::create_account_on(
+                    tx,
+                    scope,
+                    company,
+                    &new_account(input).map_err(invalid)?
+                )
+                .await
+                .map_err(invalid)?),
+                Self::UpdateAccount => json!(Ledger::update_account_on(
+                    tx,
+                    scope,
+                    company,
+                    id(input, "account_id").map_err(invalid)?,
+                    &account_change(input).map_err(invalid)?
+                )
+                .await
+                .map_err(invalid)?),
+                Self::Submit => {
+                    let book = books::find(tx.sql(), scope.tenant(), company)
+                        .await?
+                        .ok_or(Error::Internal)?;
+                    json!(Ledger::submit_journal_on(
+                        tx,
+                        scope,
+                        company,
+                        &new_entry(input, book.minor_units).map_err(invalid)?
+                    )
+                    .await
+                    .map_err(invalid)?)
+                }
+                Self::Approve => json!(Ledger::approve_journal_on(
+                    tx,
+                    scope,
+                    company,
+                    id(input, "journal_id").map_err(invalid)?
+                )
+                .await
+                .map_err(invalid)?),
+                Self::Reject => json!(Ledger::reject_journal_on(
+                    tx,
+                    scope,
+                    company,
+                    id(input, "journal_id").map_err(invalid)?,
+                    text(input, "reason").map_err(invalid)?
+                )
+                .await
+                .map_err(invalid)?),
+                Self::Reverse => json!(reverse(
+                    tx,
+                    scope,
+                    company,
+                    id(input, "entry_id").map_err(invalid)?,
+                    None,
+                    &reversal(input).map_err(invalid)?
+                )
+                .await
+                .map_err(invalid)?),
+                Self::OpenYear => json!(Ledger::open_fiscal_year_on(
+                    tx,
+                    scope,
+                    company,
+                    &new_year(input).map_err(invalid)?
+                )
+                .await
+                .map_err(invalid)?),
+                Self::ClosePeriod => json!(Ledger::close_period_on(
+                    tx,
+                    scope,
+                    company,
+                    id(input, "period_id").map_err(invalid)?,
+                    input["reason"].as_str()
+                )
+                .await
+                .map_err(invalid)?),
+                Self::ReopenPeriod => json!(Ledger::reopen_period_on(
+                    tx,
+                    scope,
+                    company,
+                    id(input, "period_id").map_err(invalid)?,
+                    text(input, "reason").map_err(invalid)?
+                )
+                .await
+                .map_err(invalid)?),
+                Self::LockPeriod => json!(Ledger::lock_period_on(
+                    tx,
+                    scope,
+                    company,
+                    id(input, "period_id").map_err(invalid)?,
+                    input["reason"].as_str()
+                )
+                .await
+                .map_err(invalid)?),
+                Self::CloseYear => json!(Ledger::close_fiscal_year_on(
+                    tx,
+                    scope,
+                    company,
+                    id(input, "fiscal_year_id").map_err(invalid)?,
+                    &year_close(input)
+                )
+                .await
+                .map_err(invalid)?),
+                Self::ReopenYear => json!(Ledger::reopen_fiscal_year_on(
+                    tx,
+                    scope,
+                    company,
+                    id(input, "fiscal_year_id").map_err(invalid)?,
+                    text(input, "reason").map_err(invalid)?
+                )
+                .await
+                .map_err(invalid)?),
+                Self::LockYear => {
+                    let year_id = id(input, "fiscal_year_id").map_err(invalid)?;
+                    let year = fiscal_year(tx.sql(), scope.tenant(), company, year_id)
+                        .await
+                        .map_err(invalid)?;
+                    for p in year
+                        .periods
+                        .iter()
+                        .filter(|p| p.status != PeriodStatus::Locked)
+                    {
+                        Ledger::lock_period_on(tx, scope, company, p.id, input["reason"].as_str())
+                            .await
+                            .map_err(invalid)?;
+                    }
+                    json!(fiscal_year(tx.sql(), scope.tenant(), company, year_id)
+                        .await
+                        .map_err(invalid)?)
+                }
+            };
+            Ok(json!({"record":record,"path":null}).into())
+        })
+    }
+}
+
+enum Read {
+    Book,
+    Accounts,
+    Journal,
+    Journals,
+    Entry,
+    Entries,
+    Years,
+}
+impl ReadHandler for Read {
+    fn owner(&self) -> &'static str {
+        MODULE
+    }
+    fn call<'a>(
+        &'a self,
+        client: &'a dyn OperationClient,
+        scope: &'a Scope,
+        input: &'a Value,
+    ) -> OperationFuture<'a> {
+        Box::pin(async move {
+            let company = id(input, "company_id").map_err(invalid)?;
+            authorize_on(client, scope, company, VIEW)
+                .await
+                .map_err(invalid)?;
+            let tenant = scope.tenant();
+            let limit = input["page_size"].as_u64().unwrap_or(100).min(100) as usize;
+            let result = match self {
+                Self::Book => {
+                    json!({"book":books::find(client,tenant,company).await?,"controlled_bookkeeping":bookkeeping::latest(client,tenant,company).await?,"duty_separation":duties::latest_change(client,tenant,company).await?})
+                }
+                Self::Accounts => {
+                    let mut rows = accounts::page(
+                        client,
+                        tenant,
+                        company,
+                        input["after_code"].as_str(),
+                        limit as i64 + 1,
+                    )
+                    .await?;
+                    let has_more = rows.len() > limit;
+                    rows.truncate(limit);
+                    let next = has_more
+                        .then(|| rows.last().map(|a| a.code.clone()))
+                        .flatten();
+                    json!({"records":rows,"next_after_code":next})
+                }
+                Self::Journal => json!(journals::find(
+                    client,
+                    tenant,
+                    company,
+                    id(input, "journal_id").map_err(invalid)?
+                )
+                .await?
+                .ok_or(bilibi_agent_api::Error::NotFound)?),
+                Self::Journals => {
+                    let rows = journals::list(
+                        client,
+                        tenant,
+                        company,
+                        &JournalQuery {
+                            status: input["status"].as_str().and_then(JournalStatus::parse),
+                            limit: Some(limit as u32),
+                            after: input["after"].as_i64(),
+                        },
+                    )
+                    .await
+                    .map_err(invalid)?;
+                    json!({"next_after":rows.last().map(|j|j.journal_number),"records":rows})
+                }
+                Self::Entry => json!(entries::find(
+                    client,
+                    tenant,
+                    company,
+                    id(input, "entry_id").map_err(invalid)?
+                )
+                .await?
+                .ok_or(bilibi_agent_api::Error::NotFound)?),
+                Self::Entries => {
+                    let after =
+                        if input.get("after_id").is_some() || input.get("after_date").is_some() {
+                            Some((
+                                date(input, "after_date").map_err(invalid)?,
+                                id(input, "after_id").map_err(invalid)?,
+                            ))
+                        } else {
+                            None
+                        };
+                    let rows = entries::list(
+                        client,
+                        tenant,
+                        company,
+                        &EntryQuery {
+                            from: optional_date(input, "from").map_err(invalid)?,
+                            to: optional_date(input, "to").map_err(invalid)?,
+                            limit: Some(limit as u32),
+                            after,
+                            account_id: input["account_id"].as_i64(),
+                            through_entry_number: input["through_entry_number"].as_i64(),
+                            exclude_closing: input["exclude_closing"].as_bool().unwrap_or(false),
+                        },
+                    )
+                    .await
+                    .map_err(invalid)?;
+                    json!({"next_after":rows.last().map(|e|json!({"after_date":e.entry_date.to_string(),"after_id":e.id})),"records":rows})
+                }
+                Self::Years => {
+                    let years = periods::state(client, tenant, company).await?.years;
+                    let after = optional_date(input, "after_start_date").map_err(invalid)?;
+                    let mut rows = years
+                        .into_iter()
+                        .filter(|y| after.is_none_or(|d| y.start_date > d));
+                    let page: Vec<_> = rows.by_ref().take(limit).collect();
+                    let next = rows
+                        .next()
+                        .and_then(|_| page.last().map(|y| y.start_date.to_string()));
+                    json!({"records":page,"next_after_start_date":next})
+                }
+            };
+            Ok(result.into())
+        })
+    }
+}
+
+fn identifier() -> Value {
+    json!({"type":"integer","minimum":1})
+}
+fn string(max: usize) -> Value {
+    json!({"type":"string","maxLength":max})
+}
+fn day() -> Value {
+    json!({"type":"string","format":"date"})
+}
+fn boolean() -> Value {
+    json!({"type":"boolean"})
+}
+fn schema(required: &[&str], properties: Value) -> Value {
+    let mut properties = properties.as_object().cloned().unwrap_or_default();
+    properties.insert("company_id".into(), identifier());
+    let required: Vec<_> = std::iter::once("company_id")
+        .chain(required.iter().copied())
+        .collect();
+    json!({"type":"object","required":required,"properties":properties})
+}
+fn output() -> Value {
+    json!({"type":"object","description":"Ledger records or deterministic review facts. Exact amounts are decimal strings. Ledger has no page; committed path is null."})
+}
+fn book_schema() -> Value {
+    schema(
+        &["currency_code", "minor_units"],
+        json!({"currency_code":string(3),"minor_units":{"type":"integer","minimum":0,"maximum":4}}),
+    )
+}
+fn account_schema() -> Value {
+    schema(
+        &["code", "name", "account_type"],
+        json!({"code":string(50),"name":string(200),"account_type":{"type":"string","enum":["asset","liability","equity","income","expense"]},"parent_id":identifier(),"active":boolean(),"retained_earnings":boolean()}),
+    )
+}
+fn change_schema() -> Value {
+    schema(
+        &["account_id"],
+        json!({"account_id":identifier(),"name":string(200),"parent_id":identifier(),"clear_parent":boolean(),"active":boolean(),"retained_earnings":boolean()}),
+    )
+}
+fn submit_schema() -> Value {
+    schema(
+        &["entry_date", "description", "lines"],
+        json!({"entry_date":day(),"description":string(500),"reference":string(100),"lines":{"type":"array","items":{"type":"object","required":["account_id"],"properties":{"account_id":identifier(),"debit":string(25),"credit":string(25),"description":string(500)}}}}),
+    )
+}
+fn journal_schema() -> Value {
+    schema(&["journal_id"], json!({"journal_id":identifier()}))
+}
+fn reject_schema() -> Value {
+    schema(
+        &["journal_id", "reason"],
+        json!({"journal_id":identifier(),"reason":string(500)}),
+    )
+}
+fn reverse_schema() -> Value {
+    schema(
+        &["entry_id", "entry_date", "description"],
+        json!({"entry_id":identifier(),"entry_date":day(),"description":string(500),"reference":string(100)}),
+    )
+}
+fn open_year_schema() -> Value {
+    schema(&[], json!({"start_date":day(),"end_date":day()}))
+}
+fn period_schema() -> Value {
+    schema(
+        &["period_id"],
+        json!({"period_id":identifier(),"reason":string(500)}),
+    )
+}
+fn reopen_period_schema() -> Value {
+    schema(
+        &["period_id", "reason"],
+        json!({"period_id":identifier(),"reason":string(500)}),
+    )
+}
+fn close_year_schema() -> Value {
+    schema(
+        &["fiscal_year_id"],
+        json!({"fiscal_year_id":identifier(),"description":string(500),"reference":string(100)}),
+    )
+}
+fn reopen_year_schema() -> Value {
+    schema(
+        &["fiscal_year_id", "reason"],
+        json!({"fiscal_year_id":identifier(),"reason":string(500)}),
+    )
+}
+fn lock_year_schema() -> Value {
+    schema(
+        &["fiscal_year_id"],
+        json!({"fiscal_year_id":identifier(),"reason":string(500)}),
+    )
+}
+fn target_schema() -> Value {
+    schema(&[], json!({}))
+}
+fn accounts_schema() -> Value {
+    schema(
+        &[],
+        json!({"after_code":string(50),"page_size":{"type":"integer","minimum":1,"maximum":100}}),
+    )
+}
+fn journals_schema() -> Value {
+    schema(
+        &[],
+        json!({"status":{"type":"string","enum":["submitted","approved","rejected"]},"after":{"type":"integer","minimum":0},"page_size":{"type":"integer","minimum":1,"maximum":100}}),
+    )
+}
+fn entry_schema() -> Value {
+    schema(&["entry_id"], json!({"entry_id":identifier()}))
+}
+fn entries_schema() -> Value {
+    schema(
+        &[],
+        json!({"from":day(),"to":day(),"after_date":day(),"after_id":identifier(),"account_id":identifier(),"through_entry_number":{"type":"integer","minimum":0},"exclude_closing":boolean(),"page_size":{"type":"integer","minimum":1,"maximum":100}}),
+    )
+}
+fn years_schema() -> Value {
+    schema(
+        &[],
+        json!({"after_start_date":day(),"page_size":{"type":"integer","minimum":1,"maximum":100}}),
+    )
+}
+
+inventory::submit! { Contribution::new(DEFINITIONS,"finance/ledger.operations",Provenance { module:MODULE,source:file!(),line:line!() }, &Definitions {
+    operations:&[
+        Operation {key:"finance.ledger.book.get",title:"Read the book",summary:"Read currency, minor units and bookkeeping controls; book is null before opening.",keywords:&[],capability:VIEW,input:target_schema,output,handler:Handler::Read(&Read::Book)},
+        Operation {key:"finance.ledger.account.list",title:"List accounts",summary:"Read the chart by code with a bounded cursor page.",keywords:&[],capability:VIEW,input:accounts_schema,output,handler:Handler::Read(&Read::Accounts)},
+        Operation {key:"finance.ledger.journal.get",title:"Read a journal",summary:"Read lines, submission, decision and the approved entry identifier.",keywords:&[],capability:VIEW,input:journal_schema,output,handler:Handler::Read(&Read::Journal)},
+        Operation {key:"finance.ledger.journal.list",title:"List journals",summary:"Read journals by number, optionally by status, after a journal number.",keywords:&[],capability:VIEW,input:journals_schema,output,handler:Handler::Read(&Read::Journals)},
+        Operation {key:"finance.ledger.entry.get",title:"Read an entry",summary:"Read immutable lines, ownership and reversal identifiers.",keywords:&[],capability:VIEW,input:entry_schema,output,handler:Handler::Read(&Read::Entry)},
+        Operation {key:"finance.ledger.entry.list",title:"List entries",summary:"Read entries by date and identifier with date, account and pinned-entry bounds.",keywords:&[],capability:VIEW,input:entries_schema,output,handler:Handler::Read(&Read::Entries)},
+        Operation {key:"finance.ledger.fiscal_year.list",title:"List fiscal years and periods",summary:"Read years in date order with periods, statuses and closing entry identifiers.",keywords:&[],capability:VIEW,input:years_schema,output,handler:Handler::Read(&Read::Years)},
+        Operation {key:"finance.ledger.book.open",title:"Open the book",summary:"Permanently choose currency and minor units; enable controlled bookkeeping.",keywords:&[],capability:MANAGE_ACCOUNTS,input:book_schema,output,handler:Handler::SafeWrite(&Write::OpenBook)},
+        Operation {key:"finance.ledger.account.create",title:"Create an account",summary:"Create a chart account, optionally grouped or designated for retained earnings.",keywords:&[],capability:MANAGE_ACCOUNTS,input:account_schema,output,handler:Handler::SafeWrite(&Write::CreateAccount)},
+        Operation {key:"finance.ledger.account.update",title:"Change an account",summary:"Change name, grouping, active flag or retained-earnings designation; preserve code and type.",keywords:&[],capability:MANAGE_ACCOUNTS,input:change_schema,output,handler:Handler::SafeWrite(&Write::UpdateAccount)},
+        Operation {key:"finance.ledger.journal.submit",title:"Submit a journal",summary:"Keep balanced manual lines for independent approval without posting an entry.",keywords:&[],capability:SUBMIT_JOURNALS,input:submit_schema,output,handler:Handler::SafeWrite(&Write::Submit)},
+        Operation {key:"finance.ledger.journal.approve",title:"Approve a journal",summary:"Approve and post atomically; recheck accounts, period and separation of duties.",keywords:&[],capability:APPROVE_JOURNALS,input:journal_schema,output,handler:Handler::SafeWrite(&Write::Approve)},
+        Operation {key:"finance.ledger.journal.reject",title:"Reject a journal",summary:"Record a permanent rejection with a reason and no posting.",keywords:&[],capability:APPROVE_JOURNALS,input:reject_schema,output,handler:Handler::SafeWrite(&Write::Reject)},
+        Operation {key:"finance.ledger.entry.reverse",title:"Reverse a manual entry",summary:"Post the mirror once, never reverse an owned entry or a year-end closing entry here.",keywords:&[],capability:POST_ENTRIES,input:reverse_schema,output,handler:Handler::SafeWrite(&Write::Reverse)},
+        Operation {key:"finance.ledger.fiscal_year.open",title:"Open a fiscal year",summary:"Open the next year and calendar-month periods; the first start date is explicit.",keywords:&[],capability:MANAGE_PERIODS,input:open_year_schema,output,handler:Handler::SafeWrite(&Write::OpenYear)},
+        Operation {key:"finance.ledger.period.close",title:"Close a period",summary:"Close in date order; the last period closes only with its year.",keywords:&[],capability:MANAGE_PERIODS,input:period_schema,output,handler:Handler::SafeWrite(&Write::ClosePeriod)},
+        Operation {key:"finance.ledger.period.reopen",title:"Reopen a period",summary:"Reopen in reverse date order with a reason and an approval exception.",keywords:&[],capability:REOPEN_PERIODS,input:reopen_period_schema,output,handler:Handler::SafeWrite(&Write::ReopenPeriod)},
+        Operation {key:"finance.ledger.period.lock",title:"Lock a period permanently",summary:"Lock closed periods in date order; a locked period never reopens.",keywords:&[],capability:LOCK_PERIODS,input:period_schema,output,handler:Handler::SafeWrite(&Write::LockPeriod)},
+        Operation {key:"finance.ledger.fiscal_year.close",title:"Close a fiscal year",summary:"Post computed closing balances to retained earnings and close remaining open periods. Also requires entries.post.",keywords:&[],capability:MANAGE_PERIODS,input:close_year_schema,output,handler:Handler::SafeWrite(&Write::CloseYear)},
+        Operation {key:"finance.ledger.fiscal_year.reopen",title:"Reopen a fiscal year",summary:"Reverse the closing entry at year-end and reopen only the last period. Also requires entries.post.",keywords:&[],capability:REOPEN_PERIODS,input:reopen_year_schema,output,handler:Handler::SafeWrite(&Write::ReopenYear)},
+        Operation {key:"finance.ledger.fiscal_year.lock",title:"Lock a fiscal year permanently",summary:"Lock every remaining closed period of a closed year in date order, atomically.",keywords:&[],capability:LOCK_PERIODS,input:lock_year_schema,output,handler:Handler::SafeWrite(&Write::LockYear)},
+    ],
+    guides:&[Guide {key:"finance.ledger",title:"Book, accounts, journals and closing",summary:"Reviewed ledger writes, independent approval, immutable entries and permanent period locks.",keywords:&[],capability:VIEW,body:include_str!("../guide.md")}],
+}) }

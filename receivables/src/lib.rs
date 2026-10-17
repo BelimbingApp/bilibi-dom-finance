@@ -1,0 +1,210 @@
+//! Receivables documents, settlements and figures, mirroring Bilimbi.Finance.Receivables.
+//! H2 exposes reviewed agent operations; the reference has no pages (`web: nil`).
+mod agent_operations;
+mod configuration;
+mod contributions;
+mod documents;
+mod evidence;
+mod posting;
+mod records;
+mod reports;
+mod sources;
+mod store;
+mod validation;
+
+pub use contributions::{
+    CAPABILITIES, ISSUE, MANAGE_CUSTOMERS, MANAGE_DOCUMENTS, MANAGE_SETUP, POST_PAYMENTS, VIEW,
+};
+pub use evidence::EvidencePage;
+pub use records::{
+    Allocation, Customer, Document, DocumentLine, DocumentQuery, Page, Payment, PaymentQuery,
+    PaymentReversal, Series, Setup, SetupChange, TaxCode, TaxLine,
+};
+pub use reports::{
+    AgedCustomer, AgedDocument, AgedReceivables, AgingBucket, AgingOptions, ControlAccountTieOut,
+    ControlAccountsTieOut, OtherPosting, ReceivedTaxOptions, ReceivedTaxTotal, TaxOptions,
+    TaxTotal,
+};
+
+use bilibi_company::organisation;
+use bilibi_database::{Db, Error, MutationTransaction};
+use bilibi_finance_attachments::Attachments;
+use bilibi_finance_ledger::{Ledger, LedgerError};
+use bilibi_module_registry::{Layer, Module, Service};
+use bilibi_tenancy::Scope;
+use std::sync::Arc;
+use tokio_postgres::GenericClient;
+
+pub const MODULE: &str = "finance/receivables";
+pub const SERVICE: &str = "finance/receivables.receivables";
+
+inventory::submit! {
+    Module {
+        id: MODULE, layer: Layer::Domains,
+        dependencies: &["base/agent_api", "base/authz", "base/database", "base/party_ids", "base/tenancy", "core/company", "finance/ledger", "finance/attachments"],
+        migrations: &[("finance-receivables-001-receivables", include_str!("../migrations/001-receivables.sql"))],
+        services: &[Service { id: SERVICE, factory: |services| {
+            let receivables = Arc::new(Receivables {
+                db: services.get::<Db>("base/database.pool")?.as_ref().clone(),
+                ledger: services.get(bilibi_finance_ledger::SERVICE)?,
+                attachments: services.get(bilibi_finance_attachments::SERVICE)?,
+                parties: services.get("base/tenancy.parties")?,
+            });
+            agent_operations::bind(receivables.clone())?;
+            Ok(receivables)
+        }}],
+    }
+}
+
+pub type Result<T> = std::result::Result<T, ReceivableError>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum ReceivableError {
+    #[error("Access denied")]
+    Unauthorized,
+    #[error("Not found")]
+    CompanyNotFound,
+    #[error("This company is archived and read-only")]
+    CompanyArchived,
+    #[error("Receivables is not configured")]
+    NotConfigured,
+    #[error("Series not found")]
+    SeriesNotFound,
+    #[error("Tax code not found")]
+    TaxCodeNotFound,
+    #[error("Customer not found")]
+    CustomerNotFound,
+    #[error("Document not found")]
+    DocumentNotFound,
+    #[error("Not a draft")]
+    NotADraft,
+    #[error("Payment not found")]
+    PaymentNotFound,
+    #[error("Already reversed")]
+    AlreadyReversed,
+    #[error(transparent)]
+    Attachment(#[from] bilibi_finance_attachments::AttachmentError),
+    #[error("Invalid option")]
+    InvalidOption,
+    #[error("Invalid input")]
+    Invalid(Vec<FieldError>),
+    #[error(transparent)]
+    Ledger(#[from] LedgerError),
+    #[error(transparent)]
+    Failed(#[from] Error),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct FieldError {
+    pub field: String,
+    /// One-based input line number, if this error belongs to a line.
+    pub line: Option<usize>,
+    pub message: String,
+}
+
+pub(crate) fn invalid(field: &str, message: impl Into<String>) -> ReceivableError {
+    ReceivableError::Invalid(vec![FieldError {
+        field: field.into(),
+        line: None,
+        message: message.into(),
+    }])
+}
+
+fn refusal(error: Error) -> ReceivableError {
+    match error {
+        Error::Forbidden | Error::Unauthorized => ReceivableError::Unauthorized,
+        Error::NotFound => ReceivableError::CompanyNotFound,
+        other => ReceivableError::Failed(other),
+    }
+}
+
+pub(crate) async fn authorize(
+    client: &impl GenericClient,
+    scope: &Scope,
+    company: i64,
+    capability: &str,
+) -> Result<()> {
+    organisation::authorize_target(client, scope, company, capability)
+        .await
+        .map(|_| ())
+        .map_err(refusal)
+}
+
+/// Each method authorizes the sealed scope and explicit target company.
+/// Attributes are JSON objects with Bilimbi's field names; immutable and
+/// unknown fields are ignored, and omitted fields preserve existing values.
+pub struct Receivables {
+    db: Db,
+    ledger: Arc<Ledger>,
+    attachments: Arc<Attachments>,
+    parties: Arc<bilibi_tenancy::PartyProofs>,
+}
+
+impl Receivables {
+    async fn authorize_on(
+        &self,
+        client: &dyn bilibi_agent_api::OperationClient,
+        scope: &Scope,
+        company: i64,
+        capability: &str,
+    ) -> Result<()> {
+        self.parties
+            .organisation_target(
+                client,
+                scope,
+                bilibi_party_ids::OrganisationId::new(company)
+                    .map_err(|_| ReceivableError::CompanyNotFound)?,
+                capability,
+            )
+            .await
+            .map(|_| ())
+            .map_err(refusal)
+    }
+
+    // No pooled side reads: preparation and execution share the handed client.
+    async fn join(
+        &self,
+        client: &dyn bilibi_agent_api::OperationClient,
+        scope: &Scope,
+        company: i64,
+        capability: &str,
+    ) -> Result<()> {
+        self.authorize_on(client, scope, company, capability)
+            .await?;
+        let row = client.query_opt("SELECT status FROM companies WHERE tenant_id=$1 AND id=$2 AND deleted_at IS NULL FOR UPDATE NOWAIT", &[&scope.tenant(), &company]).await?.ok_or(ReceivableError::CompanyNotFound)?;
+        if row.get::<_, String>(0) == "archived" {
+            return Err(ReceivableError::CompanyArchived);
+        }
+        Ok(())
+    }
+
+    pub fn series_kinds() -> &'static [&'static str] {
+        &["invoice", "credit_note", "payment"]
+    }
+    pub fn document_kinds() -> &'static [&'static str] {
+        &["invoice", "credit_note"]
+    }
+
+    async fn write<'c>(
+        &self,
+        client: &'c mut tokio_postgres::Client,
+        scope: &Scope,
+        company: i64,
+        capability: &str,
+        action: &str,
+    ) -> Result<MutationTransaction<'c>> {
+        authorize(client, scope, company, capability).await?;
+        let tx = self
+            .ledger
+            .write(client, scope, company, &[capability], action)
+            .await
+            .map_err(|e| match e {
+                LedgerError::CompanyNotFound => ReceivableError::CompanyNotFound,
+                LedgerError::CompanyArchived => ReceivableError::CompanyArchived,
+                LedgerError::Unauthorized => ReceivableError::Unauthorized,
+                other => ReceivableError::Ledger(other),
+            })?;
+        authorize(tx.sql(), scope, company, capability).await?;
+        Ok(tx)
+    }
+}

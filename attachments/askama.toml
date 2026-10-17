@@ -1,0 +1,5 @@
+# The pages compose the shared Base UI macros (components.html, forms.html,
+# feedback.html, dialog.html); the mount puts this crate three folders below
+# `apps/`, so Base UI's templates are at `../../../base/ui/templates`.
+[general]
+dirs = ["templates", "../../../base/ui/templates"]

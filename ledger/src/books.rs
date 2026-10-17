@@ -2,6 +2,7 @@
 //! opened once with the currency and its minor units, both fixed for good.
 //! The facade authorizes and holds the company lock; these run inside it.
 use crate::{Book, FieldError, MinorUnits, NewBook};
+use bilibi_agent_api::OperationClient;
 use bilibi_database::Result;
 use serde_json::{json, Value};
 use tokio_postgres::{GenericClient, Row};
@@ -10,7 +11,7 @@ const COLUMNS: &str = "company_id,currency_code,minor_units";
 
 /// The company's book, or `None` before it is opened.
 pub(crate) async fn find(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     tenant: i64,
     company_id: i64,
 ) -> Result<Option<Book>> {

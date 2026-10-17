@@ -16,10 +16,16 @@ they govern this code and are not copied here.
   exists to hide. Add a `pub` only for something the facade's contract names.
 - Never add a Cargo dependency, descriptor edge, port call or SQL reference to
   another Domain's container (Supply Chain, Factory, People, ...): cross-domain
-  flows will use Base domain events, a Platform slice in progress. Until it
-  lands, leave a clearly named `TODO(domain events)` seam at the place the
+  flows use Base domain events (`apps/base/events/README.md`), and the
+  subscriber keeps its own copy of what it needs. Where the publisher has no
+  events yet, leave a clearly named `TODO(domain events)` seam at the place the
   flow would start, and do not reach across. Bilimbi's `OrderSource` and
   `PeopleSource` seams are not ported as ports.
+- Read order lines and goods receipts only from Payables' own copy
+  (`payables/src/orders.rs`), kept from Supply Chain's documented events by
+  name and parsed into its own serde types; add an event to its subscriber and
+  `SOURCE_EVENTS` only once the pinned Supply Chain declares it, because boot
+  refuses a subscriber to an event a mounted publisher does not declare.
 - Within this Domain, depend on a sibling module only through its facade,
   declared both in the descriptor's `dependencies` and the Cargo manifest,
   only where Bilimbi has the same edge (`finance/attachments` ← `ledger`,
@@ -66,6 +72,7 @@ they govern this code and are not copied here.
 - The ledger owns no CSS, JavaScript, pages or menu items (`web: nil` in
   Bilimbi); a Finance module with pages uses only `bilibi_ui` components and
   `FlexTable` for every list, per `apps/base/ui/AGENTS.md`.
+- Agent writes join the shared plan's audited transaction through the ledger's private `*_on` methods, never the pool-owning public wrappers: nested commits would escape plan rollback. Preview on the handed `OperationClient`; retain the transaction-local review fence because the pinned engine previews every step before executing any.
 
 - Post an entry only through `Ledger::post_entry` and read it through
   `get_entry`/`list_entries`; never insert into or select from
@@ -75,6 +82,9 @@ they govern this code and are not copied here.
   `settlement_account_ids` only to settle a document posted earlier on an
   account deactivated since. The database numbers entries, so never send or
   compute an `entry_number`.
+- Use `Ledger::post_entry_in` inside `Ledger::write` when your record must
+  commit with its entry; never call standalone `post_entry` while holding
+  that company's lock on another connection, which would wait on itself.
 - A new book is controlled, so it posts only into a fiscal period opened with
   `Ledger::open_fiscal_year`: a fixture opens one before posting, and a sibling
   reports the ledger's `entry_date` refusal instead of picking another date. A
@@ -95,6 +105,24 @@ they govern this code and are not copied here.
   only. On `PostingEvent::Refresh` read again instead of trusting the stream.
   `TODO(platform)`: the relay opens its connection from `DATABASE_URL` because
   `base/database` exposes only the pool.
+- Read a ledger figure with `Ledger::account_totals` or `trial_balance`
+  (PostgreSQL sums the lines), never by adding up `list_entries` lines, and
+  read every column of one report at the first read's `through_entry_number`
+  so it reproduces. Tie a control account out with
+  `account_totals_by_owner`: a row of another owner is a difference to show,
+  never to net away.
+- Show a profit and loss, balance sheet, cash position, overview or a
+  figure's entries through `Reports` (`reports/src/lib.rs`), never by
+  arranging `account_totals` yourself: the facade reads every column at one
+  entry number, leaves closing entries out of flows (and their drill-down)
+  and groups by `finance.reports.sections` with its nearest-listed-account
+  rule. Freeze a report with `Reports::issue_report`, not a stored entry
+  number, which pins postings but not the chart or the layout.
+- Export a module's auditor evidence as the ledger does
+  (`ledger/src/evidence.rs`): `evidence_datasets` and an authorized
+  `evidence_page` on the facade, one dataset per own table with a frozen,
+  explicit field list (never a credential), ID-ordered pages of 1 to 500.
+  The auditor pack reads each module through its facade, never its tables.
 
 - Keep a record's source documents through `Attachments` (`attach`, or
   `capture_file` then `attach_capture` inside your own transaction), never
@@ -106,10 +134,49 @@ they govern this code and are not copied here.
   not hand the attachments module a facade of yours, which would make a cycle.
   Call `refresh_retention` in the transaction that finalises a record whose
   date can change while it is a draft; never extend retention yourself.
+- Show a record's source documents by mounting the embed `finance.attachments-panel` (`PANEL_EMBED`) as a `PanelSpec` (path `panel`, `source`, `document`; `attachments/README.md`), not an upload form, a download route or `Attachments` calls of your own: the panel owns the live upload, asks the facade on every action and reads whether the record is final from your `Source`, so a page passing its own flag cannot offer replace on a final record. Link a file as `/finance/attachments/{id}/download`; that route reauthorizes on every click.
+- In an Askama template never name a variable `id` (or any macro parameter name) used inside a `{% call ui::... %}` body: it resolves to the macro's own, so `{{ id }}-form` renders as the card's id.
 - Name a system principal as one lowercase hyphenated segment
   (`finance-attachments-retention-refresh`): Bilibi's vocabulary refuses
   Bilimbi's dotted names. Declaring one grants nothing; a tenant administrator
   grants it (`Grants::set_system`) or its jobs cancel as `actor_refused`.
+- Read a company's e-invoice configuration only through `Einvoice::setup`, and
+  its code lists only through `list_codes`/`override_code`; never select
+  `base_settings` rows or `finance_einvoice_*` tables from a sibling. A secret
+  (client secret, certificate, private key) is never returned by the facade: a
+  later slice that signs or submits reads it inside `finance/einvoice` only,
+  masked everywhere else.
+- Put what one clearance authority defines (document types, posting rules,
+  shapes, versions, windows, URLs) behind `Authority` in `myinvois.rs`, not in
+  the facade, a setting or a page; a second authority is a second
+  implementation, not a branch.
+- Correct a fiscal document with a new status event or a note, never an edit:
+  the e-invoice tables except `finance_einvoice_code_overrides` are
+  append-only in the database, and a schema change is the next migration.
+- Declare a setting with the `define!` macros in `configuration.rs`, with the
+  editor `capability` set; a validator must accept `null` for a nullable value,
+  because Base Settings runs it on cleared values too.
+- Read sibling context inside a write with `Ledger::get_book_on`,
+  `list_accounts_on`, `get_entry_on` and `Payables::get_document_on`, not pooled
+  methods: another connection while holding the company lock can exhaust the pool.
+- Register assets through `FixedAssets`, never by posting or claiming their
+  acquisition entry: it freezes one whole source debit and its revision;
+  projected schedules are not posted depreciation (see `fixed_assets/README.md`).
+- Change receivable drafts through `Receivables`, not its tables: null/missing
+  lines preserve snapshots, an array replaces them atomically, and discard
+  keeps them. Issue through `issue_document` and settle through `record_payment`
+  / `reverse_payment`: they retain each invoice's original control after setup
+  changes and commit its record with the owned entry. Read dated figures with
+  the report facade at one entry pin, never the unbounded document outstanding.
+- Validate a document to issue with `Draft::validate` (the shape every
+  authority shares, then `Authority::validate`), never with checks of your own
+  on the facade: it derives every amount and answers `FieldError`s at the
+  field's path in Bilimbi's words. Write the authority's JSON only through
+  `myinvois::json::Json` and build and sign it only through `myinvois::ubl`
+  and `myinvois::signer` (or `Authority::payload`), never `serde_json`: the
+  authority hashes and signs exact bytes, and `serde_json`'s maps sort keys
+  and reformat numbers. Read a certificate's facts with `Certificate::parse`
+  and report them, never the PEM.
 
 ## Maintaining this file
 

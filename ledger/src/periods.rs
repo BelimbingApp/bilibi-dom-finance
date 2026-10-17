@@ -10,6 +10,7 @@ use crate::{
     ClosingAction, ClosingEvent, FieldError, FiscalYear, NewFiscalYear, Period, PeriodStatus,
     YearStatus,
 };
+use bilibi_agent_api::OperationClient;
 use bilibi_database::{Change, Result};
 use jiff::{civil::Date, Timestamp, ToSpan};
 use rust_decimal::Decimal;
@@ -58,7 +59,7 @@ impl State {
 }
 
 pub(crate) async fn state(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     tenant: i64,
     company_id: i64,
 ) -> Result<State> {
@@ -397,14 +398,14 @@ pub(crate) fn reason(
 /// `validate_open_period/3`): into a closed or locked period, before the
 /// first fiscal year, or, for a controlled company, where no period exists.
 pub(crate) async fn date_refusal(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     tenant: i64,
     company_id: i64,
     entry_date: Date,
 ) -> Result<Option<String>> {
     let day = entry_date.to_string();
     let row = client
-        .query_one(
+        .query_opt(
             "SELECT (SELECT finance_ledger_period_status(id) FROM finance_ledger_periods \
                      WHERE tenant_id=$1 AND company_id=$2 AND $3::text::date BETWEEN start_date AND end_date), \
                     EXISTS (SELECT 1 FROM finance_ledger_periods WHERE tenant_id=$1 AND company_id=$2 \
@@ -412,7 +413,8 @@ pub(crate) async fn date_refusal(
                     finance_ledger_company_controlled($2)",
             &[&tenant, &company_id, &day],
         )
-        .await?;
+        .await?
+        .ok_or(bilibi_database::Error::Internal)?;
     let status: Option<String> = row.get(0);
     let earlier: bool = row.get(1);
     let controlled: bool = row.get(2);
@@ -431,7 +433,7 @@ pub(crate) async fn date_refusal(
 /// year's dates, by code, leaving out the accounts at zero. Earlier closing
 /// entries and their reversals cancel out.
 pub(crate) async fn closing_balances(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     tenant: i64,
     company_id: i64,
     year: &FiscalYear,
@@ -471,7 +473,7 @@ pub(crate) const NOT_CLOSING: &str = "e.id NOT IN (SELECT entry_id FROM finance_
 /// Whether the entry is a year-end closing entry, which only reopening its
 /// fiscal year reverses.
 pub(crate) async fn closing_entry(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     company_id: i64,
     entry_id: i64,
 ) -> Result<bool> {
