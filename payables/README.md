@@ -1,6 +1,6 @@
 # Payables
 
-`finance/payables` owns a company's supplier documents. It mirrors Bilimbi.Finance.Payables settings, tax codes, bills, debit notes, document approvals, payment requests and payments, including aging, tax totals and control-account tie-out, and the three-way match. Reviewed agent operations expose the facade-only workflows; the bills pages land in NP4.
+`finance/payables` owns a company's supplier documents. It mirrors Bilimbi.Finance.Payables settings, tax codes, bills, debit notes, document approvals, payment requests and payments, including aging, tax totals and control-account tie-out, and the three-way match. Reviewed agent operations expose the facade-only workflows. Slice NP4 adds the Bills list and bill detail pages; recording documents, settings and payments has no page.
 
 ## Facade
 
