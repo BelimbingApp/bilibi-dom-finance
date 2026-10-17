@@ -1,8 +1,10 @@
 //! Bank reconciliation, module `finance/reconciliation` (Bilimbi
 //! `Bilimbi.Finance.Reconciliation`): a company's bank accounts, each mapped
 //! to one ledger account and carrying the import mapping its bank's CSV export
-//! is read through, and the bank statements imported for them. Matching and
-//! reconciling follow in later slices; the whole schema is in place.
+//! is read through, and the bank statements imported for them; the matches
+//! between statement lines and the ledger's postings on that account; the
+//! reconciliations of an account as of a statement end date; and the bank
+//! charges and interest posted from statement lines.
 //!
 //! Every function takes the sealed [`Scope`] it was handed and an explicit
 //! company id. Reads authorize `finance.reconciliation.view` and writes their
@@ -34,6 +36,15 @@
 //! deleted. The same file (by SHA-256) and the same line (by fingerprint) are
 //! refused a second time; PostgreSQL refuses them on its own as well.
 //!
+//! A match groups statement lines of a bank account with ledger entries on
+//! its ledger account whose sides agree, and is undone only by an appended
+//! `unmatched` event with a reason; PostgreSQL refuses a line or an entry in
+//! two standing matches. A reconciliation reads its figures at pinned entry,
+//! statement and match-event numbers, is finalised once its difference is
+//! zero by someone other than whoever opened it (or as the ledger's approval
+//! exception while the company does not separate duties), and keeps the
+//! matches it counted for good.
+//!
 //! Results are plain records; the schema, SQL and validation stay private.
 mod bank_accounts;
 mod contributions;
@@ -41,6 +52,9 @@ mod csv;
 mod evidence;
 mod import;
 mod mapping;
+mod matching;
+mod posting;
+mod reconciliations;
 mod source;
 mod statements;
 
@@ -53,18 +67,19 @@ pub use import::MAX_LINES;
 pub use mapping::{
     Column, ImportMapping, AMOUNT_SIGNS, DATE_FORMATS, DECIMAL_SEPARATORS, DELIMITERS,
 };
+pub use posting::KINDS as POSTING_KINDS;
 pub use source::STATEMENT_SOURCE;
 
 use bilibi_company::{organisation, WriteError};
 use bilibi_database::{Db, Error, MutationBoundary, MutationTransaction};
 use bilibi_finance_attachments::{AttachmentError, Attachments, NewFile};
-use bilibi_finance_ledger::{Ledger, LedgerError, Money};
+use bilibi_finance_ledger::{Approval, Entry, Ledger, LedgerError, MinorUnits, Money, Preparer};
 use bilibi_module_registry::{Layer, Module, Service};
 use bilibi_tenancy::Scope;
 use jiff::{civil::Date, Timestamp};
 use serde::Serialize;
 use serde_json::Value;
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 /// The descriptor id.
 pub const MODULE: &str = "finance/reconciliation";
@@ -153,6 +168,66 @@ pub enum ReconciliationError {
     /// The ledger refused the read of its chart or book.
     #[error(transparent)]
     Ledger(LedgerError),
+    #[error("Choose at least one statement line and one ledger entry.")]
+    InvalidSelection,
+    #[error("The statement line no longer exists.")]
+    StatementLineNotFound,
+    #[error("That statement line is already matched.")]
+    StatementLineMatched,
+    #[error("That ledger entry no longer exists.")]
+    EntryNotFound,
+    #[error("That ledger entry does not post to this bank account.")]
+    EntryNotOnAccount,
+    #[error("That ledger entry is already matched on this account.")]
+    EntryMatched,
+    /// The two sides of a match differ.
+    #[error("The sides do not agree: the statement lines sum to {statement_side} and the ledger entries to {ledger_side}.")]
+    Unbalanced {
+        statement_side: Money,
+        ledger_side: Money,
+    },
+    #[error("The match no longer exists.")]
+    MatchNotFound,
+    #[error("That match is already unmatched.")]
+    MatchNotStanding,
+    /// A finalised reconciliation counted the match, which is kept for good.
+    #[error("A finalised reconciliation counted that match, so it is kept.")]
+    MatchFinalised,
+    #[error("The reconciliation no longer exists.")]
+    ReconciliationNotFound,
+    #[error("The reconciliation is finalised and cannot change.")]
+    ReconciliationFinalised,
+    #[error("The reconciliation was abandoned.")]
+    ReconciliationAbandoned,
+    /// The finaliser opened the reconciliation, impersonated whoever did, or
+    /// was impersonated by them, while the company separates duties.
+    #[error("This company separates duties: someone other than whoever opened the reconciliation must finalise it.")]
+    SamePerson,
+    /// A reconciliation is finalised only once its difference is zero.
+    #[error("The difference is {0}, not zero; match or post what is unmatched, or check the statement balance.")]
+    Difference(Money),
+    #[error("Choose whether the line is a charge or interest.")]
+    InvalidKind,
+    #[error("Set the bank account's charges account first.")]
+    NoChargesAccount,
+    #[error("Set the bank account's interest account first.")]
+    NoInterestAccount,
+    #[error("Money in cannot be posted as a bank charge.")]
+    NotACharge,
+    #[error("Money out cannot be posted as interest.")]
+    NotInterest,
+    /// The line already posted an entry, which the ledger holds as the
+    /// line's: match the line to it instead.
+    #[error("That statement line already posted an entry; match the line to it instead.")]
+    StatementLinePosted,
+    /// A reversal's reason is blank or over 500 characters.
+    #[error("Give a reason of at most 500 characters.")]
+    InvalidReason,
+    #[error("That statement line is not matched.")]
+    StatementLineNotMatched,
+    /// The line's match is not the one that posted it.
+    #[error("That statement line did not post the entry it is matched to.")]
+    StatementLineNotPosted,
     /// A database or capture failure; never a refusal.
     #[error(transparent)]
     Failed(#[from] Error),
@@ -165,6 +240,7 @@ impl From<LedgerError> for ReconciliationError {
             LedgerError::CompanyNotFound => Self::CompanyNotFound,
             LedgerError::CompanyArchived => Self::CompanyArchived,
             LedgerError::BookNotOpen => Self::BookNotOpen,
+            LedgerError::SamePerson => Self::SamePerson,
             LedgerError::Failed(error) => Self::Failed(error),
             other => Self::Ledger(other),
         }
@@ -349,6 +425,265 @@ impl PageOptions {
             Err(ReconciliationError::InvalidOption)
         }
     }
+}
+
+/// A statement line with its statement's number, as the matching and
+/// reconciliation reads list it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct StatementLineItem {
+    #[serde(flatten)]
+    pub line: StatementLine,
+    pub statement_number: i64,
+}
+
+/// One entry's side of a bank account's ledger account: its debits less its
+/// credits there (the sign of a statement line's amount), with its number,
+/// date, description and reference. A match keeps these as they were when
+/// it was made, which never changes, because a posted entry never does.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct LedgerItem {
+    pub entry_id: i64,
+    pub entry_number: i64,
+    #[serde(serialize_with = "as_text")]
+    pub entry_date: Date,
+    pub description: String,
+    pub reference: Option<String>,
+    pub amount: Money,
+}
+
+/// What stands unmatched on a bank account, from
+/// [`Reconciliation::unmatched_items`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Unmatched {
+    /// Statement lines with no standing match, by date, statement and line.
+    pub lines: Vec<StatementLineItem>,
+    /// Entries on the ledger account with no standing match, by date and id.
+    pub entries: Vec<LedgerItem>,
+    /// A statement line's id to the entry suggested for it: the same amount
+    /// within the account's match window, by reference and then the nearest
+    /// date, each entry suggested once.
+    pub suggestions: BTreeMap<i64, LedgerItem>,
+}
+
+/// What [`Reconciliation::record_match`] matches: statement lines of the
+/// bank account and entries on its ledger account, one or many on each side,
+/// with an optional `note` (at most 500 characters).
+#[derive(Clone, Debug, Default)]
+pub struct NewMatch {
+    pub statement_line_ids: Vec<i64>,
+    pub entry_ids: Vec<i64>,
+    pub note: Option<String>,
+}
+
+/// Whether a match stands: `unmatched` once its `unmatched` event is recorded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MatchStatus {
+    Matched,
+    Unmatched,
+}
+
+/// A match's `matched` event, recorded with it, or its `unmatched` event,
+/// with the reason.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct MatchEvent {
+    pub event_number: i64,
+    pub action: String,
+    pub reason: Option<String>,
+    pub recorded_by_user_id: i64,
+    pub recorded_by_impersonator_id: Option<i64>,
+    #[serde(serialize_with = "as_text")]
+    pub recorded_at: Timestamp,
+}
+
+/// A match: its statement lines, its entries as they were matched (by entry
+/// number), and its events. The database numbers it per company.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Match {
+    pub id: i64,
+    pub bank_account_id: i64,
+    pub match_number: i64,
+    pub note: Option<String>,
+    pub matched_by_user_id: i64,
+    pub matched_by_impersonator_id: Option<i64>,
+    #[serde(serialize_with = "as_text")]
+    pub matched_at: Timestamp,
+    pub status: MatchStatus,
+    pub statement_line_ids: Vec<i64>,
+    pub entries: Vec<LedgerItem>,
+    pub events: Vec<MatchEvent>,
+}
+
+/// The numbers a reconciliation's figures are read at, each the latest when
+/// `None` (0 or more): how a finalised reconciliation's figures reproduce.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Pins {
+    pub through_entry_number: Option<i64>,
+    pub through_statement_number: Option<i64>,
+    pub through_match_event_number: Option<i64>,
+}
+
+/// What opens (or previews) a reconciliation: the statement's `end_date` and
+/// the `statement_balance` it shows that day, in decimal notation no finer
+/// than the book's currency.
+#[derive(Clone, Debug, Default)]
+pub struct NewReconciliation {
+    pub end_date: Option<Date>,
+    pub statement_balance: String,
+}
+
+/// What explains a reconciliation's difference.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ItemKind {
+    /// On the statement, not in the books.
+    StatementLine,
+    /// In the books, not on the statement.
+    Entry,
+    /// Matched, but cleared after the end date on one side.
+    Timing,
+}
+impl ItemKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::StatementLine => "statement_line",
+            Self::Entry => "entry",
+            Self::Timing => "timing",
+        }
+    }
+    pub fn parse(value: &str) -> Option<Self> {
+        [Self::StatementLine, Self::Entry, Self::Timing]
+            .into_iter()
+            .find(|kind| kind.as_str() == value)
+    }
+}
+
+/// One item of a reconciliation: the statement line, the entry or the match
+/// (`timing`) it is about, dated, described and signed as the difference
+/// counts it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ReconciliationItem {
+    pub kind: ItemKind,
+    pub statement_line_id: Option<i64>,
+    pub entry_id: Option<i64>,
+    pub match_id: Option<i64>,
+    #[serde(serialize_with = "as_text")]
+    pub item_date: Date,
+    pub description: String,
+    pub reference: Option<String>,
+    pub amount: Money,
+}
+
+/// A reconciliation's figures: the book balance through the end date, the
+/// difference (zero once explained), the book's currency, the entry,
+/// statement and match-event numbers they were read at, and the items.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Figures {
+    pub book_balance: Money,
+    pub difference: Money,
+    pub currency_code: String,
+    pub minor_units: MinorUnits,
+    pub through_entry_number: i64,
+    pub through_statement_number: i64,
+    pub through_match_event_number: i64,
+    pub items: Vec<ReconciliationItem>,
+}
+
+/// The figures a reconciliation of a bank account would show, from
+/// [`Reconciliation::preview_reconciliation`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ReconciliationPreview {
+    pub bank_account_id: i64,
+    #[serde(serialize_with = "as_text")]
+    pub end_date: Date,
+    pub statement_balance: Money,
+    #[serde(flatten)]
+    pub figures: Figures,
+}
+
+/// A reconciliation's status, its closing event's (open with none).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReconciliationStatus {
+    Open,
+    Finalised,
+    Abandoned,
+}
+
+/// One event of a reconciliation: `opened`; `finalised`, with the figures
+/// and the numbers they were read at; or `abandoned`, with the reason.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ReconciliationEvent {
+    pub event_number: i64,
+    pub action: String,
+    pub reason: Option<String>,
+    pub book_balance: Option<Money>,
+    pub difference: Option<Money>,
+    pub through_entry_number: Option<i64>,
+    pub through_statement_number: Option<i64>,
+    pub through_match_event_number: Option<i64>,
+    pub recorded_by_user_id: i64,
+    pub recorded_by_impersonator_id: Option<i64>,
+    #[serde(serialize_with = "as_text")]
+    pub recorded_at: Timestamp,
+}
+
+/// A reconciliation of a bank account as of a statement end date, with its
+/// status and events. `figures` is set by
+/// [`Reconciliation::get_reconciliation`] (read now while open, the stored
+/// snapshot once finalised, none once abandoned) and by finalising; a list
+/// leaves it out.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct BankReconciliation {
+    pub id: i64,
+    pub bank_account_id: i64,
+    pub reconciliation_number: i64,
+    #[serde(serialize_with = "as_text")]
+    pub end_date: Date,
+    pub statement_balance: Money,
+    pub opened_by_user_id: i64,
+    pub opened_by_impersonator_id: Option<i64>,
+    #[serde(serialize_with = "as_text")]
+    pub opened_at: Timestamp,
+    pub status: ReconciliationStatus,
+    pub events: Vec<ReconciliationEvent>,
+    pub figures: Option<Figures>,
+}
+
+/// What posts a statement line: `kind`, one of [`POSTING_KINDS`]
+/// (`charge`, money out against the bank account's charges account, or
+/// `interest`, money in against its interest account), and an optional
+/// entry `description` (the line's when blank).
+#[derive(Clone, Debug, Default)]
+pub struct PostLine {
+    pub kind: String,
+    pub description: Option<String>,
+}
+
+/// What [`Reconciliation::post_statement_line`] recorded: the entry and the
+/// match of the line to it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PostedStatementLine {
+    pub entry: Entry,
+    #[serde(rename = "match")]
+    pub posted_match: Match,
+}
+
+/// What reverses a statement line's posting: the needed `reason` (at most
+/// 500 characters) and the reversal's `entry_date` (today, UTC, when none).
+#[derive(Clone, Debug, Default)]
+pub struct ReverseLine {
+    pub reason: Option<String>,
+    pub entry_date: Option<Date>,
+}
+
+/// What [`Reconciliation::reverse_statement_line`] recorded: the reversal
+/// and the match, now unmatched.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ReversedStatementLine {
+    pub reversal: Entry,
+    #[serde(rename = "match")]
+    pub unmatched_match: Match,
 }
 
 /// The choices an import mapping is built from.
@@ -676,6 +1011,653 @@ impl Reconciliation {
             .ok_or(ReconciliationError::StatementNotFound)
     }
 
+    // Matching
+
+    /// What stands unmatched on the bank account (`finance.reconciliation.view`):
+    /// its statement lines with no standing match, the entries on its ledger
+    /// account with none, and the suggested matches between them (see
+    /// [`Unmatched`]). `to` keeps both sides through a date. Reads the ledger,
+    /// so it also needs `finance.ledger.view`.
+    pub async fn unmatched_items(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        bank_account_id: i64,
+        to: Option<Date>,
+    ) -> Result<Unmatched> {
+        let client = self.db.get().await.map_err(Error::from)?;
+        authorize(&**client, scope, company_id, VIEW).await?;
+        let account = bank_accounts::find(&**client, scope.tenant(), company_id, bank_account_id)
+            .await?
+            .ok_or(ReconciliationError::BankAccountNotFound)?;
+        let sides = matching::unmatched(
+            &self.ledger,
+            &**client,
+            scope,
+            company_id,
+            &account,
+            matching::Bounds {
+                to,
+                ..Default::default()
+            },
+        )
+        .await?;
+        let suggestions =
+            matching::suggestions(&sides.lines, &sides.entries, account.match_window_days);
+        Ok(Unmatched {
+            lines: sides.lines,
+            entries: sides.entries,
+            suggestions,
+        })
+    }
+
+    /// Matches statement lines of the bank account with entries on its
+    /// ledger account, one or many on each side, with an optional note
+    /// (`finance.reconciliation.matches.manage`). Both sides must be
+    /// unmatched and sum to the same amount (`Unbalanced`); other refusals
+    /// are `InvalidSelection`, `StatementLineNotFound`,
+    /// `StatementLineMatched`, `EntryNotFound`, `EntryNotOnAccount` and
+    /// `EntryMatched`, and PostgreSQL refuses a line or an entry already in a
+    /// standing match on its own. Reads the entries through the ledger, so it
+    /// also needs `finance.ledger.view`.
+    pub async fn record_match(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        bank_account_id: i64,
+        new: &NewMatch,
+    ) -> Result<Match> {
+        let mut client = self.db.get().await.map_err(Error::from)?;
+        let mut tx = self
+            .write(
+                &mut client,
+                scope,
+                company_id,
+                &[MANAGE_MATCHES],
+                "finance.reconciliation.match",
+            )
+            .await?;
+        let tenant = scope.tenant();
+        let account = bank_accounts::find(tx.sql(), tenant, company_id, bank_account_id)
+            .await?
+            .ok_or(ReconciliationError::BankAccountNotFound)?;
+        let note = matching::note(new.note.as_deref())
+            .map_err(|error| ReconciliationError::Invalid(vec![error]))?;
+        let (lines, items) = matching::prepare(
+            &self.ledger,
+            tx.sql(),
+            scope,
+            company_id,
+            &account,
+            &new.statement_line_ids,
+            &new.entry_ids,
+        )
+        .await?;
+        let match_id = matching::insert(
+            &mut tx,
+            tenant,
+            company_id,
+            people(scope),
+            account.id,
+            &lines,
+            &items,
+            note,
+        )
+        .await?;
+        let recorded = matching::find(tx.sql(), tenant, company_id, match_id)
+            .await?
+            .ok_or(Error::Internal)?;
+        tx.commit().await?;
+        Ok(recorded)
+    }
+
+    /// Unmatches a standing match with a needed `reason`, as an appended
+    /// event: its lines and entries are unmatched again
+    /// (`finance.reconciliation.matches.manage`). A match that is not
+    /// standing is `MatchNotStanding`, and one a finalised reconciliation
+    /// counted is kept (`MatchFinalised`).
+    pub async fn unmatch(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        match_id: i64,
+        reason: Option<&str>,
+    ) -> Result<Match> {
+        let mut client = self.db.get().await.map_err(Error::from)?;
+        let mut tx = self
+            .write(
+                &mut client,
+                scope,
+                company_id,
+                &[MANAGE_MATCHES],
+                "finance.reconciliation.unmatch",
+            )
+            .await?;
+        let tenant = scope.tenant();
+        let found = matching::find(tx.sql(), tenant, company_id, match_id)
+            .await?
+            .ok_or(ReconciliationError::MatchNotFound)?;
+        matching::check_unmatch(tx.sql(), tenant, company_id, &found).await?;
+        let reason = matching::unmatch_reason(reason)
+            .map_err(|error| ReconciliationError::Invalid(vec![error]))?;
+        matching::record_unmatch(&mut tx, tenant, company_id, people(scope), found.id, reason)
+            .await?;
+        let unmatched = matching::find(tx.sql(), tenant, company_id, found.id)
+            .await?
+            .ok_or(Error::Internal)?;
+        tx.commit().await?;
+        Ok(unmatched)
+    }
+
+    /// One match with its status, statement lines, entries and events
+    /// (`finance.reconciliation.view`).
+    pub async fn get_match(&self, scope: &Scope, company_id: i64, match_id: i64) -> Result<Match> {
+        let client = self.db.get().await.map_err(Error::from)?;
+        authorize(&**client, scope, company_id, VIEW).await?;
+        matching::find(&**client, scope.tenant(), company_id, match_id)
+            .await?
+            .ok_or(ReconciliationError::MatchNotFound)
+    }
+
+    /// The bank account's matches, standing or not, oldest first
+    /// (`finance.reconciliation.view`).
+    pub async fn list_matches(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        bank_account_id: i64,
+        page: &PageOptions,
+    ) -> Result<Vec<Match>> {
+        let client = self.db.get().await.map_err(Error::from)?;
+        authorize(&**client, scope, company_id, VIEW).await?;
+        bank_accounts::find(&**client, scope.tenant(), company_id, bank_account_id)
+            .await?
+            .ok_or(ReconciliationError::BankAccountNotFound)?;
+        let (limit, after) = page.resolve()?;
+        matching::list(
+            &**client,
+            scope.tenant(),
+            company_id,
+            bank_account_id,
+            limit,
+            after,
+        )
+        .await
+    }
+
+    /// The bank account's statement lines by date, statement and line, each
+    /// with its statement number; `to` bounds the date
+    /// (`finance.reconciliation.view`).
+    pub async fn list_statement_lines(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        bank_account_id: i64,
+        to: Option<Date>,
+    ) -> Result<Vec<StatementLineItem>> {
+        let client = self.db.get().await.map_err(Error::from)?;
+        authorize(&**client, scope, company_id, VIEW).await?;
+        bank_accounts::find(&**client, scope.tenant(), company_id, bank_account_id)
+            .await?
+            .ok_or(ReconciliationError::BankAccountNotFound)?;
+        matching::statement_lines(
+            &**client,
+            scope.tenant(),
+            company_id,
+            bank_account_id,
+            matching::Bounds {
+                to,
+                ..Default::default()
+            },
+        )
+        .await
+    }
+
+    // Reconciliations
+
+    /// The figures a reconciliation of the bank account would show as of the
+    /// end date against the statement balance, without opening one
+    /// (`finance.reconciliation.view`). `pins` fix the reading to a
+    /// `through_entry_number`, `through_statement_number` and
+    /// `through_match_event_number` (each 0 or more), which is how a
+    /// finalised reconciliation's figures are reproduced. A missing end
+    /// date, a balance that is not money of the book, or a negative pin is
+    /// `InvalidOption`. Reads the ledger, so it also needs
+    /// `finance.ledger.view`.
+    pub async fn preview_reconciliation(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        bank_account_id: i64,
+        figures: &NewReconciliation,
+        pins: &Pins,
+    ) -> Result<ReconciliationPreview> {
+        let client = self.db.get().await.map_err(Error::from)?;
+        authorize(&**client, scope, company_id, VIEW).await?;
+        let account = bank_accounts::find(&**client, scope.tenant(), company_id, bank_account_id)
+            .await?
+            .ok_or(ReconciliationError::BankAccountNotFound)?;
+        if [
+            pins.through_entry_number,
+            pins.through_statement_number,
+            pins.through_match_event_number,
+        ]
+        .into_iter()
+        .flatten()
+        .any(|pin| pin < 0)
+        {
+            return Err(ReconciliationError::InvalidOption);
+        }
+        let book = self
+            .ledger
+            .get_book_on(&**client, scope, company_id)
+            .await?;
+        let (end_date, balance) = reconciliations::opening(
+            figures.end_date,
+            &figures.statement_balance,
+            book.minor_units,
+        )
+        .map_err(|_| ReconciliationError::InvalidOption)?;
+        reconciliations::compute(
+            &self.ledger,
+            &**client,
+            scope,
+            company_id,
+            &account,
+            end_date,
+            balance,
+            *pins,
+        )
+        .await
+    }
+
+    /// Opens a reconciliation of the bank account as of the end date
+    /// against the statement balance, the balance the bank's statement
+    /// shows on that date (`finance.reconciliation.reconciliations.manage`).
+    /// One reconciliation of an account is open at a time, and each ends
+    /// after the last finalised one; otherwise, and for a missing date or a
+    /// balance finer than the book's currency, `Invalid` says so. The
+    /// account must be active. Reads the book through the ledger, so it also
+    /// needs `finance.ledger.view`.
+    pub async fn open_reconciliation(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        bank_account_id: i64,
+        new: &NewReconciliation,
+    ) -> Result<BankReconciliation> {
+        let mut client = self.db.get().await.map_err(Error::from)?;
+        let mut tx = self
+            .write(
+                &mut client,
+                scope,
+                company_id,
+                &[MANAGE_RECONCILIATIONS],
+                "finance.reconciliation.open_reconciliation",
+            )
+            .await?;
+        let tenant = scope.tenant();
+        let account = bank_accounts::find(tx.sql(), tenant, company_id, bank_account_id)
+            .await?
+            .ok_or(ReconciliationError::BankAccountNotFound)?;
+        if !account.active {
+            return Err(ReconciliationError::BankAccountInactive);
+        }
+        let book = self.ledger.get_book_on(tx.sql(), scope, company_id).await?;
+        let opening =
+            reconciliations::opening(new.end_date, &new.statement_balance, book.minor_units);
+        let mut errors = opening.as_ref().err().cloned().unwrap_or_default();
+        if let Some(end_date) = new.end_date {
+            if let Err(more) =
+                reconciliations::check_open(tx.sql(), tenant, company_id, account.id, end_date)
+                    .await?
+            {
+                errors.extend(more);
+            }
+        }
+        let (end_date, balance) = match opening {
+            Ok(opening) if errors.is_empty() => opening,
+            _ => return Err(ReconciliationError::Invalid(errors)),
+        };
+        let id = reconciliations::insert(
+            &mut tx,
+            tenant,
+            company_id,
+            people(scope),
+            account.id,
+            end_date,
+            balance,
+        )
+        .await?;
+        let opened = reconciliations::find(tx.sql(), tenant, company_id, id)
+            .await?
+            .ok_or(Error::Internal)?;
+        tx.commit().await?;
+        Ok(opened)
+    }
+
+    /// Finalises an open reconciliation once its difference is zero
+    /// (`Difference` otherwise), with `finance.reconciliation.reconciliations.finalise`:
+    /// records the figures, the numbers they were read at and the items that
+    /// explain them, after which the reconciliation is immutable and the
+    /// matches it counted are kept. Needs `finance.ledger.view`.
+    ///
+    /// The finaliser differs from whoever opened it (`SamePerson`),
+    /// impersonation included, unless the company has turned separation of
+    /// duties off, when the finalisation is listed in the ledger's approval
+    /// exceptions ([`Ledger::check_approval`], asked on this write).
+    pub async fn finalise_reconciliation(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        reconciliation_id: i64,
+    ) -> Result<BankReconciliation> {
+        let mut client = self.db.get().await.map_err(Error::from)?;
+        let mut tx = self
+            .write(
+                &mut client,
+                scope,
+                company_id,
+                &[FINALISE_RECONCILIATIONS],
+                "finance.reconciliation.finalise_reconciliation",
+            )
+            .await?;
+        let tenant = scope.tenant();
+        let open = reconciliations::find(tx.sql(), tenant, company_id, reconciliation_id)
+            .await?
+            .ok_or(ReconciliationError::ReconciliationNotFound)?;
+        reconciliations::still_open(&open)?;
+        let account = bank_accounts::find(tx.sql(), tenant, company_id, open.bank_account_id)
+            .await?
+            .ok_or(ReconciliationError::BankAccountNotFound)?;
+        self.ledger
+            .check_approval(
+                &mut tx,
+                scope,
+                company_id,
+                &Approval {
+                    source: MODULE.into(),
+                    action: "reconciliation_finalisation".into(),
+                    subject_type: "reconciliation".into(),
+                    subject_id: open.id,
+                    subject: format!(
+                        "Reconciliation {} of {} to {}",
+                        open.reconciliation_number, account.name, open.end_date
+                    ),
+                    prepared_by: vec![Preparer {
+                        user_id: open.opened_by_user_id,
+                        impersonator_id: open.opened_by_impersonator_id,
+                    }],
+                    override_reason: None,
+                },
+            )
+            .await?;
+        let read = reconciliations::compute(
+            &self.ledger,
+            tx.sql(),
+            scope,
+            company_id,
+            &account,
+            open.end_date,
+            open.statement_balance,
+            Pins::default(),
+        )
+        .await?;
+        if !read.figures.difference.is_zero() {
+            return Err(ReconciliationError::Difference(read.figures.difference));
+        }
+        reconciliations::record_finalised(
+            &mut tx,
+            tenant,
+            company_id,
+            people(scope),
+            open.id,
+            read.figures.clone(),
+        )
+        .await?;
+        let mut finalised = reconciliations::find(tx.sql(), tenant, company_id, open.id)
+            .await?
+            .ok_or(Error::Internal)?;
+        finalised.figures = Some(read.figures);
+        tx.commit().await?;
+        Ok(finalised)
+    }
+
+    /// Abandons an open reconciliation with a needed `reason`
+    /// (`finance.reconciliation.reconciliations.manage`); a finalised one is
+    /// kept (`ReconciliationFinalised`).
+    pub async fn abandon_reconciliation(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        reconciliation_id: i64,
+        reason: Option<&str>,
+    ) -> Result<BankReconciliation> {
+        let mut client = self.db.get().await.map_err(Error::from)?;
+        let mut tx = self
+            .write(
+                &mut client,
+                scope,
+                company_id,
+                &[MANAGE_RECONCILIATIONS],
+                "finance.reconciliation.abandon_reconciliation",
+            )
+            .await?;
+        let tenant = scope.tenant();
+        let open = reconciliations::find(tx.sql(), tenant, company_id, reconciliation_id)
+            .await?
+            .ok_or(ReconciliationError::ReconciliationNotFound)?;
+        reconciliations::still_open(&open)?;
+        let reason = reconciliations::abandon_reason(reason)
+            .map_err(|error| ReconciliationError::Invalid(vec![error]))?;
+        reconciliations::record_abandoned(
+            &mut tx,
+            tenant,
+            company_id,
+            people(scope),
+            open.id,
+            reason,
+        )
+        .await?;
+        let abandoned = reconciliations::find(tx.sql(), tenant, company_id, open.id)
+            .await?
+            .ok_or(Error::Internal)?;
+        tx.commit().await?;
+        Ok(abandoned)
+    }
+
+    /// One reconciliation with its status, events and, unless abandoned, its
+    /// figures (`finance.reconciliation.view`): an open reconciliation's are
+    /// read now, a finalised one's are its stored snapshot, which
+    /// [`Reconciliation::preview_reconciliation`] at its pinned numbers
+    /// reproduces. Needs `finance.ledger.view`.
+    pub async fn get_reconciliation(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        reconciliation_id: i64,
+    ) -> Result<BankReconciliation> {
+        let client = self.db.get().await.map_err(Error::from)?;
+        authorize(&**client, scope, company_id, VIEW).await?;
+        let tenant = scope.tenant();
+        let mut found = reconciliations::find(&**client, tenant, company_id, reconciliation_id)
+            .await?
+            .ok_or(ReconciliationError::ReconciliationNotFound)?;
+        let account = bank_accounts::find(&**client, tenant, company_id, found.bank_account_id)
+            .await?
+            .ok_or(ReconciliationError::BankAccountNotFound)?;
+        found.figures = match found.status {
+            ReconciliationStatus::Open => Some(
+                reconciliations::compute(
+                    &self.ledger,
+                    &**client,
+                    scope,
+                    company_id,
+                    &account,
+                    found.end_date,
+                    found.statement_balance,
+                    Pins::default(),
+                )
+                .await?
+                .figures,
+            ),
+            ReconciliationStatus::Finalised => {
+                let event = found
+                    .events
+                    .iter()
+                    .find(|event| event.action == "finalised")
+                    .ok_or(Error::Internal)?;
+                let book = self
+                    .ledger
+                    .get_book_on(&**client, scope, company_id)
+                    .await?;
+                Some(Figures {
+                    book_balance: event.book_balance.ok_or(Error::Internal)?,
+                    difference: event.difference.ok_or(Error::Internal)?,
+                    currency_code: book.currency_code,
+                    minor_units: book.minor_units,
+                    through_entry_number: event.through_entry_number.ok_or(Error::Internal)?,
+                    through_statement_number: event
+                        .through_statement_number
+                        .ok_or(Error::Internal)?,
+                    through_match_event_number: event
+                        .through_match_event_number
+                        .ok_or(Error::Internal)?,
+                    items: reconciliations::items(&**client, tenant, company_id, found.id).await?,
+                })
+            }
+            ReconciliationStatus::Abandoned => None,
+        };
+        Ok(found)
+    }
+
+    /// The bank account's reconciliations, oldest first, with their status
+    /// and events (`finance.reconciliation.view`).
+    pub async fn list_reconciliations(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        bank_account_id: i64,
+    ) -> Result<Vec<BankReconciliation>> {
+        let client = self.db.get().await.map_err(Error::from)?;
+        authorize(&**client, scope, company_id, VIEW).await?;
+        bank_accounts::find(&**client, scope.tenant(), company_id, bank_account_id)
+            .await?
+            .ok_or(ReconciliationError::BankAccountNotFound)?;
+        reconciliations::list(&**client, scope.tenant(), company_id, bank_account_id).await
+    }
+
+    // Posting
+
+    /// Posts an unmatched statement line the books do not have as a bank
+    /// charge or interest (`finance.reconciliation.statement-lines.post`),
+    /// dated the line's date with the line's description unless one is
+    /// given, as an entry the line owns, and matches the line to it in the
+    /// same write. Posting goes through the ledger facade on this write, so
+    /// the actor also needs `finance.ledger.entries.post` and
+    /// `finance.ledger.view`, and the ledger's refusal (a closed period, an
+    /// inactive account) is returned with nothing recorded. Other refusals:
+    /// `InvalidKind`, `NoChargesAccount`, `NoInterestAccount`, `NotACharge`
+    /// (the line is money in), `NotInterest` (money out),
+    /// `StatementLineMatched`, and `StatementLinePosted` for a line that
+    /// already posted an entry (the ledger holds that entry as this line's:
+    /// match the line to it instead).
+    pub async fn post_statement_line(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        statement_line_id: i64,
+        post: &PostLine,
+    ) -> Result<PostedStatementLine> {
+        let mut client = self.db.get().await.map_err(Error::from)?;
+        let mut tx = self
+            .write(
+                &mut client,
+                scope,
+                company_id,
+                &[POST_STATEMENT_LINES],
+                "finance.reconciliation.post_statement_line",
+            )
+            .await?;
+        let tenant = scope.tenant();
+        let line = matching::find_line(tx.sql(), tenant, company_id, statement_line_id)
+            .await?
+            .ok_or(ReconciliationError::StatementLineNotFound)?;
+        let account = bank_accounts::find(tx.sql(), tenant, company_id, line.bank_account_id)
+            .await?
+            .ok_or(ReconciliationError::BankAccountNotFound)?;
+        if !account.active {
+            return Err(ReconciliationError::BankAccountInactive);
+        }
+        let posted = posting::post(
+            &mut tx,
+            &self.ledger,
+            scope,
+            company_id,
+            &account,
+            &line,
+            &post.kind,
+            post.description.as_deref(),
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(posted)
+    }
+
+    /// Reverses the charge or interest entry a statement line posted
+    /// (`finance.reconciliation.statement-lines.manage`), with a needed
+    /// reason (`InvalidReason` when blank or over 500 characters) and
+    /// optionally the reversal's date (today, UTC, when none). The line must
+    /// stand matched, alone, to the entry it posted
+    /// (`StatementLineNotMatched`, or `StatementLineNotPosted` for any other
+    /// match). In one write the match is unmatched, its `unmatched` event
+    /// carrying the reason, and the entry is reversed through
+    /// [`Ledger::reverse_owned_entry`] as the line's owner; the ledger's
+    /// refusal (a closed period) rolls both back and is returned. A match a
+    /// finalised reconciliation counted is kept (`MatchFinalised`). The line
+    /// is not posted again: the ledger holds an entry for it
+    /// (`StatementLinePosted`), so the right figure is booked by a manual
+    /// journal and matched. Also needs `finance.ledger.entries.post` and
+    /// `finance.ledger.view`.
+    pub async fn reverse_statement_line(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        statement_line_id: i64,
+        reverse: &ReverseLine,
+    ) -> Result<ReversedStatementLine> {
+        let mut client = self.db.get().await.map_err(Error::from)?;
+        let mut tx = self
+            .write(
+                &mut client,
+                scope,
+                company_id,
+                &[MANAGE_STATEMENT_LINES],
+                "finance.reconciliation.reverse_statement_line",
+            )
+            .await?;
+        let tenant = scope.tenant();
+        let line = matching::find_line(tx.sql(), tenant, company_id, statement_line_id)
+            .await?
+            .ok_or(ReconciliationError::StatementLineNotFound)?;
+        let account = bank_accounts::find(tx.sql(), tenant, company_id, line.bank_account_id)
+            .await?
+            .ok_or(ReconciliationError::BankAccountNotFound)?;
+        let reversed = posting::reverse(
+            &mut tx,
+            &self.ledger,
+            scope,
+            company_id,
+            &account,
+            &line,
+            reverse.reason.as_deref(),
+            reverse.entry_date,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(reversed)
+    }
+
     /// The bank account, which must be active.
     async fn active_bank_account(
         &self,
@@ -770,7 +1752,7 @@ fn refusal(error: Error) -> ReconciliationError {
 }
 
 /// The scope's actor and any impersonator, as every record names them.
-fn people(scope: &Scope) -> (i64, Option<i64>) {
+pub(crate) fn people(scope: &Scope) -> (i64, Option<i64>) {
     (
         scope.user(),
         scope.impersonator().map(|operator| operator.user()),
