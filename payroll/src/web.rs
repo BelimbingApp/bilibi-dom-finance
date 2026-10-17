@@ -213,11 +213,17 @@ impl State {
         let company = company(scope)?;
         match event {
             "change_settings" | "save_settings" => {
-                let form = read_form(
+                let form = match read_form(
                     value,
                     "settings",
                     &["net_pay_account_id", "claims_payable_account_id", "reason"],
-                );
+                ) {
+                    Ok(form) => form,
+                    Err(error) => {
+                        self.refusal("settings", error);
+                        return Ok(());
+                    }
+                };
                 self.settings = Some(form.clone());
                 if event == "save_settings" {
                     self.errors.clear();
@@ -251,7 +257,7 @@ impl State {
                 }
             }
             "change_mapping" | "save_mapping" => {
-                self.mapping = read_form(
+                self.mapping = match read_form(
                     value,
                     "mapping",
                     &[
@@ -262,7 +268,13 @@ impl State {
                         "liability_account_id",
                         "reason",
                     ],
-                );
+                ) {
+                    Ok(form) => form,
+                    Err(error) => {
+                        self.refusal("mapping", error);
+                        return Ok(());
+                    }
+                };
                 if event == "save_mapping" {
                     self.errors.clear();
                     let direction = if get(&self.mapping, "kind") == "claim_category" {
@@ -345,9 +357,15 @@ impl State {
             }
             "cancel_confirmation" => self.pending = None,
             "change_reversal" | "confirm_reversal" => {
-                self.reversal = read_form(value, "reversal", &["reason", "entry_date"]);
+                self.pending = None;
+                self.reversal = match read_form(value, "reversal", &["reason", "entry_date"]) {
+                    Ok(form) => form,
+                    Err(error) => {
+                        self.refusal("reversal", error);
+                        return Ok(());
+                    }
+                };
                 if event == "confirm_reversal" {
-                    self.pending = None;
                     self.errors.clear();
                     match reversal(&self.reversal) {
                         Ok(reversal) => {
@@ -932,14 +950,21 @@ fn default_mapping() -> HashMap<String, String> {
 
 /// Generic form_values drops strings over 1 KiB. A valid 500-character
 /// Unicode reason can occupy 2 KiB: preserve known fields for facade validation.
-fn read_form(value: &Value, form: &str, fields: &[&str]) -> HashMap<String, String> {
+fn read_form(
+    value: &Value,
+    form: &str,
+    fields: &[&'static str],
+) -> crate::Result<HashMap<String, String>> {
     fields
         .iter()
         .map(|key| {
-            let text = value[format!("{form}[{key}]")].as_str().unwrap_or_default();
-            // The transport bounds the event. Do not truncate a submitted
-            // reason into a different, valid one before facade validation.
-            ((*key).into(), text.to_owned())
+            let text = match value.get(format!("{form}[{key}]")) {
+                None => "",
+                Some(value) => value.as_str().ok_or_else(|| invalid(key, "is invalid"))?,
+            };
+            // Never turn malformed values or a truncated reason into a
+            // different, valid input before facade validation.
+            Ok(((*key).into(), text.to_owned()))
         })
         .collect()
 }

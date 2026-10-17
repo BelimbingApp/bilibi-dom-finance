@@ -164,20 +164,18 @@ pub async fn run(db: &Db, services: &Services, historical: i64) -> Outcome<()> {
         .await?;
     }
     // A stale settings form rechecks a revoked capability and remains mounted.
+    let mappings_before = payroll.list_mappings(&manager, 1).await?;
+    let changes_before = payroll.list_mapping_changes(&manager, 1).await?;
     grants
         .set_direct(&admin, 1, MANAGE_SETTINGS, Some(false))
         .await?;
     assert!(event(setup.as_mut(), &manager, mapping)
         .await?
         .contains("You do not have permission for that action."));
+    assert_eq!(payroll.list_mappings(&manager, 1).await?, mappings_before);
     assert_eq!(
-        payroll
-            .list_mappings(&manager, 1)
-            .await?
-            .iter()
-            .filter(|m| m.code == "ui-deduction")
-            .count(),
-        1
+        payroll.list_mapping_changes(&manager, 1).await?,
+        changes_before
     );
     grants.set_direct(&admin, 1, MANAGE_SETTINGS, None).await?;
     grants
@@ -203,6 +201,26 @@ pub async fn run(db: &Db, services: &Services, historical: i64) -> Outcome<()> {
     assert!(!html.contains("id=\"payroll-reversal-dialog\""));
     let mut draft = draft;
     draft["reversal[entry_date]"] = json!("2027-02-04");
+    for malformed in [json!(123), json!([]), json!({}), Value::Null] {
+        // Even an existing pending request must be cleared by bad input.
+        event(postings.as_mut(), &manager, draft.clone()).await?;
+        let mut forged = draft.clone();
+        forged["reversal[entry_date]"] = malformed;
+        let html = event(postings.as_mut(), &manager, forged).await?;
+        assert!(html.contains("payroll-reversal-date-error-0"));
+        assert!(!html.contains("id=\"payroll-reversal-dialog\""));
+        event(
+            postings.as_mut(),
+            &manager,
+            json!({"type":"commit_reversal"}),
+        )
+        .await?;
+        assert!(payroll
+            .get_posting(&manager, 1, historical)
+            .await?
+            .reversal
+            .is_none());
+    }
     assert!(event(postings.as_mut(), &manager, draft.clone())
         .await?
         .contains("id=\"payroll-reversal-dialog\""));
