@@ -75,6 +75,13 @@ they govern this code and are not copied here.
   `settlement_account_ids` only to settle a document posted earlier on an
   account deactivated since. The database numbers entries, so never send or
   compute an `entry_number`.
+- A new book is controlled, so it posts only into a fiscal period opened with
+  `Ledger::open_fiscal_year`: a fixture opens one before posting, and a sibling
+  reports the ledger's `entry_date` refusal instead of picking another date. A
+  period's or year's status is its latest closing event's, never a column;
+  inside the ledger read it through `periods::state` and record each override
+  of a control (a reopen, controlled bookkeeping off) with
+  `duties::record_override` in the same write.
 - Learn of a posting through `Ledger::subscribe_postings`, never your own
   LISTEN: the relay shares one connection, and a notice carries identifiers
   only. On `PostingEvent::Refresh` read again instead of trusting the stream.

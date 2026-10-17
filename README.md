@@ -8,7 +8,7 @@ Bilibi checkout; it does not build on its own.
 
 | Module | Descriptor ID | Owns |
 | --- | --- | --- |
-| [`ledger/`](ledger/README.md) | `finance/ledger` | each company's book and currency, its chart of accounts, and the controlled-bookkeeping setting a new book opens with, and its journal entries (append-only, numbered without gaps, balanced at commit, optionally owned by another module's record) with posting notices that announce only committed entries. Periods, journals and the other controls follow in later versions of the module. |
+| [`ledger/`](ledger/README.md) | `finance/ledger` | each company's book and currency, its chart of accounts, its journal entries (append-only, numbered without gaps, balanced at commit, optionally owned by another module's record) with posting notices that announce only committed entries, its fiscal years of monthly periods with the closing log (close, reopen, lock, year-end close and reopen with closing entries), controlled bookkeeping and its changes, and the late-recording report with its reviews. Journals and the separation of duties follow in later versions of the module. |
 | [`attachments/`](attachments/README.md) | `finance/attachments` | source documents kept with the records they support: records-grade files in Base Artifacts, the company's retention years and their history, replace and remove while a record is a draft, legal holds, and the retention refresh job that follows a record's final date. The `Source` contract each record owner implements is here. |
 
 Every other Finance module of Bilimbi (receivables, payables,
@@ -36,7 +36,7 @@ versions. The composition rules are in Bilibi's `apps/domains/AGENTS.md`.
 
 `fixtures/walkthrough/` is an example-only crate (never a product dependency)
 that installs the Platform's walkthrough fixture and then opens Company 001's
-book and chart of accounts through the ledger facade. Its binary is the
+book, chart of accounts and first fiscal year through the ledger facade. Its binary is the
 running proof of this repository's facade:
 
 ```sh
@@ -55,7 +55,12 @@ files, replacing and removing on a draft record, a final record that keeps its
 files, retention extensions and legal holds (including a change made in Base
 Artifacts out of band), the retention refresh job as its system principal
 before and after a tenant grants it, evidence pages, restricted sources, an
-archived company and the database's own refusals.
+archived company and the database's own refusals. Its periods section, on
+Company 002 with dates counted back from today, opens fiscal years, closes,
+locks and reopens periods in and out of order, closes and reopens a year with
+its closing entry and reversal, turns controlled bookkeeping off and on,
+reviews entries recorded late, races a close against posts into the same
+period, and ends with the database's own closing refusals.
 
 ## Naming
 
