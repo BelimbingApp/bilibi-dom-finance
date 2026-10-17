@@ -80,7 +80,7 @@ def plan(channel, operations):
 def commit(channel, operations, review):
     require(review.get("valid") is True, "positive preview refused: " + str(review.get("results", review.get("error"))))
     result = invoke(channel, "commit", {"operations": operations, "plan_code": review["plan_code"]})
-    if "results" in result:
+    if "error" not in result and "results" in result:
         for operation, preview, written in zip(operations, review["results"], result["results"], strict=True):
             if operation["key"] == "finance.einvoice.document.issue":
                 verify_review(preview["preview"]["result"]["changes"], written["result"]["result"]["record"])
@@ -88,7 +88,7 @@ def commit(channel, operations, review):
 
 
 def records(body):
-    require("results" in body, "positive commit refused: " + str(body.get("error")))
+    require("error" not in body and "results" in body, "positive commit refused: " + str(body.get("error")))
     values = []
     for result in body["results"]:
         result = result["result"]["result"]

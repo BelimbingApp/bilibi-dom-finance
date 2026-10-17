@@ -314,8 +314,8 @@ async fn main() -> Outcome<()> {
             };
             let source =
                 json!({"module":module,"record":format!("document:{id}"),"ledger_entry_id":entry});
-            let mut input = json!({"company_id":company,"document_type":if index%2==0 {"01"} else {"11"},"code_number":format!("H4-{company}-{index}"),"issued_at":"2026-01-10T04:05:06Z","currency_code":"MYR","source":source,"lines":[
-                {"description":"Asymmetric A","classification_code":"003","quantity":"1.7","unit_price":"13.29","discount_amount":"0.23","charge_amount":"0.07","tax_type":"01","tax_rate":"6","unit_code":"C62"},
+            let mut input = json!({"company_id":company,"document_type":if index%2==0 {"01"} else {"11"},"code_number":format!("H4-{company}-{index}"),"issued_at":"2026-01-10T04:05:06Z","currency_code":"MYR","exchange_rate":"1.123456","payment_terms":"Net 30","billing_period_start":"2026-01-01","billing_period_end":"2026-01-10","billing_period_description":"January supply","source":source,"lines":[
+                {"description":"Asymmetric A","classification_code":"003","quantity":"1.700001","unit_price":"13.290001","discount_amount":"0.23","charge_amount":"0.07","tax_type":"01","tax_rate":"6","unit_code":"C62"},
                 {"description":"Asymmetric B","classification_code":"003","quantity":"2.3","unit_price":"10.91","discount_amount":"0.11","charge_amount":"0.19","tax_type":"01","tax_rate":"6","unit_code":"C62"}
             ]});
             input[if index % 2 == 0 { "buyer" } else { "supplier" }] = party.clone();
