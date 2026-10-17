@@ -10,8 +10,8 @@ use bilibi_datetime::{DisplayContext, Format, Precision};
 use bilibi_finance_ledger::{AccountType, MinorUnits, Money};
 use bilibi_ui::{
     params, Alert, BackLink, BuiltinColumn, Button, Card, EmptyState, Fact, Facts, FlexRow,
-    FlexTable, Html, ListColumns, ListState, RecordLink, StatItem, StatStrip, StatusKind,
-    TableEmpty,
+    FlexTable, Html, ListColumns, ListState, RecordLink, SectionHeading, StatItem, StatStrip,
+    StatusKind, TableEmpty,
 };
 use std::collections::HashMap;
 
@@ -439,7 +439,7 @@ fn statement(
     list: &ListState,
 ) -> Result<Html> {
     let title = format!("Management report: {}", id.replace('-', " "));
-    let mut body = text(&format!("{id}-label"), &title, false)?;
+    let mut body = Html::EMPTY;
     if let Some((title, reason)) = empty {
         body.push(&render(EmptyState::missing(title, reason))?);
     } else {
@@ -452,12 +452,20 @@ fn statement(
         );
         body.push(&table(id, &labels, rows, &title, None, columns, list)?);
     }
-    render(Card {
+    // The unframed FlexTable notch rises above its card. Keep the label
+    // outside that card so the shared component can reserve the notch's gap.
+    let mut statement = render(SectionHeading {
+        id: &format!("{id}-label"),
+        title: &title,
+        ..SectionHeading::default()
+    })?;
+    statement.push(&render(Card {
         id: &format!("{id}-card"),
         inner_class: "p-0",
         body,
         ..Card::default()
-    })
+    })?);
+    Ok(statement)
 }
 
 fn table(

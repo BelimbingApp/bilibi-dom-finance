@@ -20,7 +20,7 @@ Both routes require `finance.ledger.view` and read the signed-in account's compa
 
 Reports subscribe before the mounted read. Commit notices and missed-notice refreshes invalidate unpinned figures; bursts coalesce, and pinned figures ignore them. Custom-range drafts and table arrangement survive a posting refresh. The relay task stops with the page. If the relay cannot start, a visible warning explains periodic-refresh fallback. As in Bilimbi, zero is not a positive URL cutoff, so an empty ledger cannot be pinned.
 
-All tables use shared FlexTable and built-in ListColumns on ListState. There is no new sort/filter/page-size control: Bilimbi fixes statement order and pages activity by cursor. Section headings, subtotals and footers remain ordered rows with the reference IDs; FlexTable's uniform body replaces Bilimbi's grouped statement table. The shared pin button raises a read-only page event because the Platform button has no patch-link variant. No domain CSS, JavaScript or new write path is added. Auditor-pack controls belong to NT4 and are not shown yet.
+All tables use shared FlexTable and built-in ListColumns on ListState. There is no new sort/filter/page-size control: Bilimbi fixes statement order and pages activity by cursor. Section headings, subtotals and footers remain ordered rows with the reference IDs; FlexTable's uniform body replaces Bilimbi's grouped statement table. A shared SectionHeading places the statement label above the card, clear of the customization notch. The shared pin button raises a read-only page event because the Platform button has no patch-link variant. No domain CSS, JavaScript or new write path is added. Auditor-pack controls belong to NT4 and are not shown yet.
 
 ## Management reports, not statutory statements
 
@@ -169,3 +169,5 @@ Company 001's sections, reads every report with comparatives, follows a figure
 to its entries, reproduces a report from its pin after a later post its
 subscription hears, issues and reads back snapshots, and shows the facade's
 and the database's refusals.
+
+From the Platform root, with `DATABASE_URL` naming a disposable PostgreSQL 18 database, `cargo run -p bilibi-finance-walkthrough-fixture --bin reports-ui` exercises the mounted page contracts and prepares the browser fixture. It proves subscribe-before-read, a stale-click pin, pinned and unpinned notices, range draft/error retention, table compactness, four views, comparison off, unopened and forbidden ledgers, and account cursors at 99/100/101 entries with stable whole-window totals. Sign in as `manager@example.test` with the walkthrough password `bilibi-dev`, then open `/finance/reports`; running the same command with `-- post` commits a real later posting to demonstrate live refresh and pinned figures. These are executable fixture proofs, not unit tests or production seeds.
