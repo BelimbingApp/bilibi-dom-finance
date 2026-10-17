@@ -2,7 +2,7 @@
 //! `Bilimbi.Finance.Ledger.Contributions`): the `finance` authorization
 //! domain, its verbs, the twelve capability keys verbatim, and the
 //! `tenant_owner` role holding all of them. The ledger has no pages, menu
-//! items or agent operations (`web: nil`).
+//! items (`web: nil`). H1 agent operations are in `agent_operations.rs`.
 use crate::MODULE;
 use bilibi_authz::{CapabilityDefinition as C, RoleDefinition, VocabularyContribution, VOCABULARY};
 use bilibi_module_registry::{Contribution, Provenance};

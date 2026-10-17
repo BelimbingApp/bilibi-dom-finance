@@ -61,6 +61,7 @@
 //!
 //! Results are plain records; the schema, SQL and validation stay private.
 mod accounts;
+mod agent_operations;
 mod bookkeeping;
 mod books;
 mod contributions;
@@ -99,7 +100,7 @@ pub const SERVICE: &str = "finance/ledger.ledger";
 inventory::submit! {
     Module {
         id: MODULE, layer: Layer::Domains,
-        dependencies: &["base/authz", "base/database", "base/tenancy", "core/company"],
+        dependencies: &["base/agent_api", "base/authz", "base/database", "base/party_ids", "base/tenancy", "core/company"],
         migrations: &[
             ("finance-ledger-001-books-and-accounts", include_str!("../migrations/001-books-and-accounts.sql")),
             ("finance-ledger-002-entries", include_str!("../migrations/002-entries.sql")),
@@ -107,11 +108,13 @@ inventory::submit! {
             ("finance-ledger-004-periods", include_str!("../migrations/004-periods.sql")),
             ("finance-ledger-005-journals", include_str!("../migrations/005-journals.sql")),
         ],
-        services: &[Service { id: SERVICE, factory: |services| Ok(Arc::new(Ledger {
+        services: &[Service { id: SERVICE, factory: |services| {
+            agent_operations::bind(services.get("base/tenancy.parties")?)?;
+            Ok(Arc::new(Ledger {
             db: services.get::<Db>("base/database.pool")?.as_ref().clone(),
             mutations: services.get("base/database.mutations")?,
             postings: postings::Relay::new(),
-        })) }],
+        })) } }],
     }
 }
 
@@ -2922,51 +2925,8 @@ async fn reverse(
     reversal: &Reversal,
 ) -> Result<Entry> {
     let tenant = scope.tenant();
-    let book = books::find(tx.sql(), tenant, company_id)
-        .await?
-        .ok_or(LedgerError::BookNotOpen)?;
-    let original = entries::find(tx.sql(), tenant, company_id, entry_id)
-        .await?
-        .ok_or(LedgerError::EntryNotFound)?;
-    if original.reverses_entry_id.is_some() {
-        return Err(LedgerError::ReversalNotReversible);
-    }
-    if original.reversed_by_entry_id.is_some() {
-        return Err(LedgerError::AlreadyReversed);
-    }
-    if periods::closing_entry(tx.sql(), company_id, original.id).await? {
-        return Err(LedgerError::ClosingEntry);
-    }
-    match (&original.owner, owner) {
-        (Some(owned), None) => return Err(LedgerError::OwnedBy(owned.clone())),
-        (None, Some(_)) => return Err(LedgerError::NotOwned),
-        (Some(owned), Some(owner)) if owned != owner => return Err(LedgerError::NotTheOwner),
-        _ => {}
-    }
-    let new = NewEntry {
-        reference: reversal.reference.clone(),
-        ..entries::mirror(&original, reversal.entry_date, reversal.description.clone())
-    };
-    let validated = entries::validate(
-        tx.sql(),
-        tenant,
-        company_id,
-        book.minor_units,
-        &new,
-        None,
-        entries::Inactive::Any,
-    )
-    .await?;
-    let valid = if reversal.entry_date < original.entry_date {
-        let early = FieldError::new("entry_date", "cannot be before the reversed entry's date");
-        let mut errors = validated.err().unwrap_or_default();
-        errors.insert(0, early);
-        return Err(LedgerError::Invalid(errors));
-    } else {
-        validated
-            .map_err(LedgerError::Invalid)?
-            .reversing(&original)
-    };
+    let (book, _, valid) =
+        prepare_reverse(tx.sql(), tenant, company_id, entry_id, owner, reversal).await?;
     let (actor, impersonator) = people(scope);
     let entry = tx
         .mutate(move |sql| {
@@ -2989,9 +2949,65 @@ async fn reverse(
     Ok(entry)
 }
 
+async fn prepare_reverse(
+    client: &dyn bilibi_agent_api::OperationClient,
+    tenant: i64,
+    company_id: i64,
+    entry_id: i64,
+    owner: Option<&EntryOwner>,
+    reversal: &Reversal,
+) -> Result<(Book, Entry, entries::ValidEntry)> {
+    let book = books::find(client, tenant, company_id)
+        .await?
+        .ok_or(LedgerError::BookNotOpen)?;
+    let original = entries::find(client, tenant, company_id, entry_id)
+        .await?
+        .ok_or(LedgerError::EntryNotFound)?;
+    if original.reverses_entry_id.is_some() {
+        return Err(LedgerError::ReversalNotReversible);
+    }
+    if original.reversed_by_entry_id.is_some() {
+        return Err(LedgerError::AlreadyReversed);
+    }
+    if periods::closing_entry(client, company_id, original.id).await? {
+        return Err(LedgerError::ClosingEntry);
+    }
+    match (&original.owner, owner) {
+        (Some(owned), None) => return Err(LedgerError::OwnedBy(owned.clone())),
+        (None, Some(_)) => return Err(LedgerError::NotOwned),
+        (Some(owned), Some(owner)) if owned != owner => return Err(LedgerError::NotTheOwner),
+        _ => {}
+    }
+    let new = NewEntry {
+        reference: reversal.reference.clone(),
+        ..entries::mirror(&original, reversal.entry_date, reversal.description.clone())
+    };
+    let validated = entries::validate(
+        client,
+        tenant,
+        company_id,
+        book.minor_units,
+        &new,
+        None,
+        entries::Inactive::Any,
+    )
+    .await?;
+    let valid = if reversal.entry_date < original.entry_date {
+        let early = FieldError::new("entry_date", "cannot be before the reversed entry's date");
+        let mut errors = validated.err().unwrap_or_default();
+        errors.insert(0, early);
+        return Err(LedgerError::Invalid(errors));
+    } else {
+        validated
+            .map_err(LedgerError::Invalid)?
+            .reversing(&original)
+    };
+    Ok((book, original, valid))
+}
+
 /// A journal of the company that is still submitted.
 async fn submitted_journal(
-    client: &impl GenericClient,
+    client: &dyn bilibi_agent_api::OperationClient,
     tenant: i64,
     company_id: i64,
     journal_id: i64,
@@ -3006,7 +3022,7 @@ async fn submitted_journal(
 }
 
 async fn separation_view(
-    client: &impl GenericClient,
+    client: &dyn bilibi_agent_api::OperationClient,
     tenant: i64,
     company_id: i64,
 ) -> Result<DutySeparation> {
@@ -3092,7 +3108,7 @@ fn side(account_id: i64, net: rust_decimal::Decimal) -> NewLine {
 }
 
 async fn fiscal_year(
-    client: &impl GenericClient,
+    client: &dyn bilibi_agent_api::OperationClient,
     tenant: i64,
     company_id: i64,
     fiscal_year_id: i64,
@@ -3106,7 +3122,7 @@ async fn fiscal_year(
 }
 
 async fn controlled_view(
-    client: &impl GenericClient,
+    client: &dyn bilibi_agent_api::OperationClient,
     tenant: i64,
     company_id: i64,
 ) -> Result<ControlledBookkeeping> {

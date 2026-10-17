@@ -7,6 +7,7 @@ use crate::{
     periods, Entry, EntryLine, EntryOwner, EntryQuery, FieldError, LedgerError, Money, NewEntry,
     NewLine,
 };
+use bilibi_agent_api::OperationClient;
 use bilibi_database::Result;
 use jiff::{civil::Date, Timestamp};
 use rust_decimal::Decimal;
@@ -26,7 +27,9 @@ const ENTRY_COLUMNS: &str = "id,entry_number,entry_date::text AS entry_date,desc
 const LINE_COLUMNS: &str = "entry_id,line_number,account_id,debit,credit,description";
 
 /// A new entry's values after trimming and checking, ready to insert.
+#[derive(serde::Serialize)]
 pub(crate) struct ValidEntry {
+    #[serde(serialize_with = "crate::as_text")]
     pub entry_date: Date,
     pub description: String,
     pub reference: Option<String>,
@@ -72,6 +75,7 @@ pub(crate) fn mirror(original: &Entry, entry_date: Date, description: String) ->
             .collect(),
     }
 }
+#[derive(serde::Serialize)]
 pub(crate) struct ValidLine {
     pub account_id: i64,
     pub debit: Money,
@@ -106,7 +110,7 @@ pub(crate) fn owner_valid(owner: &EntryOwner) -> bool {
 /// account and open-period rules, in one pass: every refusal comes back, not
 /// only the first. The owner's record must also have no original entry yet.
 pub(crate) async fn validate(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     tenant: i64,
     company_id: i64,
     units: crate::MinorUnits,
@@ -114,9 +118,58 @@ pub(crate) async fn validate(
     owner: Option<&EntryOwner>,
     inactive: Inactive<'_>,
 ) -> Result<std::result::Result<ValidEntry, Vec<FieldError>>> {
-    let mut errors = Vec::new();
-    if let Some(message) = periods::date_refusal(client, tenant, company_id, new.entry_date).await?
+    let refusal = periods::date_refusal(client, tenant, company_id, new.entry_date).await?;
+    validate_values(
+        client, tenant, company_id, units, new, owner, inactive, refusal,
+    )
+    .await
+}
+
+/// A read-only projection of reopening this year's final period. No other
+/// date or state may use this path; actual posting still checks the database.
+pub(crate) async fn validate_reopening(
+    client: &dyn OperationClient,
+    tenant: i64,
+    company_id: i64,
+    units: crate::MinorUnits,
+    new: &NewEntry,
+    year: &crate::FiscalYear,
+) -> Result<std::result::Result<ValidEntry, Vec<FieldError>>> {
+    if year.status != crate::YearStatus::Closed
+        || year.end_date != new.entry_date
+        || !year
+            .periods
+            .last()
+            .is_some_and(|p| p.status == crate::PeriodStatus::Closed)
     {
+        return Err(bilibi_database::Error::Conflict);
+    }
+    validate_values(
+        client,
+        tenant,
+        company_id,
+        units,
+        new,
+        None,
+        Inactive::Any,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn validate_values(
+    client: &dyn OperationClient,
+    tenant: i64,
+    company_id: i64,
+    units: crate::MinorUnits,
+    new: &NewEntry,
+    owner: Option<&EntryOwner>,
+    inactive: Inactive<'_>,
+    date_refusal: Option<String>,
+) -> Result<std::result::Result<ValidEntry, Vec<FieldError>>> {
+    let mut errors = Vec::new();
+    if let Some(message) = date_refusal {
         errors.push(FieldError::new("entry_date", message));
     }
     let description = new.description.trim().to_owned();
@@ -265,7 +318,7 @@ pub(crate) struct Inserted {
 /// Inserts the entry and its lines; the database numbers and stamps the entry,
 /// so what comes back is what PostgreSQL stored.
 pub(crate) async fn insert(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     currency_code: &str,
@@ -341,7 +394,7 @@ pub(crate) async fn insert(
 
 /// One entry of the company with its lines.
 pub(crate) async fn find(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     tenant: i64,
     company_id: i64,
     entry_id: i64,
@@ -357,7 +410,7 @@ pub(crate) async fn find(
 
 /// Entries by date then id, as [`EntryQuery`] bounds them.
 pub(crate) async fn list(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     tenant: i64,
     company_id: i64,
     query: &EntryQuery,
@@ -409,14 +462,13 @@ pub(crate) async fn list(
                 &query.exclude_closing,
             ],
         )
-        .await
-        .map_err(bilibi_database::Error::from)?;
+        .await?;
     Ok(hydrate(client, tenant, company_id, rows).await?)
 }
 
 /// Adds each entry's lines and the entry that reversed it, if any.
 async fn hydrate(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     tenant: i64,
     company_id: i64,
     rows: Vec<Row>,

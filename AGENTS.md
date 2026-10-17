@@ -66,6 +66,7 @@ they govern this code and are not copied here.
 - The ledger owns no CSS, JavaScript, pages or menu items (`web: nil` in
   Bilimbi); a Finance module with pages uses only `bilibi_ui` components and
   `FlexTable` for every list, per `apps/base/ui/AGENTS.md`.
+- Agent writes join the shared plan's audited transaction through the ledger's private `*_on` methods, never the pool-owning public wrappers: nested commits would escape plan rollback. Preview on the handed `OperationClient`; retain the transaction-local review fence because the pinned engine previews every step before executing any.
 
 - Post an entry only through `Ledger::post_entry` and read it through
   `get_entry`/`list_entries`; never insert into or select from
