@@ -20,7 +20,7 @@
 //! (Bilimbi passes `final?` from the page), so a page cannot show replace or
 //! remove for a record that has just become final.
 use super::{download::company_of, format, time_html, DENIED};
-use crate::{Attachment, Attachments, SourceClient, CREATE, DELETE, MAX_FILE_BYTES, NewFile};
+use crate::{Attachment, Attachments, NewFile, SourceClient, CREATE, DELETE, MAX_FILE_BYTES};
 use askama::Template;
 use bilibi_database::{Db, Error, Result};
 use bilibi_datetime::DisplayPolicy;
@@ -79,7 +79,8 @@ struct Item {
 #[derive(Template)]
 #[template(path = "panel.html")]
 struct View {
-    id: String,
+    /// Not `id`: inside a macro call body Askama resolves `id` to the macro's.
+    panel: String,
     card_id: String,
     heading_id: String,
     submit_id: String,
@@ -194,7 +195,13 @@ impl Panel {
         match self
             .pages
             .attachments
-            .source_document(SourceClient::Client(&client), scope, company, registered, self.document)
+            .source_document(
+                SourceClient::Client(&client),
+                scope,
+                company,
+                registered,
+                self.document,
+            )
             .await
         {
             Ok(document) => Ok(document.is_final),
@@ -210,8 +217,16 @@ impl Panel {
         let is_final = self.is_final(scope).await?;
         let display = {
             let client = self.pages.db.get().await?;
-            let locale = self.pages.locales.resolve(&**client, scope, None).await?.locale;
-            self.pages.display.display(&**client, scope, None, locale).await?
+            let locale = self
+                .pages
+                .locales
+                .resolve(&**client, scope, None)
+                .await?
+                .locale;
+            self.pages
+                .display
+                .display(&**client, scope, None, locale)
+                .await?
         };
         let id = &self.id;
         let mut items = Vec::with_capacity(attachments.len());
@@ -246,24 +261,25 @@ impl Panel {
         }
         let empty = if attachments.is_empty() && !can_create {
             Some(render_html(
-                EmptyState::missing("No source documents", "Nothing has been attached to this record.")
-                    .id(format!("{id}-empty")),
+                EmptyState::missing(
+                    "No source documents",
+                    "Nothing has been attached to this record.",
+                )
+                .id(format!("{id}-empty")),
             )?)
         } else {
             None
         };
         let file_input = if can_create {
-            Some(Html::render(
-                &self
-                    .uploads
-                    .input(UPLOAD, format!("{id}-file")),
+            Some(
+                Html::render(&self.uploads.input(UPLOAD, format!("{id}-file")))
+                    .map_err(|_| Error::Internal)?,
             )
-            .map_err(|_| Error::Internal)?)
         } else {
             None
         };
         View {
-            id: id.clone(),
+            panel: id.clone(),
             card_id: format!("{id}-card"),
             heading_id: format!("{id}-heading"),
             submit_id: format!("{id}-submit"),
@@ -294,7 +310,10 @@ impl Panel {
             return Ok(());
         };
         let Some(company) = company_of(scope) else {
-            self.notice(true, "This company cannot be read with your current access.");
+            self.notice(
+                true,
+                "This company cannot be read with your current access.",
+            );
             return Ok(());
         };
         let file = NewFile {
@@ -303,7 +322,12 @@ impl Panel {
             content_type: Some(file.content_type),
         };
         let result = match self.action {
-            Action::Replace(id) => self.pages.attachments.replace(scope, company, id, &file).await,
+            Action::Replace(id) => {
+                self.pages
+                    .attachments
+                    .replace(scope, company, id, &file)
+                    .await
+            }
             _ => {
                 self.pages
                     .attachments
@@ -337,7 +361,10 @@ impl Panel {
             return Err(Error::Invalid);
         };
         let Some(company) = company_of(scope) else {
-            self.notice(true, "This company cannot be read with your current access.");
+            self.notice(
+                true,
+                "This company cannot be read with your current access.",
+            );
             return Ok(());
         };
         match self
@@ -351,7 +378,10 @@ impl Panel {
                 self.reason.clear();
                 self.notice(
                     false,
-                    format!("{} was removed; its bytes stay retained.", attachment.file_name),
+                    format!(
+                        "{} was removed; its bytes stay retained.",
+                        attachment.file_name
+                    ),
                 );
             }
             Err(error) => self.notice(true, format::refusal(error)?),
@@ -361,7 +391,11 @@ impl Panel {
 
     async fn event(&mut self, scope: &Scope, value: &serde_json::Value) -> Result<()> {
         let get = |key: &str| value.get(key).and_then(serde_json::Value::as_str);
-        let id = || get("id").and_then(|id| id.parse::<i64>().ok()).filter(|id| *id > 0);
+        let id = || {
+            get("id")
+                .and_then(|id| id.parse::<i64>().ok())
+                .filter(|id| *id > 0)
+        };
         match get("type").ok_or(Error::Invalid)? {
             "attach" => self.attach(scope).await,
             "open_replace" => {

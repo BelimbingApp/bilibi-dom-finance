@@ -48,11 +48,15 @@ macro_rules! provenance {
 // Bilimbi `Contributions.menu`: id, label, icon, parent, route, capability, order.
 bilibi_menu::contribute!(
     "finance/attachments",
-    bilibi_menu::MenuItem::page("finance.attachments", "Source documents", "/finance/attachments")
-        .icon("shield-check")
-        .under("finance")
-        .requires(bilibi_menu::Requirement::Capability(crate::VIEW))
-        .order(18)
+    bilibi_menu::MenuItem::page(
+        "finance.attachments",
+        "Source documents",
+        "/finance/attachments"
+    )
+    .icon("shield-check")
+    .under("finance")
+    .requires(bilibi_menu::Requirement::Capability(crate::VIEW))
+    .order(18)
 );
 
 inventory::submit! { Contribution::new(ROUTES, "finance/attachments.index", provenance!(), &Route {
@@ -103,5 +107,11 @@ pub(crate) fn time_html(display: &DisplayContext, id: &str, at: jiff::Timestamp)
 /// A timestamp cell that stays typed through every lens of the table.
 pub(crate) fn time_cell(display: &DisplayContext, at: jiff::Timestamp) -> Cell {
     let r = display.render(at, Format::DateTime, Precision::Minute);
-    Cell::instant(Instant::new(&r.iso, &r.text, &r.company, &r.utc, r.mode.as_str()))
+    Cell::instant(Instant::new(
+        &r.iso,
+        &r.text,
+        &r.company,
+        &r.utc,
+        r.mode.as_str(),
+    ))
 }

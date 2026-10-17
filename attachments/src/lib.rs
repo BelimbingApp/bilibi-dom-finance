@@ -78,10 +78,10 @@ pub use evidence::EvidencePage;
 pub use files::{NewFile, MAX_FILE_BYTES};
 pub use owner::OWNER_ID as ARTIFACT_OWNER;
 pub use retention::DEFAULT_YEARS;
-pub use web::EMBED as PANEL_EMBED;
 pub use source::{
     Source, SourceClient, SourceDefinition, SourceDocument, SourceFuture, SourceRefusal, SOURCES,
 };
+pub use web::EMBED as PANEL_EMBED;
 
 use bilibi_artifacts::{Artifacts, Error as StorageError};
 use bilibi_database::{Db, Error, MutationBoundary};

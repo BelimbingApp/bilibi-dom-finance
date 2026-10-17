@@ -5,22 +5,22 @@
     control inside reaches this panel. -#}
 {%- import "components.html" as ui -%}
 {%- import "forms.html" as form -%}
-<div id="{{ id }}" data-target="{{ id }}">
+<div id="{{ panel }}" data-target="{{ panel }}">
 {% call ui::card(id=card_id, inner_class="p-5 sm:p-6", role="region", labelledby=heading_id) %}
 {% call ui::section_heading(title="Source documents", id=heading_id, count=count, description="The original files behind this record, kept until their retain-until date; nothing deletes them before it.") %}{% endcall %}
-{% if let Some(notice) = notice %}<p id="{{ id }}-notice" role="status" class="mt-3 text-sm {% if notice.error %}text-danger{% else %}text-success{% endif %}">{{ notice.message }}</p>{% endif %}
+{% if let Some(notice) = notice %}<p id="{{ panel }}-notice" role="status" class="mt-3 text-sm {% if notice.error %}text-danger{% else %}text-success{% endif %}">{{ notice.message }}</p>{% endif %}
 {% if !items.is_empty() %}
-<ul id="{{ id }}-list" class="mt-4 divide-y divide-line">
+<ul id="{{ panel }}-list" class="mt-4 divide-y divide-line">
 {% for item in items %}
-<li id="{{ id }}-{{ item.id }}" class="flex flex-wrap items-center justify-between gap-2 py-3 text-sm">
-<div class="min-w-0"><a id="{{ id }}-{{ item.id }}-download" href="/finance/attachments/{{ item.id }}/download" download="{{ item.file_name }}" class="font-medium">{{ item.file_name }}</a>
+<li id="{{ panel }}-{{ item.id }}" class="flex flex-wrap items-center justify-between gap-2 py-3 text-sm">
+<div class="min-w-0"><a id="{{ panel }}-{{ item.id }}-download" href="/finance/attachments/{{ item.id }}/download" download="{{ item.file_name }}" class="font-medium">{{ item.file_name }}</a>
 <p class="text-ink-muted">{{ item.size }} · SHA-256 <span title="{{ item.sha256 }}" class="font-mono">{{ item.short_hash }}</span> · kept until {{ item.retain_until }}{% if item.on_hold %} (on legal hold){% endif %} · captured {{ item.captured|safe }}</p></div>
 {% if item.show_actions %}<div class="flex gap-2">
 {% if item.can_replace %}{% call ui::button(id=item.replace_id, button_type="button", event="open_replace", name="id", value=item.id_text) %}Replace{% endcall %}{% endif %}
 {% if item.can_remove %}{% call ui::button(id=item.remove_id, button_type="button", event="open_remove", name="id", value=item.id_text, variant=bilibi_ui::ButtonVariant::Danger) %}Remove{% endcall %}{% endif %}
 </div>{% endif %}
 {% if let Some(reason) = item.removal %}
-<form id="{{ id }}-{{ item.id }}-remove-form" data-event="reason" data-change data-submit-event="remove" class="basis-full">
+<form id="{{ panel }}-{{ item.id }}-remove-form" data-event="reason" data-change data-submit-event="remove" class="basis-full">
 {% call form::input(field=reason) %}{% endcall %}
 <div class="mt-2 flex justify-end gap-2">
 {% call ui::button(button_type="button", event="cancel_action") %}Keep file{% endcall %}
@@ -33,8 +33,8 @@
 {% endif %}
 {% if let Some(empty) = empty %}{{ empty|safe }}{% endif %}
 {% if let Some(input) = file_input %}
-<form id="{{ id }}-form" data-event="attach" class="mt-4 space-y-3">
-{% if replacing %}<p id="{{ id }}-replacing" class="text-sm">The file you choose replaces the one selected; the old one stays in the record's history. {% call ui::button(button_type="button", event="cancel_action") %}Keep it instead{% endcall %}</p>{% endif %}
+<form id="{{ panel }}-form" data-event="attach" class="mt-4 space-y-3">
+{% if replacing %}<p id="{{ panel }}-replacing" class="text-sm">The file you choose replaces the one selected; the old one stays in the record's history. {% call ui::button(button_type="button", event="cancel_action") %}Keep it instead{% endcall %}</p>{% endif %}
 {{ input|safe }}
 {% call ui::button(id=submit_id, button_type="submit", variant=bilibi_ui::ButtonVariant::Primary, working="Keeping…") %}{% if replacing %}Replace file{% else %}Attach file{% endif %}{% endcall %}
 </form>

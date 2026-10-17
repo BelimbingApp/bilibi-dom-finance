@@ -22,9 +22,9 @@ use bilibi_ui::{
         LiveBody, LiveFuture, LiveInput, LiveRequest, LiveState, MountFuture, Page, PageBody,
         PageFuture, PageRequest,
     },
-    params, Badge, BadgeKind, BuiltinColumn, Cell, Choice, ColumnType, EmptyState,
-    Field, FlashMap, Filter, FlexRow, FlexTable, Html, InputKind, ListColumns, ListSpec,
-    ListState, StatusKind, TableEmpty, NO_FLASH,
+    params, Badge, BadgeKind, BuiltinColumn, Cell, Choice, ColumnType, EmptyState, Field, Filter,
+    FlashMap, FlexRow, FlexTable, Html, InputKind, ListColumns, ListSpec, ListState, StatusKind,
+    TableEmpty, NO_FLASH,
 };
 use std::{
     collections::HashMap,
@@ -83,7 +83,12 @@ fn change_columns() -> Vec<BuiltinColumn> {
     years.kind = ColumnType::Integer;
     let mut changed = BuiltinColumn::new("changed", "Changed");
     changed.kind = ColumnType::Datetime;
-    vec![number, years, BuiltinColumn::new("reason", "Reason"), changed]
+    vec![
+        number,
+        years,
+        BuiltinColumn::new("reason", "Reason"),
+        changed,
+    ]
 }
 
 /// The module's page adapter, shared by mounted states.
@@ -134,7 +139,9 @@ fn render(fragment: impl Template) -> Result<Html> {
 }
 
 /// A refusal told as the page tells it; a failure is not a refusal.
-fn told<T>(result: std::result::Result<T, AttachmentError>) -> Result<std::result::Result<T, String>> {
+fn told<T>(
+    result: std::result::Result<T, AttachmentError>,
+) -> Result<std::result::Result<T, String>> {
     match result {
         Ok(value) => Ok(Ok(value)),
         Err(error) => Ok(Err(format::refusal(error)?)),
@@ -250,7 +257,12 @@ impl Index {
 
     async fn display(&self, scope: &Scope) -> Result<DisplayContext> {
         let client = self.pages.db.get().await?;
-        let locale = self.pages.locales.resolve(&**client, scope, None).await?.locale;
+        let locale = self
+            .pages
+            .locales
+            .resolve(&**client, scope, None)
+            .await?
+            .locale;
         self.pages
             .display
             .display(&**client, scope, None, locale)
@@ -363,7 +375,9 @@ impl Index {
                         .map(|kinds| {
                             kinds
                                 .into_iter()
-                                .map(|k| (k.source_label.unwrap_or_else(|| k.source.clone()), k.source))
+                                .map(|k| {
+                                    (k.source_label.unwrap_or_else(|| k.source.clone()), k.source)
+                                })
                                 .collect()
                         }),
                 )?;
@@ -405,7 +419,11 @@ impl Index {
                     )?),
                     None => None,
                 },
-                reason: r.change.as_ref().map(|c| c.reason.clone()).unwrap_or_default(),
+                reason: r
+                    .change
+                    .as_ref()
+                    .map(|c| c.reason.clone())
+                    .unwrap_or_default(),
             }),
             None => None,
         };
@@ -431,7 +449,12 @@ impl Index {
                 .id("attachments-filter-source")
                 .kind(InputKind::Select)
                 .prompt("Every kind of record")
-                .options(sources.iter().map(|(l, v)| Choice::new(l.clone(), v.clone())).collect())
+                .options(
+                    sources
+                        .iter()
+                        .map(|(l, v)| Choice::new(l.clone(), v.clone()))
+                        .collect(),
+                )
                 .value(self.list.filters.get("source").cloned().unwrap_or_default()),
             status: Field::named("filters[status]")
                 .id("attachments-filter-status")
@@ -480,7 +503,10 @@ impl Index {
             return Ok(());
         }
         let Some(company) = company_of(scope) else {
-            self.flash(StatusKind::Error, "This company cannot be read with your current access.");
+            self.flash(
+                StatusKind::Error,
+                "This company cannot be read with your current access.",
+            );
             return Ok(());
         };
         let Ok(years) = self.draft_years.trim().parse::<i32>() else {
@@ -514,7 +540,8 @@ impl Index {
         let get = |key: &str| value.get(key).and_then(serde_json::Value::as_str);
         match get("type").ok_or(Error::Invalid)? {
             "filter" => {
-                self.list.apply_filters(&params::form_values(value, "filters"));
+                self.list
+                    .apply_filters(&params::form_values(value, "filters"));
                 self.pages_loaded = 1;
                 Ok(true)
             }
@@ -605,7 +632,8 @@ impl Page<Scope, Error> for Pages {
             if request.operation != "index" {
                 return Err(Error::NotFound);
             }
-            let state: Box<dyn LiveState<Scope, Error>> = Box::new(Index::new(self, request.query)?);
+            let state: Box<dyn LiveState<Scope, Error>> =
+                Box::new(Index::new(self, request.query)?);
             Ok(Some(state))
         })
     }

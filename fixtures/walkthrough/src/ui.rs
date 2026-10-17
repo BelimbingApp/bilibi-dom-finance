@@ -132,10 +132,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bind = std::env::var("BIND_ADDR").map_err(|_| Error::Invalid)?;
     let modules = bilibi_module_registry::discover()?;
     bilibi_database::migrate(&db, &modules).await?;
-    let mut services = bilibi_module_registry::Services::default();
-    services.provide("bootstrap.database", Arc::new(db.clone()))?;
-    services.install(&modules)?;
-    install(&db, &services).await?;
+    // The app's own services serve the proof too: a second install in one
+    // process would register the Platform's bindings twice.
+    let app = bilibi_web::App::new(db.clone(), &origin)?;
+    let services = &app.services;
+    install(&db, services).await?;
     // Company 001's viewer and staff accounts join the company, as the
     // attachments walkthrough does.
     db.get()
@@ -152,23 +153,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let root = std::env::var("BILIBI_ATTACHMENTS_DEMO_ROOT").unwrap_or_else(|_| {
         std::env::temp_dir()
-            .join(format!("bilibi-finance-attachments-ui-{}", std::process::id()))
+            .join(format!(
+                "bilibi-finance-attachments-ui-{}",
+                std::process::id()
+            ))
             .display()
             .to_string()
     });
     std::fs::create_dir_all(&root)?;
     std::fs::set_permissions(&root, std::os::unix::fs::PermissionsExt::from_mode(0o700))?;
-    let admin = sign_in(&db, &services, 1, 4).await?;
-    configure_storage(&db, &services, &admin, &root).await?;
+    let admin = sign_in(&db, services, 1, 4).await?;
+    configure_storage(&db, services, &admin, &root).await?;
 
     let attachments = services
         .get::<bilibi_finance_attachments::Attachments>(bilibi_finance_attachments::SERVICE)?;
-    let manager = sign_in(&db, &services, 1, 1).await?;
+    let manager = sign_in(&db, services, 1, 1).await?;
     let draft = records::add(&db, 1, COMPANY, "open", "Bill 12", date(2026, 3, 15), false).await?;
     let posted = records::add(&db, 1, COMPANY, "open", "Bill 7", date(2025, 11, 2), true).await?;
     for (id, name, bytes) in [
-        (draft, "bill-12-scan.pdf", &b"%PDF-1.4 supplier invoice 12"[..]),
-        (posted, "bill-7-scan.pdf", &b"%PDF-1.4 supplier invoice 7"[..]),
+        (
+            draft,
+            "bill-12-scan.pdf",
+            &b"%PDF-1.4 supplier invoice 12"[..],
+        ),
+        (
+            posted,
+            "bill-7-scan.pdf",
+            &b"%PDF-1.4 supplier invoice 7"[..],
+        ),
     ] {
         attachments
             .attach(
@@ -191,14 +203,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await
         .map_err(|_| Error::Internal)?;
     println!("Attachments UI listening at {origin}");
-    axum::serve(
-        listener,
-        bilibi_web::router(bilibi_web::App::new(db, &origin)?),
-    )
-    .with_graceful_shutdown(async {
-        let _ = tokio::signal::ctrl_c().await;
-    })
-    .await
-    .map_err(|_| Error::Internal)?;
+    axum::serve(listener, bilibi_web::router(app))
+        .with_graceful_shutdown(async {
+            let _ = tokio::signal::ctrl_c().await;
+        })
+        .await
+        .map_err(|_| Error::Internal)?;
     Ok(())
 }
