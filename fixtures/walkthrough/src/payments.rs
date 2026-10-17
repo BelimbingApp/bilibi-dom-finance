@@ -280,7 +280,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
     let attachment = attachments
         .attach(&manager, COMPANY, PAYMENT_SOURCE, r.id, &file)
         .await?;
-    attachments
+    let attachment = attachments
         .replace(&manager, COMPANY, attachment.id, &file)
         .await?;
     let paid = p.approve_payment(&reviewer, COMPANY, r.id).await?;
