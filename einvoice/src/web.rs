@@ -40,6 +40,7 @@ struct State {
     operation: &'static str,
     framed: bool,
     month: Date,
+    month_control_revision: u64,
     code_number: String,
     candidates: Option<Candidates>,
     reconciliation: Option<Reconciliation>,
@@ -124,6 +125,7 @@ impl State {
             operation: request.operation,
             framed: request.framed,
             month: month(request.query.get("month").map(String::as_str)),
+            month_control_revision: 0,
             code_number: String::new(),
             candidates: None,
             reconciliation: None,
@@ -366,6 +368,7 @@ impl State {
     async fn consolidation(&self, scope: &Scope, display: &DisplayContext) -> Result<Vec<Html>> {
         let mut parts = vec![render(ConsolidationForm {
             issue: false,
+            month_control_revision: self.month_control_revision,
             field: Field::named("month")
                 .id("einvoice-consolidation-month-input")
                 .label("Month")
@@ -424,6 +427,7 @@ impl State {
         if c.open && !c.documents.is_empty() && self.allowed(scope, ISSUE).await? {
             body.push(&render(ConsolidationForm {
                 issue: true,
+                month_control_revision: self.month_control_revision,
                 field: Field::in_form("issue", "code_number")
                     .id("einvoice-consolidation-code-number")
                     .label("Number of the consolidated document")
@@ -973,6 +977,7 @@ struct PageView<'a> {
 #[template(path = "consolidation_forms.html")]
 struct ConsolidationForm {
     issue: bool,
+    month_control_revision: u64,
     field: Field,
 }
 #[derive(Template)]
@@ -1033,7 +1038,13 @@ impl LiveState<Scope, Error> for State {
             match request.input {
                 LiveInput::Event(value) => self.event(request.scope, value).await?,
                 LiveInput::Params(query) => {
-                    self.month = month(query.get("month").map(String::as_str));
+                    let next = month(query.get("month").map(String::as_str));
+                    if next != self.month {
+                        // The pinned patcher preserves a focused input's dirty value.
+                        // Replace only this control on Back/Forward, not while editing.
+                        self.month_control_revision += 1;
+                    }
+                    self.month = next;
                     self.load(request.scope).await?;
                 }
                 LiveInput::Refresh => self.load(request.scope).await?,

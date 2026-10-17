@@ -8,6 +8,8 @@
 </form>
 {% else %}
 <form id="einvoice-consolidation-month" data-change data-event="month">
+<div id="einvoice-consolidation-month-control-{{ month_control_revision }}">
 {% call form::input(field=field) %}{% endcall %}
+</div>
 </form>
 {% endif %}
