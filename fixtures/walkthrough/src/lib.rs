@@ -29,6 +29,7 @@ pub mod attachments;
 pub mod controls;
 pub mod payables;
 pub mod periods;
+pub mod totals;
 
 /// Every fixture account's password.
 pub use bilibi_walkthrough_fixture::PASSWORD;

@@ -401,7 +401,7 @@ pub(crate) fn to_json(account: &Account) -> Value {
     })
 }
 
-fn from_row(row: &Row) -> Account {
+pub(crate) fn from_row(row: &Row) -> Account {
     let account_type: String = row.get("account_type");
     Account {
         id: row.get("id"),

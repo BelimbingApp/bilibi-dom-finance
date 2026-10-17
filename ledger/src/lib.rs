@@ -53,6 +53,12 @@
 //! submitted and posts only once someone approves it
 //! ([`Ledger::submit_journal`], [`Ledger::approve_journal`]).
 //!
+//! Figures are summed by PostgreSQL ([`Ledger::trial_balance`],
+//! [`Ledger::account_totals`], [`Ledger::account_totals_by_owner`]) and name
+//! the last entry number they count, which reproduces them exactly: entries
+//! are numbered in posting order and never change. [`Ledger::evidence_page`]
+//! exports each table for the auditor's pack.
+//!
 //! Results are plain records; the schema, SQL and validation stay private.
 mod accounts;
 mod bookkeeping;
@@ -60,17 +66,20 @@ mod books;
 mod contributions;
 mod duties;
 mod entries;
+mod evidence;
 mod journals;
 mod late_recordings;
 mod money;
 mod periods;
 mod postings;
+mod totals;
 
 pub use contributions::{
     APPROVE_JOURNALS, CAPABILITIES, LOCK_PERIODS, MANAGE_ACCOUNTS, MANAGE_CONTROLLED_BOOKKEEPING,
     MANAGE_DUTY_SEPARATION, MANAGE_PERIODS, POST_ENTRIES, REOPEN_PERIODS, REVIEW_EXCEPTIONS,
     REVIEW_LATE_RECORDINGS, SUBMIT_JOURNALS, VIEW,
 };
+pub use evidence::EvidencePage;
 pub use money::{MinorUnits, Money, MoneyError};
 
 use bilibi_company::{organisation, WriteError};
@@ -824,6 +833,90 @@ pub struct JournalQuery {
     pub after: Option<i64>,
 }
 
+/// Bounds of [`Ledger::account_totals`] and [`Ledger::account_totals_by_owner`].
+#[derive(Clone, Debug, Default)]
+pub struct TotalsQuery {
+    /// Entry dates, both inclusive; `from` after `to` is `InvalidOption`.
+    pub from: Option<Date>,
+    pub to: Option<Date>,
+    /// Counts entries numbered up to this one (0 or more), to reproduce an
+    /// earlier read; the company's last entry when absent.
+    pub through_entry_number: Option<i64>,
+    /// Leaves out year-end closing entries and their reversals, so income
+    /// and expense over a closed year show its activity.
+    pub exclude_closing: bool,
+}
+/// One account's debit and credit totals over a window.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct AccountTotal {
+    #[serde(flatten)]
+    pub account: Account,
+    pub debits: Money,
+    pub credits: Money,
+}
+/// One account's totals from the entries of one owner module (its descriptor
+/// id, `None` for entries with no owner).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct OwnerTotal {
+    #[serde(flatten)]
+    pub account: Account,
+    pub owner_module: Option<String>,
+    pub debits: Money,
+    pub credits: Money,
+}
+/// Account totals over a window, counted through `through_entry_number`:
+/// [`AccountTotals`] or [`OwnerTotals`]. Account names, parents and active
+/// flags are as they are now.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Totals<R> {
+    pub company_id: i64,
+    #[serde(serialize_with = "as_optional_text")]
+    pub from: Option<Date>,
+    #[serde(serialize_with = "as_optional_text")]
+    pub to: Option<Date>,
+    pub through_entry_number: i64,
+    pub currency_code: String,
+    pub minor_units: MinorUnits,
+    pub rows: Vec<R>,
+}
+pub type AccountTotals = Totals<AccountTotal>;
+pub type OwnerTotals = Totals<OwnerTotal>;
+/// One account of a trial balance: its totals and its balance on one side
+/// (the other is zero).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct TrialBalanceRow {
+    #[serde(flatten)]
+    pub account: Account,
+    pub debits: Money,
+    pub credits: Money,
+    pub debit_balance: Money,
+    pub credit_balance: Money,
+}
+/// Every account with a posting dated on or before `as_of`, by code, counted
+/// through `through_entry_number`. `total_debit` equals `total_credit`,
+/// because every posted entry balances.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct TrialBalance {
+    pub company_id: i64,
+    #[serde(serialize_with = "as_text")]
+    pub as_of: Date,
+    pub through_entry_number: i64,
+    pub currency_code: String,
+    pub minor_units: MinorUnits,
+    pub rows: Vec<TrialBalanceRow>,
+    pub total_debit: Money,
+    pub total_credit: Money,
+}
+fn as_optional_text<T: std::fmt::Display, S: serde::Serializer>(
+    value: &Option<T>,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error> {
+    match value {
+        Some(value) => serializer.collect_str(value),
+        None => serializer.serialize_none(),
+    }
+}
+
 /// What a [`PostingSubscription`] hears.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PostingEvent {
@@ -1186,6 +1279,158 @@ impl Ledger {
             .subscribe(scope.tenant(), company_id)
             .await
             .ok_or(LedgerError::NoticesUnavailable)
+    }
+
+    // Totals
+
+    /// The trial balance as of a date (`finance.ledger.view`): every account
+    /// with a posting dated on or before `as_of`, by code, with its debit and
+    /// credit totals and its balance on one side. An account reports its own
+    /// postings only; `parent_id` lets a reader group rows without counting a
+    /// parent twice. The result names `through_entry_number`, the last entry
+    /// it counts: passing it back with the same `as_of` reproduces the
+    /// figures exactly, even after an entry is posted later with an earlier
+    /// date. A negative number is `InvalidOption`; `BookNotOpen` before the
+    /// book is opened.
+    pub async fn trial_balance(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        as_of: Date,
+        through_entry_number: Option<i64>,
+    ) -> Result<TrialBalance> {
+        let window = totals::Window::new(&TotalsQuery {
+            to: Some(as_of),
+            through_entry_number,
+            ..TotalsQuery::default()
+        })?;
+        let client = self.db.get().await.map_err(Error::from)?;
+        authorize(&**client, scope, company_id, VIEW).await?;
+        let tenant = scope.tenant();
+        let book = books::find(&**client, tenant, company_id)
+            .await?
+            .ok_or(LedgerError::BookNotOpen)?;
+        let (through, totals) = totals::by_account(&**client, tenant, company_id, &window).await?;
+        let rows: Vec<TrialBalanceRow> = totals
+            .into_iter()
+            .map(|total| {
+                let net = total.debits - total.credits;
+                TrialBalanceRow {
+                    debit_balance: if net.is_positive() { net } else { Money::ZERO },
+                    credit_balance: if (-net).is_positive() {
+                        -net
+                    } else {
+                        Money::ZERO
+                    },
+                    account: total.account,
+                    debits: total.debits,
+                    credits: total.credits,
+                }
+            })
+            .collect();
+        Ok(TrialBalance {
+            company_id,
+            as_of,
+            through_entry_number: through,
+            currency_code: book.currency_code,
+            minor_units: book.minor_units,
+            total_debit: rows.iter().map(|row| row.debit_balance).sum(),
+            total_credit: rows.iter().map(|row| row.credit_balance).sum(),
+            rows,
+        })
+    }
+
+    /// Each account's debit and credit totals over the entries dated `from`
+    /// through `to` (`finance.ledger.view`): every account with a posting in
+    /// that window, by code, summed by PostgreSQL. The result names
+    /// `through_entry_number`, the last entry it counts; several windows read
+    /// with the same number describe one state of the ledger, which is how a
+    /// report keeps its columns consistent. `exclude_closing` leaves out
+    /// year-end closing entries and their reversals (a profit and loss reads
+    /// this way, a balance sheet counts them). A negative number or a `from`
+    /// after `to` is `InvalidOption`; `BookNotOpen` before the book is opened.
+    pub async fn account_totals(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        query: &TotalsQuery,
+    ) -> Result<AccountTotals> {
+        let window = totals::Window::new(query)?;
+        let client = self.db.get().await.map_err(Error::from)?;
+        authorize(&**client, scope, company_id, VIEW).await?;
+        let tenant = scope.tenant();
+        let book = books::find(&**client, tenant, company_id)
+            .await?
+            .ok_or(LedgerError::BookNotOpen)?;
+        let (through, rows) = totals::by_account(&**client, tenant, company_id, &window).await?;
+        Ok(Totals {
+            company_id,
+            from: window.from,
+            to: window.to,
+            through_entry_number: through,
+            currency_code: book.currency_code,
+            minor_units: book.minor_units,
+            rows,
+        })
+    }
+
+    /// [`Ledger::account_totals`] split by owner (`finance.ledger.view`): one
+    /// row per account and owner module that posted to it in the window, by
+    /// code and then owner, entries with no owner first. The same query and
+    /// the same `through_entry_number` reproduce the same figures. A control
+    /// account ties out when its owner module's rows are the whole account:
+    /// any other row is a posting the owner's own records do not know, shown
+    /// as a difference, never netted away.
+    pub async fn account_totals_by_owner(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        query: &TotalsQuery,
+    ) -> Result<OwnerTotals> {
+        let window = totals::Window::new(query)?;
+        let client = self.db.get().await.map_err(Error::from)?;
+        authorize(&**client, scope, company_id, VIEW).await?;
+        let tenant = scope.tenant();
+        let book = books::find(&**client, tenant, company_id)
+            .await?
+            .ok_or(LedgerError::BookNotOpen)?;
+        let (through, rows) = totals::by_owner(&**client, tenant, company_id, &window).await?;
+        Ok(Totals {
+            company_id,
+            from: window.from,
+            to: window.to,
+            through_entry_number: through,
+            currency_code: book.currency_code,
+            minor_units: book.minor_units,
+            rows,
+        })
+    }
+
+    // Evidence
+
+    /// The datasets [`Ledger::evidence_page`] exports, one per table this
+    /// module owns, sorted.
+    pub fn evidence_datasets() -> Vec<&'static str> {
+        evidence::datasets()
+    }
+
+    /// One ID-ordered evidence page of `dataset` with explicit fields, rows
+    /// and next cursor (`finance.ledger.view`), for the auditor's pack.
+    /// `limit` is 1 to 500 (500 when absent) and `after` the last id of the
+    /// previous page; an unknown dataset or an option out of range is
+    /// `InvalidOption`. Each page is a live read on its own connection, so
+    /// pages read across a posting are not one snapshot of the ledger.
+    pub async fn evidence_page(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        dataset: &str,
+        limit: Option<i64>,
+        after: Option<i64>,
+    ) -> Result<EvidencePage> {
+        let client = self.db.get().await.map_err(Error::from)?;
+        authorize(&**client, scope, company_id, VIEW).await?;
+        evidence::page(&**client, scope.tenant(), company_id, dataset, limit, after).await
     }
 
     // Reversals

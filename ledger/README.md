@@ -4,8 +4,9 @@ Module ID: `finance/ledger` (Bilimbi `Bilimbi.Finance.Ledger`). A company's
 general ledger: its book, chart of accounts, journal entries, posting
 notices, fiscal years with period closing and the year-end close, controlled
 bookkeeping and late-recording reviews, reversals, the separation of duties
-with its approval exceptions and their reviews, and manual journals now;
-trial balance and account totals in a later version of this module. Other Finance modules and other Domains post
+with its approval exceptions and their reviews, manual journals, the trial
+balance and account totals (also by owner) at a pinned entry, and the evidence
+datasets of the auditor's pack. Other Finance modules and other Domains post
 and read through this module's facade; none of them reads its tables.
 
 ## Public API
@@ -14,7 +15,8 @@ Resolve the `Ledger` service (`finance/ledger.ledger`) from the registry and
 call it with a sealed `Scope` and an explicit company id. Results are plain
 records (`Book`, `Account`, `Entry`, `FiscalYear`, `Period`, `ClosingEvent`,
 `ControlledBookkeeping`, `LateRecording`, `DutySeparation`,
-`ApprovalException`, `Journal`, ...); the schema is private.
+`ApprovalException`, `Journal`, `TrialBalance`, `AccountTotals`,
+`OwnerTotals`, `EvidencePage`, ...); the schema is private.
 
 | Function | Capability | Does |
 | --- | --- | --- |
@@ -52,6 +54,11 @@ records (`Book`, `Account`, `Entry`, `FiscalYear`, `Period`, `ClosingEvent`,
 | `approve_journal` | `finance.ledger.journals.approve` | Posts a submitted journal as an entry by its approver |
 | `reject_journal` | `finance.ledger.journals.approve` | Rejects a submitted journal with a `reason` |
 | `get_journal`, `list_journals` | `finance.ledger.view` | Journals with their lines, status and decision; `JournalNotFound` |
+| `trial_balance` | `finance.ledger.view` | Every account's totals and one-sided balance as of a date, optionally `through_entry_number` (see Trial balance) |
+| `account_totals` | `finance.ledger.view` | Per-account debit and credit totals over entries dated `from` through `to`, optionally `through_entry_number` and `exclude_closing` (see Account totals) |
+| `account_totals_by_owner` | `finance.ledger.view` | The same totals, one row per account and owner module, for a control-account tie-out |
+| `evidence_page` | `finance.ledger.view` | One ID-ordered page of one of the ledger's tables for the auditor's pack (see Evidence) |
+| `Ledger::evidence_datasets` | none | The fifteen dataset names, sorted |
 | `Ledger::account_types`, `Ledger::late_recording_thresholds`, `Ledger::journal_statuses` | none | The five account types; the report's 45 and 60 days; `submitted`, `approved`, `rejected` |
 
 Every call authorizes the capability for the scope's actor and the target
@@ -285,6 +292,65 @@ for another company's or a closing entry), a second time (`AlreadyReviewed`),
 and for a reviewer who posted the entry or impersonated (or was impersonated
 by) its poster (`ReviewerNotIndependent`); its `reason` is required.
 
+## Trial balance
+
+`trial_balance(scope, company_id, as_of, through_entry_number)` lists every
+account with a posting dated on or before `as_of`, by code, with its `debits`
+and `credits` and its balance on one side (`debit_balance` or
+`credit_balance`, the other zero). Each account reports its own postings
+only; `parent_id` lets a reader group rows without counting a parent twice.
+`total_debit` equals `total_credit` because every entry balances. Closing
+entries count, so as of a closed year's last day every income and expense
+account is at zero and the year's result is in retained earnings.
+
+The result names `through_entry_number`, the last entry it counts: the one
+passed, or the company's last, read in the same statement as the sums. An
+entry posted later with an earlier date changes the figures for that date, so
+passing the same `as_of` and `through_entry_number` reproduces an earlier
+trial balance's figures exactly: entries are numbered in posting order and
+never change. Account names, parents and active flags are read as they are
+now. A negative number is `InvalidOption`, and `BookNotOpen` comes before the
+book is opened.
+
+## Account totals
+
+`account_totals(scope, company_id, &TotalsQuery)` returns, for every account
+with a posting dated from `from` through `to` (both optional and inclusive;
+`from` after `to` is `InvalidOption`), its `debits` and `credits`, by code.
+PostgreSQL sums the lines per account, so a report over any number of
+entries reads one row per account; never add up `list_entries` lines for a
+figure. It names `through_entry_number` like the trial balance, and reading
+several windows at one number gives a report's columns one state of the
+ledger. `exclude_closing` leaves out every year-end closing entry and every
+reversal of one, so income and expense over a closed year show its activity
+(a profit and loss reads this way, a balance sheet counts them); the set is
+the same at any entry number, because a close names its entry in the
+transaction that posts it. `list_entries` with the same `account_id`,
+`from`, `to` and `through_entry_number` lists the entries behind a figure.
+
+`account_totals_by_owner` splits the same totals by `owner_module` (the
+owner's descriptor id, `None` for entries with no owner, first): one row per
+account and owner. A module ties its control account out with it: its own
+rows should be the whole account, and any other row is a posting its records
+do not know, shown as a difference with its owner, never netted away.
+Bilimbi's `legacy` flag is not ported, since Bilibi has no adopted entries.
+
+## Evidence
+
+`evidence_page(scope, company_id, dataset, limit, after)` reads one
+ID-ordered page of one dataset with its explicit `fields`, its `rows` (JSON
+objects) and `next`, the last id when the page was full; `limit` is 1 to 500
+(500 when absent) and `after` the previous page's `next`. An unknown dataset
+or an option out of range is `InvalidOption`. The datasets are `account`,
+`approval_exception`, `approval_exception_review`, `book`,
+`bookkeeping_change`, `closing_event`, `duty_separation_change`, `entry`,
+`fiscal_year`, `journal`, `journal_event`, `journal_line`,
+`late_recording_review`, `line` and `period`, with Bilimbi's field lists
+(`src/evidence.rs`), less the entry's `legacy`. Dates are `YYYY-MM-DD`,
+instants ISO 8601 UTC with microseconds and amounts the column's exact text
+(`100.0000`). Each page is a live read on its own connection. The field lists
+are an export contract: freeze one once exported and never add a credential.
+
 ## Schema (versions 001 to 005)
 
 `finance_ledger_books` (one per company; currency and minor units fixed for
@@ -341,9 +407,13 @@ its poster; a posted entry is corrected only by a reversal, once, and an owned
 one only through its owner; the person who prepares a record does not
 approve it unless the company has turned separation off, and every such
 approval and every override is listed for an independent reviewer; a manual
-journal posts only once someone else approves it; every write is attributed to the signed-in actor and any
-impersonator through the Platform's audit capture.
+journal posts only once someone else approves it; any past trial balance or
+account total reproduces exactly from its `through_entry_number`; every
+table is exported to the auditor field by field; every write is attributed
+to the signed-in actor and any impersonator through the Platform's audit
+capture.
 
 ## Posting inside an owner transaction
 
 `post_entry_in(tx, scope, company_id, new, options)` applies the same checks and captures the same changes as `post_entry`, on the caller's `MutationTransaction`. A record owner uses it while holding the company lock, then records its posting and commits once. Calling `post_entry` while holding that lock on another connection would wait on itself; committing separately would orphan an entry if the owner's update failed. Rollback discards both rows and posting notices.
+
