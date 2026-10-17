@@ -82,6 +82,14 @@ they govern this code and are not copied here.
   inside the ledger read it through `periods::state` and record each override
   of a control (a reopen, controlled bookkeeping off) with
   `duties::record_override` in the same write.
+- Ask `Ledger::check_approval` on your own `MutationTransaction` before every
+  approval you record, with everyone whose work it approves in `prepared_by`
+  and an `override_reason` for an override; never compare actor ids yourself:
+  the ledger counts impersonation both ways, records the exception an
+  independent reviewer reads, and a `SamePerson` refusal must roll your
+  approval back. Correct an entry you own with `Ledger::reverse_owned_entry` on
+  the transaction that records your own reversal, never `reverse_entry`, which
+  refuses it as `OwnedBy`.
 - Learn of a posting through `Ledger::subscribe_postings`, never your own
   LISTEN: the relay shares one connection, and a notice carries identifiers
   only. On `PostingEvent::Refresh` read again instead of trusting the stream.

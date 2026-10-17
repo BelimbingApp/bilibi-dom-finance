@@ -8,7 +8,7 @@ Bilibi checkout; it does not build on its own.
 
 | Module | Descriptor ID | Owns |
 | --- | --- | --- |
-| [`ledger/`](ledger/README.md) | `finance/ledger` | each company's book and currency, its chart of accounts, its journal entries (append-only, numbered without gaps, balanced at commit, optionally owned by another module's record) with posting notices that announce only committed entries, its fiscal years of monthly periods with the closing log (close, reopen, lock, year-end close and reopen with closing entries), controlled bookkeeping and its changes, and the late-recording report with its reviews. Reversals, the separation of duties with approval exceptions and their reviews, and manual journals (submit, approve, reject) are being added (L3). |
+| [`ledger/`](ledger/README.md) | `finance/ledger` | each company's book and currency, its chart of accounts, its journal entries (append-only, numbered without gaps, balanced at commit, optionally owned by another module's record) with posting notices that announce only committed entries, its fiscal years of monthly periods with the closing log (close, reopen, lock, year-end close and reopen with closing entries), controlled bookkeeping and its changes, the late-recording report with its reviews, reversals (an owned entry only through its owner), the separation of duties (impersonation counted) with the approval exceptions log and its independent reviews, and manual journals that post only once someone else approves them. |
 | [`attachments/`](attachments/README.md) | `finance/attachments` | source documents kept with the records they support: records-grade files in Base Artifacts, the company's retention years and their history, replace and remove while a record is a draft, legal holds, and the retention refresh job that follows a record's final date. The `Source` contract each record owner implements is here. |
 
 Every other Finance module of Bilimbi (receivables, payables,
@@ -60,7 +60,16 @@ Company 002 with dates counted back from today, opens fiscal years, closes,
 locks and reopens periods in and out of order, closes and reopens a year with
 its closing entry and reversal, turns controlled bookkeeping off and on,
 reviews entries recorded late, races a close against posts into the same
-period, and ends with the database's own closing refusals.
+period, and ends with the database's own closing refusals. Its controls section, on
+Company 001 in 2026, reverses manual entries (refused twice, for a reversal,
+before its original, for a closing entry), corrects an owned entry only through
+its owner's own transaction (rolled back and committed), submits, approves and
+rejects journals (refused for the submitter, for an operator who impersonated
+the submitter, after a period closed and an account was deactivated), turns
+the separation of duties off and on around sibling approvals and overrides,
+lists and reviews the approval exceptions (refused for the approver and
+preparer), races two approvals of one journal, and ends with the database's
+own journal and exception refusals.
 
 ## Naming
 
