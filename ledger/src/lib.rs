@@ -1055,14 +1055,6 @@ impl Ledger {
         new: &NewEntry,
         options: &PostOptions,
     ) -> Result<Entry> {
-        if options
-            .owner
-            .as_ref()
-            .is_some_and(|owner| !entries::owner_valid(owner))
-            || options.settlement_account_ids.iter().any(|id| *id < 1)
-        {
-            return Err(LedgerError::InvalidOption);
-        }
         let mut client = self.db.get().await.map_err(Error::from)?;
         let mut tx = self
             .write(
@@ -1073,6 +1065,35 @@ impl Ledger {
                 "finance.ledger.post_entry",
             )
             .await?;
+        let entry = self
+            .post_entry_in(&mut tx, scope, company_id, new, options)
+            .await?;
+        tx.commit().await?;
+        Ok(entry)
+    }
+
+    /// Posts inside the record owner's audited transaction, leaving commit
+    /// to that owner so its record and the entry stand or fall together.
+    /// Applies the same authorization, company lock and validation as
+    /// [`Ledger::post_entry`]; never call the standalone method while holding
+    /// the company lock on another connection.
+    pub async fn post_entry_in(
+        &self,
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company_id: i64,
+        new: &NewEntry,
+        options: &PostOptions,
+    ) -> Result<Entry> {
+        join(tx, scope, company_id, POST_ENTRIES).await?;
+        if options
+            .owner
+            .as_ref()
+            .is_some_and(|owner| !entries::owner_valid(owner))
+            || options.settlement_account_ids.iter().any(|id| *id < 1)
+        {
+            return Err(LedgerError::InvalidOption);
+        }
         let tenant = scope.tenant();
         let book = books::find(tx.sql(), tenant, company_id)
             .await?
@@ -1108,7 +1129,6 @@ impl Ledger {
                 })
             })
             .await?;
-        tx.commit().await?;
         Ok(entry)
     }
 
@@ -2468,10 +2488,11 @@ impl Ledger {
         Ok(changed)
     }
 
-    /// Every write: each capability and company reach now, then the audited
-    /// transaction holding the company's row lock (Bilimbi `write/4` with
-    /// `lock_writable_company/2`).
-    async fn write<'c>(
+    /// Opens a Finance record owner's audited write, holding the company's
+    /// row lock and rechecking its capabilities inside the transaction.
+    /// The owner records every changed row and owns commit/rollback; ledger
+    /// posting and reversal independently check their own capabilities.
+    pub async fn write<'c>(
         &self,
         client: &'c mut tokio_postgres::Client,
         scope: &Scope,
@@ -2487,6 +2508,9 @@ impl Ledger {
             .begin(client, scope.mutation_context(action))
             .await?;
         lock(&tx, scope, company_id).await?;
+        for capability in capabilities {
+            authorize(tx.sql(), scope, company_id, capability).await?;
+        }
         Ok(tx)
     }
 }
