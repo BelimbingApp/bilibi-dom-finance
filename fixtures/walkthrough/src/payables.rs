@@ -625,6 +625,69 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         ),
     )
     .await?;
+    let mut rounded = draft("ROUND-HALF", expense, code.id, units);
+    let rounding_code = p
+        .create_tax_code(
+            &manager,
+            COMPANY,
+            &NewTaxCode {
+                code: "HALF".into(),
+                details: TaxCodeDetails {
+                    name: "Rounding proof".into(),
+                    rate: "10".into(),
+                    account_id: tax_account,
+                    active: true,
+                    reason: None,
+                },
+            },
+        )
+        .await?;
+    rounded.lines[0].tax_code_id = Some(rounding_code.id);
+    rounded.lines[0].amount = money("0.05");
+    let rounded = p.create_bill(&manager, COMPANY, &rounded).await?;
+    assert_eq!(rounded.total_tax, money("0.01"));
+    let mut stated = draft("STATED-TAX", expense, code.id, units);
+    stated.tax_lines = Some(vec![TaxAmountInput {
+        tax_code_id: code.id,
+        tax_amount: money("7.99"),
+    }]);
+    let stated = p.create_bill(&manager, COMPANY, &stated).await?;
+    assert_eq!(stated.total_tax, money("7.99"));
+    grants
+        .set_direct(&admin, 3, bilibi_finance_ledger::VIEW, Some(false))
+        .await?;
+    assert_eq!(p.get_document(&staff, COMPANY, bill.id).await?.id, bill.id);
+    grants
+        .set_direct(&admin, 3, bilibi_finance_ledger::VIEW, None)
+        .await?;
+    println!("tax half rounds up, party tax overrides computed tax, payables-only reader needs no ledger grant");
+    db_refuses(&c,"append to recorded draft",&format!("INSERT INTO finance_payables_document_lines(tenant_id,company_id,document_id,line_number,description,account_id,amount) VALUES(1,1,{},2,'Late draft line',{},1)",stated.id,expense)).await?;
+    let header = |company: i64, number: &str| {
+        format!("INSERT INTO finance_payables_documents(tenant_id,company_id,document_type,status,party_key,party_name,party_document_number,document_date,due_date,currency_code,total_net,total_tax,total,created_by_user_id) VALUES(1,{company},'bill','draft','raw-party','Raw party','{number}','2026-12-15','2026-12-15','MYR',1,0,1,1)")
+    };
+    db_refuses(
+        &c,
+        "deferred document without lines",
+        &format!("BEGIN; {}; COMMIT", header(1, "RAW-NO-LINES")),
+    )
+    .await?;
+    db_refuses(&c,"deferred totals mismatch",&format!("BEGIN; WITH d AS ({} RETURNING id) INSERT INTO finance_payables_document_lines(tenant_id,company_id,document_id,line_number,description,account_id,amount) SELECT 1,1,id,1,'Wrong total',{},0.5 FROM d; COMMIT",header(1,"RAW-TOTALS"),expense)).await?;
+    db_refuses(&c,"cross-company tax code",&format!("BEGIN; WITH d AS ({} RETURNING id) INSERT INTO finance_payables_document_lines(tenant_id,company_id,document_id,line_number,description,account_id,amount,tax_code_id) SELECT 1,2,id,1,'Foreign tax',{},1,{} FROM d; COMMIT",header(2,"RAW-FOREIGN-TAX"),expense,code.id)).await?;
+    let history = p.list_settings_changes(&manager, COMPANY, 0, 1).await?;
+    assert_eq!(history.rows.len(), 1);
+    assert!(history.next_after.is_some());
+    assert_eq!(
+        p.list_settings_changes(
+            &manager,
+            COMPANY,
+            history.next_after.ok_or(Error::NotFound)?,
+            1
+        )
+        .await?
+        .rows
+        .len(),
+        1
+    );
     println!("Payables NP1 walkthrough complete");
     Ok(())
 }

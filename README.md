@@ -46,6 +46,8 @@ DATABASE_URL=postgres://…/disposable BILIBI_SETTINGS_KEY=$(openssl rand -hex 3
   cargo run -p bilibi-finance-walkthrough-fixture
 ```
 
+The settings key is an ephemeral 32-byte key for the encrypted e-invoice settings proof; never reuse a production key.
+
 It migrates a fresh disposable database, installs the fixtures, and prints
 the facade's answers to accepted and refused books, accounts, entries (owners,
 settlement accounts, concurrent posts, paged reads), reach (grants,

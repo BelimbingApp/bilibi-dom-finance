@@ -144,7 +144,7 @@ pub struct NewDocument {
     pub due_date: Option<Date>,
     pub description: Option<String>,
     pub lines: Vec<DocumentLineInput>,
-    /// None computes tax. Some states the party's amount for each used code.
+    /// None computes tax. Some overrides amounts for the used codes the party states.
     pub tax_lines: Option<Vec<TaxAmountInput>>,
 }
 #[derive(Clone, Debug)]

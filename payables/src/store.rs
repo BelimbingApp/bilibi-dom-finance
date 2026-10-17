@@ -141,7 +141,9 @@ fn opt_int(r: &Value, k: &str) -> Option<i64> {
     r[k].as_i64()
 }
 fn amount(r: &Value, k: &str) -> DbResult<Money> {
-    let d: Decimal = serde_json::from_value(r[k].clone()).map_err(|_| Error::Invalid)?;
+    // Keep PostgreSQL numeric exact even with serde_json/arbitrary_precision;
+    // Decimal's default visitor does not accept its private number map.
+    let d = Decimal::from_str_exact(&r[k].to_string()).map_err(|_| Error::Invalid)?;
     money(d)
 }
 pub(crate) async fn document(
