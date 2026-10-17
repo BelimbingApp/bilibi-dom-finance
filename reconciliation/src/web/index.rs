@@ -85,6 +85,7 @@ pub(super) struct Index {
     draft: HashMap<String, String>,
     errors: Vec<FieldError>,
     flash: Option<(StatusKind, String)>,
+    workspace: bool,
 }
 #[derive(Template)]
 #[template(path = "bank_accounts.html")]
@@ -112,7 +113,11 @@ struct Actions<'a> {
 }
 
 impl Index {
-    pub(super) fn new(pages: &Pages, query: &HashMap<String, String>) -> Result<Self> {
+    pub(super) fn new(
+        pages: &Pages,
+        query: &HashMap<String, String>,
+        workspace: bool,
+    ) -> Result<Self> {
         Ok(Self {
             pages: pages.clone(),
             list: ListState::parse(query, SPEC.clone()).map_err(|_| Error::Invalid)?,
@@ -121,6 +126,7 @@ impl Index {
             draft: blank(),
             errors: vec![],
             flash: None,
+            workspace,
         })
     }
     fn get(&self, key: &str) -> String {
@@ -219,7 +225,7 @@ impl Index {
                 let key = a.id.to_string();
                 let href = format!("/finance/reconciliation/accounts/{}", a.id);
                 let link = render(bilibi_ui::RecordLink {
-                    workspace: false,
+                    workspace: self.workspace,
                     kind: "finance/reconciliation/bank_account",
                     record_id: &key,
                     href: &href,

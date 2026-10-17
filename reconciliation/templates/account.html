@@ -9,8 +9,7 @@
 {{ refusal|safe }}
 {% if let Some(account) = account %}
 {% call workspace::announce(kind="finance/reconciliation/bank_account", record_id=account.id.to_string()) %}{% endcall %}
-{% call ui::header(subtitle="Statements imported for this account and its reconciliations.") %}{{ account.name }}{% endcall %}
-{% call ui::button(id="bank-account-matching", href=format!("/finance/reconciliation/accounts/{}/matching", account.id)) %}Match statement lines{% endcall %}
+{% call ui::header(subtitle="Statements imported for this account and its reconciliations.", actions=matching) %}{{ account.name }}{% endcall %}
 {% call ui::card(id="statement-import", inner_class="p-5 sm:p-6", role="region", labelledby="statement-import-heading") %}
 {% call ui::section_heading(id="statement-import-heading", title="Import a statement", description=mapping) %}{% endcall %}
 {{ import_forbidden|safe }}
@@ -22,11 +21,11 @@
 {% endif %}
 {% endcall %}
 {% call ui::card(id="statements", inner_class="p-0", role="region", labelledby="statements-heading") %}
-{% call ui::section_heading(id="statements-heading", title="Statements", class="p-5 pb-0") %}{% endcall %}
+{% call ui::section_heading(id="statements-heading", title="Statements", count=statement_count, class="p-5 pb-0") %}{% endcall %}
 {{ statements|safe }}
 {% endcall %}
 {% call ui::card(id="reconciliations", inner_class="p-0", role="region", labelledby="reconciliations-heading") %}
-{% call ui::section_heading(id="reconciliations-heading", title="Reconciliations", class="p-5 pb-0") %}{% endcall %}
+{% call ui::section_heading(id="reconciliations-heading", title="Reconciliations", count=reconciliation_count, class="p-5 pb-0") %}{% endcall %}
 {{ reconciliations|safe }}
 <div class="p-5">{{ open_forbidden|safe }}
 {% if let Some(end_date) = end_date %}{% if let Some(balance) = balance %}
