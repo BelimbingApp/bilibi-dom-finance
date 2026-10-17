@@ -141,9 +141,12 @@ they govern this code and are not copied here.
 - Declare a setting with the `define!` macros in `configuration.rs`, with the
   editor `capability` set; a validator must accept `null` for a nullable value,
   because Base Settings runs it on cleared values too.
-- Read ledger context inside a sibling write with `Ledger::get_book_on` and
-  `list_accounts_on`, not the pooled methods: acquiring another connection
-  while holding the company lock can exhaust the pool behind waiting writers.
+- Read sibling context inside a write with `Ledger::get_book_on`,
+  `list_accounts_on`, `get_entry_on` and `Payables::get_document_on`, not pooled
+  methods: another connection while holding the company lock can exhaust the pool.
+- Register assets through `FixedAssets`, never by posting or claiming their
+  acquisition entry: it freezes one whole source debit and its revision;
+  projected schedules are not posted depreciation (see `fixed_assets/README.md`).
 - Change receivable drafts through `Receivables`, not its tables: null/missing
   lines preserve snapshots, an array replaces them atomically, and discard
   keeps them. Issue through `issue_document` and settle through `record_payment`

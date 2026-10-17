@@ -14,8 +14,9 @@ Bilibi checkout; it does not build on its own.
 | [`payables/`](payables/README.md) | `finance/payables` | settings and tax codes with change histories; immutable bills and debit notes; independent approval, void, and atomic owned ledger posting; source documents. Matching, payments and pages follow in NP2–NP4. |
 | [`payroll/`](payroll/README.md) | `finance/payroll` | the Payroll and claims Postings page and posting-account Setup page, component/claim mappings with their change logs, owned ledger posting and correction, attempts and five evidence datasets. People is absent: the page states this and source posting returns `unavailable`, with a `TODO(domain events)` seam. |
 | [`receivables/`](receivables/README.md) | `finance/receivables` | setup, series, tax codes and customers; invoice/credit-note drafts and numbered issuance with frozen party and owned posting; fully allocated receipts and owned reversals; dated/pinned aging, tax and received-tax totals, control-account tie-out, attachment sources and eleven evidence datasets. Like Bilimbi this module has no pages. |
+| [`fixed_assets/`](fixed_assets/README.md) | `finance/fixed_assets` | immutable category revisions, acquisition from posted bill or entry debit lines, frozen assumptions and straight-line/reducing-balance schedules with full first-month and month-end recognition. Runs/corrections and pages follow in NX2/NX3. |
 
-Every other Finance module of Bilimbi (fixed assets, reconciliation, SST, reports) lands beside
+Every other Finance module of Bilimbi (reconciliation, SST, reports) lands beside
 the ledger as a sibling module folder, in later slices of the port.
 
 The ledger also contributes 21 agent operations through Bilibi's shared `/api/v1` and `/mcp`: seven reads and fourteen reviewed writes for books, accounts, journals, reversals and fiscal closing. The [ledger contract](ledger/README.md#agent-operations) and [agent guide](ledger/guide.md) describe their inputs and controls. There are no ledger pages in Bilimbi or this port.
@@ -98,6 +99,8 @@ shows Company 002's closed year with and without its closing entries, and
 pages every evidence dataset.
 
 The Payroll section proves the People-absent `unavailable` result without any entry or attempt, posting account/mapping validation and no-op histories, scope isolation, atomic owner-posting rollback, correction of explicitly historical fixture entries (including a race and a failed-date attempt), all five evidence datasets, audited rows and the database's retention/uniqueness refusals. It does not claim People-backed recognition while that publisher is absent.
+
+The separate NX1 walkthrough runs on its own fresh disposable database with `cargo run -p bilibi-finance-walkthrough-fixture --bin fixed-assets`. It proves immutable category history and frozen assumptions, bill-line and entry-line eligibility, exact schedules and month boundaries, duplicate registration races, grants/reach/archive refusals, evidence paging, audited rows and PostgreSQL guards. See the [Fixed Assets contract](fixed_assets/README.md). It creates no production data; there are no fixed-assets pages until NX3.
 
 ## Naming
 

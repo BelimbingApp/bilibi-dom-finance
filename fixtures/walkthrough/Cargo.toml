@@ -21,6 +21,7 @@ bilibi-company.workspace = true
 bilibi-finance-attachments = { path = "../../attachments" }
 bilibi-finance-payables = { path = "../../payables" }
 bilibi-finance-einvoice = { path = "../../einvoice" }
+bilibi-finance-fixed-assets = { path = "../../fixed_assets" }
 bilibi-finance-ledger = { path = "../../ledger" }
 bilibi-finance-payroll = { path = "../../payroll" }
 bilibi-finance-receivables = { path = "../../receivables" }
