@@ -61,3 +61,8 @@ bilibi-user.workspace = true
 
 # NS1: the SST running proof (src/bin/sst.rs).
 bilibi-finance-sst = { path = "../../sst" }
+
+# NC3: disposable browser proof of bank accounts, uploads and opening.
+[[bin]]
+name = "bilibi-finance-reconciliation-ui"
+path = "src/bin/reconciliation-ui.rs"
