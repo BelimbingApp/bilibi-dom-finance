@@ -12,8 +12,9 @@ Bilibi checkout; it does not build on its own.
 | [`attachments/`](attachments/README.md) | `finance/attachments` | source documents kept with the records they support: records-grade files in Base Artifacts, the company's retention years and their history, replace and remove while a record is a draft, legal holds, and the retention refresh job that follows a record's final date. The `Source` contract each record owner implements is here. |
 | [`einvoice/`](einvoice/README.md) | `finance/einvoice` | a company's fiscal documents for a clearance authority: the append-only schema (documents, lines, submissions, status events, consolidated sources and source links), the `finance.einvoice` settings (environment, format version, credentials, signing certificate and key, supplier profile, posting accounts) with encryption and PEM validators, the platform API and portal URLs, the `Authority` contract with MyInvois, and the authority's code lists with company overrides. Issuing, signing, submitting, posting and the pages follow in later versions of the module. |
 | [`payroll/`](payroll/README.md) | `finance/payroll` | posting accounts and component/claim mappings with their change logs, owned ledger posting and correction, attempts and five evidence datasets. People is absent: source lists and posting return `unavailable`, with a `TODO(domain events)` seam. Pages land in NY2. |
+| [`receivables/`](receivables/README.md) | `finance/receivables` | setup accounts and their immutable history, numbering series, immutable-rate tax codes, customers with flat party/address fields, and unnumbered invoice/credit-note drafts with per-line tax, atomic replacement and retained discard. Issuing and payments follow in NR2; like Bilimbi this module has no pages. |
 
-Every other Finance module of Bilimbi (receivables, payables,
+Every other Finance module of Bilimbi (payables,
 fixed assets, reconciliation, SST, reports) lands beside
 the ledger as a sibling module folder, in later slices of the port.
 
@@ -45,6 +46,8 @@ running proof of this repository's facade:
 DATABASE_URL=postgres://…/disposable BILIBI_SETTINGS_KEY=$(openssl rand -hex 32) \
   cargo run -p bilibi-finance-walkthrough-fixture
 ```
+
+Its NR1 section first exercises Receivables through the real facade: setup history and no-op configuration, immutable code identities, customer address normalization, checked decimal arithmetic and per-line half-up tax, empty/replace/keep/clear/discard drafts, invalid replacement rollback, inactive references, scoped reads and writes, paging, concurrent duplicate creation, archived-company refusal, SQL guards and audit capture. See the [Receivables contract](receivables/README.md) for input fields and the NR2 boundary.
 
 It migrates a fresh disposable database, installs the fixtures, and prints
 the facade's answers to accepted and refused books, accounts, entries (owners,

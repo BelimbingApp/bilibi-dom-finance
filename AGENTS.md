@@ -140,6 +140,12 @@ they govern this code and are not copied here.
 - Declare a setting with the `define!` macros in `configuration.rs`, with the
   editor `capability` set; a validator must accept `null` for a nullable value,
   because Base Settings runs it on cleared values too.
+- Read ledger context inside a sibling write with `Ledger::get_book_on` and
+  `list_accounts_on`, not the pooled methods: acquiring another connection
+  while holding the company lock can exhaust the pool behind waiting writers.
+- Change receivable drafts through `Receivables`, not its tables: null/missing
+  lines preserve snapshots, an array replaces them atomically, and discard
+  keeps them. Issuing, payments and attachment sources belong to NR2.
 
 ## Maintaining this file
 
