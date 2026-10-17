@@ -92,7 +92,9 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
     // Leave exactly one slot: validation must use its write connection, not
     // wait forever for a second one while holding the company lock.
     let mut held = Vec::new();
-    for _ in 0..15 {
+    let status = db.status();
+    let free = status.max_size - status.size + status.available;
+    for _ in 1..free {
         held.push(db.get().await?);
     }
     tokio::time::timeout(
@@ -101,7 +103,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
     )
     .await??;
     drop(held);
-    println!("configuration completes with 15 of 16 pool slots occupied");
+    println!("configuration completes with all but one pool slot occupied");
     for (direction, exp, liab) in [
         ("earning", Some(expense), None),
         ("deduction", None, Some(claims)),
