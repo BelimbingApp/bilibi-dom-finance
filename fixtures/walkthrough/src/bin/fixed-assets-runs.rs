@@ -527,6 +527,16 @@ async fn run(db: &Db, services: &Services) -> Outcome<()> {
     )
     .await?;
     reverse_source(&l, &s, zero.entry_id, date(2026, 5, 31)).await?;
+    let multi = acquire(
+        &f,
+        &l,
+        &s,
+        category.id,
+        (accounts[0], capital),
+        "120",
+        date(2026, 6, 17),
+    )
+    .await?;
     // Close in sequence through May: even an entryless void needs an open month.
     let years = l.list_fiscal_years(&s, COMPANY).await?;
     for p in years
@@ -547,6 +557,21 @@ async fn run(db: &Db, services: &Services) -> Outcome<()> {
     );
     f.void_acquisition(&s, COMPANY, zero.id, &event(date(2026, 6, 1)))
         .await?;
+    for month in [date(2026, 6, 1), date(2026, 7, 1)] {
+        assert_eq!(f.depreciate(&s, COMPANY, month).await?.total, m("10"));
+    }
+    reverse_source(&l, &s, multi.entry_id, date(2026, 7, 31)).await?;
+    let void = f
+        .void_acquisition(&s, COMPANY, multi.id, &event(date(2026, 7, 31)))
+        .await?;
+    assert_eq!(void.accumulated, Some(m("20")));
+    let mirror = l.get_entry(&s, COMPANY, void.entry_id.unwrap()).await?;
+    assert_eq!(mirror.lines.len(), 4);
+    assert_eq!(
+        mirror.lines.iter().map(|line| line.debit).sum::<Money>(),
+        m("20")
+    );
+    tied(&report(&f, &s, date(2026, 7, 31)).await?);
     refused(f.list_runs(&foreign, COMPANY).await, |e| {
         matches!(e, F::Unauthorized | F::CompanyNotFound)
     });

@@ -652,15 +652,16 @@ impl FixedAssets {
         activity.chronological(input.effective_date)?;
         let revision =
             store::revision(tx.sql(), s.tenant(), company, a.category_revision_id).await?;
-        let accumulated = activity
+        let charges: Vec<_> = activity
             .runs
             .iter()
             .filter(|r| !r.reversed)
             .flat_map(|r| r.items.iter())
             .filter(|i| i.asset_id == id)
-            .map(|i| i.amount)
-            .sum::<Money>();
-        let lines = charge_lines(&[(id, revision, accumulated)], true);
+            .map(|i| (id, revision.clone(), i.amount))
+            .collect();
+        let accumulated = charges.iter().map(|(_, _, amount)| *amount).sum::<Money>();
+        let lines = charge_lines(&charges, true);
         let event_id = store::reserve(tx.sql(), Table::Event).await?;
         let posted = self
             .post(
