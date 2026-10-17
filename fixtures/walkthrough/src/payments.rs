@@ -630,6 +630,33 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         )
         .await?;
     assert!(requests.iter().any(|r| r.id == loser));
+    let first_page = p
+        .list_payment_requests(
+            &manager,
+            COMPANY,
+            &PaymentRequestQuery {
+                status: Some("rejected".into()),
+                after: Some(0),
+                limit: Some(1),
+            },
+        )
+        .await?;
+    assert_eq!(first_page.len(), 1);
+    let cursor = first_page[0].request_number;
+    let next_page = p
+        .list_payment_requests(
+            &manager,
+            COMPANY,
+            &PaymentRequestQuery {
+                status: Some("rejected".into()),
+                after: Some(cursor),
+                limit: Some(1),
+            },
+        )
+        .await?;
+    assert_eq!(next_page.len(), 1);
+    assert!(next_page[0].request_number > cursor);
+
     for dataset in p.evidence_datasets() {
         let page = p
             .evidence_page(&manager, COMPANY, dataset, Some(1), None)

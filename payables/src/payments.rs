@@ -462,7 +462,7 @@ impl Payables {
         {
             return Err(PayablesError::InvalidOption);
         }
-        let rows=c.query("SELECT r.id FROM finance_payables_payment_requests r LEFT JOIN finance_payables_payment_request_events e ON e.tenant_id=r.tenant_id AND e.company_id=r.company_id AND e.request_id=r.id WHERE r.tenant_id=$1 AND r.company_id=$2 AND ($3::text IS NULL OR COALESCE(e.event,'submitted')=$3) AND r.request_number>COALESCE($4,0) ORDER BY r.request_number LIMIT $5",&[&s.tenant(),&company,&q.status,&q.after,&n]).await?;
+        let rows=c.query("SELECT r.id FROM finance_payables_payment_requests r LEFT JOIN finance_payables_payment_request_events e ON e.tenant_id=r.tenant_id AND e.company_id=r.company_id AND e.request_id=r.id WHERE r.tenant_id=$1 AND r.company_id=$2 AND ($3::text IS NULL OR COALESCE(e.event,'submitted')=$3) AND r.request_number>COALESCE($4::bigint,0) ORDER BY r.request_number LIMIT $5",&[&s.tenant(),&company,&q.status,&q.after,&n]).await?;
         let mut result = Vec::new();
         for row in rows {
             result.push(request(&**c, s.tenant(), company, row.get(0)).await?);
