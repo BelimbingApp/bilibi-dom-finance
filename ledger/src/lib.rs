@@ -1439,18 +1439,31 @@ impl Ledger {
         as_of: Date,
         through_entry_number: Option<i64>,
     ) -> Result<TrialBalance> {
+        let client = self.db.get().await.map_err(Error::from)?;
+        self.trial_balance_on(&**client, scope, company_id, as_of, through_entry_number)
+            .await
+    }
+
+    /// Authorized figures on the caller's database snapshot.
+    pub async fn trial_balance_on(
+        &self,
+        client: &(impl tokio_postgres::GenericClient + Sync),
+        scope: &Scope,
+        company_id: i64,
+        as_of: Date,
+        through_entry_number: Option<i64>,
+    ) -> Result<TrialBalance> {
         let window = totals::Window::new(&TotalsQuery {
             to: Some(as_of),
             through_entry_number,
             ..TotalsQuery::default()
         })?;
-        let client = self.db.get().await.map_err(Error::from)?;
-        authorize(&**client, scope, company_id, VIEW).await?;
+        authorize(client, scope, company_id, VIEW).await?;
         let tenant = scope.tenant();
-        let book = books::find(&**client, tenant, company_id)
+        let book = books::find(client, tenant, company_id)
             .await?
             .ok_or(LedgerError::BookNotOpen)?;
-        let (through, totals) = totals::by_account(&**client, tenant, company_id, &window).await?;
+        let (through, totals) = totals::by_account(client, tenant, company_id, &window).await?;
         let rows: Vec<TrialBalanceRow> = totals
             .into_iter()
             .map(|total| {
@@ -1581,8 +1594,22 @@ impl Ledger {
         after: Option<i64>,
     ) -> Result<EvidencePage> {
         let client = self.db.get().await.map_err(Error::from)?;
-        authorize(&**client, scope, company_id, VIEW).await?;
-        evidence::page(&**client, scope.tenant(), company_id, dataset, limit, after).await
+        self.evidence_page_on(&**client, scope, company_id, dataset, limit, after)
+            .await
+    }
+
+    /// Authorized evidence on the caller's snapshot; never opens another connection.
+    pub async fn evidence_page_on(
+        &self,
+        client: &(impl tokio_postgres::GenericClient + Sync),
+        scope: &Scope,
+        company_id: i64,
+        dataset: &str,
+        limit: Option<i64>,
+        after: Option<i64>,
+    ) -> Result<EvidencePage> {
+        authorize(client, scope, company_id, VIEW).await?;
+        evidence::page(client, scope.tenant(), company_id, dataset, limit, after).await
     }
 
     // Reversals

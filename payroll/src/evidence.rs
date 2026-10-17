@@ -117,7 +117,21 @@ impl Payroll {
         after: Option<i64>,
     ) -> Result<EvidencePage> {
         let client = self.db.get().await.map_err(Error::from)?;
-        authorize(&**client, scope, company, VIEW).await?;
+        self.evidence_page_on(&**client, scope, company, name, limit, after)
+            .await
+    }
+
+    /// Authorized evidence on the caller's snapshot; never opens another connection.
+    pub async fn evidence_page_on(
+        &self,
+        client: &(impl tokio_postgres::GenericClient + Sync),
+        scope: &Scope,
+        company: i64,
+        name: &str,
+        limit: Option<i64>,
+        after: Option<i64>,
+    ) -> Result<EvidencePage> {
+        authorize(client, scope, company, VIEW).await?;
         let (table, fields) = dataset(name).ok_or(PayrollError::InvalidOption)?;
         let (limit, after) = (limit.unwrap_or(500), after.unwrap_or(0));
         if !(1..=500).contains(&limit) || after < 0 {

@@ -196,7 +196,20 @@ impl Receivables {
         options: &AgingOptions,
     ) -> Result<AgedReceivables> {
         let client = self.db.get().await.map_err(Error::from)?;
-        authorize(&**client, scope, company, VIEW).await?;
+        self.aged_receivables_on(&**client, scope, company, as_of, options)
+            .await
+    }
+
+    /// Authorized figures on the caller's database snapshot.
+    pub async fn aged_receivables_on(
+        &self,
+        client: &(impl tokio_postgres::GenericClient + Sync),
+        scope: &Scope,
+        company: i64,
+        as_of: Date,
+        options: &AgingOptions,
+    ) -> Result<AgedReceivables> {
+        authorize(client, scope, company, VIEW).await?;
         window(None, None, options.through_entry_number)?;
         if options.bucket_days.is_empty()
             || options.bucket_days.iter().any(|n| *n <= 0 || *n > 36_500)
@@ -204,7 +217,7 @@ impl Receivables {
         {
             return Err(ReceivableError::InvalidOption);
         }
-        let book = self.ledger.get_book_on(&**client, scope, company).await?;
+        let book = self.ledger.get_book_on(client, scope, company).await?;
         let pin=match options.through_entry_number { Some(n)=>n, None=>client.query_one("SELECT COALESCE(max(n),0) FROM (SELECT ledger_entry_number n FROM finance_receivables_documents WHERE tenant_id=$1 AND company_id=$2 UNION ALL SELECT ledger_entry_number FROM finance_receivables_payments WHERE tenant_id=$1 AND company_id=$2 UNION ALL SELECT ledger_entry_number FROM finance_receivables_payment_reversals WHERE tenant_id=$1 AND company_id=$2) x", &[&scope.tenant(),&company]).await.map_err(Error::from)?.get(0) };
         let mut buckets = vec![AgingBucket {
             from_days: None,
@@ -229,7 +242,7 @@ impl Receivables {
             .collect();
         let mut customers: BTreeMap<i64, AgedCustomer> = BTreeMap::new();
         let mut totals = vec![Decimal::ZERO; buckets.len()];
-        for row in balances(&**client, scope, company, &as_of.to_string(), pin).await? {
+        for row in balances(client, scope, company, &as_of.to_string(), pin).await? {
             let outstanding: Decimal = row.get("outstanding");
             if outstanding.is_zero() {
                 continue;

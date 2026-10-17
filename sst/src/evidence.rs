@@ -213,7 +213,21 @@ impl Sst {
         after: Option<i64>,
     ) -> Result<EvidencePage> {
         let c = self.db.get().await.map_err(Error::from)?;
-        authorize(&**c, s, company, VIEW).await?;
+        self.evidence_page_on(&**c, s, company, dataset, limit, after)
+            .await
+    }
+
+    /// Authorized evidence on the caller's snapshot; never opens another connection.
+    pub async fn evidence_page_on(
+        &self,
+        c: &(impl tokio_postgres::GenericClient + Sync),
+        s: &Scope,
+        company: i64,
+        dataset: &str,
+        limit: Option<i64>,
+        after: Option<i64>,
+    ) -> Result<EvidencePage> {
+        authorize(c, s, company, VIEW).await?;
         let limit = limit.unwrap_or(500);
         let after = after.unwrap_or(0);
         let (_, table, fields) = DATASETS

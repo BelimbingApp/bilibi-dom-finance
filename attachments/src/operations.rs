@@ -152,7 +152,7 @@ impl Attachments {
     /// capability check per source.
     pub(crate) async fn readable_sources(
         &self,
-        client: &Client,
+        client: &(impl GenericClient + Sync),
         scope: &Scope,
         company_id: i64,
     ) -> Result<Vec<String>> {

@@ -154,7 +154,19 @@ impl Payables {
         q: &AgingQuery,
     ) -> Result<AgedPayables> {
         let c = self.db.get().await.map_err(Error::from)?;
-        authorize(&**c, s, company, VIEW).await?;
+        self.aged_payables_on(&**c, s, company, as_of, q).await
+    }
+
+    /// Authorized figures on the caller's database snapshot.
+    pub async fn aged_payables_on(
+        &self,
+        c: &(impl tokio_postgres::GenericClient + Sync),
+        s: &Scope,
+        company: i64,
+        as_of: Date,
+        q: &AgingQuery,
+    ) -> Result<AgedPayables> {
+        authorize(c, s, company, VIEW).await?;
         fence(q.through_entry_number)?;
         if q.bucket_days.is_empty()
             || q.bucket_days.iter().any(|v| *v <= 0)

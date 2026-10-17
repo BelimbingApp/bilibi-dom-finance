@@ -274,7 +274,21 @@ impl Reconciliation {
         after: Option<i64>,
     ) -> Result<EvidencePage> {
         let client = self.db.get().await.map_err(Error::from)?;
-        authorize(&**client, scope, company_id, VIEW).await?;
+        self.evidence_page_on(&**client, scope, company_id, dataset, limit, after)
+            .await
+    }
+
+    /// Authorized evidence on the caller's snapshot; never opens another connection.
+    pub async fn evidence_page_on(
+        &self,
+        client: &(impl tokio_postgres::GenericClient + Sync),
+        scope: &bilibi_tenancy::Scope,
+        company_id: i64,
+        dataset: &str,
+        limit: Option<i64>,
+        after: Option<i64>,
+    ) -> Result<EvidencePage> {
+        authorize(client, scope, company_id, VIEW).await?;
         let limit = limit.unwrap_or(DEFAULT_LIMIT);
         let after = after.unwrap_or(0);
         let dataset = ALL
