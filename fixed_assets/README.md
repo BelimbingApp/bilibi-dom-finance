@@ -103,7 +103,7 @@ Every list, including the asset's projected schedule, posted charges and events,
 
 The shared Record form registers a manual-entry or posted-bill debit, creates/revises category defaults, or records a monthly run. Runs show skipped acquisitions individually and keep the reference's warning after an otherwise successful run. The asset page shows its frozen assumptions, acquisition provenance, recorded actor, projected schedule, posted charges and correction history, then disposal, void and reversal forms. Void waits for the shared `ConfirmDialog`; Cancel writes nothing. The form disappears permanently after a successful void. The facade decides all lifecycle and accounting refusals.
 
-Each write event checks its current capability and the facade checks again inside its audited write. A refusal preserves the submitted draft and presents field errors; missing permissions show the reference's withheld-control sentence. `record_asset` is the submit event because the Platform reserves `save` for Company inline edits.
+Each write event checks its current capability and the facade checks again inside its audited write. A refusal preserves the submitted draft and presents field errors; as in the reference, a form reports every bad field at once in field-name order, and an acquisition's missing source record or line comes before any other field. Missing permissions show the reference's withheld-control sentence. `record_asset` is the submit event because the Platform reserves `save` for Company inline edits.
 
 On a third fresh disposable database, run the NX3 page proof:
 
