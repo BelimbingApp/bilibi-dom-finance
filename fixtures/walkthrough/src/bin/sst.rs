@@ -1,4 +1,4 @@
-//! NS1 running proof against a fresh disposable PostgreSQL database:
+//! NS1 and NS2 running proof against a fresh disposable PostgreSQL database:
 //! `DATABASE_URL=… cargo run -p bilibi-finance-walkthrough-fixture --bin sst`.
 //! Every business record is created through the real facades (ledger,
 //! Receivables, Payables, SST), never seed SQL; the database's own refusals
@@ -23,6 +23,10 @@ use jiff::civil::{date, Date};
 use rust_decimal::Decimal;
 use serde_json::json;
 use std::{fmt::Debug, sync::Arc};
+
+// NS2: the returns section, run last on top of NS1's records.
+#[path = "../sst_returns.rs"]
+mod returns;
 
 bilibi_walkthrough_fixture::walkthrough_vocabulary!();
 bilibi_walkthrough_fixture::walkthrough_module_roles!();
@@ -181,9 +185,7 @@ async fn main() -> Outcome<()> {
     services.install(&modules)?;
     install(&db, &services).await?;
     run(&db, &services).await?;
-    println!(
-        "NS1: registration, mapping, period, figures, pin, scope, audit and SQL proofs passed"
-    );
+    println!("NS1 and NS2: every SST setup, figures and returns proof passed");
     Ok(())
 }
 
@@ -1160,5 +1162,13 @@ async fn run(db: &Db, services: &Services) -> Outcome<()> {
     raw.batch_execute("ROLLBACK").await?;
     assert_eq!((numbered, version), (1, 5));
     println!("the database numbers what the writer sent: return number 0 stored as {numbered}, registration version 99 as {version}");
-    Ok(())
+    returns::run(returns::Fixture {
+        db,
+        services,
+        invoice_series: series[0],
+        customer,
+        codes: &codes,
+        sales_tax_account: accounts.sales_tax,
+    })
+    .await
 }
