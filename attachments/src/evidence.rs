@@ -108,7 +108,7 @@ fn query(dataset: &str) -> String {
                  r.changed_by_impersonator_id,to_char(r.changed_at,'{ISO}') AS changed_at"
             ),
             "finance_attachments_retention_changes",
-            "",
+            " AND $4::text[] IS NOT NULL",
         ),
     };
     format!(

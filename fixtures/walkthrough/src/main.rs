@@ -18,6 +18,7 @@ use std::{fmt::Debug, sync::Arc, time::Duration};
 bilibi_walkthrough_fixture::walkthrough_vocabulary!();
 bilibi_walkthrough_fixture::walkthrough_module_roles!();
 bilibi_finance_walkthrough_fixture::walkthrough_ledger_roles!();
+bilibi_finance_walkthrough_fixture::walkthrough_attachments_roles!();
 
 /// An entry on one line: number, date, description, owner and `account:amount`
 /// per line (debits positive, credits negative).
@@ -1102,5 +1103,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?
         .get(0);
     println!("audit mutations recorded for finance.ledger.*: {audited}");
+    bilibi_finance_walkthrough_fixture::attachments::run(&db, &services).await?;
     Ok(())
 }

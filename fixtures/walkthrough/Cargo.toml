@@ -16,10 +16,17 @@ bilibi-core.workspace = true
 bilibi-database.workspace = true
 bilibi-domains.workspace = true
 bilibi-extensions.workspace = true
+bilibi-company.workspace = true
+bilibi-finance-attachments = { path = "../../attachments" }
 bilibi-finance-ledger = { path = "../../ledger" }
 bilibi-module-registry.workspace = true
+bilibi-party-ids.workspace = true
+bilibi-queue.workspace = true
+bilibi-settings.workspace = true
 bilibi-tenancy.workspace = true
 bilibi-walkthrough-fixture = { path = "../../../../../fixtures/walkthrough" }
 inventory.workspace = true
 jiff = "0.2.38"
+serde_json.workspace = true
+tokio-postgres.workspace = true
 tokio.workspace = true

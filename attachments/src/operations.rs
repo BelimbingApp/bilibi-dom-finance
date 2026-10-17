@@ -395,6 +395,8 @@ impl Attachments {
         let mut client = self.db.get().await.map_err(Error::from)?;
         authorize(&**client, scope, company_id, CREATE).await?;
         authorize(&**client, scope, company_id, bilibi_finance_ledger::VIEW).await?;
+        // An archived company takes no document: refuse before any byte is stored.
+        ensure_writable(&**client, scope, company_id, false).await?;
         let valid = files::validate(file)?;
         let years = self.retention_years(&**client, scope, company_id).await?;
         let year_end = retention::financial_year_end(document_date);
@@ -929,7 +931,17 @@ pub(crate) async fn lock_writable(
     scope: &Scope,
     company_id: i64,
 ) -> Result<()> {
-    organisation::require_writable(tx.sql(), scope, company_id, true)
+    ensure_writable(tx.sql(), scope, company_id, true).await
+}
+
+/// Refuses an archived company, optionally holding its row lock.
+pub(crate) async fn ensure_writable(
+    client: &impl GenericClient,
+    scope: &Scope,
+    company_id: i64,
+    lock: bool,
+) -> Result<()> {
+    organisation::require_writable(client, scope, company_id, lock)
         .await
         .map(|_| ())
         .map_err(|error| match error {
