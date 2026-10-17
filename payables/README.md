@@ -33,7 +33,17 @@ Documents move `draft → approved → posted`, or `draft/approved/held → void
 
 Posting calls `Ledger::post_entry_in` on the document's own transaction, owned as `finance/payables`, `document:<id>`. A bill debits line/tax accounts and credits the current payable account. A debit note mirrors this against its bill's original payable account even after configuration changes; only that settlement account may be inactive. The ledger validates the document's actual date, and a refusal rolls everything back without taking a document number. No ledger table is read or written here.
 
-`list_documents` is ordered by `(document_date,id)`, with a following cursor, date/type/status/party filters and limit 1–500 (default 100). `page_documents` is newest first, with case-insensitive party-name or posted-number search, page and sizes 25/50/100. Reads return complete documents including lines, tax snapshots, correction IDs and a posted bill's outstanding balance.
+`list_documents` is ordered by `(document_date,id)`, with a following cursor, date/type/status/party filters and limit 1–500 (default 100). `page_documents` is newest first, with case-insensitive literal party-name or party-document-number search (up to 255 characters), page and sizes 25/50/100. It clamps an out-of-range page to the last page, or 1 with no results. Reads return complete documents including lines, tax snapshots, correction IDs and a posted bill's outstanding balance.
+
+## Bills pages
+
+`/finance/payables/bills` requires `finance.payables.view`. It preserves Bilimbi's `search`, `status`, `document_type`, `page` and `page_size` query names. Held bills applies the held filter while preserving search, type and page size. The FlexTable has eight built-in columns, column customization and compact/normal rows; no sortable headings, as in the reference. Search matches the party snapshot or the party's own number, not the internally assigned posting number. There is no create form.
+
+`/finance/payables/bills/{id}` shows the party snapshot, immutable lines and their order-line references, totals, outstanding, actors (including impersonation), ledger entry number, last comparison, exceptions and match history. All three detail lists are FlexTables. Timestamps use the reader's display policy at second precision. Record links and announcements use the workspace kind `finance/payables`.
+
+Approve and Post act immediately, as Bilimbi does. Void and Approve exceptions use shared reason modals with the reference confirmations and 1–500-character reasons. Exception approval retains the displayed hold ID when the dialog opens; a new hold refuses the stale approval and requires a fresh review. Every write-shaped event checks its capability again, and the facade checks inside the audited write. Refusals stay on the page as flashes, including separation of duties, archival and ledger refusals; a successful post returning a held bill is a warning, not success.
+
+The page mounts `finance.attachments-panel` for `finance/payables/document`. The source re-reads finality on every action: approval hides replace/remove but still allows additional evidence. Attachments owns uploads, retention and downloads; Payables owns no CSS or JavaScript.
 
 ## Source documents and later slices
 

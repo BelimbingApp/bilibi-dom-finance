@@ -1,0 +1,8 @@
+{% import "components.html" as ui %}
+<div class="flex flex-wrap items-center gap-2">
+{% call ui::back_link(id="payables-bill-back", href="/finance/payables/bills") %}All bills{% endcall %}
+{% if approve %}{% call ui::button(id="payables-bill-approve", event="approve", button_type="button", variant=bilibi_ui::ButtonVariant::Primary) %}Approve{% endcall %}{% endif %}
+{% if post %}{% call ui::button(id="payables-bill-post", event="post", button_type="button", variant=bilibi_ui::ButtonVariant::Primary) %}Post{% endcall %}{% endif %}
+{% if approve_exception %}{% call ui::button(id="payables-bill-open-approve-exception", event="open_dialog", name="dialog", value="approve_exception", button_type="button") %}Approve exceptions{% endcall %}{% endif %}
+{% if void %}{% call ui::button(id="payables-bill-open-void", event="open_dialog", name="dialog", value="void", button_type="button", variant=bilibi_ui::ButtonVariant::Danger) %}Void{% endcall %}{% endif %}
+</div>
