@@ -20,5 +20,4 @@ jiff = "0.2.38"
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
 tokio-postgres.workspace = true
