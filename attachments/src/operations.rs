@@ -793,7 +793,7 @@ impl Attachments {
         {
             return Err(AttachmentError::InvalidOption);
         }
-        let sources = self.readable_sources(&client, scope, company_id).await?;
+        let sources = self.readable_sources(&**client, scope, company_id).await?;
         let rows = store::list(
             &**client,
             scope.tenant(),
@@ -818,7 +818,7 @@ impl Attachments {
         let client = self.db.get().await.map_err(Error::from)?;
         authorize(&**client, scope, company_id, VIEW).await?;
         Ok(self
-            .readable_sources(&client, scope, company_id)
+            .readable_sources(&**client, scope, company_id)
             .await?
             .into_iter()
             .map(|source| SourceKind {

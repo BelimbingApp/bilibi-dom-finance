@@ -26,14 +26,17 @@
 //! company configures in the [`SECTIONS`] setting (see `layout.rs`). Section
 //! headings and account choices are the company's data; a report reads them as
 //! they are when it runs.
+mod auditor_pack;
 mod configuration;
 mod contributions;
 mod controls;
 mod issued;
 mod layout;
+mod pack_owner;
 mod statement;
 mod web;
 
+pub use auditor_pack::AuditorPack;
 pub use bilibi_finance_ledger::{PostingEvent, PostingSubscription};
 pub use configuration::SECTIONS;
 pub use contributions::{CAPABILITIES, EXPORT, ISSUE};
@@ -72,14 +75,13 @@ const DEFAULT_ENTRY_LIMIT: u32 = 100;
 inventory::submit! {
     Module {
         id: MODULE, layer: Layer::Domains,
-        // TODO(finance siblings): Bilimbi's reports depend on every Finance
-        // module; each edge (receivables and payables for the aging reports
-        // an issue can freeze, then the auditor pack's sources) lands with
-        // the first call into that sibling, once the sibling exists.
         dependencies: &[
             "base/authz", "base/database", "base/datetime", "base/locale", "base/menu",
             "base/party_ids", "base/settings", "base/tenancy", "base/ui",
-            "core/company", "finance/ledger",
+            "core/company", "base/artifacts", "finance/ledger",
+            "finance/attachments", "finance/receivables", "finance/payables",
+            "finance/reconciliation", "finance/einvoice", "finance/payroll",
+            "finance/sst", "finance/fixed_assets",
         ],
         migrations: &[("finance-reports-001-issued", include_str!("../migrations/001-issued.sql"))],
         services: &[Service { id: SERVICE, factory: |services| Ok(Arc::new(Reports {
@@ -87,6 +89,17 @@ inventory::submit! {
             mutations: services.get("base/database.mutations")?,
             settings: services.get("base/settings.store")?,
             ledger: services.get(bilibi_finance_ledger::SERVICE)?,
+            artifacts: services.get("base/artifacts.store")?,
+            sources: auditor_pack::Sources {
+                attachments: services.get(bilibi_finance_attachments::SERVICE)?,
+                receivables: services.get(bilibi_finance_receivables::SERVICE)?,
+                payables: services.get(bilibi_finance_payables::SERVICE)?,
+                reconciliation: services.get(bilibi_finance_reconciliation::SERVICE)?,
+                einvoice: services.get(bilibi_finance_einvoice::SERVICE)?,
+                payroll: services.get(bilibi_finance_payroll::SERVICE)?,
+                sst: services.get(bilibi_finance_sst::SERVICE)?,
+                fixed_assets: services.get(bilibi_finance_fixed_assets::SERVICE)?,
+            },
         })) }, Service { id: "finance/reports.pages", factory: |services| {
             Ok(Arc::new(bilibi_ui::page::PageService::<Scope, Error>(Arc::new(web::Pages {
                 reports: services.get(SERVICE)?,
@@ -99,6 +112,8 @@ inventory::submit! {
                 display: services.get("base/datetime.display")?,
                 locales: services.get("base/locale.locales")?,
             }))))
+        } }, Service { id: "finance/reports.downloads", factory: |services| {
+            Ok(Arc::new(bilibi_ui::download::DownloadService::<Scope, Error>(Arc::new(auditor_pack::Downloads { reports: services.get(SERVICE)? }))))
         } }],
     }
 }
@@ -134,6 +149,16 @@ pub enum ReportsError {
     /// Any other refusal of the ledger's facade, as the ledger words it.
     #[error(transparent)]
     Ledger(LedgerError),
+    #[error("The company changed while the pack was being generated")]
+    SnapshotChanged,
+    #[error("Archive exceeds the configured size limit")]
+    InvalidSize,
+    #[error("Evidence control totals do not agree")]
+    ControlTotalsMismatch,
+    #[error("Source integrity failure")]
+    SourceIntegrityFailure,
+    #[error("Artifact storage: {0}")]
+    Artifact(&'static str),
     /// A database or capture failure; never a refusal.
     #[error(transparent)]
     Failed(#[from] Error),
@@ -370,6 +395,8 @@ pub struct Reports {
     mutations: Arc<MutationBoundary>,
     settings: Arc<Settings>,
     ledger: Arc<Ledger>,
+    artifacts: Arc<bilibi_artifacts::Artifacts>,
+    sources: auditor_pack::Sources,
 }
 
 /// One live read: the ledger's columns at one entry number, the chart and the

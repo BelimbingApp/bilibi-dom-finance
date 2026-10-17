@@ -149,3 +149,5 @@ and `finance_attachments_retention_changes`. All three are append-only
 company's attachments without gaps and stamps the capture time, refuses a
 shorter retention, a second `replaced`/`removed` per attachment, a replacement
 by another record's attachment and a hold without a reason.
+
+`evidence_page_on` is the same authorized evidence contract on a caller-supplied PostgreSQL client or transaction. Use it for every page of one repeatable-read export (Reports auditor pack); the pooled `evidence_page` wrapper is a live read per page. Schema helpers remain private.

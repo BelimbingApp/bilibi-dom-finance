@@ -125,3 +125,5 @@ python3 apps/domains/finance/fixtures/walkthrough/payables-operations.py
 ```
 
 The bootstrap creates real OAuth API and resource-bound PKCE MCP credentials in a new private 0600 file. The proof never prints tokens or plan codes, and SQL only observes effects. The existing facade walkthrough and H1 wire walkthrough run on separate fresh databases. No unit tests or mocks are introduced.
+
+`evidence_page_on` is the same authorized evidence contract on a caller-supplied PostgreSQL client or transaction. Use it for every page of one repeatable-read export (Reports auditor pack); the pooled `evidence_page` wrapper is a live read per page. Schema helpers remain private.

@@ -15,7 +15,8 @@ use bilibi_ui::{
         self, LiveBody, LiveFuture, LiveInput, LiveRequest, LiveState, MountFuture, Page, PageBody,
         PageFuture, PageRequest, Subscription,
     },
-    params, Field, Html, InputKind, ListColumns, ListSpec, ListState, Tab, Tabs,
+    params, Field, FlashMap, Html, InputKind, ListColumns, ListSpec, ListState, StatusKind, Tab,
+    Tabs, NO_FLASH,
 };
 use jiff::Timestamp;
 use serde_json::Value;
@@ -62,6 +63,8 @@ struct State {
     dirty: Arc<AtomicBool>,
     notices_unavailable: bool,
     framed: bool,
+    auditor_pack: Option<String>,
+    flash: Option<(StatusKind, String)>,
 }
 
 impl Drop for State {
@@ -107,6 +110,8 @@ impl State {
             dirty: Arc::new(AtomicBool::new(false)),
             notices_unavailable: false,
             framed: request.framed,
+            auditor_pack: None,
+            flash: None,
         };
         state.canonicalize();
         Ok(state)
@@ -233,6 +238,30 @@ impl State {
         if self.activity {
             return Ok(());
         }
+        if kind == "export_auditor_pack" {
+            // A mounted control is never authority: every event asks again.
+            self.reclock(scope).await?;
+            let result = match company(scope) {
+                Ok(company) => {
+                    self.pages
+                        .reports
+                        .export_auditor_pack(scope, company, period(&self.query, &self.clock).to)
+                        .await
+                }
+                Err(_) => Err(ReportsError::Unauthorized),
+            };
+            self.flash = Some(match result {
+                Ok(artifact) => {
+                    self.auditor_pack = Some(artifact.id);
+                    (StatusKind::Success, "Auditor pack generated.".into())
+                }
+                Err(error) => (
+                    StatusKind::Error,
+                    crate::auditor_pack::export_refusal(&error).into(),
+                ),
+            });
+            return Ok(());
+        }
         if kind == "browser_timezone" {
             self.browser_zone = value["timezone"].as_str().map(str::to_owned);
             self.timezone_request.clear();
@@ -245,12 +274,16 @@ impl State {
         }
         match self.filter.event(kind, value, &self.clock) {
             Some(Outcome::Applied(period)) => {
+                self.auditor_pack = None;
                 self.filter.set(period, &self.clock);
                 self.canonicalize();
                 return self.load(scope).await;
             }
             Some(Outcome::Update) => return Ok(()),
             None => {}
+        }
+        if matches!(kind, "compare" | "pin" | "unpin") {
+            self.auditor_pack = None;
         }
         match kind {
             "compare" => {
@@ -306,6 +339,7 @@ impl State {
             self.activity,
             self.pinned().is_some(),
             &self.query,
+            self.auditor_pack.as_deref(),
         )?);
         if !self.activity {
             let addresses = VIEWS.map(|(view, _)| self.address(view));
@@ -336,7 +370,17 @@ impl State {
                 self.framed,
             )?);
         }
+        let mut flash = NO_FLASH;
+        if let Some((kind, text)) = &self.flash {
+            match kind {
+                StatusKind::Success => flash.success = text,
+                StatusKind::Error => flash.error = text,
+                StatusKind::Warning => flash.warning = text,
+                StatusKind::Info => flash.info = text,
+            }
+        }
         PageView {
+            flash,
             id: if self.activity {
                 "account-activity"
             } else {
@@ -444,6 +488,8 @@ impl LiveState<Scope, Error> for State {
         Box::pin(async move {
             match request.input {
                 LiveInput::Params(query) => {
+                    self.auditor_pack = None;
+                    self.flash = None;
                     self.query = query.clone();
                     self.list = ListState::parse(query, self.list.spec().clone().into())
                         .map_err(|_| Error::Internal)?;
@@ -504,4 +550,5 @@ struct PageView<'a> {
     filter: Option<Html>,
     compare: Option<Field>,
     timezone_request: &'a str,
+    flash: FlashMap<'a>,
 }

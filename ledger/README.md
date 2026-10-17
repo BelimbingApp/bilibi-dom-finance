@@ -459,3 +459,5 @@ account total reproduces exactly from its `through_entry_number`; every
 table is exported to the auditor field by field; every write is attributed
 to the signed-in actor and any impersonator through the Platform's audit
 capture.
+
+`evidence_page_on` is the same authorized evidence contract on a caller-supplied PostgreSQL client or transaction. Use it for every page of one repeatable-read export (Reports auditor pack); the pooled `evidence_page` wrapper is a live read per page. Schema helpers remain private.

@@ -10,7 +10,7 @@ none of the ledger's tables.
 
 Management reports and account activity are available at `/finance/reports`
 and `/finance/reports/accounts/{account_id}` (NT2). Bookkeeping and Approval
-exceptions are also available (NT3); the auditor pack follows in NT4.
+exceptions are also available (NT3), alongside auditor-pack generation and downloads (NT4).
 
 ## Pages
 
@@ -20,7 +20,7 @@ Both routes require `finance.ledger.view` and read the signed-in account's compa
 
 Reports subscribe before the mounted read. Commit notices and missed-notice refreshes invalidate unpinned figures; bursts coalesce, and pinned figures ignore them. Custom-range drafts and table arrangement survive a posting refresh. The relay task stops with the page. If the relay cannot start, a visible warning explains periodic-refresh fallback. As in Bilimbi, zero is not a positive URL cutoff, so an empty ledger cannot be pinned.
 
-All tables use shared FlexTable and built-in ListColumns on ListState. There is no new sort/filter/page-size control: Bilimbi fixes statement order and pages activity by cursor. Section headings, subtotals and footers remain ordered rows with the reference IDs; FlexTable's uniform body replaces Bilimbi's grouped statement table. A shared SectionHeading places the statement label above the card, clear of the customization notch. The shared pin button raises a read-only page event because the Platform button has no patch-link variant. No domain CSS, JavaScript or new write path is added. Auditor-pack controls belong to NT4 and are not shown yet.
+All tables use shared FlexTable and built-in ListColumns on ListState. There is no new sort/filter/page-size control: Bilimbi fixes statement order and pages activity by cursor. Section headings, subtotals and footers remain ordered rows with the reference IDs; FlexTable's uniform body replaces Bilimbi's grouped statement table. A shared SectionHeading places the statement label above the card, clear of the customization notch. The shared pin button raises a read-only page event because the Platform button has no patch-link variant. No domain CSS or JavaScript is added. When figures are available, Generate auditor pack produces an export for the selected period end, followed by Download auditor pack.
 
 ## Management reports, not statutory statements
 
@@ -61,8 +61,7 @@ ledger calls it makes authorize again: a missing grant or a sibling company
 without tenant-wide reach is `Unauthorized`, and a company the scope cannot see
 is `CompanyNotFound`. Issuing asks for `finance.reports.issue` as well, and
 runs in an audited mutation transaction holding the company's lock, so an
-archived company is `CompanyArchived`. `finance.reports.reports-export` is
-declared for the auditor pack, which a later slice builds. Both capabilities
+archived company is `CompanyArchived`. `finance.reports.reports-export` generates and downloads the auditor pack, with all nine source view capabilities required again. Both capabilities
 are granted to `tenant_owner`.
 
 ## Figures that reproduce
@@ -185,3 +184,17 @@ Run the page-service proof on a fresh disposable database with `DATABASE_URL=…
 The page's company is the sealed actor's affiliation, matching the other Finance pages. An account without an affiliation gets an explicit missing-company state. The page proof creates and binds the independent reviewer's Company 001 affiliation through the Core Affiliation and User facades; its administrator stays unaffiliated so this missing-context case remains covered.
 
 Archived-company history remains readable. Until Base Settings accepts an archived company for display reads, these pages fall back to the user's tenant display clock, as the report facade already does for the unavailable company layout. The ledger still refuses every archived-company write; this display fallback only keeps that refusal visible on the live page.
+
+## Auditor pack
+
+`export_auditor_pack(scope, company, as_of)` collects every dataset published by the nine Finance siblings and Reports' issued reports, through their authorized facades, on one read-only PostgreSQL repeatable-read transaction. The initial ledger total supplies the one `through_entry_number` for the general ledger, trial balance and aged receivables/payables. The database snapshot also freezes mutable account labels, document states, settings histories and attachment status across all evidence pages; an entry pin alone cannot do this. `as_of` dates the summaries only: evidence includes all company records visible at the snapshot, including drafts and reversals. A page's positive entry cutoff does not truncate the auditor pack.
+
+The ZIP includes `manifest.json`, one `<module>-<dataset>.csv` per sibling dataset, `issued-reports.csv`, `general-ledger.csv`, JSON and CSV trial balance and aging summaries, `source-file-index.csv`, and exact `authority-payload-<submission-id>.json` files. The attachment index is `attachments-attachment.csv`: it carries filenames, hashes, retention and holds, with `import_mapping_ref` linking statement attachments to `reconciliation-statement.csv#<id>`. Original supporting documents and bank-statement bytes stay in Attachments. Every authority payload's SHA-256 must match before inclusion. General-ledger debit and credit sums must equal the ledger facade's SQL aggregates, or no artifact is published.
+
+Manifest version 8 records the tenant, company, currency, minor units, actor and impersonator, UTC capture time, PostgreSQL snapshot, entry cutoff, filters, exact-decimal encoding, and each file's SHA-256 and row count (byte size for payloads). CSV uses UTF-8, CRLF and quoted cells; formula-like text is prefixed with an apostrophe even after whitespace or controls. Known numeric fields retain unrounded decimal strings, including negative amounts. Empty datasets still have their frozen headers. Files are collected in a random 0700 temporary directory with 0600 files, paged 500 rows at a time, hashed incrementally and removed on success, failure or cancellation. The compressed archive is checked against `artifacts.max_bytes` before loading into memory.
+
+Publication uses Base Artifacts' ordinary retained download policy (`artifacts.storage_root`, `artifacts.retention_days`, `artifacts.max_bytes`). Its private owner validates an `auditor-pack` UUID reference and rechecks the export capability, live company and all nine source view grants on create and every read. Maintenance requires `finance.reports.issue`. `read_auditor_pack(scope, company, artifact_id)` returns only bytes and a trusted filename; `/finance/reports/auditor-packs/{artifact_id}` resolves the signed-in actor's company and calls this facade on every click. Base Artifacts reauthenticates the actor, verifies expiry, byte size and hash, and commits read audit evidence before delivering bytes. Shared download delivery sets attachment disposition, private/no-store, nosniff and sandbox headers. Revoking any source grant refuses a previously generated pack.
+
+The Generate event reauthorizes rather than trusting a mounted flag. Success and recoverable storage/refusal flashes use Bilimbi's wording. Period changes clear the previous download link. Artifact settings belong to Operator Settings; the reports page adds no setup fields.
+
+Run `DATABASE_URL=… AUDITOR_PACK_PROOF_DIR=/absolute/private/task-directory cargo run -p bilibi-finance-walkthrough-fixture --bin auditor-pack` on a fresh disposable PostgreSQL 18 database. It proves a 500-row page boundary under a second session's backdated posting, checks archive membership and checksums, exact totals, source hashes, formula protection, issued evidence, missing/cross-company access, size refusal, the download adapter and revocation of every source grant against an already-mounted page. Append `-- serve` to keep the real app at `http://127.0.0.1:4324` for browser proof; use the walkthrough manager account.

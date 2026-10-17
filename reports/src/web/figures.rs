@@ -146,6 +146,7 @@ pub(super) fn header(
     activity: bool,
     pinned: bool,
     _query: &HashMap<String, String>,
+    auditor_pack: Option<&str>,
 ) -> Result<Html> {
     let mut subtitle = Html::EMPTY;
     let mut actions = Html::EMPTY;
@@ -194,6 +195,21 @@ pub(super) fn header(
         // The shared button has no patch-link variant. A page event changes
         // only URL/read state, retaining the mounted page just as patch does.
         actions = render(Button {
+            id: "export-auditor-pack",
+            event: "export_auditor_pack",
+            button_type: "button",
+            body: Html::text("Generate auditor pack"),
+            ..Button::default()
+        })?;
+        if let Some(artifact) = auditor_pack {
+            actions.push(&render(Button {
+                id: "download-auditor-pack",
+                href: &format!("/finance/reports/auditor-packs/{artifact}"),
+                body: Html::text("Download auditor pack"),
+                ..Button::default()
+            })?);
+        }
+        actions.push(&render(Button {
             id: if pinned { "unpin-report" } else { "pin-report" },
             event: if pinned { "unpin" } else { "pin" },
             name: "through",
@@ -205,7 +221,7 @@ pub(super) fn header(
                 "Pin entry cutoff"
             }),
             ..Button::default()
-        })?;
+        })?);
     }
     render(HeaderView {
         title: &title,

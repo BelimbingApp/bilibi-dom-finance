@@ -1,6 +1,8 @@
 {# Mirrors Bilimbi ReportsLive and AccountActivityLive; shared components own UI markup. #}
 {% import "components.html" as ui %}
 {% import "forms.html" as forms %}
+{% import "feedback.html" as feedback %}
+{% call feedback::flash_group(messages=flash) %}{% endcall %}
 {% call ui::page(id=id, variant=bilibi_ui::PageVariant::Detail) %}
 {% for part in before %}{{ part }}{% endfor %}
 {% if let Some(filter) = filter %}

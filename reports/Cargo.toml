@@ -26,3 +26,18 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-postgres.workspace = true
+
+# NT4: owned evidence and private archive storage.
+bilibi-artifacts.workspace = true
+zip.workspace = true
+uuid.workspace = true
+sha2 = "0.11.1"
+rust_decimal.workspace = true
+bilibi-finance-attachments = { path = "../attachments" }
+bilibi-finance-receivables = { path = "../receivables" }
+bilibi-finance-payables = { path = "../payables" }
+bilibi-finance-reconciliation = { path = "../reconciliation" }
+bilibi-finance-einvoice = { path = "../einvoice" }
+bilibi-finance-payroll = { path = "../payroll" }
+bilibi-finance-sst = { path = "../sst" }
+bilibi-finance-fixed-assets = { path = "../fixed_assets" }

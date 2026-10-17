@@ -89,3 +89,9 @@ bilibi_menu::contribute!(
     .requires(bilibi_menu::Requirement::Capability(crate::VIEW))
     .order(21)
 );
+
+// Bilimbi Reports.Web.AuditorPackController: every click reauthorizes the artifact.
+inventory::submit! { Contribution::new(bilibi_module_registry::contributions::DOWNLOADS, "finance/reports.auditor-pack", provenance!(), &bilibi_module_registry::contributions::Download {
+    path: "/finance/reports/auditor-packs/{artifact_id}", service: "finance/reports.downloads",
+    operation: "auditor-pack", access: Access::Capability(EXPORT),
+}) }

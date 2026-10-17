@@ -316,3 +316,4 @@ cargo run -p bilibi-finance-walkthrough-fixture --bin bilibi-finance-reconciliat
 ```
 
 It proves the facade's import/skipped rows, duplicate-file refusal, original download bytes, denied/restricted scopes, Money precision, and concurrent opening refusal before serving the app. The walkthrough's manager, staff and viewer accounts exercise full control, import-only and read-only states; use the fixture's `PASSWORD`. The operating account is left ready for browser imports and opening, and the reserve account has one open reconciliation. These are disposable fixture facts, never production seeds.
+`evidence_page_on` is the same authorized evidence contract on a caller-supplied PostgreSQL client or transaction. Use it for every page of one repeatable-read export (Reports auditor pack); the pooled `evidence_page` wrapper is a live read per page. Schema helpers remain private.

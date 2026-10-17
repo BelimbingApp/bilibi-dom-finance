@@ -69,3 +69,7 @@ bilibi-agent-api.workspace = true
 [[bin]]
 name = "bilibi-finance-reconciliation-ui"
 path = "src/bin/reconciliation-ui.rs"
+
+# NT4: inspect the archive returned by the real Reports facade.
+[dependencies.zip]
+workspace = true

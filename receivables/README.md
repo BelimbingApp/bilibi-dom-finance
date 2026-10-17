@@ -108,3 +108,5 @@ python3 apps/domains/finance/fixtures/walkthrough/receivables-operations.py
 ```
 
 The bootstrap saves real resource-bound OAuth credentials in a new mode-0600 file; never print it or use a production database. `receivables-control` makes only fixture-scoped grant/archive changes through normal facades in a second session. The wire proof exercises all 23 operations on HTTP and MCP, exact half-up totals and posting sides, preserved/cleared snapshots and dates, controls after setup changes, original-owned reversal, repeated non-mutating previews, replay, strict schemas, capability revocation, tenant isolation, archived targets, ICU/ID paging, mixed H1/H2 independent batching, dependent-plan rollback and late audit-capture failure/recovery. Run the H1 wire walkthrough on a separate fresh database to check the shared Ledger seams. No unit tests are added.
+
+`evidence_page_on` is the same authorized evidence contract on a caller-supplied PostgreSQL client or transaction. Use it for every page of one repeatable-read export (Reports auditor pack); the pooled `evidence_page` wrapper is a live read per page. Schema helpers remain private.

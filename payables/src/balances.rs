@@ -17,14 +17,16 @@ impl Default for AgingQuery {
         }
     }
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct AgedDocument {
     pub id: i64,
     pub document_number: i64,
     pub party_key: String,
     pub party_name: String,
     pub party_document_number: Option<String>,
+    #[serde(serialize_with = "date_text")]
     pub document_date: Date,
+    #[serde(serialize_with = "date_text")]
     pub due_date: Date,
     pub currency_code: String,
     pub total: Money,
@@ -32,7 +34,7 @@ pub struct AgedDocument {
     pub days_overdue: i32,
     pub bucket: usize,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct AgedParty {
     pub party_key: String,
     pub party_name: String,
@@ -40,9 +42,10 @@ pub struct AgedParty {
     pub buckets: Vec<Money>,
     pub total: Money,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct AgedPayables {
     pub company_id: i64,
+    #[serde(serialize_with = "date_text")]
     pub as_of: Date,
     pub through_entry_number: i64,
     pub bucket_days: Vec<i32>,
@@ -350,4 +353,11 @@ impl Payables {
             accounts,
         })
     }
+}
+
+fn date_text<S: serde::Serializer>(
+    date: &Date,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error> {
+    serializer.collect_str(date)
 }

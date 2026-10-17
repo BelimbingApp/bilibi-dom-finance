@@ -112,3 +112,5 @@ DATABASE_URL=postgres://…/disposable cargo run -p bilibi-finance-walkthrough-f
 ```
 
 It drives the actual mounted Page/LiveState adapters against facade records: create/revise category defaults, search, page and page size, acquisition and field refusals, escaping and workspace markers, run skips, disposal/reversal, void confirmation/cancel, charge correction history, grants revoked after mount, withheld controls and column/compact controls. Add `serve` with matching `APP_ORIGIN` and `BIND_ADDR` to keep that disposable app available for browser proof; the fixture manager can write and contractor can view.
+
+`evidence_page_on` is the same authorized evidence contract on a caller-supplied PostgreSQL client or transaction. Use it for every page of one repeatable-read export (Reports auditor pack); the pooled `evidence_page` wrapper is a live read per page. Schema helpers remain private.
