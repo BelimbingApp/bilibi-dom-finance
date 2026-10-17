@@ -1003,6 +1003,49 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
             .get(0);
         println!("audit mutations recorded for finance.reconciliation.{kind}: {count}");
     }
+    show(
+        "viewer reads the statement evidence page",
+        reconciliation
+            .evidence_page(&viewer, COMPANY, "statement", Some(2), None)
+            .await
+            .map(|page| {
+                (
+                    page.fields.len(),
+                    page.rows.len(),
+                    page.next,
+                    page.rows.first().cloned(),
+                )
+            }),
+    );
+    show(
+        "viewer reads the statement-line evidence page after line 5",
+        reconciliation
+            .evidence_page(&viewer, COMPANY, "statement_line", Some(2), Some(5))
+            .await
+            .map(|page| (page.rows.len(), page.next, page.rows.first().cloned())),
+    );
+    show(
+        "an unknown dataset",
+        reconciliation
+            .evidence_page(&viewer, COMPANY, "secret", None, None)
+            .await
+            .map(|_| ()),
+    );
+    show(
+        "a limit of 501",
+        reconciliation
+            .evidence_page(&viewer, COMPANY, "match", Some(501), None)
+            .await
+            .map(|_| ()),
+    );
+    show(
+        "the other tenant reads the evidence",
+        reconciliation
+            .evidence_page(&other, COMPANY, "statement", None, None)
+            .await
+            .map(|_| ()),
+    );
+    println!("datasets: {:?}", Reconciliation::evidence_datasets());
     let lines_held: i64 = raw_client
         .query_one(
             "SELECT count(*) FROM finance_reconciliation_statement_lines",

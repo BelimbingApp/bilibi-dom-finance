@@ -29,6 +29,7 @@ records; the schema is private.
 | `list_bank_account_changes` | `finance.reconciliation.view` | The change log: field, values before and after, actor, reason, time |
 | `import_statement` | `finance.reconciliation.statements.import` | Imports a CSV file's bytes as a numbered statement with its lines |
 | `list_statements`, `get_statement` | `finance.reconciliation.view` | Statements (without lines), and one with its lines in line order |
+| `evidence_page` | `finance.reconciliation.view` | One ID-ordered page (`limit` 1 to 500, `after`) of a dataset for the auditor's pack, one per table: `bank_account`, `bank_account_change`, `statement`, `statement_line`, `match`, `match_line`, `match_entry`, `match_event`, `reconciliation_record`, `reconciliation_event`, `reconciliation_item`. Dates, times and amounts are text |
 | `mapping_choices` | none | The delimiters, date formats, amount signs and decimal separators a mapping is built from |
 
 Lists page by `PageOptions` (`limit` 1 to 500, 100 by default; `after`, the
@@ -178,8 +179,7 @@ for those).
 
 ## Not ported yet
 
-- Matching, reconciliations, posting charges and interest, and the evidence
-  datasets (`NC2`); the pages, with live upload of the statement file and the
+- Matching, reconciliations and posting charges and interest (`NC2`); the pages, with live upload of the statement file and the
   download of the bank's file (`NC3`, `NC4`).
 - `TODO(menu)`: the `finance.reconciliation` menu item (Bank reconciliation,
   `/finance/reconciliation`) lands with the bank accounts page.

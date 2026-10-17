@@ -38,6 +38,7 @@
 mod bank_accounts;
 mod contributions;
 mod csv;
+mod evidence;
 mod import;
 mod mapping;
 mod source;
@@ -47,6 +48,7 @@ pub use contributions::{
     CAPABILITIES, FINALISE_RECONCILIATIONS, IMPORT_STATEMENTS, MANAGE_BANK_ACCOUNTS,
     MANAGE_MATCHES, MANAGE_RECONCILIATIONS, MANAGE_STATEMENT_LINES, POST_STATEMENT_LINES, VIEW,
 };
+pub use evidence::EvidencePage;
 pub use import::MAX_LINES;
 pub use mapping::{
     Column, ImportMapping, AMOUNT_SIGNS, DATE_FORMATS, DECIMAL_SEPARATORS, DELIMITERS,
