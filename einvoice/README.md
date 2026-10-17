@@ -14,7 +14,8 @@ bridge: a validated document's one owned entry and a cancelled one's
 reversal, retried from the reconciliation read, source links to the entry
 Receivables or Payables already posted, the monthly consolidated document,
 the printable PDF with its validation link's QR code, and the auditor's
-evidence datasets. The pages follow (slices NE5 and NE6). Other modules and
+evidence datasets. The documents pages are available; consolidation,
+reconciliation and setup pages follow in NE6. Other modules and
 Domains never read its tables.
 
 ## Public API
@@ -32,6 +33,7 @@ and call it with a sealed `Scope` and an explicit company id.
 | `Draft::validate` | none | A draft's shape and the authority's rules, with the derived amounts (see Drafts) |
 | `issue_document` | `.documents.issue` | Records a valid draft as an `issued` document; `Invalid`, `CodeNumberTaken`; audit action `finance.einvoice.document.issued` |
 | `get_document` | `.view` | A `DocumentView`: the document, its lines, events, status, identifiers, validation link, cancellation deadline, attention flags and whether a submit job waits |
+| `list_documents` | `.view` | `DocumentQuery` to `DocumentPage`: literal case-insensitive number or counterparty search, status/type/environment filters, newest first, clamped pages of 25, 50, 100 or 300; count and returned statuses share one snapshot |
 | `submit_document` | `.documents.submit` | Queues the submit job as the caller (answers its ID); `NotSubmittable`, `SourceTaken`, `MissingCredentials`, `SigningKeyRequired`, `AlreadyQueued`; audit action `finance.einvoice.submission.queued` |
 | `refresh_status` | `.documents.submit` | Reads the status at the authority and records what changed; `NotSubmitted`, `Authority(code)` |
 | `cancel_document` | `.documents.cancel` | Cancels a valid or rejected document at the authority with a reason; `NotCancellable`, `CancellationPeriodOver`, `ActiveReferencingDocuments`, `InvalidReason`, `CancellationRefused`, `RateLimited`, `AuthorityUnavailable` |
@@ -56,6 +58,18 @@ Refused values are `Invalid(Vec<FieldError>)` with Bilimbi's changeset words
 (`must be 1 to 16 letters, digits, dots, or dashes`, `should be at most 500
 character(s)`), each at its field's path (`code`, `buyer.address.state_code`,
 `lines[2].tax_rate`).
+
+## Documents pages
+
+`/finance/einvoice/documents` uses shared FlexTable column settings and compact rows, with URL-backed search, status, document type, environment and pagination. Search uses the supplier for a self-billed document and the buyer otherwise. The reference fixes newest-first order rather than enabling sortable headers.
+
+`/finance/einvoice/documents/{id}` reads the frozen parties, lines and totals, identifiers, ledger entry and reversal, validation link and QR, event history, attention flags and consolidated sources. Lists use independent FlexTables; record links support workspace selection. Submit, refresh, cancellation and PDF generation check the current grant in both the live handler and facade. A read-only viewer may generate/download PDFs, as in Bilimbi. Revocation while a cancellation is pending refuses the action without losing the page.
+
+Cancellation asks for a reason in the shared Modal, then asks for confirmation in the shared ConfirmDialog. The pinned Platform cannot place a reason input or a custom “Keep document” label inside ConfirmDialog, so this requires one extra confirmation click compared with Bilimbi; no Domain script or Platform change is added.
+
+`/finance/einvoice/documents/{id}/pdf/{artifact_id}` returns an attachment through the Platform download contract. `read_pdf` reauthorizes the artifact's actual document and company on every request; the cosmetic document ID never grants access. The response is private/no-store and nosniff through the shared FileBody transport.
+
+Run the NE5 proof against an empty disposable database with `DATABASE_URL=... BILIBI_SETTINGS_KEY=<64 hex characters> cargo run -p bilibi-finance-walkthrough-fixture --bin einvoice-ui`. It exercises literal wildcard search, page boundaries and combined filters, tenant isolation, real queue submit/poll/refresh, PDF bytes, status after PDF events, cancellation with Unicode reason and revoked grants. Only MyInvois is a local stand-in. To inspect the same records in a browser, add `serve` and set matching `APP_ORIGIN` and `BIND_ADDR`; this is fixture-only and installs no production data.
 
 ## Drafts
 

@@ -431,3 +431,6 @@ macro_rules! walkthrough_reconciliation_roles {
         }) }
     };
 }
+
+// NE5: real e-invoice pages, downloads and local authority browser proof.
+pub mod einvoice_ui;

@@ -69,24 +69,29 @@ impl Einvoice {
         let tenant = scope.tenant();
         let size = q.page_size as i64;
         let page = q.page as i64;
-        // One statement counts and selects IDs from the same snapshot, even
+        // One statement counts and selects IDs and statuses from the same snapshot, even
         // when a concurrent issuer adds a document or clearance moves status.
         // strpos, unlike ILIKE, gives literal substring semantics directly.
         let row = client
             .query_one(
-                "WITH matches AS MATERIALIZED (
-               SELECT d.id FROM finance_einvoice_documents d
+                "WITH candidates AS (
+               SELECT d.*, COALESCE((SELECT e.event FROM finance_einvoice_status_events e
+                   WHERE e.tenant_id = $1 AND e.company_id = $2 AND e.document_id = d.id
+                     AND e.event = ANY($8) ORDER BY e.sequence DESC LIMIT 1), 'issued') AS status
+               FROM finance_einvoice_documents d WHERE d.tenant_id = $1 AND d.company_id = $2),
+             matches AS MATERIALIZED (
+               SELECT d.id, d.status FROM candidates d
                WHERE d.tenant_id = $1 AND d.company_id = $2
                  AND ($3 = '' OR strpos(lower(d.code_number), lower($3)) > 0
                    OR strpos(lower(CASE WHEN d.document_type = ANY($7) THEN d.supplier->>'name'
                       ELSE d.buyer->>'name' END), lower($3)) > 0)
-                 AND ($4 = '' OR $4 = COALESCE((SELECT e.event FROM finance_einvoice_status_events e
-                   WHERE e.tenant_id = $1 AND e.company_id = $2 AND e.document_id = d.id
-                     AND e.event = ANY($8) ORDER BY e.sequence DESC LIMIT 1), 'issued'))
+                 AND ($4 = '' OR $4 = d.status)
                  AND ($5 = '' OR d.document_type = $5) AND ($6 = '' OR d.environment = $6)),
-             counted AS (SELECT count(*) AS total FROM matches)
-             SELECT total, ARRAY(SELECT id FROM matches ORDER BY id DESC LIMIT $9
-               OFFSET (LEAST($10, GREATEST(1, (total + $9 - 1) / $9)) - 1) * $9) FROM counted",
+             counted AS (SELECT count(*) AS total FROM matches),
+             paged AS MATERIALIZED (SELECT id, status FROM matches ORDER BY id DESC LIMIT $9
+               OFFSET (SELECT (LEAST($10, GREATEST(1, (total + $9 - 1) / $9)) - 1) * $9 FROM counted))
+             SELECT total, ARRAY(SELECT id FROM paged ORDER BY id DESC),
+               ARRAY(SELECT status FROM paged ORDER BY id DESC) FROM counted",
                 &[
                     &tenant,
                     &company,
@@ -105,8 +110,15 @@ impl Einvoice {
         let total_entries = row.get::<_, i64>(0) as u64;
         let total_pages = total_entries.div_ceil(q.page_size);
         let ids: Vec<i64> = row.get(1);
+        let statuses: Vec<String> = row.get(2);
+        // Document snapshots are immutable; only status can move between reads.
+        let mut entries =
+            documents::summaries(&**client, &authority, tenant, company, &ids).await?;
+        for (entry, status) in entries.iter_mut().zip(statuses) {
+            entry.status = status;
+        }
         Ok(DocumentPage {
-            entries: documents::summaries(&**client, &authority, tenant, company, &ids).await?,
+            entries,
             page: q.page.min(total_pages.max(1)),
             page_size: q.page_size,
             total_entries,

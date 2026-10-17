@@ -100,13 +100,12 @@ fn table(
 }
 fn time_cell(display: &DisplayContext, at: jiff::Timestamp, precision: Precision) -> Cell {
     let r = display.render(at, Format::DateTime, precision);
-    Cell::instant(Instant::new(
-        &r.iso,
-        &r.text,
-        &r.company,
-        &r.utc,
-        r.mode.as_str(),
-    ))
+    let mut instant = Instant::new(&r.iso, &r.text, &r.company, &r.utc, r.mode.as_str());
+    instant.precision = match precision {
+        Precision::Minute => "minute",
+        Precision::Second => "second",
+    };
+    Cell::instant(instant)
 }
 
 #[derive(Template)]

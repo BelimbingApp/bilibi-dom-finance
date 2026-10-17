@@ -7,47 +7,43 @@
 {% if let Some(d) = document %}
   {% call workspace::announce(kind="finance/einvoice", record_id=d.document.id.to_string()) %}{% endcall %}
   {% call ui::header(subtitle_html=subtitle, actions=actions) %}{{ title }}{% endcall %}
-  <div class="mb-4 text-sm text-ink-muted">{{ d.document.environment }}
-    {% if d.self_billed %}<span id="einvoice-document-self-billed">{% call ui::badge(dot=false) %}Self-billed{% endcall %}</span>{% endif %}
-    {% if let Some(month) = d.document.details.consolidation_month %}<span id="einvoice-document-consolidated">{% call ui::badge(dot=false) %}Consolidated {{ month }}{% endcall %}</span>{% endif %}
-  </div>
   {% if !attention.is_empty() %}
-  {% call ui::card(id="einvoice-document-attention", role="alert") %}
+  {% call ui::card(id="einvoice-document-attention", inner_class="p-5 sm:p-6", role="alert") %}
     {% call ui::section_heading(id="einvoice-document-attention-heading", title="Needs attention") %}{% endcall %}
     <ul class="mt-2 list-disc space-y-1 pl-5 text-sm text-ink">{% for (flag, message) in attention %}<li id="einvoice-attention-{{ flag }}">{{ message }}</li>{% endfor %}</ul>
   {% endcall %}
   {% endif %}
   {% if let Some(holder) = d.consolidated_by %}
-  {% call ui::card(id="einvoice-document-consolidated-by") %}
+  {% call ui::card(id="einvoice-document-consolidated-by", inner_class="p-5 sm:p-6", role="region", labelledby="einvoice-document-consolidated-by-heading") %}
     {% call ui::section_heading(id="einvoice-document-consolidated-by-heading", title="Consolidated") %}{% endcall %}
     <p class="mt-2 text-sm text-ink">The consolidated document <a id="einvoice-document-consolidated-by-link" href="/finance/einvoice/documents/{{ holder.id }}" class="text-action hover:underline">{{ holder.code_number }}</a> reports this document to the authority, so it is not submitted on its own.</p>
   {% endcall %}
   {% endif %}
   <div class="grid gap-4 lg:grid-cols-3">
-    {% call ui::card(id="einvoice-document-supplier") %}
+    {% call ui::card(id="einvoice-document-supplier", inner_class="p-5 sm:p-6", role="region", labelledby="einvoice-document-supplier-heading") %}
       {% call ui::section_heading(id="einvoice-document-supplier-heading", title="Supplier") %}{% endcall %}
       {% for line in supplier %}<p class="text-sm text-ink">{{ line }}</p>{% endfor %}
     {% endcall %}
-    {% call ui::card(id="einvoice-document-buyer") %}
+    {% call ui::card(id="einvoice-document-buyer", inner_class="p-5 sm:p-6", role="region", labelledby="einvoice-document-buyer-heading") %}
       {% call ui::section_heading(id="einvoice-document-buyer-heading", title="Buyer") %}{% endcall %}
       {% for line in buyer %}<p class="text-sm text-ink">{{ line }}</p>{% endfor %}
     {% endcall %}
-    {% call ui::card(id="einvoice-document-validation") %}
+    {% call ui::card(id="einvoice-document-validation", inner_class="p-5 sm:p-6", role="region", labelledby="einvoice-document-validation-heading") %}
       {% call ui::section_heading(id="einvoice-document-validation-heading", title="Validation") %}{% endcall %}
       {{ authority }}{{ share }}
     {% endcall %}
   </div>
-  {% call ui::card(id="einvoice-document-lines", inner_class="p-0") %}
+  {% call ui::card(id="einvoice-document-lines", inner_class="p-0", role="region", labelledby="einvoice-document-lines-heading") %}
     {% call ui::section_heading(id="einvoice-document-lines-heading", title="Lines", class="p-5 pb-0") %}{% endcall %}
     {{ lines }}<div class="p-5">{{ totals }}</div>
   {% endcall %}
   {% if !d.sources.is_empty() %}
-  {% call ui::card(id="einvoice-document-sources", inner_class="p-0") %}
+  {% call ui::card(id="einvoice-document-sources", inner_class="p-0", role="region", labelledby="einvoice-document-sources-heading") %}
     {% call ui::section_heading(id="einvoice-document-sources-heading", title="Covered documents", count=Some(d.sources.len()), class="p-5 pb-0") %}{% endcall %}
     {{ sources }}
   {% endcall %}
   {% endif %}
-  {% call ui::card(id="einvoice-document-events", inner_class="p-0") %}
+  {% call ui::card(id="einvoice-document-events", inner_class="p-0", role="region", labelledby="einvoice-document-events-heading") %}
     {% call ui::section_heading(id="einvoice-document-events-heading", title="History", class="p-5 pb-0") %}{% endcall %}
     {{ events }}
   {% endcall %}

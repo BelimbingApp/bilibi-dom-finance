@@ -192,7 +192,15 @@ impl Index {
                             class: "font-medium text-ink-strong hover:underline",
                         })?,
                     )
-                    .cell("document_type", Cell::text(type_label(&d.document_type)))
+                    .slot(
+                        "document_type",
+                        render(Badge {
+                            kind: BadgeKind::Plain,
+                            dot: false,
+                            class: "",
+                            body: Html::text(&type_label(&d.document_type)),
+                        })?,
+                    )
                     .cell(
                         "issued_at",
                         time_cell(&display, d.issued_at, Precision::Minute),

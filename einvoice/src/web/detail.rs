@@ -66,6 +66,16 @@ struct CancelForm {
     reason: Field,
 }
 
+#[derive(Template)]
+#[template(
+    source = r#"{% import "components.html" as ui %}{{ status }}<span class="ml-2 text-ink-muted">{{ d.document.environment }}</span>{% if d.self_billed %}<span id="einvoice-document-self-billed" class="ml-2">{% call ui::badge(dot=false) %}Self-billed{% endcall %}</span>{% endif %}{% if let Some(month) = d.document.details.consolidation_month %}<span id="einvoice-document-consolidated" class="ml-2">{% call ui::badge(dot=false) %}Consolidated {{ month }}{% endcall %}</span>{% endif %}"#,
+    ext = "html"
+)]
+struct Subtitle<'a> {
+    d: &'a DocumentView,
+    status: Html,
+}
+
 fn columns(name: &str, fields: &[(&str, &str)]) -> Result<ListColumns> {
     ListColumns::mount(
         name,
@@ -381,7 +391,10 @@ impl Detail {
         if let Some(d) = &self.document {
             let can_submit = self.pages.allowed(scope, SUBMIT).await?;
             let can_cancel = self.pages.allowed(scope, CANCEL).await?;
-            view.subtitle = status_badge(&d.status)?;
+            view.subtitle = render(Subtitle {
+                d,
+                status: status_badge(&d.status)?,
+            })?;
             view.supplier = party_lines(&d.document.supplier);
             view.buyer = party_lines(&d.document.buyer);
             view.attention = d.attention.iter().copied().map(attention).collect();
