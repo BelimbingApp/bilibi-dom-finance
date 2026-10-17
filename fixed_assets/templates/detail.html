@@ -1,0 +1,29 @@
+{% import "components.html" as ui %}
+{% import "feedback.html" as feedback %}
+{% import "workspace.html" as workspace %}
+{% call ui::page(id="asset-detail", variant=bilibi_ui::PageVariant::Detail) %}
+{% call feedback::flash_group(messages=flash) %}{% endcall %}
+{% call ui::header() %}Asset{% endcall %}
+{% call ui::button(href="/finance/fixed-assets/register") %}Register{% endcall %}
+{{ unavailable }}
+{% if let Some(d) = detail %}
+{% call workspace::announce(kind="finance/fixed_assets", record_id=d.asset.id) %}{% endcall %}
+{{ assumptions }}{{ schedule }}
+<p>This projected book schedule assumes continued use. Recorded charges and reversals appear in depreciation runs.</p>
+{{ charges }}{{ events }}
+{% call ui::card(class="mt-4") %}
+{% call ui::section_heading(title="Sale or write-off") %}{% endcall %}{{ dispose }}
+{% endcall %}
+{% if !d.voided %}
+{% call ui::card(class="mt-4") %}
+{% call ui::section_heading(title="Void acquisition") %}{% endcall %}
+<p>For an asset whose acquisition entry was reversed in the ledger. Depreciation already posted for this asset is reversed; other assets keep theirs. This cannot be undone.</p>
+{{ void }}
+{% endcall %}
+{% endif %}
+{% call ui::card(class="mt-4") %}
+{% call ui::section_heading(title="Reverse disposal") %}{% endcall %}{{ reverse }}
+{% endcall %}
+{% endif %}
+{{ confirm }}
+{% endcall %}

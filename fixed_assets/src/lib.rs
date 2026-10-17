@@ -1,6 +1,6 @@
 //! Bilimbi.Finance.FixedAssets: immutable category defaults and acquisition
 //! assumptions, monthly runs and immutable corrections. Registration recognises
-//! an existing debit; it never posts or takes ownership of it. Pages follow in NX3.
+//! an existing debit; it never posts or takes ownership of it.
 mod acquisitions;
 mod activity;
 mod categories;
@@ -8,6 +8,7 @@ mod contributions;
 mod reports;
 mod schedule;
 mod store;
+mod web;
 
 pub use activity::{DisposalInput, Event, EventAction, EventInput, Run, RunException, RunItem};
 use bilibi_company::organisation;
@@ -31,7 +32,7 @@ pub const MODULE: &str = "finance/fixed_assets";
 pub const SERVICE: &str = "finance/fixed_assets.fixed_assets";
 inventory::submit! { Module {
     id: MODULE, layer: Layer::Domains,
-    dependencies: &["base/authz", "base/database", "base/tenancy", "core/company", "finance/ledger", "finance/payables"],
+    dependencies: &["base/authz", "base/database", "base/tenancy", "base/datetime", "base/locale", "base/menu", "base/ui", "core/company", "finance/ledger", "finance/payables"],
     migrations: &[
         ("finance-fixed-assets-001-acquisitions", include_str!("../migrations/001-acquisitions.sql")),
         ("finance-fixed-assets-002-runs-corrections", include_str!("../migrations/002-runs-corrections.sql")),
@@ -40,7 +41,13 @@ inventory::submit! { Module {
         db: s.get::<Db>("base/database.pool")?.as_ref().clone(),
         ledger: s.get(bilibi_finance_ledger::SERVICE)?,
         payables: s.get(bilibi_finance_payables::SERVICE)?,
-    })) }],
+    })) }, Service { id: web::PAGES, factory: |s| Ok(Arc::new(bilibi_ui::page::PageService::<Scope, Error>(Arc::new(web::Pages {
+        db: s.get::<Db>("base/database.pool")?.as_ref().clone(),
+        assets: s.get(SERVICE)?,
+        ledger: s.get(bilibi_finance_ledger::SERVICE)?,
+        display: s.get("base/datetime.display")?,
+        locales: s.get("base/locale.locales")?,
+    })))) }],
 } }
 
 pub type Result<T> = std::result::Result<T, FixedAssetsError>;
@@ -197,11 +204,26 @@ pub struct ScheduleRow {
     pub accumulated: Money,
     pub carrying_value: Money,
 }
+/// Posted charge with the earliest correction that reversed it.
+#[derive(Clone, Debug)]
+pub struct AssetCharge {
+    pub run_id: i64,
+    pub period: Date,
+    pub amount: Money,
+    pub entry_number: Option<i64>,
+    pub recorded_by_user_id: i64,
+    pub recorded_by_impersonator_id: Option<i64>,
+    pub recorded_at: String,
+    pub reversal: Option<Event>,
+}
 #[derive(Clone, Debug)]
 pub struct AssetDetail {
     pub asset: Asset,
     pub revision: CategoryRevision,
     pub schedule: Vec<ScheduleRow>,
+    pub charges: Vec<AssetCharge>,
+    pub events: Vec<Event>,
+    pub voided: bool,
 }
 impl AssetDetail {
     /// Scheduled (not posted) depreciation effective at month-end. A mid-month

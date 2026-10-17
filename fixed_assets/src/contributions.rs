@@ -1,4 +1,4 @@
-//! Bilimbi.Finance.FixedAssets.Contributions. Pages and menu land in NX3.
+//! Bilimbi.Finance.FixedAssets.Contributions. Page routes and menu are in `web/mod.rs`.
 use crate::MODULE;
 use bilibi_authz::{CapabilityDefinition as C, RoleDefinition, VocabularyContribution, VOCABULARY};
 use bilibi_module_registry::{Contribution, Provenance};

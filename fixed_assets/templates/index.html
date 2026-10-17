@@ -1,0 +1,13 @@
+{% import "components.html" as ui %}
+{% import "feedback.html" as feedback %}
+{% call ui::page(id=page_dom) %}
+<span id="assets-browser-clock" data-hook="BrowserTimeZone" hidden></span>
+{% call feedback::flash_group(messages=flash) %}{% endcall %}
+{% call ui::header(subtitle="Permanent accounting records for this company.") %}{{ title }}{% endcall %}
+{{ toolbar }}{{ period }}{{ unavailable }}{{ table }}{{ pager }}{{ reconciliation }}
+{% call ui::card(class="mt-4") %}
+{% call ui::section_heading(title=heading) %}{% endcall %}
+{{ form }}
+{% endcall %}
+{{ reverse }}
+{% endcall %}

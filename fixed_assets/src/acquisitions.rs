@@ -137,20 +137,62 @@ impl FixedAssets {
         Ok(asset)
     }
     pub async fn get_asset(&self, s: &Scope, company: i64, id: i64) -> Result<AssetDetail> {
-        let c = self.db.get().await.map_err(Error::from)?;
-        authorize(&**c, s, company, VIEW).await?;
-        let v = store::raw(&**c, Table::Asset, s.tenant(), company, id)
+        let mut c = self.db.get().await.map_err(Error::from)?;
+        let tx = c
+            .build_transaction()
+            .isolation_level(tokio_postgres::IsolationLevel::RepeatableRead)
+            .start()
+            .await?;
+        authorize(&*tx, s, company, VIEW).await?;
+        let v = store::raw(&*tx, Table::Asset, s.tenant(), company, id)
             .await?
             .ok_or(FixedAssetsError::NotFound)?;
-        let book = self.ledger.get_book_on(&**c, s, company).await?;
+        let book = self.ledger.get_book_on(&*tx, s, company).await?;
         let asset = store::asset(&v, book.minor_units)?;
         let revision =
-            store::revision(&**c, s.tenant(), company, asset.category_revision_id).await?;
+            store::revision(&*tx, s.tenant(), company, asset.category_revision_id).await?;
         let schedule = schedule::rows(&asset, book.minor_units)?;
+        let activity = activity::Activity::load(&*tx, s, company, book.minor_units).await?;
+        let voided = activity.voided(id);
+        let events = activity
+            .events
+            .iter()
+            .filter(|e| e.asset_id == Some(id))
+            .cloned()
+            .collect();
+        let mut charges = Vec::new();
+        for run in &activity.runs {
+            for item in run.items.iter().filter(|i| i.asset_id == id) {
+                let reversal = activity
+                    .events
+                    .iter()
+                    .filter(|e| {
+                        (e.run_id == Some(run.id) && e.action == EventAction::RunReversed)
+                            || (e.asset_id == Some(id)
+                                && e.action == EventAction::AcquisitionVoided)
+                    })
+                    .min_by_key(|e| e.event_number)
+                    .cloned();
+                charges.push(AssetCharge {
+                    run_id: run.id,
+                    period: run.period,
+                    amount: item.amount,
+                    entry_number: run.entry_number,
+                    recorded_by_user_id: run.recorded_by_user_id,
+                    recorded_by_impersonator_id: run.recorded_by_impersonator_id,
+                    recorded_at: run.recorded_at.clone(),
+                    reversal,
+                });
+            }
+        }
+        tx.commit().await?;
         Ok(AssetDetail {
             asset,
             revision,
             schedule,
+            charges,
+            events,
+            voided,
         })
     }
 }

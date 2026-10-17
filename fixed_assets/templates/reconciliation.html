@@ -1,0 +1,7 @@
+{% import "components.html" as ui %}
+<div id="assets-reconciliation" class="mt-4">
+{% call ui::section_heading(title=format!("Ledger reconciliation as of {}", report.as_of)) %}{% endcall %}
+<p>Ledger entry {{ report.through_entry_number }}; asset {{ report.through_asset_number }}; event {{ report.through_event_number }}; category revision {{ report.through_category_revision_id }}.</p>
+<a id="assets-report-reproduce" href="{{ reproduce }}" data-patch>Keep this report's recorded boundary</a>
+{% for row in rows %}<p>{{ row }}</p>{% endfor %}
+</div>

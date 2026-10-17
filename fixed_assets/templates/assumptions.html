@@ -1,0 +1,10 @@
+{% import "components.html" as ui %}
+{% call ui::card(class="mt-4") %}
+{% call ui::section_heading(title=format!("#{} {}",detail.asset.asset_number,detail.asset.description)) %}{% endcall %}
+<p>Cost {{ detail.asset.cost }}; residual {{ detail.asset.residual_value }}.</p>
+<p>Acquired {{ detail.asset.acquisition_date }}; in service {{ detail.asset.in_service_date }}.</p>
+<p>{{ method }}; {{ detail.asset.assumptions.life_months }} months. Category revision {{ detail.revision.id }}.</p>
+<p>Acquisition entry {{ detail.asset.entry_number }}, line {{ detail.asset.entry_line_number }}.</p>
+{% if detail.voided %}<p id="asset-voided">Acquisition voided: this asset is excluded from depreciation runs and reconciliation.</p>{% endif %}
+<p>Recorded by user {{ actor }} at {{ recorded }}.</p>
+{% endcall %}
