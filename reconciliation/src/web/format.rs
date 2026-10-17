@@ -2,6 +2,7 @@
 use crate::ReconciliationError as E;
 use bilibi_database::{Error, Result};
 use bilibi_finance_ledger::Money;
+use rust_decimal::Decimal;
 
 pub(super) fn told<T>(result: crate::Result<T>) -> Result<std::result::Result<T, String>> {
     match result {
@@ -47,10 +48,14 @@ pub(super) fn refusal(error: &E) -> String {
     }
 }
 pub(super) fn money(value: Option<Money>, units: u8) -> String {
-    let Some(value) = value else {
-        return "—".into();
-    };
-    let value = value.amount().round_dp(u32::from(units));
+    value.map_or_else(|| "—".into(), |value| amount(value.amount(), units))
+}
+/// A signed amount with thousands separators, rounded to the book's minor
+/// units (Bilimbi `Format.money`).
+pub(super) fn amount(value: Decimal, units: u8) -> String {
+    let mut value = value.round_dp(u32::from(units));
+    // Money is normalized; Bilimbi shows every minor unit (12.50).
+    value.rescale(u32::from(units));
     let text = value.abs().to_string();
     let (whole, fraction) = text.split_once('.').unwrap_or((&text, ""));
     let grouped = whole
@@ -65,7 +70,11 @@ pub(super) fn money(value: Option<Money>, units: u8) -> String {
         });
     format!(
         "{}{}{}{}",
-        if value.is_sign_negative() { "-" } else { "" },
+        if value.is_sign_negative() && !value.is_zero() {
+            "-"
+        } else {
+            ""
+        },
         grouped,
         if fraction.is_empty() { "" } else { "." },
         fraction

@@ -1,0 +1,41 @@
+{# Bilimbi Finance.Reconciliation.Web.ReconciliationLive #}
+{% import "components.html" as ui %}
+{% import "forms.html" as form %}
+{% import "feedback.html" as feedback %}
+{% import "dialog.html" as dialog %}
+{% import "workspace.html" as workspace %}
+{% call feedback::flash_group(messages=flash) %}{% endcall %}
+{% call ui::page(id="reconciliation", variant=bilibi_ui::PageVariant::Detail) %}
+{% call ui::back_link(id="reconciliation-back", href=back, title=back_title) %}{% endcall %}
+{{ refusal|safe }}
+{% if let Some(r) = record %}
+{% call workspace::announce(kind="finance/reconciliation/reconciliation", record_id=r.id.to_string()) %}{% endcall %}
+{% call ui::header(subtitle_html=r.subtitle, actions=r.actions) %}{{ r.title }}{% endcall %}
+{% call ui::card(id="reconciliation-figures", inner_class="p-5 sm:p-6", role="region", labelledby="reconciliation-figures-heading") %}
+{% call ui::section_heading(id="reconciliation-figures-heading", title="Figures") %}{% endcall %}
+{{ r.figures|safe }}
+{{ r.controls|safe }}
+{% endcall %}
+{% if let Some((count, table)) = r.items %}
+{% call ui::card(id="reconciliation-items", inner_class="p-0", role="region", labelledby="reconciliation-items-heading") %}
+{% call ui::section_heading(id="reconciliation-items-heading", title="Items explaining the difference", count=count, class="p-5 pb-0", description="Statement lines the books lack, entries the statement lacks, and matches that cleared after the end date.") %}{% endcall %}
+{{ table|safe }}
+{% endcall %}
+{% endif %}
+{% call ui::card(id="reconciliation-events", inner_class="p-0", role="region", labelledby="reconciliation-events-heading") %}
+{% call ui::section_heading(id="reconciliation-events-heading", title="History", class="p-5 pb-0") %}{% endcall %}
+{{ r.events|safe }}
+{% endcall %}
+{% if let Some(reason) = r.abandon %}
+{% call dialog::modal(id="abandon-modal", title="Abandon this reconciliation", cancel_event="cancel_abandon", description="It stays on record as abandoned with this reason, and a new one can be opened.") %}
+<form id="abandon-form" data-event="abandon_change" data-change data-submit-event="abandon" class="space-y-3">
+{% call form::input(field=reason) %}{% endcall %}
+<div class="flex gap-2">
+{% call ui::button(id="abandon-submit", button_type="submit", variant=bilibi_ui::ButtonVariant::Danger, working="Abandoning…") %}Abandon{% endcall %}
+{% call ui::button(id="abandon-cancel", button_type="button", event="cancel_abandon") %}Cancel{% endcall %}
+</div>
+</form>
+{% endcall %}
+{% endif %}
+{% endif %}
+{% endcall %}

@@ -1,0 +1,47 @@
+{# Bilimbi Finance.Reconciliation.Web.MatchingLive. The selection checkboxes
+   sit in FlexTable rows and join matching-form through form=, since a table's
+   own column forms cannot nest inside it. #}
+{% import "components.html" as ui %}
+{% import "forms.html" as form %}
+{% import "feedback.html" as feedback %}
+{% import "dialog.html" as dialog %}
+{% call feedback::flash_group(messages=flash) %}{% endcall %}
+{% call ui::page(id="matching", variant=bilibi_ui::PageVariant::Detail) %}
+{% call ui::back_link(id="matching-back", href="/finance/reconciliation/accounts/{}"|format(account.id), title=account.name) %}{% endcall %}
+{% call ui::header(subtitle="Tick statement lines and ledger entries whose amounts agree, then match them; or accept a suggestion.") %}{{ account.name }}: matching{% endcall %}
+{{ forbidden|safe }}
+<div class="grid gap-4 lg:grid-cols-2">
+{% call ui::card(id="unmatched-lines", inner_class="p-0", role="region", labelledby="unmatched-lines-heading") %}
+{% call ui::section_heading(id="unmatched-lines-heading", title="Statement lines not in the books", count=line_count, class="p-5 pb-0") %}{% endcall %}
+{{ lines|safe }}
+{% endcall %}
+{% call ui::card(id="unmatched-entries", inner_class="p-0", role="region", labelledby="unmatched-entries-heading") %}
+{% call ui::section_heading(id="unmatched-entries-heading", title="Ledger entries not on a statement", count=entry_count, class="p-5 pb-0") %}{% endcall %}
+{{ entries|safe }}
+{% endcall %}
+</div>
+{% if can_match %}
+{% call ui::card(id="match-selected", inner_class="p-5 sm:p-6", class="mt-4") %}
+<form id="matching-form" data-event="select" data-change data-submit-event="match" class="flex flex-wrap items-end gap-4">
+<p class="text-sm">Selected: <span id="selected-lines-count">{{ selected_lines }}</span> lines totalling <span id="selected-lines-sum" class="tabular-nums">{{ lines_sum }}</span>, <span id="selected-entries-count">{{ selected_entries }}</span> entries totalling <span id="selected-entries-sum" class="tabular-nums">{{ entries_sum }}</span>.</p>
+{% call form::input(field=note) %}{% endcall %}
+{% call ui::button(id="match-selected-submit", button_type="submit", variant=bilibi_ui::ButtonVariant::Primary, working="Matching…") %}Match selected{% endcall %}
+</form>
+{% endcall %}
+{% endif %}
+{% call ui::card(id="standing-matches", inner_class="p-0", class="mt-4", role="region", labelledby="standing-matches-heading") %}
+{% call ui::section_heading(id="standing-matches-heading", title="Standing matches", count=match_count, class="p-5 pb-0") %}{% endcall %}
+{{ matches|safe }}
+{% endcall %}
+{% if let Some(u) = unmatching %}
+{% call dialog::modal(id="unmatch-modal", title=u.title, cancel_event="cancel_unmatch", description="Its statement lines and ledger entries become unmatched again; the match and this reason stay on record.") %}
+<form id="unmatch-form" data-event="unmatch_change" data-change data-submit-event="unmatch" class="space-y-3">
+{% call form::input(field=u.reason) %}{% endcall %}
+<div class="flex gap-2">
+{% call ui::button(id="unmatch-submit", button_type="submit", variant=bilibi_ui::ButtonVariant::Danger, working="Unmatching…") %}Unmatch{% endcall %}
+{% call ui::button(id="unmatch-cancel", button_type="button", event="cancel_unmatch") %}Cancel{% endcall %}
+</div>
+</form>
+{% endcall %}
+{% endif %}
+{% endcall %}

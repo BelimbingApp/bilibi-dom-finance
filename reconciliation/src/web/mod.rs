@@ -1,14 +1,17 @@
-//! Bilimbi `Finance.Reconciliation.Web`: bank accounts and statement import.
+//! Bilimbi `Finance.Reconciliation.Web`: bank accounts and statement import,
+//! matching, and one reconciliation.
 mod account;
 mod format;
 mod index;
+mod matching;
+mod reconciliation;
 
 use crate::{Reconciliation, MODULE};
 use askama::Template;
 use bilibi_database::{Db, Error, Result};
 use bilibi_datetime::{DisplayContext, DisplayPolicy};
 use bilibi_finance_attachments::Attachments;
-use bilibi_finance_ledger::Ledger;
+use bilibi_finance_ledger::{Ledger, PostingSubscription};
 use bilibi_locale::Locales;
 use bilibi_module_registry::{
     contributions::{Access, Contribution, Method, Route, ROUTES},
@@ -16,7 +19,11 @@ use bilibi_module_registry::{
 };
 use bilibi_tenancy::Scope;
 use bilibi_ui::{page::*, Html};
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+use tokio::{sync::broadcast, task::JoinHandle};
 
 pub(crate) const PAGES: &str = "finance/reconciliation.pages";
 const DENIED: &str = "You do not have permission for that action.";
@@ -62,6 +69,16 @@ route!(
     "/finance/reconciliation/accounts/{id}",
     "account"
 );
+route!(
+    "finance/reconciliation.matching",
+    "/finance/reconciliation/accounts/{id}/matching",
+    "matching"
+);
+route!(
+    "finance/reconciliation.reconciliation",
+    "/finance/reconciliation/reconciliations/{id}",
+    "reconciliation"
+);
 
 fn company(scope: &Scope) -> Result<i64> {
     scope
@@ -101,29 +118,66 @@ impl Pages {
                 request.query,
                 request.framed,
             )?)),
-            "account" => {
-                let id = request
-                    .path
-                    .get("id")
-                    .and_then(|s| s.parse::<i64>().ok())
-                    .filter(|id| *id > 0)
-                    .ok_or(Error::NotFound)?;
-                Ok(Box::new(account::Account::new(
-                    self,
-                    id,
-                    request.query,
-                    request.framed,
-                )?))
-            }
+            "account" => Ok(Box::new(account::Account::new(
+                self,
+                path_id(request)?,
+                request.query,
+                request.framed,
+            )?)),
+            "matching" => Ok(Box::new(matching::Matching::new(self, path_id(request)?)?)),
+            "reconciliation" => Ok(Box::new(reconciliation::Detail::new(
+                self,
+                path_id(request)?,
+            )?)),
             _ => Err(Error::NotFound),
         }
     }
+    /// The page's title naming the record it shows, as Bilimbi's
+    /// `page_title`, or `None` when the record is out of reach.
+    async fn record_title(
+        &self,
+        scope: &Scope,
+        operation: &str,
+        id: i64,
+    ) -> Result<Option<String>> {
+        let company = company(scope)?;
+        let account = |id| self.reconciliation.get_bank_account(scope, company, id);
+        Ok(match operation {
+            "account" => format::told(account(id).await)?.ok().map(|a| a.name),
+            "matching" => format::told(account(id).await)?
+                .ok()
+                .map(|a| format!("{}: matching", a.name)),
+            "reconciliation" => {
+                match format::told(
+                    self.reconciliation
+                        .get_reconciliation(scope, company, id)
+                        .await,
+                )? {
+                    Ok(r) => format::told(account(r.bank_account_id).await)?
+                        .ok()
+                        .map(|a| format!("{}: reconciliation {}", a.name, r.reconciliation_number)),
+                    Err(_) => None,
+                }
+            }
+            _ => None,
+        })
+    }
+}
+fn path_id(request: &PageRequest<'_, Scope>) -> Result<i64> {
+    request
+        .path
+        .get("id")
+        .and_then(|s| s.parse::<i64>().ok())
+        .filter(|id| *id > 0)
+        .ok_or(Error::NotFound)
 }
 impl Page<Scope, Error> for Pages {
     fn title(&self, operation: &str) -> Option<&'static str> {
         match operation {
             "index" => Some("Bank reconciliation"),
             "account" => Some("Bank statements"),
+            "matching" => Some("Matching"),
+            "reconciliation" => Some("Reconciliation"),
             _ => None,
         }
     }
@@ -138,21 +192,11 @@ impl Page<Scope, Error> for Pages {
                     input: LiveInput::Refresh,
                 })
                 .await?;
-            let title = if request.operation == "account" {
-                let id = request
-                    .path
-                    .get("id")
-                    .and_then(|s| s.parse().ok())
-                    .ok_or(Error::NotFound)?;
-                format::told(
-                    self.reconciliation
-                        .get_bank_account(scope, company(scope)?, id)
-                        .await,
-                )?
-                .ok()
-                .map(|account| account.name)
-            } else {
+            let title = if request.operation == "index" {
                 None
+            } else {
+                self.record_title(scope, request.operation, path_id(&request)?)
+                    .await?
             };
             Ok(PageBody {
                 html: body.html,
@@ -162,7 +206,80 @@ impl Page<Scope, Error> for Pages {
         })
     }
     fn mount<'a>(&'a self, request: PageRequest<'a, Scope>) -> MountFuture<'a, Scope, Error> {
-        Box::pin(async move { Ok(Some(self.state(&request)?)) })
+        Box::pin(async move {
+            let scope = request.scope.ok_or(Error::Unauthorized)?;
+            let state: Box<dyn LiveState<Scope, Error>> = match request.operation {
+                // Bilimbi subscribes to the ledger's postings once the page
+                // connects, so these two follow the books.
+                "matching" => Box::new(
+                    matching::Matching::new(self, path_id(&request)?)?
+                        .follow(Follow::subscribe(self, scope).await),
+                ),
+                "reconciliation" => Box::new(
+                    reconciliation::Detail::new(self, path_id(&request)?)?
+                        .follow(Follow::subscribe(self, scope).await),
+                ),
+                _ => self.state(&request)?,
+            };
+            Ok(Some(state))
+        })
+    }
+}
+
+/// The ledger's posting notices for a connected page (Bilimbi
+/// `Ledger.subscribe_postings` in `mount`, and `handle_info` draining the
+/// mailbox): every notice since the last read wakes the page once, and the
+/// page reads again through the facade, since a notice carries no figures. A
+/// scope without the ledger's view gets no notices and reads on demand.
+#[derive(Default)]
+pub(super) struct Follow {
+    posting: Option<PostingSubscription>,
+    bridge: Option<JoinHandle<()>>,
+    posted: Arc<AtomicBool>,
+    tenant: i64,
+}
+impl Follow {
+    async fn subscribe(pages: &Pages, scope: &Scope) -> Self {
+        let posting = match company(scope) {
+            Ok(company) => pages.ledger.subscribe_postings(scope, company).await.ok(),
+            Err(_) => None,
+        };
+        Self {
+            posting,
+            bridge: None,
+            posted: Arc::default(),
+            tenant: scope.tenant(),
+        }
+    }
+    /// The page's subscription; the receiver exists before forwarding
+    /// begins, and the mount's first refresh reads after LISTEN, so no
+    /// posting falls in between.
+    fn subscriptions(&mut self) -> Vec<Subscription> {
+        let Some(mut posting) = self.posting.take() else {
+            return vec![];
+        };
+        let (sender, receiver) = broadcast::channel(1);
+        let posted = self.posted.clone();
+        let tenant = self.tenant;
+        self.bridge = Some(tokio::spawn(async move {
+            while posting.next().await.is_some() {
+                if !posted.swap(true, Ordering::SeqCst) {
+                    let _ = sender.send(Change { tenant, user: None });
+                }
+            }
+        }));
+        vec![Subscription { receiver }]
+    }
+    /// Whether a posting arrived since the last call.
+    fn posted(&self) -> bool {
+        self.posted.swap(false, Ordering::SeqCst)
+    }
+}
+impl Drop for Follow {
+    fn drop(&mut self) {
+        if let Some(task) = self.bridge.take() {
+            task.abort();
+        }
     }
 }
 fn event_type(value: &serde_json::Value) -> Result<&str> {
