@@ -20,10 +20,43 @@ use serde_json::json;
 
 bilibi_walkthrough_fixture::walkthrough_vocabulary!();
 bilibi_walkthrough_fixture::walkthrough_module_roles!();
+bilibi_finance_walkthrough_fixture::walkthrough_ledger_roles!();
+bilibi_finance_walkthrough_fixture::walkthrough_attachments_roles!();
+bilibi_finance_walkthrough_fixture::walkthrough_payables_roles!();
+bilibi_finance_walkthrough_fixture::walkthrough_reconciliation_roles!();
+bilibi_finance_walkthrough_fixture::walkthrough_reports_roles!();
+macro_rules! browser_roles {
+    ($id:literal, $module:literal, $caps:path) => {
+        inventory::submit! { Contribution::new(VOCABULARY,$id,Provenance {module:$module,source:file!(),line:line!()},&VocabularyContribution {
+            domains:&[],verbs:&[],capabilities:&[],system_principals:&[],roles:&[
+                RoleDefinition {code:"manager",name:"manager",description:"Walkthrough fixture role",grant_all:false,capabilities:&$caps},
+            ],
+        }) }
+    };
+}
+browser_roles!(
+    "walkthrough.browser.einvoice",
+    "finance/einvoice",
+    bilibi_finance_einvoice::CAPABILITIES
+);
+browser_roles!(
+    "walkthrough.browser.assets",
+    "finance/fixed_assets",
+    bilibi_finance_fixed_assets::CAPABILITIES
+);
+browser_roles!(
+    "walkthrough.browser.payroll",
+    "finance/payroll",
+    bilibi_finance_payroll::CAPABILITIES
+);
+browser_roles!(
+    "walkthrough.browser.sst",
+    "finance/sst",
+    bilibi_finance_sst::CAPABILITIES
+);
 inventory::submit! { Contribution::new(VOCABULARY,"walkthrough.fixture.finance.browser",Provenance {module:"finance/ledger",source:file!(),line:line!()},&VocabularyContribution {
     domains:&[],verbs:&[],capabilities:&[],system_principals:&[],roles:&[
-        RoleDefinition {code:"manager",name:"manager",description:"Disposable browser recorder",grant_all:true,capabilities:&[]},
-        RoleDefinition {code:"viewer",name:"viewer",description:"Disposable browser reader",grant_all:false,capabilities:&[
+        RoleDefinition {code:"viewer",name:"viewer",description:"Walkthrough fixture role",grant_all:false,capabilities:&[
             "finance.ledger.view", "finance.attachments.view", "finance.payables.view",
             "finance.einvoice.view", "finance.fixed-assets.view", "finance.payroll.view",
             "finance.reconciliation.view", "finance.sst.view",
@@ -65,7 +98,18 @@ async fn main() -> Outcome<()> {
     };
     let root = std::env::var("FINANCE_UI_STORAGE")?;
     std::fs::create_dir_all(&root)?;
+    std::fs::set_permissions(&root, std::os::unix::fs::PermissionsExt::from_mode(0o700))?;
     configure_storage(&db, services, &admin, &root).await?;
+    if std::env::args().any(|arg| arg == "serve") {
+        let _authority =
+            bilibi_finance_walkthrough_fixture::browser::prepare_einvoice(&db, services).await?;
+        axum::serve(
+            tokio::net::TcpListener::bind(std::env::var("BIND_ADDR")?).await?,
+            bilibi_web::router(app),
+        )
+        .await?;
+        return Ok(());
+    }
     let payables = services.get::<Payables>(bilibi_finance_payables::SERVICE)?;
     payables
         .put_settings(
@@ -171,13 +215,56 @@ async fn main() -> Outcome<()> {
         "Acquisition entry {}, line 1; cost {}; accumulated {}",
         entry.id, cost.id, accumulated.id
     );
+    let assets = services
+        .get::<bilibi_finance_fixed_assets::FixedAssets>(bilibi_finance_fixed_assets::SERVICE)?;
+    let revision = assets
+        .create_category(
+            &manager,
+            COMPANY,
+            "Walkthrough equipment",
+            &bilibi_finance_fixed_assets::RevisionInput {
+                cost_account_id: cost.id,
+                accumulated_account_id: accumulated.id,
+                expense_account_id: account("5000")?,
+                gain_account_id: account("4000")?,
+                loss_account_id: account("5000")?,
+                assumptions: bilibi_finance_fixed_assets::Assumptions {
+                    method: bilibi_finance_fixed_assets::Method::StraightLine,
+                    life_months: 3,
+                    annual_rate: None,
+                },
+                reason: "Initial browser assumptions".into(),
+            },
+        )
+        .await?;
+    let asset = assets
+        .acquire_from_entry(
+            &manager,
+            COMPANY,
+            entry.id,
+            1,
+            &bilibi_finance_fixed_assets::AcquisitionInput {
+                category_revision_id: revision.id,
+                description: "Walkthrough equipment".into(),
+                in_service_date: date(2026, 10, 1),
+                residual_value: None,
+                method: None,
+                life_months: None,
+                annual_rate: None,
+            },
+        )
+        .await?;
+    bilibi_finance_walkthrough_fixture::browser::prove_messages(services, &manager, asset.id)
+        .await?;
+    println!("Asset: /finance/fixed-assets/register/{}", asset.id);
     let bank = services.get::<Reconciliation>(bilibi_finance_reconciliation::SERVICE)?.create_bank_account(&manager,COMPANY,&NewBankAccount {
         name:"Operating account".into(),ledger_account_id:account("1000")?,charges_account_id:Some(account("5000")?),interest_account_id:Some(account("4000")?),match_window_days:None,active:None,reason:None,
         import_mapping:json!({"date":"Date","description":"Details","reference":"Ref","amount":"Amount","balance":"Balance"}),
     }).await?;
     println!("Bank account: /finance/reconciliation/accounts/{}", bank.id);
     // Existing authority stand-in creates documents and serves submit/poll locally.
-    let _authority = bilibi_finance_walkthrough_fixture::einvoice_ui::run(&db, services).await?;
+    let _authority =
+        bilibi_finance_walkthrough_fixture::browser::prepare_einvoice(&db, services).await?;
     println!("Finance browser fixture: {origin}; manager@example.test, viewer@example.test; walkthrough password");
     axum::serve(
         tokio::net::TcpListener::bind(std::env::var("BIND_ADDR")?).await?,

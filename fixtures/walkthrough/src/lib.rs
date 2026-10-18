@@ -440,3 +440,6 @@ pub mod einvoice_ui;
 
 // NE6: executable page and browser proof on disposable data.
 pub mod einvoice_pages;
+
+// NU1: records for the combined, disposable browser sweep.
+pub mod browser;

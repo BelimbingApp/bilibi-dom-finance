@@ -223,6 +223,16 @@ impl Page<Scope, Error> for Pages {
     }
 }
 
+// A delayed success timeout must not dismiss a newer refusal.
+fn clear_flash(flash: &mut Option<(StatusKind, String)>, value: &serde_json::Value) {
+    if flash
+        .as_ref()
+        .is_some_and(|(kind, _)| value["key"].as_str() == Some(kind.name()))
+    {
+        *flash = None;
+    }
+}
+
 fn flash_map(flash: &Option<(StatusKind, String)>) -> bilibi_ui::FlashMap<'_> {
     let mut messages = bilibi_ui::NO_FLASH;
     if let Some((kind, text)) = flash {

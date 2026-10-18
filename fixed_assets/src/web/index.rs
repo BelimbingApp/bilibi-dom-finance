@@ -615,6 +615,9 @@ impl Index {
             return Ok(());
         }
         match event {
+            "clear-flash" => {
+                clear_flash(&mut self.flash, v);
+            }
             "filter" => self.list.apply_filters(&params::form_values(v, "filters")),
             "page" => self.list.put_page(v["page"].as_str()),
             "grid" => {
@@ -686,7 +689,6 @@ impl Index {
 impl LiveState<Scope, Error> for Index {
     fn update<'a>(&'a mut self, r: LiveRequest<'a, Scope>) -> LiveFuture<'a, Error> {
         Box::pin(async move {
-            self.flash = None;
             self.period(r.scope).await?;
             match r.input {
                 LiveInput::Refresh => {}

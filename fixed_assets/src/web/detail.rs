@@ -334,6 +334,10 @@ impl Detail {
     async fn event(&mut self, s: &Scope, v: &serde_json::Value) -> Result<()> {
         let event = v["type"].as_str().unwrap_or("");
         match event {
+            "clear-flash" => {
+                clear_flash(&mut self.flash, v);
+                return Ok(());
+            }
             "schedule_grid" => {
                 self.schedule.handle(&params::string_values(v));
                 return Ok(());
@@ -413,7 +417,6 @@ struct Recorded {
 impl LiveState<Scope, Error> for Detail {
     fn update<'a>(&'a mut self, r: LiveRequest<'a, Scope>) -> LiveFuture<'a, Error> {
         Box::pin(async move {
-            self.flash = None;
             match r.input {
                 LiveInput::Event(v) => self.event(r.scope, v).await?,
                 LiveInput::Params(p) => {
