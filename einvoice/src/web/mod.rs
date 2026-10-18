@@ -221,3 +221,16 @@ impl Download<Scope, Error> for Downloads {
         })
     }
 }
+
+// ADR 01 gap, listed so it stays visible: these pages still write through
+// the facade rather than an operation contract (`base/agent_api` page).
+inventory::submit! { bilibi_module_registry::Contribution::new(bilibi_module_registry::contributions::PAGE_WRITES, PAGES, bilibi_module_registry::Provenance { module: MODULE, source: file!(), line: line!() }, &bilibi_module_registry::contributions::PageWrites {
+    service: PAGES,
+    contracts: &[],
+    pending: bilibi_module_registry::contributions::Pending::Every { reason: "Submitting, refreshing and cancelling documents and generating their PDFs write through the Einvoice facade; no contract yet." },
+}) }
+inventory::submit! { bilibi_module_registry::Contribution::new(bilibi_module_registry::contributions::PAGE_WRITES, control::SERVICE, bilibi_module_registry::Provenance { module: MODULE, source: file!(), line: line!() }, &bilibi_module_registry::contributions::PageWrites {
+    service: control::SERVICE,
+    contracts: &[],
+    pending: bilibi_module_registry::contributions::Pending::Every { reason: "Consolidation, posting retries, setup and connection tests write through the Einvoice facade; no contract yet." },
+}) }

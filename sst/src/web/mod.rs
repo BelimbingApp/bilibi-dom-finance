@@ -266,3 +266,11 @@ struct Time<'a> {
     utc: String,
     mode: &'static str,
 }
+
+// ADR 01 gap, listed so it stays visible: these pages still write through
+// the facade rather than an operation contract (`base/agent_api` page).
+inventory::submit! { bilibi_module_registry::Contribution::new(bilibi_module_registry::contributions::PAGE_WRITES, PAGES, bilibi_module_registry::Provenance { module: MODULE, source: file!(), line: line!() }, &bilibi_module_registry::contributions::PageWrites {
+    service: PAGES,
+    contracts: &[],
+    pending: bilibi_module_registry::contributions::Pending::Every { reason: "Setup, mappings, return adjustments, finalising and withdrawing returns write through the SST facade; no contract yet." },
+}) }

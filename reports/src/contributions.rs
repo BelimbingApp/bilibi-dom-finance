@@ -95,3 +95,16 @@ inventory::submit! { Contribution::new(bilibi_module_registry::contributions::DO
     path: "/finance/reports/auditor-packs/{artifact_id}", service: "finance/reports.downloads",
     operation: "auditor-pack", access: Access::Capability(EXPORT),
 }) }
+
+// ADR 01 gap, listed so it stays visible: these pages still write through
+// the facade rather than an operation contract (`base/agent_api` page).
+inventory::submit! { bilibi_module_registry::Contribution::new(bilibi_module_registry::contributions::PAGE_WRITES, "finance/reports.pages", bilibi_module_registry::Provenance { module: MODULE, source: file!(), line: line!() }, &bilibi_module_registry::contributions::PageWrites {
+    service: "finance/reports.pages",
+    contracts: &[],
+    pending: bilibi_module_registry::contributions::Pending::Every { reason: "Generating the auditor pack writes through the Reports facade; no contract yet." },
+}) }
+inventory::submit! { bilibi_module_registry::Contribution::new(bilibi_module_registry::contributions::PAGE_WRITES, "finance/reports.control-pages", bilibi_module_registry::Provenance { module: MODULE, source: file!(), line: line!() }, &bilibi_module_registry::contributions::PageWrites {
+    service: "finance/reports.control-pages",
+    contracts: &[],
+    pending: bilibi_module_registry::contributions::Pending::Every { reason: "Controlled bookkeeping, fiscal years, duty separation and reviews write through the Ledger facade, not the finance.ledger contracts yet." },
+}) }

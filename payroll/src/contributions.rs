@@ -27,3 +27,11 @@ bilibi_menu::contribute!(
         .requires(bilibi_menu::Requirement::Capability(VIEW))
         .order(12)
 );
+
+// ADR 01 gap, listed so it stays visible: these pages still write through
+// the facade rather than an operation contract (`base/agent_api` page).
+inventory::submit! { bilibi_module_registry::Contribution::new(bilibi_module_registry::contributions::PAGE_WRITES, "finance/payroll.pages", bilibi_module_registry::Provenance { module: MODULE, source: file!(), line: line!() }, &bilibi_module_registry::contributions::PageWrites {
+    service: "finance/payroll.pages",
+    contracts: &[],
+    pending: bilibi_module_registry::contributions::Pending::Every { reason: "Posting runs and claims, reversals, mappings and settings write through the Payroll facade; no contract yet." },
+}) }

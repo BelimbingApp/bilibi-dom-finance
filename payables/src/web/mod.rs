@@ -121,3 +121,11 @@ fn company(scope: &Scope) -> Option<i64> {
 fn render(fragment: impl Template) -> Result<Html> {
     Html::render(&fragment).map_err(|_| Error::Internal)
 }
+
+// ADR 01 gap, listed so it stays visible: these pages still write through
+// the facade rather than an operation contract (`base/agent_api` page).
+inventory::submit! { bilibi_module_registry::Contribution::new(bilibi_module_registry::contributions::PAGE_WRITES, PAGES, bilibi_module_registry::Provenance { module: MODULE, source: file!(), line: line!() }, &bilibi_module_registry::contributions::PageWrites {
+    service: PAGES,
+    contracts: &[],
+    pending: bilibi_module_registry::contributions::Pending::Every { reason: "Approving, voiding and posting documents and approving match exceptions write through the Payables facade, not the finance.payables contracts yet." },
+}) }

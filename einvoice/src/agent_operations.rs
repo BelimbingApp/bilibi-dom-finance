@@ -2,8 +2,8 @@
 //! Consent, transport and the outer audited transaction belong to Agent API.
 use crate::{clearance::PreparedIssue, documents, *};
 use bilibi_agent_api::{
-    Definitions, Guide, Handler, Operation, OperationClient, OperationFuture, ReadHandler,
-    WriteHandler, DEFINITIONS,
+    Channels, Definitions, Guide, Handler, Operation, OperationClient, OperationFuture,
+    ReadHandler, WriteHandler, DEFINITIONS,
 };
 use bilibi_module_registry::{Contribution, Provenance, RegistryError};
 use serde_json::json;
@@ -443,9 +443,9 @@ fn output() -> Value {
 
 inventory::submit! { Contribution::new(DEFINITIONS,"finance/einvoice.operations",Provenance {module:MODULE,source:file!(),line:line!()},&Definitions {
     operations:&[
-        Operation {key:"finance.einvoice.document.issue",title:"Issue an e-invoice document",summary:"Record an immutable fiscal document linked to a Receivables or Payables entry. Requires ledger view too. Does not submit or post a second entry.",keywords:&["invoice","self-billed","tax document"],capability:ISSUE,input:issue,output,handler:Handler::SafeWrite(&Issue)},
-        Operation {key:"finance.einvoice.document.get",title:"Read an e-invoice document",summary:"Read immutable parties, lines and totals, status events, authority identifiers, source links and ledger follow-up flags.",keywords:&[],capability:VIEW,input:get,output,handler:Handler::Read(&Read::Get)},
-        Operation {key:"finance.einvoice.document.list",title:"List e-invoice documents",summary:"Read document summaries newest first with an exclusive before cursor; at most 100 per page, default 50.",keywords:&[],capability:VIEW,input:list,output,handler:Handler::Read(&Read::List)},
+        Operation {key:"finance.einvoice.document.issue",title:"Issue an e-invoice document",summary:"Record an immutable fiscal document linked to a Receivables or Payables entry. Requires ledger view too. Does not submit or post a second entry.",keywords:&["invoice","self-billed","tax document"],capability:ISSUE,input:issue,output,handler:Handler::SafeWrite(&Issue),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.einvoice.document.get",title:"Read an e-invoice document",summary:"Read immutable parties, lines and totals, status events, authority identifiers, source links and ledger follow-up flags.",keywords:&[],capability:VIEW,input:get,output,handler:Handler::Read(&Read::Get),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.einvoice.document.list",title:"List e-invoice documents",summary:"Read document summaries newest first with an exclusive before cursor; at most 100 per page, default 50.",keywords:&[],capability:VIEW,input:list,output,handler:Handler::Read(&Read::List),channels:Channels::Every,step_up:&[]},
     ],
     guides:&[Guide {key:"finance.einvoice",title:"Source-linked fiscal documents",summary:"Review and issue fiscal documents without duplicating source accounting; inspect documents and their clearance status.",keywords:&[],capability:VIEW,body:include_str!("../guide.md")}],
 }) }

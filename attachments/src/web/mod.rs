@@ -115,3 +115,16 @@ pub(crate) fn time_cell(display: &DisplayContext, at: jiff::Timestamp) -> Cell {
         r.mode.as_str(),
     ))
 }
+
+// ADR 01 gap, listed so it stays visible: these pages still write through
+// the facade rather than an operation contract (`base/agent_api` page).
+inventory::submit! { bilibi_module_registry::Contribution::new(bilibi_module_registry::contributions::PAGE_WRITES, PAGES, bilibi_module_registry::Provenance { module: MODULE, source: file!(), line: line!() }, &bilibi_module_registry::contributions::PageWrites {
+    service: PAGES,
+    contracts: &[],
+    pending: bilibi_module_registry::contributions::Pending::Every { reason: "Retention years write through the Attachments facade; no contract yet." },
+}) }
+inventory::submit! { bilibi_module_registry::Contribution::new(bilibi_module_registry::contributions::PAGE_WRITES, PANELS, bilibi_module_registry::Provenance { module: MODULE, source: file!(), line: line!() }, &bilibi_module_registry::contributions::PageWrites {
+    service: PANELS,
+    contracts: &[],
+    pending: bilibi_module_registry::contributions::Pending::Every { reason: "Attaching, replacing and removing source documents write through the Attachments facade; no contract yet." },
+}) }
