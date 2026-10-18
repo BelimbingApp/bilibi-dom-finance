@@ -34,3 +34,16 @@ pub(super) fn refusal(action: &str, error: E) -> String {
         }),
     }.into()
 }
+
+// A success timeout can arrive after a newer refusal was shown.
+pub(super) fn clear_flash(
+    flash: &mut Option<(bilibi_ui::StatusKind, String)>,
+    value: &serde_json::Value,
+) {
+    if flash
+        .as_ref()
+        .is_some_and(|(kind, _)| value["key"].as_str() == Some(kind.name()))
+    {
+        *flash = None;
+    }
+}

@@ -70,6 +70,7 @@ pub async fn prepare_einvoice(
     {
         return Ok(stop);
     }
+    let mut last_document = None;
     for n in 1..=3 {
         let document = facade
             .issue_document(
@@ -78,6 +79,7 @@ pub async fn prepare_einvoice(
                 &clearance::draft(&format!("BROWSER-E-{n}"), None),
             )
             .await?;
+        last_document = Some(document.document.id);
         if n == 1 {
             facade
                 .submit_document(manager, company, document.document.id)
@@ -90,6 +92,7 @@ pub async fn prepare_einvoice(
             document.document.id
         );
     }
+    prove_document_messages(services, manager, last_document.unwrap()).await?;
     Ok(stop)
 }
 
@@ -166,5 +169,66 @@ pub async fn prove_messages(
         assert!(!dismissed.html.contains("id=\"flash-error\""));
     }
     println!("NU1: Fixed Assets list/detail refusals survive refresh and stale success dismissal; matching dismissal clears without an error");
+    Ok(())
+}
+
+async fn prove_document_messages(
+    services: &Services,
+    scope: &bilibi_tenancy::Scope,
+    document: i64,
+) -> Outcome<()> {
+    use bilibi_database::Error;
+    use bilibi_tenancy::Scope;
+    use bilibi_ui::page::{LiveInput, LiveRequest, PageRequest, PageService};
+    use std::collections::HashMap;
+    let pages = services.get::<PageService<Scope, Error>>("finance/einvoice.pages")?;
+    let path = HashMap::from([("id".into(), document.to_string())]);
+    let mut state = pages
+        .0
+        .mount(PageRequest {
+            operation: "detail",
+            scope: Some(scope),
+            path: &path,
+            query: &HashMap::new(),
+            body: &[],
+            framed: false,
+        })
+        .await?
+        .unwrap();
+    let refused = json!({"type":"refresh"});
+    let body = state
+        .update(LiveRequest {
+            scope,
+            credential: "",
+            input: LiveInput::Event(&refused),
+        })
+        .await?;
+    assert!(body
+        .html
+        .contains("The authority has not given this document a UUID yet"));
+    let stale = json!({"type":"clear-flash","key":"success"});
+    for input in [LiveInput::Refresh, LiveInput::Event(&stale)] {
+        let kept = state
+            .update(LiveRequest {
+                scope,
+                credential: "",
+                input,
+            })
+            .await?;
+        assert_eq!(
+            body.html, kept.html,
+            "e-invoice refusal survives refresh and stale success dismissal"
+        );
+    }
+    let dismiss = json!({"type":"clear-flash","key":"error"});
+    let cleared = state
+        .update(LiveRequest {
+            scope,
+            credential: "",
+            input: LiveInput::Event(&dismiss),
+        })
+        .await?;
+    assert!(!cleared.html.contains("id=\"flash-error\""));
+    println!("NU1: E-invoice refusal survives refresh and stale success dismissal; matching dismissal clears without an error");
     Ok(())
 }

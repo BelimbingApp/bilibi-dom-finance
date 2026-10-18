@@ -247,6 +247,10 @@ impl Detail {
             .and_then(serde_json::Value::as_str)
             .ok_or(Error::Invalid)?;
         match action {
+            "clear-flash" => {
+                messages::clear_flash(&mut self.flash, value);
+                return Ok(false);
+            }
             "lines_grid" | "sources_grid" | "events_grid" => {
                 let c = match action {
                     "lines_grid" => &mut self.lines,
@@ -640,7 +644,9 @@ impl LiveState<Scope, Error> for Detail {
                     if !matches!(
                         action,
                         Some("lines_grid" | "sources_grid" | "events_grid")
-                            | Some("link-copied" | "cancel_reason" | "close_cancel")
+                            | Some(
+                                "link-copied" | "cancel_reason" | "close_cancel" | "clear-flash"
+                            )
                     ) {
                         self.flash = None;
                     }

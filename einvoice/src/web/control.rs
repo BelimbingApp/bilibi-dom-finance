@@ -183,7 +183,7 @@ impl State {
             return Ok(());
         }
         if event == "clear-flash" {
-            self.flash = None;
+            super::messages::clear_flash(&mut self.flash, value);
             return Ok(());
         }
         let company = company(scope)?;
