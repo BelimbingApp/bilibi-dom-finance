@@ -253,7 +253,13 @@ async fn prove_report_messages(services: &Services, scope: &bilibi_tenancy::Scop
         })
         .await?
         .unwrap();
-    state.update(LiveRequest {scope,credential:"",input:LiveInput::Refresh}).await?;
+    state
+        .update(LiveRequest {
+            scope,
+            credential: "",
+            input: LiveInput::Refresh,
+        })
+        .await?;
     let export = json!({"type":"export_auditor_pack"});
     let body = state
         .update(LiveRequest {
