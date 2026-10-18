@@ -135,6 +135,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The app's own services serve the proof too: a second install in one
     // process would register the Platform's bindings twice.
     let app = bilibi_web::App::new(db.clone(), &origin)?;
+    bilibi_finance_walkthrough_fixture::without_step_up(&app.services)?;
     let services = &app.services;
     install(&db, services).await?;
     // Company 001's viewer and staff accounts join the company, as the

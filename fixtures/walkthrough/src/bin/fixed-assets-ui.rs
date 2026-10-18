@@ -93,6 +93,7 @@ async fn main() -> Outcome<()> {
     bilibi_database::migrate(&db, &modules).await?;
     let origin = std::env::var("APP_ORIGIN").unwrap_or_else(|_| "http://127.0.0.1:4333".into());
     let app = bilibi_web::App::new(db.clone(), &origin)?;
+    bilibi_finance_walkthrough_fixture::without_step_up(&app.services)?;
     let services = &app.services;
     install(&db, services).await?;
     let manager = sign_in(&db, services, 1, 1).await?;

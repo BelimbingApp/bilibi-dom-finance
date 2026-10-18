@@ -38,6 +38,7 @@ async fn main() -> Outcome<()> {
     let modules = bilibi_module_registry::discover()?;
     bilibi_database::migrate(&db, &modules).await?;
     let app = bilibi_web::App::new(db.clone(), &origin)?;
+    bilibi_finance_walkthrough_fixture::without_step_up(&app.services)?;
     let services = &app.services;
     let installed = install(&db, services).await?;
     // Only identity fixtures use SQL; all Finance records below use facades.

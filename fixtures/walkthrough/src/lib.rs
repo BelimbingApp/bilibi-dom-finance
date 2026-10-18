@@ -80,6 +80,18 @@ pub struct Installed {
     pub accounts: Vec<Account>,
 }
 
+/// Turns Base Step-up enforcement off for a fixture binary that installs its
+/// own services, as `BILIBI_ENV=development` does in the host: the fixtures
+/// grant disposable capabilities through `Grants`, which asks for step-up,
+/// and no fixture account enrolls an authenticator. Call it right after
+/// `Services::install` or `bilibi_web::App::new`.
+pub fn without_step_up(services: &Services) -> bilibi_module_registry::Result<()> {
+    services
+        .get::<bilibi_base::step_up::StepUp>(bilibi_base::step_up::SERVICE)?
+        .set_enforced(false);
+    Ok(())
+}
+
 /// Installs the Platform fixture, reconciles the contributed roles, and opens
 /// Company 001's book and chart through the ledger facade as the manager.
 pub async fn install(db: &Db, services: &Services) -> Result<Installed> {

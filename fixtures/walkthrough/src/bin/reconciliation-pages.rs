@@ -308,6 +308,7 @@ async fn main() -> Outcome<()> {
     let bind = std::env::var("BIND_ADDR")?;
     bilibi_database::migrate(&db, &bilibi_module_registry::discover()?).await?;
     let app = bilibi_web::App::new(db.clone(), &origin)?;
+    bilibi_finance_walkthrough_fixture::without_step_up(&app.services)?;
     let services = &app.services;
     install(&db, services).await?;
     affiliate(&db).await?;

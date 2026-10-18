@@ -111,6 +111,7 @@ async fn main() -> Outcome<()> {
     let db = pool(&std::env::var("DATABASE_URL")?)?;
     bilibi_database::migrate(&db, &bilibi_module_registry::discover()?).await?;
     let app = bilibi_web::App::new(db.clone(), "http://127.0.0.1:4324")?;
+    bilibi_finance_walkthrough_fixture::without_step_up(&app.services)?;
     let services = &app.services;
     let installed = install(&db, services).await?;
     let manager = sign_in(&db, services, 1, 1).await?;

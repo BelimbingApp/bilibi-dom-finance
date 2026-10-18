@@ -107,6 +107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut services = Services::default();
     services.provide("bootstrap.database", Arc::new(db.clone()))?;
     services.install(&modules)?;
+    bilibi_finance_walkthrough_fixture::without_step_up(&services)?;
 
     let installed = install(&db, &services).await?;
     bilibi_finance_walkthrough_fixture::receivables::run(&db, &services).await?;

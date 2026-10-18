@@ -72,6 +72,12 @@ they govern this code and are not copied here.
 - The ledger owns no CSS, JavaScript, pages or menu items (`web: nil` in
   Bilimbi); a Finance module with pages uses only `bilibi_ui` components and
   `FlexTable` for every list, per `apps/base/ui/AGENTS.md`.
+- Declare every page or panel service's write events in its `PageWrites`
+  (Bilibi `apps/base/agent_api/README.md`): the host refuses, as
+  `Error::Internal` at run time, a live-event write its service has not
+  declared, and the build does not catch it. The existing pages keep a
+  `Pending::Every` allowance with its reason beside their routes; a new write
+  event calls its operation contract through `PageContracts` where one exists.
 - Agent writes join the shared plan's audited transaction through the ledger's private `*_on` methods, never the pool-owning public wrappers: nested commits would escape plan rollback. Preview on the handed `OperationClient`; retain the transaction-local review fence because the pinned engine previews every step before executing any.
 
 - Post an entry only through `Ledger::post_entry` and read it through

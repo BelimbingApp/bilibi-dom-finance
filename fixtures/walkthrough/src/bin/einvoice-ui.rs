@@ -19,6 +19,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     bilibi_database::migrate(&db, &modules).await?;
     let origin = std::env::var("APP_ORIGIN").unwrap_or("http://localhost:4320".into());
     let app = bilibi_web::App::new(db.clone(), &origin)?;
+    bilibi_finance_walkthrough_fixture::without_step_up(&app.services)?;
     bilibi_finance_walkthrough_fixture::install(&db, &app.services).await?;
     // Retain the real Queue executor for interactive submit/poll actions.
     let _stop = bilibi_finance_walkthrough_fixture::einvoice_ui::run(&db, &app.services).await?;

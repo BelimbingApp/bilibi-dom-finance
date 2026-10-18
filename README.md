@@ -21,7 +21,7 @@ Bilibi checkout; it does not build on its own.
 Every other Finance module of Bilimbi (SST) lands beside
 the ledger as a sibling module folder, in later slices of the port.
 
-The ledger also contributes 21 agent operations through Bilibi's shared `/api/v1` and `/mcp`: seven reads and fourteen reviewed writes for books, accounts, journals, reversals and fiscal closing. The [ledger contract](ledger/README.md#agent-operations) and [agent guide](ledger/guide.md) describe their inputs and controls. There are no ledger pages in Bilimbi or this port.
+The ledger also contributes 21 agent operations through Bilibi's shared `/api/v1` and `/mcp`: seven reads and fourteen reviewed writes for books, accounts, journals, reversals and fiscal closing. The [ledger contract](ledger/README.md#agent-operations) and [agent guide](ledger/guide.md) describe their inputs and controls. There are no ledger pages in Bilimbi or this port. Every Finance operation (ledger, payables, receivables, e-invoice) serves every door (`channels: every`) and lists no step-up: Finance declares no Base Step-up operation, as Bilimbi has none.
 
 ## Mount
 

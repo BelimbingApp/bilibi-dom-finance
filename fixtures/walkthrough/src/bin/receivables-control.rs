@@ -32,6 +32,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut services = Services::default();
     services.provide("bootstrap.database", Arc::new(db.clone()))?;
     services.install(&modules)?;
+    bilibi_finance_walkthrough_fixture::without_step_up(&services)?;
     let admin = sign_in(&db, &services, 1, 4).await?;
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.as_slice() {

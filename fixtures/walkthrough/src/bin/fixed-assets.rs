@@ -112,6 +112,7 @@ async fn main() -> Outcome<()> {
     let mut services = Services::default();
     services.provide("bootstrap.database", Arc::new(db.clone()))?;
     services.install(&modules)?;
+    bilibi_finance_walkthrough_fixture::without_step_up(&services)?;
     install(&db, &services).await?;
     run(&db, &services).await?;
     println!("NX1: all acquisition, schedule, scope, concurrency, audit and SQL proofs passed");
