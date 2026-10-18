@@ -93,6 +93,8 @@ pub async fn prepare_einvoice(
         );
     }
     prove_document_messages(services, manager, last_document.unwrap()).await?;
+    prove_report_messages(services, manager).await?;
+    prove_payroll_messages(services, manager, company).await?;
     Ok(stop)
 }
 
@@ -230,5 +232,138 @@ async fn prove_document_messages(
         .await?;
     assert!(!cleared.html.contains("id=\"flash-error\""));
     println!("NU1: E-invoice refusal survives refresh and stale success dismissal; matching dismissal clears without an error");
+    Ok(())
+}
+
+async fn prove_report_messages(services: &Services, scope: &bilibi_tenancy::Scope) -> Outcome<()> {
+    use bilibi_database::Error;
+    use bilibi_tenancy::Scope;
+    use bilibi_ui::page::{LiveInput, LiveRequest, PageRequest, PageService};
+    use std::collections::HashMap;
+    let pages = services.get::<PageService<Scope, Error>>("finance/reports.pages")?;
+    let mut state = pages
+        .0
+        .mount(PageRequest {
+            operation: "reports",
+            scope: Some(scope),
+            path: &HashMap::new(),
+            query: &HashMap::new(),
+            body: &[],
+            framed: false,
+        })
+        .await?
+        .unwrap();
+    state.update(LiveRequest {scope,credential:"",input:LiveInput::Refresh}).await?;
+    let export = json!({"type":"export_auditor_pack"});
+    let body = state
+        .update(LiveRequest {
+            scope,
+            credential: "",
+            input: LiveInput::Event(&export),
+        })
+        .await?;
+    assert!(body.html.contains("Auditor pack generated."));
+    let wrong = json!({"type":"clear-flash","key":"error"});
+    let kept = state
+        .update(LiveRequest {
+            scope,
+            credential: "",
+            input: LiveInput::Event(&wrong),
+        })
+        .await?;
+    assert_eq!(body.html, kept.html);
+    let dismiss = json!({"type":"clear-flash","key":"success"});
+    let cleared = state
+        .update(LiveRequest {
+            scope,
+            credential: "",
+            input: LiveInput::Event(&dismiss),
+        })
+        .await?;
+    assert!(!cleared.html.contains("id=\"flash-success\""));
+    let params = HashMap::from([("view".into(), "profit-and-loss".into())]);
+    let changed = state
+        .update(LiveRequest {
+            scope,
+            credential: "",
+            input: LiveInput::Params(&params),
+        })
+        .await?;
+    assert!(!changed.html.contains("id=\"flash-success\""));
+    println!(
+        "NU1: real auditor pack success clears by kind and stays dismissed after changing reports"
+    );
+    Ok(())
+}
+
+async fn prove_payroll_messages(
+    services: &Services,
+    scope: &bilibi_tenancy::Scope,
+    company: i64,
+) -> Outcome<()> {
+    use bilibi_database::Error;
+    use bilibi_tenancy::Scope;
+    use bilibi_ui::page::{LiveInput, LiveRequest, PageRequest, PageService};
+    use std::collections::HashMap;
+    let ledger = services.get::<bilibi_finance_ledger::Ledger>(bilibi_finance_ledger::SERVICE)?;
+    let accounts = ledger.list_accounts(scope, company).await?;
+    let id = |code: &str| {
+        accounts
+            .iter()
+            .find(|a| a.code == code)
+            .unwrap()
+            .id
+            .to_string()
+    };
+    let pages = services.get::<PageService<Scope, Error>>("finance/payroll.pages")?;
+    let mut state = pages
+        .0
+        .mount(PageRequest {
+            operation: "setup",
+            scope: Some(scope),
+            path: &HashMap::new(),
+            query: &HashMap::new(),
+            body: &[],
+            framed: false,
+        })
+        .await?
+        .unwrap();
+    let save = json!({"type":"save_settings","settings[net_pay_account_id]":id("2000"),"settings[claims_payable_account_id]":id("2000"),"settings[reason]":"Initial browser setup"});
+    let saved = state
+        .update(LiveRequest {
+            scope,
+            credential: "",
+            input: LiveInput::Event(&save),
+        })
+        .await?;
+    assert!(saved.html.contains("Posting accounts saved."));
+    let invalid = json!({"type":"save_mapping","mapping[kind]":"component","mapping[code]":"","mapping[direction]":"earning","mapping[expense_account_id]":id("5000"),"mapping[liability_account_id]":id("2000")});
+    let refused = state
+        .update(LiveRequest {
+            scope,
+            credential: "",
+            input: LiveInput::Event(&invalid),
+        })
+        .await?;
+    assert!(refused.html.contains("id=\"flash-error\""));
+    let stale = json!({"type":"clear-flash","key":"success"});
+    let kept = state
+        .update(LiveRequest {
+            scope,
+            credential: "",
+            input: LiveInput::Event(&stale),
+        })
+        .await?;
+    assert_eq!(refused.html, kept.html);
+    let dismiss = json!({"type":"clear-flash","key":"error"});
+    let cleared = state
+        .update(LiveRequest {
+            scope,
+            credential: "",
+            input: LiveInput::Event(&dismiss),
+        })
+        .await?;
+    assert!(!cleared.html.contains("id=\"flash-error\""));
+    println!("NU1: payroll setup and mapping use real facades; stale success dismissal retains the mapping refusal");
     Ok(())
 }

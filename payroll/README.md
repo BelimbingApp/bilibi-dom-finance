@@ -71,3 +71,5 @@ The Payroll section asserts configuration/no-op histories, account roles, isolat
 Its page scenarios run through the registered PageService: settings and mapping saves, change-only forms, a 400-character Unicode reason, field errors and retained drafts, independent column controls, Ledger-withheld labels, grants revoked after mount, malformed reversal dates, cancel and one-shot confirmation, and complete change history beyond 500 rows. Browser proof uses this disposable database and the real app; it never seeds a product installation.
 
 `evidence_page_on` is the same authorized evidence contract on a caller-supplied PostgreSQL client or transaction. Use it for every page of one repeatable-read export (Reports auditor pack); the pooled `evidence_page` wrapper is a live read per page. Schema helpers remain private.
+
+The shared `clear-flash` event clears only the current message kind, so a delayed success timeout cannot erase a newer settings or mapping refusal.

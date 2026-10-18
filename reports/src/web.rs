@@ -229,6 +229,10 @@ impl State {
 
     async fn event(&mut self, scope: &Scope, value: &Value) -> Result<()> {
         let kind = value["type"].as_str().unwrap_or_default();
+        if kind == "clear-flash" {
+            clear_flash(&mut self.flash, value);
+            return Ok(());
+        }
         if let Some(id) = kind.strip_prefix("grid:") {
             if let Some(columns) = self.columns.get_mut(id) {
                 columns.handle(&params::string_values(value));
@@ -581,4 +585,14 @@ struct PageView<'a> {
     compare: Option<Field>,
     timezone_request: &'a str,
     flash: FlashMap<'a>,
+}
+
+// The browser may dismiss an older success while a refusal is in flight.
+pub(super) fn clear_flash(flash: &mut Option<(StatusKind, String)>, value: &Value) {
+    if flash
+        .as_ref()
+        .is_some_and(|(kind, _)| value["key"].as_str() == Some(kind.name()))
+    {
+        *flash = None;
+    }
 }

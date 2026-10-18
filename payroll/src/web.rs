@@ -186,7 +186,13 @@ impl State {
             return Ok(());
         }
         if event == "clear-flash" {
-            self.flash = None;
+            if self
+                .flash
+                .as_ref()
+                .is_some_and(|(kind, _)| value["key"].as_str() == Some(kind.name()))
+            {
+                self.flash = None;
+            }
             return Ok(());
         }
         let settings_event = matches!(event, "save_settings" | "save_mapping" | "edit_mapping");

@@ -334,7 +334,7 @@ impl State {
             return Ok(());
         }
         if event == "clear-flash" {
-            self.flash = None;
+            crate::web::clear_flash(&mut self.flash, payload);
             return Ok(());
         }
         if event == "close_dialog" {
