@@ -58,6 +58,18 @@ pub async fn prepare_einvoice(
     let executor = Executor::from_services(services, Config::default())?;
     let (stop, shutdown) = tokio::sync::watch::channel(false);
     tokio::spawn(executor.run(shutdown));
+    if facade
+        .list_documents(
+            manager,
+            company,
+            &bilibi_finance_einvoice::DocumentQuery::default(),
+        )
+        .await?
+        .total_entries
+        > 0
+    {
+        return Ok(stop);
+    }
     for n in 1..=3 {
         let document = facade
             .issue_document(

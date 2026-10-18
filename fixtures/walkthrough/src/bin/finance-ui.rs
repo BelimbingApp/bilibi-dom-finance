@@ -56,7 +56,7 @@ browser_roles!(
 inventory::submit! { Contribution::new(VOCABULARY,"walkthrough.fixture.finance.browser",Provenance {module:"finance/ledger",source:file!(),line:line!()},&VocabularyContribution {
     domains:&[],verbs:&[],capabilities:&[],system_principals:&[],roles:&[
         RoleDefinition {code:"viewer",name:"viewer",description:"Walkthrough fixture role",grant_all:false,capabilities:&[
-            "finance.ledger.view", "finance.attachments.view", "finance.payables.view",
+            "finance.ledger.view", "finance.attachments.view", "finance.payables.view", "finance.receivables.view",
             "finance.einvoice.view", "finance.fixed-assets.view", "finance.payroll.view",
             "finance.reconciliation.view", "finance.sst.view",
         ]},
