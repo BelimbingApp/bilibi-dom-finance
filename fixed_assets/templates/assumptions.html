@@ -1,5 +1,5 @@
 {% import "components.html" as ui %}
-{% call ui::card(class="mt-4") %}
+{% call ui::card() %}
 <h2 class="font-medium">{{ heading }}</h2>
 <p>Cost {{ detail.asset.cost }}; residual {{ detail.asset.residual_value }}.</p>
 <p>Acquired {{ detail.asset.acquisition_date }}; in service {{ detail.asset.in_service_date }}.</p>
