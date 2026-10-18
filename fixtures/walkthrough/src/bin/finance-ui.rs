@@ -11,9 +11,7 @@ use bilibi_finance_payables::{
     DocumentLineInput, NewDocument, Party, Payables, Settings, SettingsInput, DOCUMENT_SOURCE,
 };
 use bilibi_finance_reconciliation::{NewBankAccount, Reconciliation};
-use bilibi_finance_walkthrough_fixture::{
-    attachments::configure_storage, install, sign_in, COMPANY,
-};
+use bilibi_finance_walkthrough_fixture::{attachments::configure_storage, install, sign_in};
 use bilibi_module_registry::{Contribution, Provenance};
 use jiff::civil::date;
 use serde_json::json;
@@ -23,6 +21,7 @@ bilibi_walkthrough_fixture::walkthrough_module_roles!();
 bilibi_finance_walkthrough_fixture::walkthrough_ledger_roles!();
 bilibi_finance_walkthrough_fixture::walkthrough_attachments_roles!();
 bilibi_finance_walkthrough_fixture::walkthrough_payables_roles!();
+bilibi_finance_walkthrough_fixture::walkthrough_receivables_roles!();
 bilibi_finance_walkthrough_fixture::walkthrough_reconciliation_roles!();
 bilibi_finance_walkthrough_fixture::walkthrough_reports_roles!();
 macro_rules! browser_roles {
@@ -64,6 +63,8 @@ inventory::submit! { Contribution::new(VOCABULARY,"walkthrough.fixture.finance.b
     ],
 }) }
 
+const COMPANY: i64 = 100;
+
 type Outcome<T> = Result<T, Box<dyn std::error::Error>>;
 
 #[tokio::main]
@@ -77,7 +78,7 @@ async fn main() -> Outcome<()> {
     bilibi_database::migrate(&db, &bilibi_module_registry::discover()?).await?;
     let app = bilibi_web::App::new(db.clone(), &origin)?;
     let services = &app.services;
-    let installed = install(&db, services).await?;
+    install(&db, services).await?;
     db.get().await?.batch_execute(
         "INSERT INTO persons(id,tenant_id,name,kind,email) VALUES(4,1,'Alex Admin','human','admin@example.test'),(5,1,'Lee Viewer','human','viewer@example.test') ON CONFLICT DO NOTHING;
          INSERT INTO person_affiliations(id,tenant_id,person_id,organisation_id,title,work_email) VALUES(3,1,4,1,'Reviewer','admin@example.test'),(4,1,5,1,'Reader','viewer@example.test') ON CONFLICT DO NOTHING;
@@ -86,8 +87,66 @@ async fn main() -> Outcome<()> {
          SELECT setval(pg_get_serial_sequence('persons','id'),(SELECT max(id) FROM persons));
          SELECT setval(pg_get_serial_sequence('person_affiliations','id'),(SELECT max(id) FROM person_affiliations))"
     ).await?;
-    let manager = sign_in(&db, services, 1, 1).await?;
-    let admin = sign_in(&db, services, 1, 4).await?;
+    // Tenant 2 is an ordinary tenant. Neither browser account is an operator.
+    db.get().await?.batch_execute(
+        "INSERT INTO persons(id,tenant_id,name,kind,email) VALUES(6,2,'Other Manager','human','manager@other.example.test'),(7,2,'Other Reviewer','human','reviewer@other.example.test'),(8,2,'Other Reader','human','viewer@other.example.test') ON CONFLICT DO NOTHING;
+         INSERT INTO person_affiliations(id,tenant_id,person_id,organisation_id,title) VALUES(5,2,6,100,'Recorder'),(6,2,7,100,'Reviewer'),(7,2,8,100,'Reader') ON CONFLICT DO NOTHING;
+         UPDATE users SET person_id=6,affiliation_id=5,organisation_id=100 WHERE tenant_id=2 AND id=5 AND person_id IS NULL;
+         INSERT INTO users(id,tenant_id,name,email,password_hash,person_id,affiliation_id,organisation_id) SELECT 8,2,'Other Reviewer','reviewer@other.example.test',password_hash,7,6,100 FROM users WHERE id=5 ON CONFLICT DO NOTHING;
+         INSERT INTO users(id,tenant_id,name,email,password_hash,person_id,affiliation_id,organisation_id) SELECT 9,2,'Other Reader','viewer@other.example.test',password_hash,8,7,100 FROM users WHERE id=5 ON CONFLICT DO NOTHING;
+         INSERT INTO principal_roles(tenant_id,user_id,role_id) SELECT 2,8,id FROM roles WHERE tenant_id=2 AND code='admin' ON CONFLICT DO NOTHING;
+         INSERT INTO principal_roles(tenant_id,user_id,role_id) SELECT 2,9,id FROM roles WHERE tenant_id=2 AND code='viewer' ON CONFLICT DO NOTHING;
+         SELECT setval(pg_get_serial_sequence('persons','id'),(SELECT max(id) FROM persons));
+         SELECT setval(pg_get_serial_sequence('person_affiliations','id'),(SELECT max(id) FROM person_affiliations));
+         SELECT setval(pg_get_serial_sequence('users','id'),(SELECT max(id) FROM users))"
+    ).await?;
+    let manager = sign_in(&db, services, 2, 5).await?;
+    let admin = sign_in(&db, services, 2, 8).await?;
+    let operator = sign_in(&db, services, 1, 4).await?;
+    let ledger = services.get::<Ledger>(bilibi_finance_ledger::SERVICE)?;
+    let book = match ledger.get_book(&manager, COMPANY).await {
+        Err(bilibi_finance_ledger::LedgerError::BookNotOpen) => {
+            ledger
+                .open_book(
+                    &manager,
+                    COMPANY,
+                    &bilibi_finance_ledger::NewBook {
+                        currency_code: "MYR".into(),
+                        minor_units: 2,
+                    },
+                )
+                .await?
+        }
+        other => other?,
+    };
+    let existing = ledger.list_accounts(&manager, COMPANY).await?;
+    for (code, name, kind, retained) in bilibi_finance_walkthrough_fixture::CHART {
+        if !existing.iter().any(|a| a.code == code) {
+            let mut account = NewAccount::new(code, name, kind);
+            account.retained_earnings = retained;
+            ledger.create_account(&manager, COMPANY, &account).await?;
+        }
+    }
+    if ledger
+        .list_fiscal_years(&manager, COMPANY)
+        .await?
+        .is_empty()
+    {
+        ledger
+            .open_fiscal_year(
+                &manager,
+                COMPANY,
+                &bilibi_finance_ledger::NewFiscalYear {
+                    start_date: Some(date(2026, 1, 1)),
+                    end_date: None,
+                },
+            )
+            .await?;
+    }
+    let installed = bilibi_finance_walkthrough_fixture::Installed {
+        book,
+        accounts: ledger.list_accounts(&manager, COMPANY).await?,
+    };
     let account = |code: &str| {
         installed
             .accounts
@@ -99,10 +158,31 @@ async fn main() -> Outcome<()> {
     let root = std::env::var("FINANCE_UI_STORAGE")?;
     std::fs::create_dir_all(&root)?;
     std::fs::set_permissions(&root, std::os::unix::fs::PermissionsExt::from_mode(0o700))?;
-    configure_storage(&db, services, &admin, &root).await?;
+    configure_storage(&db, services, &operator, &root).await?;
+    let payables = services.get::<Payables>(bilibi_finance_payables::SERVICE)?;
+    if payables.list_tax_codes(&manager, COMPANY).await?.is_empty() {
+        payables
+            .create_tax_code(
+                &manager,
+                COMPANY,
+                &bilibi_finance_payables::NewTaxCode {
+                    code: "INPUT".into(),
+                    details: bilibi_finance_payables::TaxCodeDetails {
+                        name: "Input tax".into(),
+                        rate: "10".into(),
+                        account_id: account("2100")?,
+                        active: true,
+                        reason: None,
+                    },
+                },
+            )
+            .await?;
+    }
     if std::env::args().any(|arg| arg == "serve") {
-        let _authority =
-            bilibi_finance_walkthrough_fixture::browser::prepare_einvoice(&db, services).await?;
+        let _authority = bilibi_finance_walkthrough_fixture::browser::prepare_einvoice(
+            &db, services, &manager, &operator, COMPANY,
+        )
+        .await?;
         axum::serve(
             tokio::net::TcpListener::bind(std::env::var("BIND_ADDR")?).await?,
             bilibi_web::router(app),
@@ -110,7 +190,6 @@ async fn main() -> Outcome<()> {
         .await?;
         return Ok(());
     }
-    let payables = services.get::<Payables>(bilibi_finance_payables::SERVICE)?;
     payables
         .put_settings(
             &manager,
@@ -263,9 +342,11 @@ async fn main() -> Outcome<()> {
     }).await?;
     println!("Bank account: /finance/reconciliation/accounts/{}", bank.id);
     // Existing authority stand-in creates documents and serves submit/poll locally.
-    let _authority =
-        bilibi_finance_walkthrough_fixture::browser::prepare_einvoice(&db, services).await?;
-    println!("Finance browser fixture: {origin}; manager@example.test, viewer@example.test; walkthrough password");
+    let _authority = bilibi_finance_walkthrough_fixture::browser::prepare_einvoice(
+        &db, services, &manager, &operator, COMPANY,
+    )
+    .await?;
+    println!("Finance browser fixture: {origin}; manager@other.example.test, reviewer@other.example.test, viewer@other.example.test; walkthrough password");
     axum::serve(
         tokio::net::TcpListener::bind(std::env::var("BIND_ADDR")?).await?,
         bilibi_web::router(app),

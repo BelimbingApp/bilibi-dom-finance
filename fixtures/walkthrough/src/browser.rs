@@ -14,15 +14,16 @@ type Outcome<T> = Result<T, Box<dyn std::error::Error>>;
 pub async fn prepare_einvoice(
     db: &Db,
     services: &Services,
+    manager: &bilibi_tenancy::Scope,
+    admin: &bilibi_tenancy::Scope,
+    company: i64,
 ) -> Outcome<tokio::sync::watch::Sender<bool>> {
-    let manager = crate::sign_in(db, services, 1, 1).await?;
-    let admin = crate::sign_in(db, services, 1, 4).await?;
-    let target = Target::Company(OrganisationId::new(1)?);
+    let target = Target::Company(OrganisationId::new(company)?);
     let url = clearance::serve(Arc::new(StandIn::default())).await?;
     clearance::save(
         db,
         services,
-        &admin,
+        admin,
         Target::Global,
         "finance.einvoice.sandbox.api_url",
         json!(url),
@@ -46,7 +47,7 @@ pub async fn prepare_einvoice(
         clearance::save(
             db,
             services,
-            &manager,
+            manager,
             target,
             &format!("finance.einvoice.{key}"),
             json!(value),
@@ -60,14 +61,14 @@ pub async fn prepare_einvoice(
     for n in 1..=3 {
         let document = facade
             .issue_document(
-                &manager,
-                1,
+                manager,
+                company,
                 &clearance::draft(&format!("BROWSER-E-{n}"), None),
             )
             .await?;
         if n == 1 {
             facade
-                .submit_document(&manager, 1, document.document.id)
+                .submit_document(manager, company, document.document.id)
                 .await?;
             let client = db.get().await?;
             clearance::jobs_settle(&client).await?;
