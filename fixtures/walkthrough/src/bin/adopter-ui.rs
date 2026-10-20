@@ -1,6 +1,6 @@
 //! Browser proof on an empty disposable database. Set DATABASE_URL,
 //! APP_ORIGIN and BIND_ADDR. ADOPTER_EMPTY_BOOK=1 leaves the book unopened;
-//! otherwise it prepares a draft bill and a bank account, with storage unset.
+//! otherwise it prepares a draft bill and a bank account, using install defaults.
 use bilibi_database::{pool, Error};
 use bilibi_finance_ledger::{Ledger, Money, NewEntry, NewLine, PostOptions};
 use bilibi_finance_payables::{
@@ -34,6 +34,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bind = std::env::var("BIND_ADDR")?;
     bilibi_database::migrate(&db, &bilibi_module_registry::discover()?).await?;
     let app = bilibi_web::App::new(db.clone(), &origin)?;
+    bilibi_database::seeds::run(
+        &db,
+        &bilibi_module_registry::discover()?,
+        app.services.catalog()?,
+        &app.services,
+    )
+    .await?;
     bilibi_finance_walkthrough_fixture::without_step_up(&app.services)?;
     if std::env::var("ADOPTER_EMPTY_BOOK").as_deref() == Ok("1") {
         bilibi_walkthrough_fixture::install(&db).await?;

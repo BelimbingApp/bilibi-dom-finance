@@ -335,4 +335,4 @@ Sign in as `manager@example.test` (every control), `staff@example.test` (finalis
 
 Cash reports may read `Reconciliation::cash_account_ids` with `finance.ledger.view`. It returns only the mapped ledger identifiers, including inactive bank accounts; bank names, import mappings and statements still require `finance.reconciliation.view`.
 
-An import blocked by storage configuration names **Private document directory** (`artifacts.storage_root`) and **Document retention days** (`artifacts.retention_days`) and links to Global settings. Finance does not create an installation storage directory; Base Artifacts owns its location and retention policy.
+Base Artifacts saves storage defaults during `seed-production`: the server's private `data/artifacts` folder and 2557 retention days (7 years). The first import creates missing folders with 0700 permissions, so a fresh installation needs no storage settings edits. Administrators can change both settings in Global settings. An import blocked by an invalid or cleared policy names **Private document directory** (`artifacts.storage_root`) and **Document retention days** (`artifacts.retention_days`) and links there.
