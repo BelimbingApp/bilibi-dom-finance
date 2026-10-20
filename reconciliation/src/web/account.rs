@@ -1,7 +1,7 @@
 //! Mirrors Bilimbi `Finance.Reconciliation.Web.ImportLive`.
 use super::{
     clear_flash, company, event_type, flash_map,
-    format::{money, told},
+    format::told,
     render, Pages, DENIED,
 };
 use crate::{
@@ -12,7 +12,7 @@ use askama::Template;
 use bilibi_database::{Error, Result};
 use bilibi_datetime::{Format, Precision};
 use bilibi_finance_attachments::{AttachmentError, AttachmentQuery, NewFile};
-use bilibi_finance_ledger::LedgerError;
+use bilibi_finance_ledger::{LedgerError, MinorUnits};
 use bilibi_tenancy::Scope;
 use bilibi_ui::{
     page::*, params, Badge, BadgeKind, BuiltinColumn, Cell, EmptyState, Field, FlashMap, FlexRow,
@@ -263,7 +263,9 @@ impl Account {
                 self.draft.insert(
                     "statement_balance".into(),
                     s.closing_balance
-                        .map(|m| m.amount().normalize().to_string())
+                        .and_then(|m| {
+                            MinorUnits::new(i64::from(units)).map(|minor| m.shown(minor))
+                        })
                         .unwrap_or_default(),
                 );
             }
@@ -288,8 +290,20 @@ impl Account {
                     .cell("from", Cell::date(&from, &from))
                     .cell("to", Cell::date(&to, &to))
                     .cell("lines", Cell::text(s.line_count.to_string()))
-                    .cell("opening", Cell::text(money(s.opening_balance, units)))
-                    .cell("closing", Cell::text(money(s.closing_balance, units)))
+                    .cell(
+                        "opening",
+                        Cell::text(s.opening_balance.map_or_else(
+                            || "—".into(),
+                            |v| v.display(MinorUnits::new(i64::from(units))),
+                        )),
+                    )
+                    .cell(
+                        "closing",
+                        Cell::text(s.closing_balance.map_or_else(
+                            || "—".into(),
+                            |v| v.display(MinorUnits::new(i64::from(units))),
+                        )),
+                    )
                     .cell(
                         "imported",
                         Cell::instant(Instant::new(
@@ -335,7 +349,10 @@ impl Account {
                     .cell("end_date", Cell::date(&date, &date))
                     .cell(
                         "balance",
-                        Cell::text(money(Some(r.statement_balance), units)),
+                        Cell::text(
+                            r.statement_balance
+                                .display(MinorUnits::new(i64::from(units))),
+                        ),
                     )
                     .slot(
                         "status",

@@ -6,7 +6,7 @@ use crate::{
 use askama::Template;
 use bilibi_database::{Error, Result};
 use bilibi_datetime::{DisplayContext, DisplayPolicy, Format, Precision};
-use bilibi_finance_ledger::{Account, AccountType, FieldError, LedgerError};
+use bilibi_finance_ledger::{Account, AccountType, FieldError, LedgerError, MinorUnits, Money};
 use bilibi_locale::Locales;
 use bilibi_tenancy::Scope;
 use bilibi_ui::{
@@ -21,7 +21,7 @@ use bilibi_ui::{
     ListState, SectionHeading, StatusKind, TableEmpty, NO_FLASH,
 };
 use jiff::Timestamp;
-use rust_decimal::{Decimal, RoundingStrategy};
+use rust_decimal::Decimal;
 use serde_json::Value;
 use std::{collections::HashMap, sync::Arc};
 
@@ -538,7 +538,15 @@ impl State {
                                 "total",
                                 format!(
                                     "{} {}",
-                                    money(&posting.total, places.into()),
+                                    posting.total.parse::<Decimal>().map_or_else(
+                                        |_| "—".into(),
+                                        |amount| {
+                                            Money::display_decimal(
+                                                amount,
+                                                MinorUnits::new(i64::from(places)),
+                                            )
+                                        },
+                                    ),
                                     posting.currency_code
                                 ),
                             ),
@@ -1102,26 +1110,6 @@ fn history_row(
         );
     }
     row
-}
-fn money(value: &str, places: u32) -> String {
-    let Ok(amount) = value.parse::<Decimal>() else {
-        return "—".into();
-    };
-    let rounded = amount.round_dp_with_strategy(places, RoundingStrategy::MidpointAwayFromZero);
-    let fixed = format!("{rounded:.precision$}", precision = places as usize);
-    let (whole, fraction) = fixed.split_once('.').unwrap_or((&fixed, ""));
-    let mut grouped = String::new();
-    for (i, c) in whole.char_indices() {
-        if i > 0 && (whole.len() - i).is_multiple_of(3) && c != '-' && &whole[..i] != "-" {
-            grouped.push(',');
-        }
-        grouped.push(c);
-    }
-    if places > 0 {
-        grouped.push('.');
-        grouped.push_str(fraction);
-    }
-    grouped
 }
 fn action(id: &str, event: &str, value: i64, label: &str) -> Result<Html> {
     render(Button {

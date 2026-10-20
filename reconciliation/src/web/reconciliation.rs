@@ -8,7 +8,7 @@
 //! a facade call that re-asks its capability.
 use super::{
     clear_flash, company, event_type, flash_map,
-    format::{amount, told},
+    format::told,
     render, Follow, Pages,
 };
 use crate::{
@@ -18,7 +18,7 @@ use crate::{
 use askama::Template;
 use bilibi_database::{Error, Result};
 use bilibi_datetime::{Format, Precision};
-use bilibi_finance_ledger::POST_ENTRIES;
+use bilibi_finance_ledger::{MinorUnits, POST_ENTRIES};
 use bilibi_tenancy::Scope;
 use bilibi_ui::{
     page::*, params, Badge, BadgeKind, BuiltinColumn, Cell, EmptyState, Fact, Facts, Field,
@@ -411,7 +411,7 @@ impl Detail {
             value: render(Figure {
                 text: format!(
                     "{} {}",
-                    amount(report.statement_balance.amount(), units),
+                    report.statement_balance.display(MinorUnits::new(i64::from(units))),
                     figures.map_or("", |f| f.currency_code.as_str())
                 ),
                 badge: None,
@@ -422,7 +422,7 @@ impl Detail {
                 title: "Balance per books",
                 id: "figure-book-balance",
                 value: render(Figure {
-                    text: amount(f.book_balance.amount(), units),
+                    text: f.book_balance.display(MinorUnits::new(i64::from(units))),
                     badge: None,
                 })?,
             });
@@ -431,7 +431,7 @@ impl Detail {
                 title: "Unexplained difference",
                 id: "figure-difference",
                 value: render(Figure {
-                    text: amount(f.difference.amount(), units),
+                    text: f.difference.display(MinorUnits::new(i64::from(units))),
                     badge: Some(if explained {
                         badge(BadgeKind::Success, "explained")?
                     } else {
@@ -479,7 +479,10 @@ impl Detail {
                                     .filter(|_| mode != RowMode::Compact),
                             })?,
                         )
-                        .cell("amount", Cell::text(amount(item.amount.amount(), units)));
+                        .cell(
+                            "amount",
+                            Cell::text(item.amount.display(MinorUnits::new(i64::from(units)))),
+                        );
                     row.dom_id = Some(format!("item-{}", index + 1));
                     if open && self.can_post && item.kind == ItemKind::StatementLine {
                         let line = item.statement_line_id;

@@ -18,7 +18,7 @@ use crate::{
 };
 use askama::Template;
 use bilibi_database::{Error, Result};
-use bilibi_finance_ledger::{FieldError, PostingSubscription};
+use bilibi_finance_ledger::{FieldError, MinorUnits, Money, PostingSubscription};
 use bilibi_tenancy::Scope;
 use bilibi_ui::{
     page::{self, LiveBody, LiveFuture, LiveInput, LiveRequest, LiveState, Subscription},
@@ -311,7 +311,12 @@ impl Return {
             .map(|f| f.minor_units)
             .or(r.minor_units)
             .unwrap_or(0);
-        let money = |amount: Option<Decimal>| f::money(amount, units);
+        let money = |amount: Option<Decimal>| {
+            amount.map_or_else(
+                || "—".into(),
+                |amount| Money::display_decimal(amount, MinorUnits::new(i64::from(units))),
+            )
+        };
         let compact = |columns: &ListColumns| columns.mode() == RowMode::Compact;
 
         // Header.

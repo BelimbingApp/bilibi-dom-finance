@@ -1,8 +1,6 @@
-//! Bilimbi `Finance.Reconciliation.Web.Format`: refusal copy and amounts.
+//! Bilimbi `Finance.Reconciliation.Web.Format`: refusal copy.
 use crate::ReconciliationError as E;
 use bilibi_database::{Error, Result};
-use bilibi_finance_ledger::Money;
-use rust_decimal::{Decimal, RoundingStrategy};
 
 pub(super) fn told<T>(result: crate::Result<T>) -> Result<std::result::Result<T, String>> {
     match result {
@@ -48,39 +46,4 @@ pub(super) fn refusal(error: &E) -> String {
         E::Attachment(bilibi_finance_attachments::AttachmentError::InvalidContentType) => "The file's type could not be recognised.".into(),
         other => other.to_string(),
     }
-}
-pub(super) fn money(value: Option<Money>, units: u8) -> String {
-    value.map_or_else(|| "—".into(), |value| amount(value.amount(), units))
-}
-/// A signed amount with thousands separators, rounded to the book's minor
-/// units (Bilimbi `Format.money`).
-pub(super) fn amount(value: Decimal, units: u8) -> String {
-    // Decimal.round/2 rounds half up (away from zero), not to even.
-    let mut value =
-        value.round_dp_with_strategy(u32::from(units), RoundingStrategy::MidpointAwayFromZero);
-    // Money is normalized; Bilimbi shows every minor unit (12.50).
-    value.rescale(u32::from(units));
-    let text = value.abs().to_string();
-    let (whole, fraction) = text.split_once('.').unwrap_or((&text, ""));
-    let grouped = whole
-        .chars()
-        .enumerate()
-        .fold(String::new(), |mut out, (i, c)| {
-            if i > 0 && (whole.len() - i).is_multiple_of(3) {
-                out.push(',');
-            }
-            out.push(c);
-            out
-        });
-    format!(
-        "{}{}{}{}",
-        if value.is_sign_negative() && !value.is_zero() {
-            "-"
-        } else {
-            ""
-        },
-        grouped,
-        if fraction.is_empty() { "" } else { "." },
-        fraction
-    )
 }

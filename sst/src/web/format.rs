@@ -4,37 +4,7 @@ use super::render;
 use crate::{ReturnStatus, Sst, SstError, TaxReturn, TaxSource, TaxType};
 use bilibi_database::Result;
 use bilibi_ui::{Badge, BadgeKind, Html};
-use rust_decimal::{Decimal, RoundingStrategy};
-
-/// A signed amount with thousands separators, rounded half up to the book's
-/// minor units; `—` for none.
-pub(super) fn money(amount: Option<Decimal>, minor_units: u8) -> String {
-    let Some(amount) = amount else {
-        return "—".into();
-    };
-    let mut rounded =
-        amount.round_dp_with_strategy(minor_units.into(), RoundingStrategy::MidpointAwayFromZero);
-    rounded.rescale(minor_units.into());
-    let text = rounded.abs().to_string();
-    let (whole, fraction) = text.split_once('.').unwrap_or((&text, ""));
-    let mut grouped = String::new();
-    for (i, digit) in whole.chars().enumerate() {
-        if i > 0 && (whole.len() - i) % 3 == 0 {
-            grouped.push(',');
-        }
-        grouped.push(digit);
-    }
-    let sign = if rounded.is_sign_negative() && !rounded.is_zero() {
-        "-"
-    } else {
-        ""
-    };
-    if fraction.is_empty() {
-        format!("{sign}{grouped}")
-    } else {
-        format!("{sign}{grouped}.{fraction}")
-    }
-}
+use rust_decimal::Decimal;
 
 /// A rate as `Decimal.to_string(:normal)` writes it.
 pub(super) fn rate(rate: Decimal) -> String {

@@ -9,6 +9,7 @@ use super::{
 use crate::{Registration, SstError, TaxReturn, TaxType, TaxablePeriod, PREPARE_RETURNS};
 use askama::Template;
 use bilibi_database::{Error, Result};
+use bilibi_finance_ledger::{MinorUnits, Money};
 use bilibi_tenancy::Scope;
 use bilibi_ui::{
     page::{LiveBody, LiveFuture, LiveInput, LiveRequest, LiveState},
@@ -315,7 +316,15 @@ impl Returns {
                 .cell("due", Cell::text(r.due_date.to_string()))
                 .cell(
                     "tax_payable",
-                    Cell::text(f::money(r.tax_payable, r.minor_units.unwrap_or(0))),
+                    Cell::text(r.tax_payable.map_or_else(
+                        || "—".into(),
+                        |amount| {
+                            Money::display_decimal(
+                                amount,
+                                MinorUnits::new(i64::from(r.minor_units.unwrap_or(0))),
+                            )
+                        },
+                    )),
                 ),
             );
         }
