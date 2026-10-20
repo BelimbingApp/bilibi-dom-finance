@@ -64,7 +64,6 @@ inventory::submit! { Module {
         db: s.get::<Db>("base/database.pool")?.as_ref().clone(),
         payables: s.get(SERVICE)?,
         ledger: s.get(bilibi_finance_ledger::SERVICE)?,
-        contracts: s.get(bilibi_agent_api::page::SERVICE)?,
         display: s.get("base/datetime.display")?,
         locales: s.get("base/locale.locales")?,
     })))) }],
