@@ -196,6 +196,7 @@ impl Aged {
                 .id("payables-aged-as-of")
                 .kind(InputKind::Date)
                 .label("As of")
+                .hint("Use the date order shown in the box. Dates are saved as YYYY-MM-DD.")
                 .value(as_of.to_string()),
         })?;
         let Some(aged) = &self.aged else {

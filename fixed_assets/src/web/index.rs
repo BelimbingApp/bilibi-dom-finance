@@ -203,7 +203,7 @@ impl Index {
             .flat_map(|p| p.period.params().map(|(k, v)| (k.into(), v)))
             .collect()
     }
-    fn fields(&self, accounts: &[(i64, String, String)]) -> Vec<Field> {
+    fn fields(&self, accounts: &[(i64, String, String, bool)]) -> Vec<Field> {
         use InputKind::{Date, Number, Select, Text};
         let d = &self.draft;
         let mut fields = Vec::new();
@@ -273,7 +273,7 @@ impl Index {
                         .chain(
                             accounts
                                 .iter()
-                                .filter(|a| a.2 == expected)
+                                .filter(|a| a.3 && a.2 == expected)
                                 .map(|a| Choice::new(&a.1, a.0.to_string())),
                         )
                         .collect(),
@@ -312,7 +312,7 @@ impl Index {
         }
         fields
     }
-    async fn write_form(&self, s: &Scope, accounts: &[(i64, String, String)]) -> Result<Html> {
+    async fn write_form(&self, s: &Scope, accounts: &[(i64, String, String, bool)]) -> Result<Html> {
         if !self.pages.allowed(s, self.kind.cap()).await? {
             return withheld(
                 "assets-write-withheld",

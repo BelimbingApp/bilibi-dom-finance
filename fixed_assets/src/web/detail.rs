@@ -106,7 +106,7 @@ impl Detail {
         &self,
         s: &Scope,
         op: &str,
-        accounts: &[(i64, String, String)],
+        accounts: &[(i64, String, String, bool)],
     ) -> Result<Html> {
         let (d, cap, title, reason) = match op {
             "dispose" => (
@@ -180,7 +180,7 @@ impl Detail {
                         .chain(
                             accounts
                                 .iter()
-                                .filter(|a| a.2 == "asset")
+                                .filter(|a| a.3 && a.2 == "asset")
                                 .map(|a| bilibi_ui::Choice::new(&a.1, a.0.to_string())),
                         )
                         .collect(),

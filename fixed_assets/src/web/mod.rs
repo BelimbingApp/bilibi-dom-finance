@@ -269,7 +269,7 @@ impl Pages {
         scope: &Scope,
     ) -> Result<(
         Option<bilibi_finance_ledger::MinorUnits>,
-        Vec<(i64, String, String)>,
+        Vec<(i64, String, String, bool)>,
     )> {
         let company = scope.actor().organisation().ok_or(Error::Forbidden)?.get();
         let mut input = serde_json::json!({"company_id":company});
@@ -297,13 +297,14 @@ impl Pages {
                 .await
                 .map_err(|_| Error::Internal)?;
             for a in page["result"]["records"].as_array().into_iter().flatten() {
-                if let (Some(id), Some(code), Some(name), Some(kind)) = (
+                if let (Some(id), Some(code), Some(name), Some(kind), Some(active)) = (
                     a["id"].as_i64(),
                     a["code"].as_str(),
                     a["name"].as_str(),
                     a["account_type"].as_str(),
+                    a["active"].as_bool(),
                 ) {
-                    accounts.push((id, format!("{code} {name}"), kind.to_owned()));
+                    accounts.push((id, format!("{code} {name}"), kind.to_owned(), active));
                 }
             }
             if let Some(code) = page["result"]["next_after_code"].as_str() {
