@@ -14,7 +14,7 @@ mod trial;
 mod view;
 mod years;
 
-use crate::{APPROVE_JOURNALS, MANAGE_ACCOUNTS, MANAGE_PERIODS, MODULE, POST_ENTRIES, VIEW};
+use crate::{MANAGE_ACCOUNTS, MANAGE_PERIODS, MODULE, VIEW};
 use askama::Template;
 use bilibi_agent_api::{
     page::{Call, PageContracts},
