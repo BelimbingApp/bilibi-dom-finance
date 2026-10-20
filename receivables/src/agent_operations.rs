@@ -271,6 +271,21 @@ async fn fence(
         .await?;
     Ok(())
 }
+impl Write {
+    /// The page a person opens to see what this write changed: the record's
+    /// own page, or the settings page for setup, series and tax codes.
+    fn page(&self, record: &Value) -> Value {
+        use crate::web::{CUSTOMERS as CUSTOMER_PAGES, INVOICES, RECEIPTS, SETTINGS};
+        let record_page = |base: &str| json!(format!("{base}/{}", record["id"]));
+        match self {
+            Self::Configure => json!(SETTINGS),
+            Self::Code(table, _) if table.name == CUSTOMERS.name => record_page(CUSTOMER_PAGES),
+            Self::Code(..) => json!(SETTINGS),
+            Self::Draft(_) | Self::Discard | Self::Issue => record_page(INVOICES),
+            Self::Payment | Self::Reverse => record_page(RECEIPTS),
+        }
+    }
+}
 impl WriteHandler for Write {
     fn owner(&self) -> &'static str {
         MODULE
@@ -373,7 +388,9 @@ impl WriteHandler for Write {
                 })
             }
             .await;
-            Ok(json!({"record":record.map_err(|e|self.error(e))?,"path":null}).into())
+            let record = record.map_err(|e| self.error(e))?;
+            let path = self.page(&record);
+            Ok(json!({"record":record,"path":path}).into())
         })
     }
 }
@@ -488,7 +505,7 @@ fn schema(required: &[&str], properties: Value) -> Value {
     object(&required, Value::Object(properties))
 }
 fn output() -> Value {
-    json!({"type":"object","description":"Receivables record, cursor page, or deterministic review facts. Exact decimals are strings; dates are ISO. No Receivables pages exist; committed path is null."})
+    json!({"type":"object","description":"Receivables record, cursor page, or deterministic review facts. Exact decimals are strings; dates are ISO. Committed path is the page of the record written, or the settings page for setup, series and tax codes."})
 }
 fn target() -> Value {
     schema(&[], json!({}))

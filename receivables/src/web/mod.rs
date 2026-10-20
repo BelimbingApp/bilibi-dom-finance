@@ -36,11 +36,11 @@ use serde_json::{json, Value};
 use std::{collections::BTreeMap, sync::Arc};
 
 pub(crate) const PAGES: &str = "finance/receivables.pages";
-const CUSTOMERS: &str = "/finance/receivables/customers";
-const INVOICES: &str = "/finance/receivables/invoices";
-const RECEIPTS: &str = "/finance/receivables/receipts";
+pub(crate) const CUSTOMERS: &str = "/finance/receivables/customers";
+pub(crate) const INVOICES: &str = "/finance/receivables/invoices";
+pub(crate) const RECEIPTS: &str = "/finance/receivables/receipts";
 const AGING: &str = "/finance/receivables/aging";
-const SETTINGS: &str = "/finance/receivables/settings";
+pub(crate) const SETTINGS: &str = "/finance/receivables/settings";
 
 /// The most records one page reads before it says the list is cut short. Lists
 /// are read through the contracts' cursors and filtered, sorted and paged
