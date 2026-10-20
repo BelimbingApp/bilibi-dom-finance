@@ -101,7 +101,7 @@ history names that person; the module's own events name the principal.
 
 | Page | Route | Access | Mirrors |
 | --- | --- | --- | --- |
-| Source documents | `/finance/attachments` (menu "Source documents" under Finance, order 18) | `finance.attachments.view` | Bilimbi `Web.IndexLive` |
+| Source documents | `/finance/attachments` (menu "Source documents" under the Bookkeeping group, order 2) | `finance.attachments.view` | Bilimbi `Web.IndexLive` |
 | Download | `/finance/attachments/{id}/download` | `finance.attachments.view`, asked again by `read_attachment` on every request | Bilimbi `Web.DownloadController` |
 | Panel | embed `finance.attachments-panel` | signed in; every read and write asks the facade | Bilimbi `Web.Panel` |
 

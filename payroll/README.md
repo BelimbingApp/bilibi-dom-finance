@@ -4,7 +4,7 @@
 
 ## Pages
 
-`/finance/payroll` (“Payroll and claims”) shows the People-absent notice and local postings with standing and reversal reasons. `/finance/payroll/setup` (“Payroll posting accounts”) shows the company's posting accounts, component/category mappings and their two change histories. Both routes require `finance.payroll.view`; their menu item is “Payroll and claims” under Finance. Setup is linked from Postings, not a second menu item.
+`/finance/payroll` (“Payroll and claims”) shows the People-absent notice and local postings with standing and reversal reasons. `/finance/payroll/setup` (“Payroll posting accounts”) shows the company's posting accounts, component/category mappings and their two change histories. Both routes require `finance.payroll.view`; their menu item is “Payroll and claims” in the Payroll group under Finance. Setup is linked from Postings, not a second menu item.
 
 All lists use shared FlexTable/ListColumns on ListState, with independent column arrangement and row-height controls. Bilimbi enables no sort, filter or pager here, so these pages add none. Active accounts of the required types populate the forms; retained records still label inactive accounts, and a reader without Ledger view sees `#ID`. Mapping “Change” fills the upsert-by-key form, not an ID-based edit. Claim categories always save direction `claim`. Refusals keep drafts and display field errors; typing never writes. Every write-shaped event reauthorizes before calling the facade.
 
