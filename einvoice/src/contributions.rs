@@ -64,7 +64,7 @@ macro_rules! page {
 page!(
     "consolidation",
     "/finance/einvoice/consolidation",
-    "E-invoice Consolidation",
+    "E-invoice consolidation",
     VIEW,
     "squares-2x2",
     2
@@ -72,7 +72,7 @@ page!(
 page!(
     "reconciliation",
     "/finance/einvoice/reconciliation",
-    "E-invoice Reconciliation",
+    "E-invoice reconciliation",
     VIEW,
     "chart-bar",
     3
@@ -80,7 +80,7 @@ page!(
 page!(
     "setup",
     "/finance/einvoice/setup",
-    "E-invoice Setup",
+    "E-invoice setup",
     SETTINGS,
     "clipboard-document-list",
     4
