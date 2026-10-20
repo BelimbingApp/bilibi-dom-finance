@@ -363,12 +363,12 @@ impl Account {
     }
 }
 
-/// An account's label from a list, or its bare number when unreadable.
+/// An account's label from a list, or a neutral label when unreadable.
 pub(super) fn account_label(accounts: &[Account], id: i64) -> String {
     accounts
         .iter()
         .find(|a| a.id == id)
-        .map_or_else(|| format!("Account #{id}"), Account::label)
+        .map_or_else(|| "Account unavailable".into(), Account::label)
 }
 
 pub(super) fn render(fragment: impl Template) -> Result<Html> {

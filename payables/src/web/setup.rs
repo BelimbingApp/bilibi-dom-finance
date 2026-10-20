@@ -160,7 +160,10 @@ impl Setup {
         self.accounts
             .iter()
             .find(|a| a.id == id)
-            .map_or_else(|| format!("#{id}"), |a| format!("{} {}", a.code, a.name))
+            .map_or_else(
+                || "Account unavailable".into(),
+                |a| format!("{} {}", a.code, a.name),
+            )
     }
 
     fn errors_for(errors: &[(String, String)], path: &str, label: &str) -> Vec<String> {

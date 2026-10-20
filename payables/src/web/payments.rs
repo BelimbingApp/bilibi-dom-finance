@@ -201,7 +201,7 @@ impl Payments {
                     .iter()
                     .find(|a| a.id == r.paid_from_account_id)
                     .map_or_else(
-                        || format!("#{}", r.paid_from_account_id),
+                        || "Account unavailable".into(),
                         |a| format!("{} {}", a.code, a.name),
                     );
                 let amount = r.amount.display(self.units);

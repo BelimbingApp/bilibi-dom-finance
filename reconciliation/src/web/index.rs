@@ -218,7 +218,7 @@ impl Index {
                     .as_ref()
                     .and_then(|v| v.iter().find(|a| a.id == id))
                     .map(|a| format!("{} {}", a.code, a.name))
-                    .unwrap_or_else(|| format!("#{id}"))
+                    .unwrap_or_else(|| "Account unavailable".into())
             })
             .unwrap_or_else(|| "—".into())
         };

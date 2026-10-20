@@ -1013,7 +1013,10 @@ fn account_label(accounts: &[Account], id: Option<i64>) -> String {
         Some(id) => accounts
             .iter()
             .find(|a| a.id == id)
-            .map_or_else(|| format!("#{id}"), |a| format!("{} {}", a.code, a.name)),
+            .map_or_else(
+                || "Account unavailable".into(),
+                |a| format!("{} {}", a.code, a.name),
+            ),
     }
 }
 fn account_choices(accounts: &[Account], liability: bool) -> Vec<Choice> {
