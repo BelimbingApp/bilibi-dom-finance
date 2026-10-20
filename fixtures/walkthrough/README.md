@@ -1,6 +1,6 @@
 # Finance browser walkthrough
 
-`finance-ui` prepares one disposable database with an ordinary tenant's recorder, independent reviewer and read-only reader, plus bills, source documents, a ledger acquisition, an asset, a bank account and e-invoices backed by a local authority. It also checks the Fixed Assets list/detail flash lifecycle through their real mounted page adapters.
+`finance-ui` prepares one disposable database with an ordinary tenant's recorder, independent reviewer and read-only reader, plus bills, source documents, a ledger acquisition, an asset, a bank account, receivables customers, invoices and receipts, and e-invoices backed by a local authority. It also checks the Fixed Assets list/detail flash lifecycle through their real mounted page adapters.
 
 Run from the mounted Platform root with `DATABASE_URL` on a fresh disposable database, `BILIBI_SETTINGS_KEY` set to a fresh 64-character hex key, `FINANCE_UI_STORAGE` naming a private directory, and matching `APP_ORIGIN` and `BIND_ADDR`:
 
