@@ -6,6 +6,7 @@
 {%- import "forms.html" as form -%}
 {%- import "feedback.html" as feedback -%}
 {% call feedback::flash_group(messages=flash) %}{% endcall %}
+{% if flash.error.contains("/system/settings") %}{% call ui::button(id="attachments-storage-settings", href="/system/settings") %}File storage settings{% endcall %}{% endif %}
 {% call ui::page(id="finance-attachments") %}
 {% call ui::header(subtitle="The original files behind the company's records, each kept as a records-grade document until its retain-until date.") %}Source documents{% endcall %}
 

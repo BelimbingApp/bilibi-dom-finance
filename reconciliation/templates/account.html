@@ -13,7 +13,7 @@
 {% call ui::card(id="statement-import", inner_class="p-5 sm:p-6", role="region", labelledby="statement-import-heading") %}
 {% call ui::section_heading(id="statement-import-heading", title="Import a statement", description=mapping) %}{% endcall %}
 {{ import_forbidden|safe }}
-{% if flash.error.contains("Private document directory") %}{% call ui::button(id="bank-import-storage-settings", href="/system/settings") %}File storage settings{% endcall %}{% endif %}
+{% if flash.error.contains("/system/settings") %}{% call ui::button(id="bank-import-storage-settings", href="/system/settings") %}File storage settings{% endcall %}{% endif %}
 {% if let Some(upload) = upload %}
 {# FileUpload owns preflight, progress and refusal rendering; like the
    Design Library specimen, this form reports only the import submit. #}

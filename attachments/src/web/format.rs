@@ -27,10 +27,7 @@ pub(crate) fn refusal(error: AttachmentError) -> Result<String, Error> {
         }
         E::SourceUnavailable => "The module that owns this record is not mounted.".into(),
         E::InvalidSource => "That kind of record cannot take attachments.".into(),
-        E::RetentionNotConfigured => {
-            "Base Artifacts has no storage root configured; an operator sets it in Operator Settings."
-                .into()
-        }
+        refused @ (E::RetentionNotConfigured | E::StorageFolderMissing(_)) => refused.to_string(),
         E::Invalid(errors) => errors
             .iter()
             .map(|e| format!("{} {}", e.field.replace('_', " "), e.message))

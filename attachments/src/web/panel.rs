@@ -84,6 +84,7 @@ struct View {
     card_id: String,
     heading_id: String,
     submit_id: String,
+    settings_id: String,
     count: Option<usize>,
     notice: Option<Notice>,
     items: Vec<Item>,
@@ -283,6 +284,7 @@ impl Panel {
             card_id: format!("{id}-card"),
             heading_id: format!("{id}-heading"),
             submit_id: format!("{id}-submit"),
+            settings_id: format!("{id}-storage-settings"),
             count: Some(attachments.len()),
             notice: self.notice.as_ref().map(|n| Notice {
                 error: n.error,
