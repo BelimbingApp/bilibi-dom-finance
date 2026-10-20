@@ -16,7 +16,7 @@ Resolve `Payables` through `finance/payables.payables`. Every call takes the sea
 | `post_document` | `finance.payables.documents.post` |
 | `submit_payment` | `finance.payables.payments.submit` |
 | `approve_payment`, `approve_payment_with_override`, `reject_payment`, `reverse_payment` | `finance.payables.payments.post` |
-| `get_payment_request`, `list_payment_requests`, `get_payment`, `list_payments`, `aged_payables`, `tax_totals`, `tie_out_control_accounts`, `evidence_page` | `finance.payables.view` |
+| `get_payment_request`, `list_payment_requests`, `page_payment_requests`, `get_payment`, `list_payments`, `aged_payables`, `tax_totals`, `tie_out_control_accounts`, `evidence_page` | `finance.payables.view` |
 | `approve_match_exception` | `finance.payables.match.approve` |
 | `billed_quantities` | `finance.payables.view` |
 
