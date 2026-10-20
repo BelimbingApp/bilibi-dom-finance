@@ -496,7 +496,10 @@ impl Document {
                 row.cell("number", Cell::text(l.line_number.to_string()))
                     .cell("description", Cell::text(&l.description))
                     .slot("quantity", f::tabular(&f::decimal(l.quantity))?)
-                    .slot("unit_price", f::tabular(&Money::display_decimal(l.unit_price, None))?)
+                    .slot(
+                        "unit_price",
+                        f::tabular(&Money::display_decimal(l.unit_price, None))?,
+                    )
                     .cell("account", Cell::text(self.account(l.account_id)))
                     .cell(
                         "tax",

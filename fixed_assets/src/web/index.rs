@@ -312,7 +312,11 @@ impl Index {
         }
         fields
     }
-    async fn write_form(&self, s: &Scope, accounts: &[(i64, String, String, bool)]) -> Result<Html> {
+    async fn write_form(
+        &self,
+        s: &Scope,
+        accounts: &[(i64, String, String, bool)],
+    ) -> Result<Html> {
         if !self.pages.allowed(s, self.kind.cap()).await? {
             return withheld(
                 "assets-write-withheld",

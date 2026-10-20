@@ -14,7 +14,7 @@ exceptions are also available (NT3), alongside auditor-pack generation and downl
 
 ## Pages
 
-Both routes require `finance.ledger.view` and read the signed-in account's company through the facade. Reports has four addressable views (`view=overview`, `profit-and-loss`, `balance-sheet`, `cash-position`), the shared period filter (this month by default), and previous-period comparison (`compare=none` disables it except on Overview). Custom dates stay a draft until Apply range succeeds. The display policy and browser timezone decide the preset's calendar.
+Both routes require `finance.ledger.view` and read the signed-in account's company through the facade. Reports has four addressable views (`view=overview`, `profit-and-loss`, `balance-sheet`, `cash-position`), the shared period filter (the latest month with entries by default, see First report and layout), and previous-period comparison (`compare=none` disables it except on Overview). Custom dates stay a draft until Apply range succeeds. The display policy and browser timezone decide the preset's calendar.
 
 `Pin entry cutoff` puts the displayed positive entry number in `through`; `Show latest figures` removes it. This is not an issued snapshot. Every account-amount link carries its column's dates and the displayed cutoff, including `closing=excluded` for profit and loss. Account entries show whole-window debit and credit totals and 100 dated entries at a time; `Next entries` retains the cutoff and the `(after_date, after_id)` cursor. Activity does not subscribe to postings.
 
@@ -98,14 +98,16 @@ income less expense not yet closed into it. That line is part of equity, so
 
 The cash position lists every account its sections cover, whatever its type and
 whether or not it has postings, as debits less credits, so an overdrawn bank
-account kept as a liability counts against the total.
+account kept as a liability counts against the total. With no cash section
+configured, the accounts are the Bank reconciliation accounts (see First report
+and layout).
 
 ## Configuration
 
 Section headings and account choices are a company's own data, never code. They
 are the `finance.reports.sections` setting (Base Settings, tenant or company
 scope, editor group Reports, edited by holders of
-`finance.ledger.accounts.manage`): an ordered JSON array of sections, each with
+`finance.ledger.accounts.manage` on the Report sections page): an ordered JSON array of sections, each with
 only these keys.
 
 ```json

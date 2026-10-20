@@ -157,13 +157,10 @@ impl Setup {
     }
 
     fn account_label(&self, id: i64) -> String {
-        self.accounts
-            .iter()
-            .find(|a| a.id == id)
-            .map_or_else(
-                || "Account unavailable".into(),
-                |a| format!("{} {}", a.code, a.name),
-            )
+        self.accounts.iter().find(|a| a.id == id).map_or_else(
+            || "Account unavailable".into(),
+            |a| format!("{} {}", a.code, a.name),
+        )
     }
 
     fn errors_for(errors: &[(String, String)], path: &str, label: &str) -> Vec<String> {

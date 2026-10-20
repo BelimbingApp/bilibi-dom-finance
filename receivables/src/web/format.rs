@@ -2,11 +2,11 @@
 use super::{render, Flash};
 use bilibi_database::{Error, Result};
 use bilibi_datetime::{DisplayContext, Format, Precision};
+use bilibi_finance_ledger::{MinorUnits, Money};
 use bilibi_ui::{
     error_sentence, Badge, BadgeKind, BuiltinColumn, ErrorSummary, Fact, FlashGroup, FlexRow,
     FlexTable, Html, ListColumns, Modal, ModalWidth, Page, PageVariant,
 };
-use bilibi_finance_ledger::{MinorUnits, Money};
 use rust_decimal::Decimal;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -388,11 +388,7 @@ impl Figures {
         value.map_or_else(|| "—".into(), |m| self.money(m))
     }
 
-    pub(super) fn with_currency(
-        &self,
-        value: Money,
-        fallback: &str,
-    ) -> String {
+    pub(super) fn with_currency(&self, value: Money, fallback: &str) -> String {
         format!(
             "{} {}",
             self.money(value),
@@ -421,11 +417,7 @@ pub(super) fn buttons(buttons: Html) -> Result<Html> {
 }
 
 impl Figures {
-    pub(super) fn with_currency_opt(
-        &self,
-        value: Option<Money>,
-        fallback: &str,
-    ) -> String {
+    pub(super) fn with_currency_opt(&self, value: Option<Money>, fallback: &str) -> String {
         value.map_or_else(|| "—".into(), |m| self.with_currency(m, fallback))
     }
 }

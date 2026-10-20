@@ -122,7 +122,7 @@ The ledger has pages so a person without an AI agent can do the same daily work.
 
 | Menu (Finance, under Bookkeeping) | Route | What a person does there |
 | --- | --- | --- |
-| Book | `/finance/ledger/book` | Reads the currency and decimal places. Opens the book once. Sees whether controlled bookkeeping and separation of duties are on. |
+| Book | `/finance/ledger/book` | Reads the currency and decimal places. Opens the book once, asking who approves. Sees whether controlled bookkeeping and separation of duties are on. |
 | Chart of accounts | `/finance/ledger/accounts` | Searches and filters the chart, adds an account in a dialog. |
 | (account record) | `/finance/ledger/accounts/{id}` | Edits the name and group in place, deactivates or activates the account, marks the retained earnings account, reads today's balance. |
 | Journal entries | `/finance/ledger/entries` | Lists entries oldest first, 100 at a time, by date or account. |
