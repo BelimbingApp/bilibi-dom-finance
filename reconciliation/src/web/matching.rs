@@ -6,9 +6,8 @@
 //! capability, and the dialog holds the match it unmatches, never an id the
 //! browser sends with the reason.
 use super::{
-    clear_flash, company, event_type, flash_map,
-    format::told,
-    record_id, render, Follow, Pages, DENIED,
+    clear_flash, company, event_type, flash_map, format::told, record_id, render, Follow, Pages,
+    DENIED,
 };
 use crate::{
     BankAccount, LedgerItem, Match, MatchStatus, NewMatch, PageOptions, StatementLineItem,

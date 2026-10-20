@@ -1,9 +1,5 @@
 //! Mirrors Bilimbi `Finance.Reconciliation.Web.ImportLive`.
-use super::{
-    clear_flash, company, event_type, flash_map,
-    format::told,
-    render, Pages, DENIED,
-};
+use super::{clear_flash, company, event_type, flash_map, format::told, render, Pages, DENIED};
 use crate::{
     BankAccount, BankReconciliation, NewReconciliation, PageOptions, ReconciliationStatus,
     Statement, IMPORT_STATEMENTS, MANAGE_RECONCILIATIONS, STATEMENT_SOURCE,
@@ -263,9 +259,7 @@ impl Account {
                 self.draft.insert(
                     "statement_balance".into(),
                     s.closing_balance
-                        .and_then(|m| {
-                            MinorUnits::new(i64::from(units)).map(|minor| m.shown(minor))
-                        })
+                        .and_then(|m| MinorUnits::new(i64::from(units)).map(|minor| m.shown(minor)))
                         .unwrap_or_default(),
                 );
             }

@@ -6,11 +6,7 @@
 //! difference is zero or abandoned with a reason; a finalised one shows the
 //! figures and items it was finalised with, which never change. Every write is
 //! a facade call that re-asks its capability.
-use super::{
-    clear_flash, company, event_type, flash_map,
-    format::told,
-    render, Follow, Pages,
-};
+use super::{clear_flash, company, event_type, flash_map, format::told, render, Follow, Pages};
 use crate::{
     BankAccount, BankReconciliation, ItemKind, PostLine, ReconciliationStatus,
     FINALISE_RECONCILIATIONS, MANAGE_RECONCILIATIONS, POST_STATEMENT_LINES,
@@ -411,7 +407,9 @@ impl Detail {
             value: render(Figure {
                 text: format!(
                     "{} {}",
-                    report.statement_balance.display(MinorUnits::new(i64::from(units))),
+                    report
+                        .statement_balance
+                        .display(MinorUnits::new(i64::from(units))),
                     figures.map_or("", |f| f.currency_code.as_str())
                 ),
                 badge: None,
