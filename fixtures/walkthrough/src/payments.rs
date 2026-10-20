@@ -9,8 +9,8 @@ use bilibi_finance_ledger::{
 };
 use bilibi_finance_payables::{
     AgingQuery, AllocationInput, Document, DocumentLineInput, NewDocument, NewPayment, NewTaxCode,
-    Party, Payables, PayablesError, PaymentQuery, PaymentRequestQuery, Settings, SettingsInput,
-    TaxCodeDetails, TaxQuery, PAYMENT_SOURCE,
+    Party, Payables, PayablesError, PaymentQuery, PaymentRequestPageQuery, PaymentRequestQuery,
+    Settings, SettingsInput, TaxCodeDetails, TaxQuery, PAYMENT_SOURCE,
 };
 use bilibi_module_registry::Services;
 use bilibi_tenancy::{Authentication, Scope};
@@ -638,6 +638,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
                 status: Some("rejected".into()),
                 after: Some(0),
                 limit: Some(1),
+                ..Default::default()
             },
         )
         .await?;
@@ -651,11 +652,240 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
                 status: Some("rejected".into()),
                 after: Some(cursor),
                 limit: Some(1),
+                ..Default::default()
             },
         )
         .await?;
     assert_eq!(next_page.len(), 1);
     assert!(next_page[0].request_number > cursor);
+
+    // Newest first is the oldest-first order reversed, and a cursor continues it.
+    let oldest = p
+        .list_payment_requests(
+            &manager,
+            COMPANY,
+            &PaymentRequestQuery {
+                limit: Some(500),
+                ..Default::default()
+            },
+        )
+        .await?;
+    let newest = p
+        .list_payment_requests(
+            &manager,
+            COMPANY,
+            &PaymentRequestQuery {
+                limit: Some(500),
+                newest_first: true,
+                ..Default::default()
+            },
+        )
+        .await?;
+    assert!(oldest.len() > 2);
+    assert_eq!(
+        newest.iter().map(|r| r.id).collect::<Vec<_>>(),
+        oldest.iter().rev().map(|r| r.id).collect::<Vec<_>>()
+    );
+    let top = p
+        .list_payment_requests(
+            &manager,
+            COMPANY,
+            &PaymentRequestQuery {
+                limit: Some(1),
+                newest_first: true,
+                ..Default::default()
+            },
+        )
+        .await?;
+    assert_eq!(top[0].id, newest[0].id);
+    let below = p
+        .list_payment_requests(
+            &manager,
+            COMPANY,
+            &PaymentRequestQuery {
+                after: Some(top[0].request_number),
+                limit: Some(1),
+                newest_first: true,
+                ..Default::default()
+            },
+        )
+        .await?;
+    assert_eq!(below[0].id, newest[1].id);
+    let oldest_payments = p
+        .list_payments(&manager, COMPANY, &PaymentQuery::default())
+        .await?;
+    let newest_payments = p
+        .list_payments(
+            &manager,
+            COMPANY,
+            &PaymentQuery {
+                newest_first: true,
+                ..Default::default()
+            },
+        )
+        .await?;
+    assert!(oldest_payments.len() > 2);
+    assert_eq!(
+        newest_payments.iter().map(|x| x.id).collect::<Vec<_>>(),
+        oldest_payments
+            .iter()
+            .rev()
+            .map(|x| x.id)
+            .collect::<Vec<_>>()
+    );
+    let latest = &newest_payments[0];
+    let before_latest = p
+        .list_payments(
+            &manager,
+            COMPANY,
+            &PaymentQuery {
+                after: Some((latest.payment_date, latest.id)),
+                limit: Some(1),
+                newest_first: true,
+                ..Default::default()
+            },
+        )
+        .await?;
+    assert_eq!(before_latest[0].id, newest_payments[1].id);
+
+    // A page of requests is newest first with the company's whole count, so
+    // a page past the first still shows the requests the first one does not.
+    for i in 0..26 {
+        let mut paging = request(b2.id, bank.id, money("1"), date(2026, 12, 31));
+        paging.reference = Some(format!("NP3 paging proof {i}"));
+        p.submit_payment(&manager, COMPANY, &paging).await?;
+    }
+    let first = p
+        .page_payment_requests(&manager, COMPANY, &PaymentRequestPageQuery::default())
+        .await?;
+    assert_eq!(first.requests.len(), 25);
+    assert!(first.total > 25);
+    assert_eq!(
+        first.requests[0].reference.as_deref(),
+        Some("NP3 paging proof 25")
+    );
+    assert!(first
+        .requests
+        .windows(2)
+        .all(|w| w[0].request_number > w[1].request_number));
+    let second = p
+        .page_payment_requests(
+            &manager,
+            COMPANY,
+            &PaymentRequestPageQuery {
+                page: 2,
+                ..Default::default()
+            },
+        )
+        .await?;
+    assert_eq!(second.total, first.total);
+    assert!(!second.requests.is_empty());
+    assert!(second.requests[0].request_number < first.requests[24].request_number);
+    let beyond = p
+        .page_payment_requests(
+            &manager,
+            COMPANY,
+            &PaymentRequestPageQuery {
+                page: 99,
+                ..Default::default()
+            },
+        )
+        .await?;
+    assert_eq!(beyond.page, (first.total + 24) / 25);
+    assert!(beyond.requests.iter().any(|r| r.id == oldest[0].id));
+    let searched = p
+        .page_payment_requests(
+            &manager,
+            COMPANY,
+            &PaymentRequestPageQuery {
+                search: "PAGING PROOF".into(),
+                ..Default::default()
+            },
+        )
+        .await?;
+    assert_eq!(searched.total, 26);
+    let decided = p
+        .page_payment_requests(
+            &manager,
+            COMPANY,
+            &PaymentRequestPageQuery {
+                status: Some("rejected".into()),
+                ..Default::default()
+            },
+        )
+        .await?;
+    assert!(decided.requests.iter().any(|r| r.id == loser));
+    assert!(decided.requests.iter().all(|r| r.status == "rejected"));
+    refused(
+        "payment request page size",
+        p.page_payment_requests(
+            &manager,
+            COMPANY,
+            &PaymentRequestPageQuery {
+                page_size: 7,
+                ..Default::default()
+            },
+        )
+        .await,
+        |e| matches!(e, PayablesError::InvalidOption),
+    )?;
+
+    // Correcting a draft is one step: a refused replacement leaves the draft
+    // as it was, and an accepted one frees the supplier's invoice number.
+    let draft = p
+        .create_bill(
+            &manager,
+            COMPANY,
+            &bill_input("NP3-REPLACE", expense.id, money("5")),
+        )
+        .await?;
+    let corrected = bill_input("NP3-REPLACE", expense.id, money("6"));
+    refused(
+        "duplicate invoice number",
+        p.create_bill(&manager, COMPANY, &corrected).await,
+        |e| matches!(e, PayablesError::Invalid(_)),
+    )?;
+    let mut refused_draft = corrected.clone();
+    refused_draft.lines[0].account_id = payable.id;
+    refused(
+        "refused replacement",
+        p.replace_draft(&manager, COMPANY, draft.id, &refused_draft)
+            .await,
+        |e| matches!(e, PayablesError::Invalid(_)),
+    )?;
+    assert_eq!(
+        p.get_document(&manager, COMPANY, draft.id).await?.status,
+        "draft"
+    );
+    refused(
+        "foreign tenant cannot replace",
+        p.replace_draft(&foreign, COMPANY, draft.id, &corrected)
+            .await,
+        |e| {
+            matches!(
+                e,
+                PayablesError::Unauthorized | PayablesError::CompanyNotFound
+            )
+        },
+    )?;
+    let replacement = p
+        .replace_draft(&manager, COMPANY, draft.id, &corrected)
+        .await?;
+    assert_eq!(replacement.status, "draft");
+    assert_ne!(replacement.id, draft.id);
+    assert_eq!(replacement.total, money("6"));
+    let old = p.get_document(&manager, COMPANY, draft.id).await?;
+    assert_eq!(old.status, "voided");
+    assert_eq!(
+        old.void_reason.as_deref(),
+        Some("Replaced by a corrected draft.")
+    );
+    refused(
+        "replace a voided draft",
+        p.replace_draft(&manager, COMPANY, draft.id, &corrected)
+            .await,
+        |e| matches!(e, PayablesError::NotDraft),
+    )?;
 
     for dataset in p.evidence_datasets() {
         let page = p

@@ -10,6 +10,9 @@ use bilibi_finance_ledger::{
 use rust_decimal::RoundingStrategy;
 use serde_json::json;
 
+/// Why a corrected draft's predecessor is voided.
+pub(super) const REPLACED: &str = "Replaced by a corrected draft.";
+
 pub(super) enum PreparedPosting {
     Held(Document, Vec<MatchLine>),
     Post {
@@ -54,6 +57,24 @@ async fn note_capacity(
         return Err(PayablesError::ExceedsOutstanding);
     }
     Ok(json!({"bill_id":bill,"as_of":as_of.to_string(),"lowest_outstanding":lowest}))
+}
+/// The draft bill a corrected draft replaces.
+pub(super) async fn replaceable(
+    c: &dyn OperationClient,
+    tenant: i64,
+    company: i64,
+    id: i64,
+) -> Result<Document> {
+    let d = store::document_record(c, tenant, company, id)
+        .await?
+        .ok_or(PayablesError::DocumentNotFound)?;
+    if d.document_type != "bill" {
+        return Err(invalid("document_id", "is not a bill"));
+    }
+    if d.status != "draft" {
+        return Err(PayablesError::NotDraft);
+    }
+    Ok(d)
 }
 fn filters(kind: &Option<String>, status: &Option<String>) -> Result<()> {
     if kind
@@ -118,6 +139,7 @@ impl Payables {
         company: i64,
         bill: Option<i64>,
         input: &NewDocument,
+        replacing: Option<i64>,
     ) -> Result<(
         serde_json::Value,
         Vec<serde_json::Value>,
@@ -163,7 +185,7 @@ impl Payables {
         if due < input.document_date {
             return Err(invalid("due_date", "cannot be before the document date"));
         }
-        if bill.is_none() && c.query_opt("SELECT id FROM finance_payables_documents WHERE tenant_id=$1 AND company_id=$2 AND party_key=$3 AND party_document_number=$4 AND document_type='bill' AND status<>'voided'",&[&tenant,&company,&key,&number]).await?.is_some() {
+        if bill.is_none() && c.query_opt("SELECT id FROM finance_payables_documents WHERE tenant_id=$1 AND company_id=$2 AND party_key=$3 AND party_document_number=$4 AND document_type='bill' AND status<>'voided' AND id<>COALESCE($5::bigint,0)",&[&tenant,&company,&key,&number,&replacing]).await?.is_some() {
             return Err(invalid("party_document_number","is already recorded for this party"));
         }
         let book = self.ledger.get_book_on(c, s, company).await?;
@@ -330,7 +352,7 @@ impl Payables {
     ) -> Result<Document> {
         join(tx, s, company, CREATE_DOCUMENTS).await?;
         let (header, lines, taxes, _) = self
-            .prepare_document(tx.sql(), s, company, bill, input)
+            .prepare_document(tx.sql(), s, company, bill, input, None)
             .await?;
         let tenant = s.tenant();
         let document = tx
@@ -355,6 +377,49 @@ impl Payables {
             })
             .await?;
         Ok(document)
+    }
+    /// Voids a draft bill and records its corrected draft in one audited
+    /// transaction, so a refused replacement leaves the draft as it was and
+    /// the supplier's invoice number stays free for the replacement.
+    pub async fn replace_draft(
+        &self,
+        s: &Scope,
+        company: i64,
+        id: i64,
+        input: &NewDocument,
+    ) -> Result<Document> {
+        let mut c = self.db.get().await.map_err(Error::from)?;
+        let mut tx = self
+            .write_all(
+                &mut c,
+                s,
+                company,
+                &[CREATE_DOCUMENTS, APPROVE_DOCUMENTS],
+                "finance.payables.replace_draft",
+            )
+            .await?;
+        let result = self
+            .replace_draft_on(&mut tx, s, company, id, input)
+            .await?;
+        tx.commit().await?;
+        Ok(result)
+    }
+    pub(super) async fn replace_draft_on(
+        &self,
+        tx: &mut MutationTransaction<'_>,
+        s: &Scope,
+        company: i64,
+        id: i64,
+        input: &NewDocument,
+    ) -> Result<Document> {
+        join(tx, s, company, CREATE_DOCUMENTS).await?;
+        join(tx, s, company, APPROVE_DOCUMENTS).await?;
+        let old = replaceable(tx.sql(), s.tenant(), company, id).await?;
+        self.prepare_document(tx.sql(), s, company, None, input, Some(old.id))
+            .await?;
+        self.void_document_on(tx, s, company, old.id, REPLACED)
+            .await?;
+        self.create_document_on(tx, s, company, None, input).await
     }
     pub async fn approve_document(&self, s: &Scope, company: i64, id: i64) -> Result<Document> {
         let mut c = self.db.get().await.map_err(Error::from)?;

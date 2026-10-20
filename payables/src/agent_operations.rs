@@ -293,6 +293,7 @@ enum Write {
     TaxCreate,
     TaxUpdate,
     Bill,
+    Replace,
     Note,
     Approve,
     Post,
@@ -306,7 +307,7 @@ impl Write {
     fn capability(self) -> &'static str {
         match self {
             Self::Settings | Self::TaxCreate | Self::TaxUpdate => MANAGE_SETTINGS,
-            Self::Bill | Self::Note => CREATE_DOCUMENTS,
+            Self::Bill | Self::Replace | Self::Note => CREATE_DOCUMENTS,
             Self::Approve | Self::Void => APPROVE_DOCUMENTS,
             Self::Post => POST_DOCUMENTS,
             Self::Submit => SUBMIT_PAYMENTS,
@@ -324,6 +325,9 @@ impl Write {
         let p = owner()?;
         let company = id(v, "company_id")?;
         authorize_on(c, s, company, self.capability()).await?;
+        if matches!(self, Self::Replace) {
+            authorize_on(c, s, company, APPROVE_DOCUMENTS).await?;
+        }
         // Same connection and lock as the facade, no business writes. NOWAIT
         // also prevents opposite-company plans from waiting on one another.
         let row = c.query_opt("SELECT status FROM companies WHERE tenant_id=$1 AND id=$2 AND deleted_at IS NULL FOR UPDATE NOWAIT",&[&s.tenant(),&company]).await?.ok_or(PayablesError::CompanyNotFound)?;
@@ -350,13 +354,33 @@ impl Write {
                     .await?;
                 json!({"before":before,"after":after,"reason":reason,"accounts":p.ledger.list_accounts_on(c,s,company).await?})
             }
-            Self::Bill | Self::Note => {
+            Self::Bill | Self::Replace | Self::Note => {
                 let book = p.ledger.get_book_on(c, s, company).await?;
                 let input = document_input(v, book.minor_units)?;
+                let replaced = if matches!(self, Self::Replace) {
+                    Some(
+                        documents::replaceable(c, s.tenant(), company, id(v, "document_id")?)
+                            .await?,
+                    )
+                } else {
+                    None
+                };
                 let (header, lines, taxes, capacity) = p
-                    .prepare_document(c, s, company, v["bill_id"].as_i64(), &input)
+                    .prepare_document(
+                        c,
+                        s,
+                        company,
+                        v["bill_id"].as_i64(),
+                        &input,
+                        replaced.as_ref().map(|d| d.id),
+                    )
                     .await?;
-                json!({"document":header,"lines":lines,"tax_lines":taxes,"capacity":capacity,"book":book,"accounts":p.ledger.list_accounts_on(c,s,company).await?})
+                let mut review = json!({"document":header,"lines":lines,"tax_lines":taxes,"capacity":capacity,"book":book,"accounts":p.ledger.list_accounts_on(c,s,company).await?});
+                if let Some(old) = replaced {
+                    review["replaces"] = document_value(old);
+                    review["void_reason"] = json!(documents::REPLACED);
+                }
+                review
             }
             Self::Approve | Self::Void => {
                 let d = store::document_record(c, s.tenant(), company, id(v, "document_id")?)
@@ -595,6 +619,23 @@ impl WriteHandler for Write {
                             .await?
                         )
                     }
+                    Self::Replace => {
+                        let units = p
+                            .ledger
+                            .get_book_on(tx.sql(), s, company)
+                            .await?
+                            .minor_units;
+                        json!(
+                            p.replace_draft_on(
+                                tx,
+                                s,
+                                company,
+                                id(v, "document_id")?,
+                                &document_input(v, units)?
+                            )
+                            .await?
+                        )
+                    }
                     Self::Approve => json!(
                         p.approve_document_on(tx, s, company, id(v, "document_id")?)
                             .await?
@@ -661,7 +702,7 @@ impl WriteHandler for Write {
             let mut record = result.map_err(|e| error(e, self.array()))?;
             if matches!(
                 self,
-                Self::Bill | Self::Note | Self::Approve | Self::Post | Self::Void
+                Self::Bill | Self::Replace | Self::Note | Self::Approve | Self::Post | Self::Void
             ) {
                 let id = record["id"].as_i64().ok_or(Error::Internal)?;
                 record = document_value(
@@ -711,7 +752,11 @@ impl ReadHandler for Read {
                 authorize_on(c,s,company,VIEW).await?;
                 let tenant=s.tenant();
                 let limit=v["page_size"].as_i64().unwrap_or(100);
-                let after=v["after_id"].as_i64().unwrap_or(0);
+                // Requests and payments may list newest first: the cursor is then
+                // the lowest ID seen, and none starts from the newest.
+                let newest=matches!(self,Self::Requests|Self::Payments)&&v["newest_first"].as_bool()==Some(true);
+                let after=v["after_id"].as_i64().filter(|n|!newest||*n>0).unwrap_or(if newest {i64::MAX} else {0});
+                let (cmp,order)=if newest {("<","DESC")} else {(">","")};
                 let result=match self {
                     Self::Settings=>json!({"settings":store::settings(c,tenant,company).await?.map(|(_,s)|s)}),
                     Self::Document=>document_value(store::document_record(c,tenant,company,id(v,"document_id")?).await?.ok_or(PayablesError::DocumentNotFound)?),
@@ -722,10 +767,10 @@ impl ReadHandler for Read {
                         // Cursor and ordering use the same stable ID. These
                         // agent lists deliberately don't reuse page offsets.
                         let query=match self {
-                            Self::Taxes=>"SELECT id FROM finance_payables_tax_codes WHERE tenant_id=$1 AND company_id=$2 AND id>$3 ORDER BY id LIMIT $4",
-                            Self::Documents=>"SELECT id FROM finance_payables_documents WHERE tenant_id=$1 AND company_id=$2 AND id>$3 AND ($5::text IS NULL OR status=$5) AND ($6::text IS NULL OR party_key=$6) AND ($7::text IS NULL OR document_type=$7) AND ($8::bigint IS NULL OR corrects_document_id=$8) ORDER BY id LIMIT $4",
-                            Self::Requests=>"SELECT r.id FROM finance_payables_payment_requests r LEFT JOIN finance_payables_payment_request_events e ON e.tenant_id=r.tenant_id AND e.company_id=r.company_id AND e.request_id=r.id WHERE r.tenant_id=$1 AND r.company_id=$2 AND r.id>$3 AND ($5::text IS NULL OR COALESCE(e.event,'submitted')=$5) AND ($6::text IS NULL OR r.party_key=$6) ORDER BY r.id LIMIT $4",
-                            _=>"SELECT id FROM finance_payables_payments WHERE tenant_id=$1 AND company_id=$2 AND id>$3 AND ($5::text IS NULL OR party_key=$5) ORDER BY id LIMIT $4",
+                            Self::Taxes=>"SELECT id FROM finance_payables_tax_codes WHERE tenant_id=$1 AND company_id=$2 AND id>$3 ORDER BY id LIMIT $4".to_owned(),
+                            Self::Documents=>"SELECT id FROM finance_payables_documents WHERE tenant_id=$1 AND company_id=$2 AND id>$3 AND ($5::text IS NULL OR status=$5) AND ($6::text IS NULL OR party_key=$6) AND ($7::text IS NULL OR document_type=$7) AND ($8::bigint IS NULL OR corrects_document_id=$8) ORDER BY id LIMIT $4".to_owned(),
+                            Self::Requests=>format!("SELECT r.id FROM finance_payables_payment_requests r LEFT JOIN finance_payables_payment_request_events e ON e.tenant_id=r.tenant_id AND e.company_id=r.company_id AND e.request_id=r.id WHERE r.tenant_id=$1 AND r.company_id=$2 AND r.id{cmp}$3 AND ($5::text IS NULL OR COALESCE(e.event,'submitted')=$5) AND ($6::text IS NULL OR r.party_key=$6) ORDER BY r.id {order} LIMIT $4"),
+                            _=>format!("SELECT id FROM finance_payables_payments WHERE tenant_id=$1 AND company_id=$2 AND id{cmp}$3 AND ($5::text IS NULL OR party_key=$5) ORDER BY id {order} LIMIT $4"),
                         };
                         let n=limit+1;
                         let mut params:Vec<&(dyn tokio_postgres::types::ToSql+Sync)>=vec![&tenant,&company,&after,&n];
@@ -735,7 +780,7 @@ impl ReadHandler for Read {
                             Self::Payments => params.push(&party),
                             _ => {}
                         }
-                        let mut ids:Vec<i64>=c.query(query,&params).await?.iter().map(|r|r.get(0)).collect();
+                        let mut ids:Vec<i64>=c.query(&query,&params).await?.iter().map(|r|r.get(0)).collect();
                         let more=ids.len()>limit as usize; ids.truncate(limit as usize);
                         let next=if more {ids.last().copied()} else {None};
                         let mut records=Vec::new();
@@ -838,6 +883,15 @@ fn document_schema(note: bool) -> Value {
         )
     }
 }
+fn replace_schema() -> Value {
+    let mut schema = document_schema(false);
+    schema["properties"]["document_id"] = identifier();
+    schema["required"]
+        .as_array_mut()
+        .expect("required list")
+        .push(json!("document_id"));
+    schema
+}
 fn payment_schema() -> Value {
     schema(
         &[
@@ -872,6 +926,9 @@ fn list_schema(kind: &str) -> Value {
     if kind == "request" {
         props["status"] = json!({"type":"string","enum":["submitted","posted","rejected"]});
     }
+    if kind == "request" || kind == "payment" {
+        props["newest_first"] = boolean();
+    }
     schema(&[], props)
 }
 
@@ -882,13 +939,14 @@ inventory::submit! {Contribution::new(DEFINITIONS,"finance/payables.operations",
         Operation {key:"finance.payables.document.get",title:"Read a payable document",summary:"Read a bill or debit note, immutable line and tax snapshots, status and outstanding.",keywords:&[],capability:VIEW,input:document_id,output,handler:Handler::Read(&Read::Document),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.payables.document.list",title:"List payable documents",summary:"Read bills and debit notes by ID, optionally filtered by party, type and status.",keywords:&[],capability:VIEW,input:||list_schema("document"),output,handler:Handler::Read(&Read::Documents),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.payables.payment_request.get",title:"Read a payment request",summary:"Read retained allocations, submitter, decision and posted payment ID.",keywords:&[],capability:VIEW,input:request_id,output,handler:Handler::Read(&Read::Request),channels:Channels::Every,step_up:&[]},
-        Operation {key:"finance.payables.payment_request.list",title:"List payment requests",summary:"Read requests by ID with party and status filters and a bounded cursor.",keywords:&[],capability:VIEW,input:||list_schema("request"),output,handler:Handler::Read(&Read::Requests),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.payables.payment_request.list",title:"List payment requests",summary:"Read requests by ID, oldest first or with newest_first newest first, with party and status filters and a bounded cursor.",keywords:&[],capability:VIEW,input:||list_schema("request"),output,handler:Handler::Read(&Read::Requests),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.payables.payment.get",title:"Read a payable payment",summary:"Read a posted payment, allocations, entry and reversal identifiers.",keywords:&[],capability:VIEW,input:payment_id,output,handler:Handler::Read(&Read::Payment),channels:Channels::Every,step_up:&[]},
-        Operation {key:"finance.payables.payment.list",title:"List payable payments",summary:"Read payments and reversals by ID with a party filter and a bounded cursor.",keywords:&[],capability:VIEW,input:||list_schema("payment"),output,handler:Handler::Read(&Read::Payments),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.payables.payment.list",title:"List payable payments",summary:"Read payments and reversals by ID, oldest first or with newest_first newest first, with a party filter and a bounded cursor.",keywords:&[],capability:VIEW,input:||list_schema("payment"),output,handler:Handler::Read(&Read::Payments),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.payables.settings.put",title:"Configure payables",summary:"Set the active liability control account and tolerances. Omitted values preserve settings; explicit flags clear tolerances.",keywords:&[],capability:MANAGE_SETTINGS,input:settings_schema,output,handler:Handler::SafeWrite(&Write::Settings),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.payables.tax_code.create",title:"Create a payables tax code",summary:"Create a company-defined code, rate and account; keep an audited change history.",keywords:&[],capability:MANAGE_SETTINGS,input:||tax_schema(false),output,handler:Handler::SafeWrite(&Write::TaxCreate),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.payables.tax_code.update",title:"Change a payables tax code",summary:"Change name, rate, account or active flag; omissions preserve values and code is immutable.",keywords:&[],capability:MANAGE_SETTINGS,input:||tax_schema(true),output,handler:Handler::SafeWrite(&Write::TaxUpdate),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.payables.bill.create",title:"Record a bill",summary:"Freeze the party, positive net lines and tax snapshots in a draft without posting.",keywords:&[],capability:CREATE_DOCUMENTS,input:||document_schema(false),output,handler:Handler::SafeWrite(&Write::Bill),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.payables.bill.replace_draft",title:"Replace a draft bill",summary:"Void a draft bill and record its corrected draft in one step: if the corrected draft is refused, the draft is left as it was, and its supplier invoice number may be reused.",keywords:&[],capability:CREATE_DOCUMENTS,input:replace_schema,output,handler:Handler::SafeWrite(&Write::Replace),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.payables.debit_note.create",title:"Record a debit note",summary:"Draft a reduction against a posted bill, retaining its party and respecting future outstanding balances.",keywords:&[],capability:CREATE_DOCUMENTS,input:||document_schema(true),output,handler:Handler::SafeWrite(&Write::Note),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.payables.document.approve",title:"Approve a payable document",summary:"Approve a draft through separation of duties; no accounting entry is posted yet.",keywords:&[],capability:APPROVE_DOCUMENTS,input:document_id,output,handler:Handler::SafeWrite(&Write::Approve),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.payables.document.post",title:"Post a payable document",summary:"Match an approved or held bill; record a hold or post its owned entry atomically. Actual posting requires ledger capability and an open period.",keywords:&[],capability:POST_DOCUMENTS,input:document_id,output,handler:Handler::SafeWrite(&Write::Post),channels:Channels::Every,step_up:&[]},

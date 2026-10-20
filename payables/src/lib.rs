@@ -9,7 +9,7 @@ mod documents;
 mod payments;
 pub use payments::{
     Allocation, AllocationInput, NewPayment, Payment, PaymentDecision, PaymentQuery,
-    PaymentRequest, PaymentRequestQuery,
+    PaymentRequest, PaymentRequestPage, PaymentRequestPageQuery, PaymentRequestQuery,
 };
 mod balances;
 pub use balances::{
@@ -410,8 +410,19 @@ impl Payables {
         capability: &str,
         action: &str,
     ) -> Result<MutationTransaction<'c>> {
+        self.write_all(client, scope, company, &[capability], action)
+            .await
+    }
+    async fn write_all<'c>(
+        &self,
+        client: &'c mut tokio_postgres::Client,
+        scope: &Scope,
+        company: i64,
+        capabilities: &[&str],
+        action: &str,
+    ) -> Result<MutationTransaction<'c>> {
         self.ledger
-            .write(client, scope, company, &[capability], action)
+            .write(client, scope, company, capabilities, action)
             .await
             .map_err(|e| match e {
                 LedgerError::Unauthorized => PayablesError::Unauthorized,

@@ -81,12 +81,20 @@ pub struct Payment {
     pub posted_at: String,
     pub allocations: Vec<Allocation>,
 }
+/// Oldest first by request number, `after` being the last number seen. With
+/// `newest_first` the order is reversed and `after` is the last (lowest)
+/// number seen, so the next page holds the lower ones; no `after` starts at
+/// the newest.
 #[derive(Clone, Debug, Default)]
 pub struct PaymentRequestQuery {
     pub status: Option<String>,
     pub after: Option<i64>,
     pub limit: Option<i64>,
+    pub newest_first: bool,
 }
+/// Oldest first by `(payment_date, id)`, `after` being the last pair seen.
+/// With `newest_first` the order is reversed and `after` is the last (lowest)
+/// pair seen; no `after` starts at the newest.
 #[derive(Clone, Debug, Default)]
 pub struct PaymentQuery {
     pub party_key: Option<String>,
@@ -95,6 +103,34 @@ pub struct PaymentQuery {
     pub to: Option<Date>,
     pub after: Option<(Date, i64)>,
     pub limit: Option<i64>,
+    pub newest_first: bool,
+}
+/// One page of payment requests, newest first, by page number and size.
+#[derive(Clone, Debug)]
+pub struct PaymentRequestPageQuery {
+    pub status: Option<String>,
+    /// Case-insensitive literal search in the supplier's name and code, the
+    /// reference and the request number (up to 255 characters).
+    pub search: String,
+    pub page: i64,
+    pub page_size: i64,
+}
+impl Default for PaymentRequestPageQuery {
+    fn default() -> Self {
+        Self {
+            status: None,
+            search: String::new(),
+            page: 1,
+            page_size: 25,
+        }
+    }
+}
+#[derive(Clone, Debug)]
+pub struct PaymentRequestPage {
+    pub requests: Vec<PaymentRequest>,
+    pub total: i64,
+    pub page: i64,
+    pub page_size: i64,
 }
 
 fn limit(value: Option<i64>) -> Result<i64> {
@@ -463,19 +499,51 @@ impl Payables {
         let c = self.db.get().await.map_err(Error::from)?;
         authorize(&**c, s, company, VIEW).await?;
         let n = limit(q.limit)?;
-        if q.after.is_some_and(|a| a < 0)
-            || q.status
-                .as_ref()
-                .is_some_and(|v| !Self::payment_request_statuses().contains(&v.as_str()))
-        {
+        if q.after.is_some_and(|a| a < 0) || !valid_status(&q.status) {
             return Err(PayablesError::InvalidOption);
         }
-        let rows=c.query("SELECT r.id FROM finance_payables_payment_requests r LEFT JOIN finance_payables_payment_request_events e ON e.tenant_id=r.tenant_id AND e.company_id=r.company_id AND e.request_id=r.id WHERE r.tenant_id=$1 AND r.company_id=$2 AND ($3::text IS NULL OR COALESCE(e.event,'submitted')=$3) AND r.request_number>COALESCE($4::bigint,0) ORDER BY r.request_number LIMIT $5",&[&s.tenant(),&company,&q.status,&q.after,&n]).await?;
+        let (cmp, order) = if q.newest_first {
+            ("<", "DESC")
+        } else {
+            (">", "")
+        };
+        let rows=c.query(&format!("SELECT r.id FROM finance_payables_payment_requests r LEFT JOIN finance_payables_payment_request_events e ON e.tenant_id=r.tenant_id AND e.company_id=r.company_id AND e.request_id=r.id WHERE r.tenant_id=$1 AND r.company_id=$2 AND ($3::text IS NULL OR COALESCE(e.event,'submitted')=$3) AND ($4::bigint IS NULL OR r.request_number{cmp}$4) ORDER BY r.request_number {order} LIMIT $5"),&[&s.tenant(),&company,&q.status,&q.after,&n]).await?;
         let mut result = Vec::new();
         for row in rows {
             result.push(request(&**c, s.tenant(), company, row.get(0)).await?);
         }
         Ok(result)
+    }
+    pub async fn page_payment_requests(
+        &self,
+        s: &Scope,
+        company: i64,
+        q: &PaymentRequestPageQuery,
+    ) -> Result<PaymentRequestPage> {
+        let c = self.db.get().await.map_err(Error::from)?;
+        authorize(&**c, s, company, VIEW).await?;
+        if q.page < 1
+            || ![25, 50, 100].contains(&q.page_size)
+            || q.search.chars().count() > 255
+            || !valid_status(&q.status)
+        {
+            return Err(PayablesError::InvalidOption);
+        }
+        let search = q.search.trim();
+        let total: i64=c.query_one("SELECT count(*) FROM finance_payables_payment_requests r LEFT JOIN finance_payables_payment_request_events e ON e.tenant_id=r.tenant_id AND e.company_id=r.company_id AND e.request_id=r.id WHERE r.tenant_id=$1 AND r.company_id=$2 AND ($3::text IS NULL OR COALESCE(e.event,'submitted')=$3) AND (strpos(lower(r.party_name),lower($4))>0 OR strpos(lower(r.party_key),lower($4))>0 OR strpos(lower(COALESCE(r.reference,'')),lower($4))>0 OR strpos(r.request_number::text,$4)>0)",&[&s.tenant(),&company,&q.status,&search]).await?.get(0);
+        let page = q.page.min(((total + q.page_size - 1) / q.page_size).max(1));
+        let offset = (page - 1) * q.page_size;
+        let rows=c.query("SELECT r.id FROM finance_payables_payment_requests r LEFT JOIN finance_payables_payment_request_events e ON e.tenant_id=r.tenant_id AND e.company_id=r.company_id AND e.request_id=r.id WHERE r.tenant_id=$1 AND r.company_id=$2 AND ($3::text IS NULL OR COALESCE(e.event,'submitted')=$3) AND (strpos(lower(r.party_name),lower($4))>0 OR strpos(lower(r.party_key),lower($4))>0 OR strpos(lower(COALESCE(r.reference,'')),lower($4))>0 OR strpos(r.request_number::text,$4)>0) ORDER BY r.request_number DESC LIMIT $5 OFFSET $6",&[&s.tenant(),&company,&q.status,&search,&q.page_size,&offset]).await?;
+        let mut requests = Vec::new();
+        for row in rows {
+            requests.push(request(&**c, s.tenant(), company, row.get(0)).await?);
+        }
+        Ok(PaymentRequestPage {
+            requests,
+            total,
+            page,
+            page_size: q.page_size,
+        })
     }
     pub async fn list_payments(
         &self,
@@ -489,17 +557,27 @@ impl Payables {
         if q.from.zip(q.to).is_some_and(|(f, t)| f > t) || q.after.is_some_and(|(_, id)| id <= 0) {
             return Err(PayablesError::InvalidOption);
         }
+        let (cmp, order) = if q.newest_first {
+            ("<", "DESC")
+        } else {
+            (">", "")
+        };
         let from = q.from.map(|d| d.to_string());
         let to = q.to.map(|d| d.to_string());
         let after = q.after.map(|(d, _)| d.to_string());
         let after_id = q.after.map(|(_, id)| id);
-        let rows=c.query("SELECT p.id FROM finance_payables_payments p WHERE p.tenant_id=$1 AND p.company_id=$2 AND ($3::text IS NULL OR p.party_key=$3) AND ($4::bigint IS NULL OR EXISTS (SELECT 1 FROM finance_payables_payment_allocations a WHERE a.tenant_id=p.tenant_id AND a.company_id=p.company_id AND a.document_id=$4 AND a.payment_id=COALESCE(p.reverses_payment_id,p.id))) AND ($5::text IS NULL OR p.payment_date >= $5::text::date) AND ($6::text IS NULL OR p.payment_date <= $6::text::date) AND ($7::text IS NULL OR (p.payment_date,p.id)>($7::text::date,$8)) ORDER BY p.payment_date,p.id LIMIT $9",&[&s.tenant(),&company,&q.party_key,&q.document_id,&from,&to,&after,&after_id,&n]).await?;
+        let rows=c.query(&format!("SELECT p.id FROM finance_payables_payments p WHERE p.tenant_id=$1 AND p.company_id=$2 AND ($3::text IS NULL OR p.party_key=$3) AND ($4::bigint IS NULL OR EXISTS (SELECT 1 FROM finance_payables_payment_allocations a WHERE a.tenant_id=p.tenant_id AND a.company_id=p.company_id AND a.document_id=$4 AND a.payment_id=COALESCE(p.reverses_payment_id,p.id))) AND ($5::text IS NULL OR p.payment_date >= $5::text::date) AND ($6::text IS NULL OR p.payment_date <= $6::text::date) AND ($7::text IS NULL OR (p.payment_date,p.id){cmp}($7::text::date,$8)) ORDER BY p.payment_date {order},p.id {order} LIMIT $9"),&[&s.tenant(),&company,&q.party_key,&q.document_id,&from,&to,&after,&after_id,&n]).await?;
         let mut result = Vec::new();
         for row in rows {
             result.push(payment(&**c, s.tenant(), company, row.get(0)).await?);
         }
         Ok(result)
     }
+}
+fn valid_status(status: &Option<String>) -> bool {
+    status
+        .as_ref()
+        .is_none_or(|v| Payables::payment_request_statuses().contains(&v.as_str()))
 }
 pub(super) fn approval(r: &PaymentRequest, override_reason: Option<String>) -> Approval {
     Approval {

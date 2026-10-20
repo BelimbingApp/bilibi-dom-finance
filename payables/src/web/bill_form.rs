@@ -1,7 +1,8 @@
 //! Recording a bill or a debit note, and correcting a draft. Bilimbi recorded
 //! documents through its API; this page saves the same draft through the
-//! `finance.payables.bill.create` and `.debit_note.create` contracts the agent
-//! doors call, and leaves approving and posting to the bill's own page.
+//! `finance.payables.bill.create`, `.bill.replace_draft` and
+//! `.debit_note.create` contracts the agent doors call, and leaves approving
+//! and posting to the bill's own page.
 use super::{company, format as f, record_id, render, Pages, Written, INDEX};
 use crate::{Document, DocumentPageQuery, Party, TaxCode, APPROVE_DOCUMENTS, CREATE_DOCUMENTS};
 use askama::Template;
@@ -440,42 +441,20 @@ impl BillForm {
             self.notice = Some("Choose a company first.".into());
             return Ok(None);
         };
-        // A draft cannot be edited: the corrected one replaces it, so the
-        // old draft is voided first (the supplier's invoice number is only
-        // free once it is).
-        if let Some(old) = self.correcting {
-            let voided = self
-                .pages
-                .write(
-                    scope,
-                    credential,
-                    "save",
-                    "finance.payables.document.void",
-                    json!({"company_id": company, "document_id": old, "void_reason": "Replaced by a corrected draft."}),
-                )
-                .await?;
-            match voided {
-                Written::Done(_) => self.correcting = None,
-                Written::Forbidden => {
-                    self.notice = Some(
-                        "You do not have permission to void the draft this one replaces.".into(),
-                    );
-                    return Ok(None);
-                }
-                Written::Fields(_) | Written::Changed => {
-                    self.notice = Some("The draft can no longer be replaced: it was approved or voided while you were editing. Open it again to see where it stands.".into());
-                    return Ok(None);
-                }
-            }
-        }
-        let contract = if self.note {
-            "finance.payables.debit_note.create"
+        // A draft cannot be edited: the corrected one replaces it, voiding the
+        // old draft in the same step, so a refusal leaves the old draft as it was.
+        let (contract, input) = if self.note {
+            ("finance.payables.debit_note.create", self.input(company))
+        } else if let Some(old) = self.correcting {
+            let mut input = self.input(company);
+            input["document_id"] = json!(old);
+            ("finance.payables.bill.replace_draft", input)
         } else {
-            "finance.payables.bill.create"
+            ("finance.payables.bill.create", self.input(company))
         };
         let written = self
             .pages
-            .write(scope, credential, "save", contract, self.input(company))
+            .write(scope, credential, "save", contract, input)
             .await?;
         match written {
             Written::Done(result) => {
@@ -483,10 +462,16 @@ impl BillForm {
                 Ok(id.map(|id| format!("{INDEX}/{id}")))
             }
             Written::Forbidden => {
-                self.notice = Some(format!(
-                    "You do not have permission to record {}.",
-                    if self.note { "debit notes" } else { "bills" }
-                ));
+                self.notice = Some(
+                    if self.correcting.is_some() {
+                        "You do not have permission to replace this draft."
+                    } else if self.note {
+                        "You do not have permission to record debit notes."
+                    } else {
+                        "You do not have permission to record bills."
+                    }
+                    .into(),
+                );
                 Ok(None)
             }
             Written::Changed => {
@@ -512,12 +497,6 @@ impl BillForm {
                 if self.notice.is_none() && self.errors.is_empty() {
                     self.notice =
                         Some("The document was not saved. Check the form and try again.".into());
-                }
-                if self.for_bill.is_none() && self.correcting.is_none() && self.source.is_some() {
-                    self.notice = Some(format!(
-                        "The old draft is already voided. {}",
-                        self.notice.take().unwrap_or_default()
-                    ));
                 }
                 Ok(None)
             }
@@ -758,7 +737,7 @@ impl BillForm {
             .transpose()?;
         let replaces = match (&self.source, self.note, self.correcting) {
             (Some(old), false, Some(_)) => Some(format!(
-                "Saving replaces draft #{}: it is voided and this version is recorded in its place.",
+                "Saving replaces draft #{} with this version. If it is refused, that draft stays as it is.",
                 old.id
             )),
             _ => None,
