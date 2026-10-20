@@ -601,8 +601,20 @@ pub(crate) fn shell(
     id: &str,
     variant: bilibi_ui::PageVariant,
     flash: &Flash,
-    body: Html,
+    mut body: Html,
 ) -> Result<String> {
+    if flash
+        .map()
+        .error
+        .contains("/finance/reports/approval-exceptions")
+    {
+        body.push(&render(bilibi_ui::Button {
+            id: "ledger-approval-settings",
+            href: "/finance/reports/approval-exceptions",
+            body: Html::text("Approval exceptions"),
+            ..bilibi_ui::Button::default()
+        })?);
+    }
     let mut html = render(FlashGroup {
         id: "flash-group",
         flash: flash.map(),

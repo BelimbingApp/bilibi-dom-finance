@@ -60,6 +60,7 @@ inventory::submit! { Module {
         ledger: s.get(bilibi_finance_ledger::SERVICE)?,
         order_source: orders::available(&*s.get::<bilibi_events::Events>(bilibi_events::SERVICE)?),
     }); agent_operations::bind(payables.clone(), s.get("base/tenancy.parties")?)?; Ok(payables) } }, Service { id: web::PAGES, factory: |s| Ok(Arc::new(bilibi_ui::page::PageService::<Scope, Error>(Arc::new(web::Pages {
+        contracts: s.get(bilibi_agent_api::page::SERVICE)?,
         db: s.get::<Db>("base/database.pool")?.as_ref().clone(),
         payables: s.get(SERVICE)?,
         ledger: s.get(bilibi_finance_ledger::SERVICE)?,

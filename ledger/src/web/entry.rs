@@ -403,6 +403,7 @@ impl Entry {
                 .id("ledger-reverse-date")
                 .label("Date of the reversal")
                 .kind(InputKind::Date)
+                .hint("Use the date order shown in the box. Dates are saved as YYYY-MM-DD.")
                 .value(&reverse.date)
                 .required()
                 .hint("Not before the date of the entry. The period of this date must be open.")

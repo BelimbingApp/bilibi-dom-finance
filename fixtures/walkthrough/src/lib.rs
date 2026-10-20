@@ -455,3 +455,6 @@ pub mod einvoice_pages;
 
 // NU1: records for the combined, disposable browser sweep.
 pub mod browser;
+
+// First-adopter setup and shared operation-transaction proofs.
+pub mod adopter_setup;

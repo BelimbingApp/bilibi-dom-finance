@@ -363,3 +363,56 @@ inventory::submit! { bilibi_module_registry::Contribution::new(bilibi_module_reg
         reason: "Approving match exceptions writes through the Payables facade: there is no match-override contract yet.",
     },
 }) }
+
+impl Pages {
+    async fn account_context(
+        &self,
+        scope: &Scope,
+    ) -> Result<(
+        Option<bilibi_finance_ledger::MinorUnits>,
+        Vec<(i64, String, String)>,
+    )> {
+        let company = scope.actor().organisation().ok_or(Error::Forbidden)?.get();
+        let mut input = serde_json::json!({"company_id":company});
+        let book = match self
+            .contracts
+            .read(scope, "finance.ledger.book.get", &input)
+            .await
+        {
+            Ok(book) => book,
+            // A document viewer need not have permission to read the chart.
+            Err(
+                bilibi_agent_api::Error::Forbidden
+                | bilibi_agent_api::Error::Backend(Error::Forbidden | Error::Unauthorized),
+            ) => return Ok((None, Vec::new())),
+            Err(_) => return Err(Error::Internal),
+        };
+        let units = book["result"]["book"]["minor_units"]
+            .as_i64()
+            .and_then(bilibi_finance_ledger::MinorUnits::new);
+        let mut accounts = Vec::new();
+        loop {
+            let page = self
+                .contracts
+                .read(scope, "finance.ledger.account.list", &input)
+                .await
+                .map_err(|_| Error::Internal)?;
+            for a in page["result"]["records"].as_array().into_iter().flatten() {
+                if let (Some(id), Some(code), Some(name), Some(kind)) = (
+                    a["id"].as_i64(),
+                    a["code"].as_str(),
+                    a["name"].as_str(),
+                    a["account_type"].as_str(),
+                ) {
+                    accounts.push((id, format!("{code} {name}"), kind.to_owned()));
+                }
+            }
+            if let Some(code) = page["result"]["next_after_code"].as_str() {
+                input["after_code"] = serde_json::json!(code);
+            } else {
+                break;
+            }
+        }
+        Ok((units, accounts))
+    }
+}

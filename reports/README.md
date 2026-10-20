@@ -200,3 +200,11 @@ The Generate event reauthorizes rather than trusting a mounted flag. Success and
 Run `DATABASE_URL=… AUDITOR_PACK_PROOF_DIR=/absolute/private/task-directory cargo run -p bilibi-finance-walkthrough-fixture --bin auditor-pack` on a fresh disposable PostgreSQL 18 database. It proves a 500-row page boundary under a second session's backdated posting, checks archive membership and checksums, exact totals, source hashes, formula protection, issued evidence, missing/cross-company access, size refusal, the download adapter and revocation of every source grant against an already-mounted page. Append `-- serve` to keep the real app at `http://127.0.0.1:4324` for browser proof; use the walkthrough manager account.
 
 Report and control-page feedback clears on the shared `clear-flash` event for its current message kind. A dismissed auditor-pack success stays dismissed across tab changes and refresh; an older success timeout cannot clear a newer refusal.
+
+## First report and layout
+
+Reports opens on the latest calendar month with entries. An explicit period in the address is preserved; a book with no entries opens on this month. The initial month is read through `finance.ledger.book.get` (`latest_entry_date`).
+
+When no cash-position section is configured, cash uses exactly the ledger accounts mapped in Bank reconciliation, including an inactive bank account that still holds money. Descendant accounts are not included by that default. An explicit cash section, including one with no accounts, takes precedence. `Reconciliation::cash_account_ids` requires ledger view and returns only account identifiers, without bank details.
+
+Use **Report sections** (`/finance/reports/sections`) to arrange report headings and choose accounts. This form replaces the generic JSON editor. Its `finance.reports.sections.get` and `finance.reports.sections.set` contracts serve pages and agents. Saving requires `finance.ledger.accounts.manage`; the shared transaction retains the layout review fence, audits the setting and refuses an archived company.

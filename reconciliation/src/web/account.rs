@@ -388,7 +388,8 @@ impl Account {
             };
             view.end_date = Some(
                 field("end_date", "reconciliation-end-date", "Statement end date")
-                    .kind(InputKind::Date),
+                    .kind(InputKind::Date)
+                    .hint("Use the date order shown in the box. Dates are saved as YYYY-MM-DD."),
             );
             view.balance = Some(field(
                 "statement_balance",

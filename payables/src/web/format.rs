@@ -140,7 +140,7 @@ pub(super) fn refusal(action: &str, error: PayablesError) -> String {
     };
     match (action, &error) {
         ("approve", NotDraft) => "Only a draft can be approved.".into(),
-        ("approve", Ledger(LedgerError::SamePerson)) => "This company separates duties: someone other than whoever recorded the document must approve it.".into(),
+        ("approve", Ledger(LedgerError::SamePerson)) => "Someone else must approve this because the company requires separation of duties. For a one-person company, change Separation of duties on Approval exceptions.".into(),
         ("approve", Unauthorized) => "You do not have permission to approve documents.".into(),
         ("post", NotApproved) => "Only an approved or held document can be posted.".into(),
         ("post", Unauthorized) => "You do not have permission to post documents.".into(),
@@ -152,7 +152,7 @@ pub(super) fn refusal(action: &str, error: PayablesError) -> String {
         ("approve_exception", NotHeld) => "Only a held bill has exceptions to approve.".into(),
         ("approve_exception", AlreadyApproved) => "These exceptions are already approved.".into(),
         ("approve_exception", StaleHold) => "The bill was matched again since this page loaded. Review the new figures and approve again.".into(),
-        ("approve_exception", Ledger(LedgerError::SamePerson)) => "This company separates duties: someone other than whoever recorded the bill or tried to post it must approve its exceptions.".into(),
+        ("approve_exception", Ledger(LedgerError::SamePerson)) => "Someone else must approve these exceptions because the company requires separation of duties. For a one-person company, change Separation of duties on Approval exceptions.".into(),
         ("approve_exception", Unauthorized) => "You do not have permission to approve match exceptions.".into(),
         ("void", NotVoidable) => "Only a draft, approved, or held document can be voided.".into(),
         ("void", Unauthorized) => "You do not have permission to void documents.".into(),

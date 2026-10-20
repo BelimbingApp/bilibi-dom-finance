@@ -86,6 +86,28 @@ pub(super) fn price(value: Decimal) -> String {
     value.to_string()
 }
 
+/// A displayed unit price; editable prices stay in plain decimal notation.
+pub(super) fn price_display(value: Decimal) -> String {
+    let text = price(value.abs());
+    let (whole, fraction) = text.split_once('.').unwrap_or((&text, ""));
+    let mut out = if value.is_sign_negative() && !value.is_zero() {
+        "-".to_owned()
+    } else {
+        String::new()
+    };
+    for (i, c) in whole.char_indices() {
+        if i > 0 && (whole.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    if !fraction.is_empty() {
+        out.push('.');
+        out.push_str(fraction);
+    }
+    out
+}
+
 pub(super) fn actor(user: Option<i64>, impersonator: Option<i64>) -> String {
     match (user, impersonator) {
         (Some(u), Some(i)) => format!("User #{u} (impersonated by #{i})"),
@@ -385,7 +407,24 @@ impl Figures {
                 }
             }
         }
-        value.to_string()
+        let text = value.abs().to_string();
+        let (whole, fraction) = text.split_once('.').unwrap_or((&text, ""));
+        let mut grouped = if value.is_sign_negative() && !value.is_zero() {
+            "-".to_owned()
+        } else {
+            String::new()
+        };
+        for (i, c) in whole.char_indices() {
+            if i > 0 && (whole.len() - i).is_multiple_of(3) {
+                grouped.push(',');
+            }
+            grouped.push(c);
+        }
+        if !fraction.is_empty() {
+            grouped.push('.');
+            grouped.push_str(fraction);
+        }
+        grouped
     }
 
     pub(super) fn money(&self, value: bilibi_finance_ledger::Money) -> String {

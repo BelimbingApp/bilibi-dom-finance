@@ -116,3 +116,5 @@ It drives the actual mounted Page/LiveState adapters against facade records: cre
 `evidence_page_on` is the same authorized evidence contract on a caller-supplied PostgreSQL client or transaction. Use it for every page of one repeatable-read export (Reports auditor pack); the pooled `evidence_page` wrapper is a live read per page. Schema helpers remain private.
 
 Page flashes survive background refresh and table changes. The shared `clear-flash` event clears only the message kind it names, so a delayed success timeout cannot erase a newer refusal. The combined `finance-ui` walkthrough checks this through both the mounted category and asset pages and supplies records for Chrome checks across Finance.
+
+Asset categories and disposal forms choose accounts from the ledger's account-list contract. Page money uses `Money::display` with the book's decimal places.

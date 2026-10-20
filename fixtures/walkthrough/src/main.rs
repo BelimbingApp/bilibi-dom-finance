@@ -106,9 +106,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("migrations applied: {:?}", migrated.applied);
     let mut services = Services::default();
     services.provide("bootstrap.database", Arc::new(db.clone()))?;
+    services.provide("bootstrap.composition", Arc::new(bilibi_web::composition()))?;
     services.install(&modules)?;
     bilibi_finance_walkthrough_fixture::without_step_up(&services)?;
 
+    bilibi_finance_walkthrough_fixture::adopter_setup::opening(&db, &services).await?;
     let installed = install(&db, &services).await?;
     bilibi_finance_walkthrough_fixture::receivables::run(&db, &services).await?;
     println!("fixture book: {:?}", installed.book);
@@ -1137,5 +1139,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // NC2: reconciliation matching, reconciliations and statement-line posting.
     bilibi_finance_walkthrough_fixture::reconciliation_matching::run(&db, &services).await?;
+    bilibi_finance_walkthrough_fixture::adopter_setup::reports(&db, &services).await?;
     Ok(())
 }

@@ -134,7 +134,7 @@ impl Report {
                     &r.totals,
                     r.header.minor_units,
                 )?);
-                parts.push(statement("cash-position",&r.header,rows,r.sections.is_empty().then_some(("No cash accounts configured","Name the cash and bank accounts in a cash position section of the Report sections setting.")),columns,list)?);
+                parts.push(statement("cash-position",&r.header,rows,r.sections.is_empty().then_some(("No cash accounts configured","Add a bank account in Bank reconciliation, or choose accounts in Report sections.")),columns,list)?);
             }
         }
         Ok(parts)
@@ -713,21 +713,9 @@ fn window(a: &AccountActivity) -> String {
     }
 }
 fn amount(m: Money, u: MinorUnits) -> String {
-    let fixed = m.shown(u);
-    let (whole, fraction) = fixed.split_once('.').unwrap_or((&fixed, ""));
-    let mut grouped = String::new();
-    for (i, c) in whole.char_indices() {
-        if i > 0 && (whole.len() - i).is_multiple_of(3) && &whole[..i] != "-" {
-            grouped.push(',');
-        }
-        grouped.push(c);
-    }
-    if u.get() > 0 {
-        grouped.push('.');
-        grouped.push_str(fraction);
-    }
-    grouped
+    m.display(u)
 }
+
 fn text(id: &str, text: &str, emphasis: bool) -> Result<Html> {
     render(Text { id, text, emphasis })
 }

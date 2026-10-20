@@ -20,6 +20,8 @@ pub(super) struct Book {
     pages: Pages,
     currency: String,
     units: String,
+    approver: String,
+    approval_reason: String,
     refusal: Refusal,
     notice: String,
     confirming: bool,
@@ -32,6 +34,8 @@ impl Book {
             pages,
             currency: String::new(),
             units: "2".into(),
+            approver: "someone_else".into(),
+            approval_reason: String::new(),
             refusal: Refusal::default(),
             notice: String::new(),
             confirming: false,
@@ -111,7 +115,7 @@ impl Book {
         let mut controls = render(SectionHeading {
             id: "ledger-book-controls-heading",
             title: "Controls",
-            description: "Controlled bookkeeping lets entries post only into an open period. Separation of duties asks someone else to approve. Change both on the Bookkeeping page.",
+            description: "Controlled bookkeeping lets entries post only into an open period. Separation of duties asks someone else to approve. Change bookkeeping on the Bookkeeping page and approvals on Approval exceptions.",
             ..SectionHeading::default()
         })?;
         controls.push(&render(Facts {
@@ -128,6 +132,12 @@ impl Book {
                     value: yes_no(required, "Required", "Not required")?,
                 },
             ],
+        })?);
+        controls.push(&render(Button {
+            id: "ledger-book-approval-settings",
+            href: "/finance/reports/approval-exceptions",
+            body: Html::text("Approval settings"),
+            ..Button::default()
         })?);
         let mut html = render(Card {
             id: "ledger-book-card",
@@ -200,6 +210,28 @@ impl Book {
                 .hint("How many digits follow the point in an amount: 2 for 12.50. You cannot change it later.")
                 .errors(errors("minor_units")),
         )?);
+        body.push(&render(
+            Field::in_form("book", "approver")
+                .id("ledger-book-approver")
+                .label("Who approves?")
+                .kind(InputKind::Select)
+                .value(&self.approver)
+                .options(vec![
+                    Choice::new("Someone else reviews my work", "someone_else"),
+                    Choice::new("I do everything (one-person company)", "one_person"),
+                ])
+                .hint("Approving your own work records an exception for an independent reviewer."),
+        )?);
+        if self.approver == "one_person" {
+            body.push(&render(
+                Field::in_form("book", "approval_reason")
+                    .id("ledger-book-approval-reason")
+                    .label("Why one person approves")
+                    .value(&self.approval_reason)
+                    .required()
+                    .errors(errors("reason")),
+            )?);
+        }
         let actions = render(Button {
             id: "ledger-book-open",
             button_type: "button",
@@ -239,7 +271,7 @@ impl Book {
                     self.currency.trim().to_uppercase(),
                     self.units
                 ),
-                detail: "The currency and the decimal places can never be changed. Controlled bookkeeping starts on.",
+                detail: if self.approver == "one_person" { "The currency and decimal places are permanent. You may approve your own work; each approval is recorded in Approval exceptions." } else { "The currency and decimal places are permanent. Someone else must approve your work." },
                 confirm: "Open the book",
                 working: "Opening…",
                 confirm_event: "open_book",
@@ -262,6 +294,13 @@ impl LiveState<Scope, Error> for Book {
                             .get("minor_units")
                             .cloned()
                             .unwrap_or_else(|| "2".into());
+                        self.approver = fields
+                            .get("approver")
+                            .cloned()
+                            .unwrap_or_else(|| "someone_else".into());
+                        if let Some(reason) = fields.get("approval_reason") {
+                            self.approval_reason = reason.clone();
+                        }
                         self.refusal = Refusal::default();
                         self.notice.clear();
                     }
@@ -286,7 +325,7 @@ impl LiveState<Scope, Error> for Book {
                                 r.credential,
                                 "open_book",
                                 "finance.ledger.book.open",
-                                json!({"currency_code": self.currency.trim().to_uppercase(), "minor_units": units}),
+                                json!({"currency_code": self.currency.trim().to_uppercase(), "minor_units": units,"separation_required":self.approver != "one_person","approval_reason": self.approval_reason}),
                             )
                             .await?
                         {

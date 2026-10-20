@@ -109,10 +109,31 @@ inventory::submit! { Contribution::new(bilibi_module_registry::contributions::DO
 inventory::submit! { bilibi_module_registry::Contribution::new(bilibi_module_registry::contributions::PAGE_WRITES, "finance/reports.pages", bilibi_module_registry::Provenance { module: MODULE, source: file!(), line: line!() }, &bilibi_module_registry::contributions::PageWrites {
     service: "finance/reports.pages",
     contracts: &[],
-    pending: bilibi_module_registry::contributions::Pending::Every { reason: "Generating the auditor pack writes through the Reports facade; no contract yet." },
+    pending: bilibi_module_registry::contributions::Pending::Events { events:&["export_auditor_pack"], reason: "Generating the auditor pack writes through the Reports facade; no contract yet." },
 }) }
 inventory::submit! { bilibi_module_registry::Contribution::new(bilibi_module_registry::contributions::PAGE_WRITES, "finance/reports.control-pages", bilibi_module_registry::Provenance { module: MODULE, source: file!(), line: line!() }, &bilibi_module_registry::contributions::PageWrites {
     service: "finance/reports.control-pages",
     contracts: &[],
     pending: bilibi_module_registry::contributions::Pending::Every { reason: "Controlled bookkeeping, fiscal years, duty separation and reviews write through the Ledger facade, not the finance.ledger contracts yet." },
+}) }
+
+inventory::submit! { Contribution::new(ROUTES, "finance/reports.sections", provenance!(), &Route {
+    method:Method::Get,path:"/finance/reports/sections",service:"finance/reports.section-pages",operation:"sections",access:Access::Capability(bilibi_finance_ledger::MANAGE_ACCOUNTS),framed:true,
+}) }
+bilibi_menu::contribute!(
+    "finance/reports",
+    bilibi_menu::MenuItem::page(
+        "finance.reports.sections",
+        "Report sections",
+        "/finance/reports/sections"
+    )
+    .under("finance.group.bookkeeping")
+    .requires(bilibi_menu::Requirement::Capability(
+        bilibi_finance_ledger::MANAGE_ACCOUNTS
+    ))
+    .order(5)
+);
+
+inventory::submit! { Contribution::new(bilibi_module_registry::contributions::PAGE_WRITES, "finance/reports.section-pages", provenance!(), &bilibi_module_registry::contributions::PageWrites {
+    service:"finance/reports.section-pages",contracts:&[("save_sections","finance.reports.sections.set")],pending:bilibi_module_registry::contributions::Pending::None,
 }) }

@@ -32,7 +32,7 @@ pub const MODULE: &str = "finance/fixed_assets";
 pub const SERVICE: &str = "finance/fixed_assets.fixed_assets";
 inventory::submit! { Module {
     id: MODULE, layer: Layer::Domains,
-    dependencies: &["base/authz", "base/database", "base/tenancy", "base/datetime", "base/locale", "base/menu", "base/ui", "core/company", "finance/ledger", "finance/payables"],
+    dependencies: &["base/agent_api", "base/authz", "base/database", "base/tenancy", "base/datetime", "base/locale", "base/menu", "base/ui", "core/company", "finance/ledger", "finance/payables"],
     migrations: &[
         ("finance-fixed-assets-001-acquisitions", include_str!("../migrations/001-acquisitions.sql")),
         ("finance-fixed-assets-002-runs-corrections", include_str!("../migrations/002-runs-corrections.sql")),
@@ -42,6 +42,7 @@ inventory::submit! { Module {
         ledger: s.get(bilibi_finance_ledger::SERVICE)?,
         payables: s.get(bilibi_finance_payables::SERVICE)?,
     })) }, Service { id: web::PAGES, factory: |s| Ok(Arc::new(bilibi_ui::page::PageService::<Scope, Error>(Arc::new(web::Pages {
+        contracts: s.get(bilibi_agent_api::page::SERVICE)?,
         db: s.get::<Db>("base/database.pool")?.as_ref().clone(),
         assets: s.get(SERVICE)?,
         ledger: s.get(bilibi_finance_ledger::SERVICE)?,

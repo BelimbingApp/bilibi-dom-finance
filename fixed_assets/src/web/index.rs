@@ -203,7 +203,7 @@ impl Index {
             .flat_map(|p| p.period.params().map(|(k, v)| (k.into(), v)))
             .collect()
     }
-    fn fields(&self) -> Vec<Field> {
+    fn fields(&self, accounts: &[(i64, String, String)]) -> Vec<Field> {
         use InputKind::{Date, Number, Select, Text};
         let d = &self.draft;
         let mut fields = Vec::new();
@@ -216,21 +216,21 @@ impl Index {
                     false,
                 ),
                 ("name", "New category name", Text, false),
-                ("cost_account_id", "Cost account ID", Number, true),
+                ("cost_account_id", "Cost account", Select, true),
                 (
                     "accumulated_account_id",
-                    "Accumulated depreciation account ID",
-                    Number,
+                    "Accumulated depreciation account",
+                    Select,
                     true,
                 ),
                 (
                     "expense_account_id",
-                    "Depreciation expense account ID",
-                    Number,
+                    "Depreciation expense account",
+                    Select,
                     true,
                 ),
-                ("gain_account_id", "Disposal gain account ID", Number, true),
-                ("loss_account_id", "Disposal loss account ID", Number, true),
+                ("gain_account_id", "Disposal gain account", Select, true),
+                ("loss_account_id", "Disposal loss account", Select, true),
             ],
             Kind::Register => &[
                 ("source", "Acquisition source", Select, false),
@@ -262,6 +262,23 @@ impl Index {
         };
         for (key, label, kind, required) in specs {
             let mut f = d.field(key, label, *kind, *required, "asset");
+            if key.ends_with("account_id") {
+                let expected = match *key {
+                    "cost_account_id" | "accumulated_account_id" => "asset",
+                    "expense_account_id" | "loss_account_id" => "expense",
+                    _ => "income",
+                };
+                f = f.options(
+                    std::iter::once(Choice::new("Choose an account", ""))
+                        .chain(
+                            accounts
+                                .iter()
+                                .filter(|a| a.2 == expected)
+                                .map(|a| Choice::new(&a.1, a.0.to_string())),
+                        )
+                        .collect(),
+                );
+            }
             if *key == "source" {
                 f = f.options(vec![
                     Choice::new("Manual ledger entry", "entry"),
@@ -308,7 +325,7 @@ impl Index {
             event_name: "record_asset",
             button_dom: "assets-record",
             verb: "Record",
-            fields: self.fields(),
+            fields: self.fields(&self.pages.account_context(s).await?.1),
             help: if self.kind == Kind::Runs {
                 "One charge through this month, including any scheduled depreciation still unposted. Closed periods are refused."
             } else {
@@ -362,6 +379,12 @@ impl Index {
         &self,
         s: &Scope,
     ) -> crate::Result<(Vec<(String, FlexRow)>, Option<RegisterReport>)> {
+        let units = self
+            .pages
+            .account_context(s)
+            .await
+            .map_err(crate::FixedAssetsError::Failed)?
+            .0;
         let c = company(s).ok_or(FixedAssetsError::CompanyNotFound)?;
         let mut rows = Vec::new();
         let report = match self.kind {
@@ -385,9 +408,9 @@ impl Index {
                     let row = FlexRow::new(a.id.to_string())
                         .cell("number", Cell::text(a.asset_number.to_string()))
                         .slot("description", link)
-                        .cell("cost", Cell::text(a.cost.to_string()))
-                        .cell("accumulated", Cell::text(r.accumulated.to_string()))
-                        .cell("carrying", Cell::text(r.carrying_value.to_string()))
+                        .cell("cost", Cell::text(a.cost.display(units)))
+                        .cell("accumulated", Cell::text(r.accumulated.display(units)))
+                        .cell("carrying", Cell::text(r.carrying_value.display(units)))
                         .cell(
                             "status",
                             Cell::text(if r.voided {
@@ -434,7 +457,7 @@ impl Index {
                     let row = FlexRow::new(r.id.to_string())
                         .cell("id", Cell::text(r.id.to_string()))
                         .cell("period", Cell::text(r.period.to_string()))
-                        .cell("total", Cell::text(r.total.to_string()))
+                        .cell("total", Cell::text(r.total.display(units)))
                         .cell(
                             "entry",
                             Cell::text(
@@ -459,6 +482,7 @@ impl Index {
         Ok((rows, report))
     }
     async fn body(&mut self, s: &Scope) -> Result<String> {
+        let (units, accounts) = self.pages.account_context(s).await?;
         let (mut rows, report, unavailable) = match self.rows(s).await {
             Ok((rows, r)) => (rows, r, Html::EMPTY),
             Err(e) => (
@@ -519,8 +543,15 @@ impl Index {
                     .iter()
                     .map(|r| {
                         format!(
-                            "Account {}: ledger {}, register {}, difference {}.",
-                            r.account_id, r.ledger_balance, r.register_balance, r.difference
+                            "{}: ledger {}, register {}, difference {}.",
+                            accounts
+                                .iter()
+                                .find(|a| a.0 == r.account_id)
+                                .map(|a| a.1.as_str())
+                                .unwrap_or("Account unavailable"),
+                            r.ledger_balance.display(units),
+                            r.register_balance.display(units),
+                            r.difference.display(units)
                         )
                     })
                     .collect(),

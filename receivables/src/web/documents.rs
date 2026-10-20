@@ -476,6 +476,7 @@ impl Documents {
                     .id(format!("receivables-draft-{key}"))
                     .label(label)
                     .kind(InputKind::Date)
+                    .hint("Use the date order shown in the box. Dates are saved as YYYY-MM-DD.")
                     .value(value(key))
                     .hint(hint)
                     .errors(draft.errors.of(key)),

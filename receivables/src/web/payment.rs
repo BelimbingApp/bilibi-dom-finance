@@ -311,6 +311,7 @@ impl Payment {
                 .id("receivables-reverse-reversal_date")
                 .label("Reversal date")
                 .kind(InputKind::Date)
+                .hint("Use the date order shown in the box. Dates are saved as YYYY-MM-DD.")
                 .value(values.get("reversal_date").cloned().unwrap_or_default())
                 .required()
                 .hint(format!(

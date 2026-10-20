@@ -87,16 +87,6 @@ impl Bills {
 
     pub(super) async fn reload(&mut self, scope: &Scope) -> Result<()> {
         self.can_create = self.pages.allowed(scope, CREATE_DOCUMENTS).await?;
-        self.units = match company(scope) {
-            Some(c) => self
-                .pages
-                .ledger
-                .get_book(scope, c)
-                .await
-                .ok()
-                .map(|b| b.minor_units),
-            None => None,
-        };
         let result = match company(scope) {
             Some(company) => {
                 self.pages
@@ -126,6 +116,7 @@ impl Bills {
         self.documents.clear();
         self.total = 0;
         if let Ok(page) = result {
+            self.units = self.pages.account_context(scope).await?.0;
             self.documents = page.documents;
             self.total = page.total as u64;
             self.list.page = page.page as u64;
@@ -229,14 +220,7 @@ impl Bills {
                     .slot(
                         "total",
                         render(Tabular {
-                            text: format!(
-                                "{} {}",
-                                self.units.map_or_else(
-                                    || d.total.to_string(),
-                                    |u| format::money(d.total, u)
-                                ),
-                                d.currency_code
-                            ),
+                            text: format!("{} {}", d.total.display(self.units), d.currency_code),
                         })?,
                     )
                     .slot("status", format::status(&d.status)?)

@@ -78,6 +78,32 @@ impl Money {
         let amount = Decimal::from_str_exact(text.trim()).map_err(|_| MoneyError::Unparsable)?;
         Self::new(amount, units)
     }
+    /// A page amount with thousands separators and the book's decimal places.
+    /// `shown` remains plain decimal notation for editable values and contracts.
+    /// Without book access, retain the stored precision with at least two places.
+    pub fn display(self, units: impl Into<Option<MinorUnits>>) -> String {
+        let units = units
+            .into()
+            .unwrap_or(MinorUnits(self.0.scale().max(2) as u8));
+        let fixed = self.abs().shown(units);
+        let (whole, fraction) = fixed.split_once('.').unwrap_or((&fixed, ""));
+        let mut out = if self.0.is_sign_negative() && !self.is_zero() {
+            "-".to_owned()
+        } else {
+            String::new()
+        };
+        for (i, digit) in whole.char_indices() {
+            if i > 0 && (whole.len() - i).is_multiple_of(3) {
+                out.push(',');
+            }
+            out.push(digit);
+        }
+        if units.get() > 0 {
+            out.push('.');
+            out.push_str(fraction);
+        }
+        out
+    }
     pub fn amount(self) -> Decimal {
         self.0
     }

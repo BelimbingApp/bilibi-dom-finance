@@ -484,3 +484,7 @@ to the signed-in actor and any impersonator through the Platform's audit
 capture.
 
 `evidence_page_on` is the same authorized evidence contract on a caller-supplied PostgreSQL client or transaction. Use it for every page of one repeatable-read export (Reports auditor pack); the pooled `evidence_page` wrapper is a live read per page. Schema helpers remain private.
+
+Opening a book through `finance.ledger.book.open` may include `separation_required: false` and `approval_reason` for a one-person company. That choice also requires `finance.ledger.duty-separation.manage`, records the duty-separation change in the same transaction and keeps every later same-person approval in Approval exceptions. Omitting it leaves the approval control unchanged; independent approval is the default. The Book page asks who approves before opening. A same-person refusal names the control and the Approval exceptions address.
+
+`Money::display` formats a page amount with thousands separators and the book's decimal places. `Money::shown` remains plain decimal notation for editable values.

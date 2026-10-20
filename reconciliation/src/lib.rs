@@ -209,7 +209,7 @@ pub enum ReconciliationError {
     ReconciliationAbandoned,
     /// The finaliser opened the reconciliation, impersonated whoever did, or
     /// was impersonated by them, while the company separates duties.
-    #[error("This company separates duties: someone other than whoever opened the reconciliation must finalise it.")]
+    #[error("Someone else must finalise this because the company requires separation of duties. For a one-person company, change Separation of duties on Approval exceptions: /finance/reports/approval-exceptions")]
     SamePerson,
     /// A reconciliation is finalised only once its difference is zero.
     #[error("The difference is {0}, not zero; match or post what is unmatched, or check the statement balance.")]
@@ -728,6 +728,18 @@ impl Reconciliation {
             amount_signs: &AMOUNT_SIGNS,
             decimal_separators: &DECIMAL_SEPARATORS,
         }
+    }
+
+    /// Ledger account identifiers used by bank reconciliation, for cash reports.
+    /// Only ledger view is required; no bank names, mappings or statements escape.
+    pub async fn cash_account_ids(&self, scope: &Scope, company_id: i64) -> Result<Vec<i64>> {
+        let client = self.db.get().await.map_err(Error::from)?;
+        authorize(&**client, scope, company_id, bilibi_finance_ledger::VIEW).await?;
+        Ok(bank_accounts::list(&**client, scope.tenant(), company_id)
+            .await?
+            .into_iter()
+            .map(|account| account.ledger_account_id)
+            .collect())
     }
 
     /// The company's bank accounts by name, active or not

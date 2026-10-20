@@ -7,7 +7,6 @@ use crate::{
 };
 use askama::Template;
 use bilibi_database::{Error, Result};
-use bilibi_finance_ledger::{Account, MinorUnits};
 use bilibi_tenancy::Scope;
 use bilibi_ui::{
     page::{LiveBody, LiveFuture, LiveInput, LiveRequest, LiveState, PanelSpec},
@@ -26,8 +25,6 @@ pub(super) struct Bill {
     pages: Pages,
     id: i64,
     document: Option<Document>,
-    units: Option<MinorUnits>,
-    accounts: Vec<Account>,
     dialog: Option<Dialog>,
     reason: String,
     flash: Option<(StatusKind, String)>,
@@ -42,8 +39,6 @@ impl Bill {
             pages,
             id: params::positive_id(path.get("id").map(String::as_str)).unwrap_or(0),
             document: None,
-            units: None,
-            accounts: vec![],
             dialog: None,
             reason: String::new(),
             flash: None,
@@ -97,25 +92,6 @@ impl Bill {
                 .ok(),
             None => None,
         };
-        self.units = match company(scope) {
-            Some(c) => self
-                .pages
-                .ledger
-                .get_book(scope, c)
-                .await
-                .ok()
-                .map(|b| b.minor_units),
-            None => None,
-        };
-        self.accounts = match company(scope) {
-            Some(c) => self
-                .pages
-                .ledger
-                .list_accounts(scope, c)
-                .await
-                .unwrap_or_default(),
-            None => vec![],
-        };
         if let Some(d) = &self.document {
             self.lines.load(&d.lines, |l| l.id.to_string());
             self.events.load(&d.match_events, |e| e.id.to_string());
@@ -124,18 +100,6 @@ impl Bill {
             }
         }
         Ok(())
-    }
-
-    fn account(&self, id: i64) -> String {
-        self.accounts
-            .iter()
-            .find(|a| a.id == id)
-            .map_or_else(|| format!("#{id}"), |a| format!("{} {}", a.code, a.name))
-    }
-
-    fn money(&self, amount: bilibi_finance_ledger::Money) -> String {
-        self.units
-            .map_or_else(|| amount.to_string(), |u| f::money(amount, u))
     }
 
     /// `Bill #3`, or `Bill from Acme` while it has no number to name it by.
@@ -180,6 +144,7 @@ impl Bill {
         let can_create = self.pages.allowed(scope, CREATE_DOCUMENTS).await?;
         let can_pay = self.pages.allowed(scope, SUBMIT_PAYMENTS).await?;
         let display = self.pages.display(scope).await?;
+        let (units, accounts) = self.pages.account_context(scope).await?;
         let party = render(Facts {
             id: "payables-bill-party-facts",
             items: vec![
@@ -207,7 +172,7 @@ impl Bill {
                 "Outstanding",
                 &d.outstanding.map_or_else(
                     || "—".into(),
-                    |m| format!("{} {}", self.money(m), d.currency_code),
+                    |m| format!("{} {}", m.display(units), d.currency_code),
                 ),
             ),
             f::fact("Ledger entry", &f::number(d.entry_number)),
@@ -273,15 +238,15 @@ impl Bill {
             items: vec![
                 f::fact(
                     "Net",
-                    &format!("{} {}", self.money(d.total_net), d.currency_code),
+                    &format!("{} {}", d.total_net.display(units), d.currency_code),
                 ),
                 f::fact(
                     "Tax",
-                    &format!("{} {}", self.money(d.total_tax), d.currency_code),
+                    &format!("{} {}", d.total_tax.display(units), d.currency_code),
                 ),
                 f::fact(
                     "Total",
-                    &format!("{} {}", self.money(d.total), d.currency_code),
+                    &format!("{} {}", d.total.display(units), d.currency_code),
                 ),
             ],
         })?;
@@ -314,7 +279,16 @@ impl Bill {
             line_rows.push(
                 row.cell("number", Cell::text(l.line_number.to_string()))
                     .cell("description", Cell::text(&l.description))
-                    .cell("account", Cell::text(self.account(l.account_id)))
+                    .cell(
+                        "account",
+                        Cell::text(
+                            accounts
+                                .iter()
+                                .find(|a| a.0 == l.account_id)
+                                .map(|a| a.1.clone())
+                                .unwrap_or_else(|| "Account unavailable".into()),
+                        ),
+                    )
                     .cell(
                         "order_line",
                         Cell::text(l.order_line_id.map_or_else(
@@ -323,7 +297,7 @@ impl Bill {
                         )),
                     )
                     .cell("quantity", Cell::text(f::decimal(l.quantity)))
-                    .cell("amount", Cell::text(self.money(l.amount))),
+                    .cell("amount", Cell::text(l.amount.display(units))),
             );
         }
         let mut match_rows = Vec::new();

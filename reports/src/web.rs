@@ -1,6 +1,7 @@
 //! Bilimbi Reports.Web.{ReportsLive,AccountActivityLive}, Finance 4abfaf82.
 //! Page state owns navigation and posting invalidation; figures remain in Reports.
 mod figures;
+mod sections;
 
 use crate::{ActivityQuery, Reports, ReportsError};
 use askama::Template;
@@ -40,6 +41,7 @@ const PATH: &str = "/finance/reports";
 #[derive(Clone)]
 pub(crate) struct Pages {
     pub reports: Arc<Reports>,
+    pub contracts: Arc<bilibi_agent_api::page::PageContracts>,
     pub display: Arc<DisplayPolicy>,
     pub locales: Arc<Locales>,
 }
@@ -91,14 +93,38 @@ impl State {
         }
         .shared()
         .map_err(|_| Error::Internal)?;
+        let mut query = request.query.clone();
+        if !activity
+            && !["period", "from", "to"]
+                .iter()
+                .any(|key| query.contains_key(*key))
+        {
+            let book = pages
+                .contracts
+                .read(
+                    scope,
+                    "finance.ledger.book.get",
+                    &serde_json::json!({"company_id":company(scope)?}),
+                )
+                .await
+                .map_err(|_| Error::Internal)?;
+            if let Some(date) = book["result"]["latest_entry_date"]
+                .as_str()
+                .and_then(|s| s.parse::<jiff::civil::Date>().ok())
+            {
+                query.insert("period".into(), "custom".into());
+                query.insert("from".into(), date.first_of_month().to_string());
+                query.insert("to".into(), date.last_of_month().to_string());
+            }
+        }
         let mut state = Self {
             pages,
             tenant: scope.tenant(),
             activity,
             account_id: params::positive_id(request.path.get("account_id").map(String::as_str)),
-            query: request.query.clone(),
+            query: query.clone(),
             list: ListState::parse(request.query, spec).map_err(|_| Error::Internal)?,
-            filter: PeriodFilter::new("report-period", period(request.query, &clock), &clock),
+            filter: PeriodFilter::new("report-period", period(&query, &clock), &clock),
             clock,
             display,
             browser_zone: None,
@@ -446,6 +472,16 @@ impl Page<Scope, Error> for Pages {
     }
     fn render<'a>(&'a self, request: PageRequest<'a, Scope>) -> PageFuture<'a, Error> {
         Box::pin(async move {
+            if request.operation == "sections" {
+                let state =
+                    sections::State::new(self.clone(), request.scope.ok_or(Error::Unauthorized)?)
+                        .await?;
+                return Ok(PageBody {
+                    html: state.body()?,
+                    live: true,
+                    title: Some("Report sections".into()),
+                });
+            }
             let mut state = State::new(self.clone(), &request).await?;
             state
                 .load(request.scope.ok_or(Error::Unauthorized)?)
@@ -459,6 +495,12 @@ impl Page<Scope, Error> for Pages {
     }
     fn mount<'a>(&'a self, request: PageRequest<'a, Scope>) -> MountFuture<'a, Scope, Error> {
         Box::pin(async move {
+            if request.operation == "sections" {
+                return Ok(Some(Box::new(
+                    sections::State::new(self.clone(), request.scope.ok_or(Error::Unauthorized)?)
+                        .await?,
+                ) as Box<dyn LiveState<Scope, Error>>));
+            }
             let mut state = State::new(self.clone(), &request).await?;
             if !state.activity {
                 match self

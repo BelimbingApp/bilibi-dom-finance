@@ -332,3 +332,7 @@ cargo run -p bilibi-finance-walkthrough-fixture --bin bilibi-finance-reconciliat
 ```
 
 Sign in as `manager@example.test` (every control), `staff@example.test` (finalise only, granted by the proof) or `viewer@example.test` (read only) with the fixture's `PASSWORD`.
+
+Cash reports may read `Reconciliation::cash_account_ids` with `finance.ledger.view`. It returns only the mapped ledger identifiers, including inactive bank accounts; bank names, import mappings and statements still require `finance.reconciliation.view`.
+
+An import blocked by storage configuration names **Private document directory** (`artifacts.storage_root`) and **Document retention days** (`artifacts.retention_days`) and links to Global settings. Finance does not create an installation storage directory; Base Artifacts owns its location and retention policy.

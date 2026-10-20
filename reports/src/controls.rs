@@ -1148,6 +1148,7 @@ impl State {
                     .id("fiscal-year-start")
                     .label("First day of the year")
                     .kind(InputKind::Date)
+                    .hint("Use the date order shown in the box. Dates are saved as YYYY-MM-DD.")
                     .value(
                         self.dates
                             .get("start_date")
@@ -1159,6 +1160,7 @@ impl State {
                     .id("fiscal-year-end")
                     .label("Last day (optional)")
                     .kind(InputKind::Date)
+                    .hint("Use the date order shown in the box. Dates are saved as YYYY-MM-DD.")
                     .value(self.dates.get("end_date").map(String::as_str).unwrap_or("")),
             ]
         } else {

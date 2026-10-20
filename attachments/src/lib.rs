@@ -210,7 +210,7 @@ pub enum AttachmentError {
     #[error("Invalid option")]
     InvalidOption,
     /// An operator has not set Base Artifacts' storage root and retention.
-    #[error("Source document storage is not configured")]
+    #[error("Ask a server administrator to set Private document directory (artifacts.storage_root) and Document retention days (artifacts.retention_days) in Global settings: /system/settings")]
     RetentionNotConfigured,
     /// The file is larger than Base Artifacts' `artifacts.max_bytes`.
     #[error("The file is larger than the storage limit")]

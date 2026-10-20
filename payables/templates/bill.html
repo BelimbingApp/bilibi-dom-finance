@@ -15,6 +15,7 @@
 {% call ui::card(id="payables-bill-facts", inner_class="p-5 sm:p-6", role="region", labelledby="payables-bill-facts-heading") %}
 {% call ui::section_heading(id="payables-bill-facts-heading", title="Document") %}{% endcall %}
 {{ facts|safe }}
+{% if flash.error.contains("separation of duties") %}{% call ui::button(id="payables-approval-settings", href="/finance/reports/approval-exceptions") %}Approval exceptions{% endcall %}{% endif %}
 {% endcall %}
 </div>
 {% call ui::card(id="payables-bill-lines", inner_class="p-0", role="region", labelledby="payables-bill-lines-heading") %}

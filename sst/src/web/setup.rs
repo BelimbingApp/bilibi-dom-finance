@@ -412,7 +412,7 @@ impl Setup {
                     "registration-period-start",
                     "First taxable period starts",
                 )
-                .kind(InputKind::Date)
+                .kind(InputKind::Date).hint("Use the date order shown in the box. Dates are saved as YYYY-MM-DD.")
                 .hint("It runs to the end of the month the cycle's months on, counting its own month."),
                 d.field(
                     "registration",

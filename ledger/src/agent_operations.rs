@@ -252,7 +252,21 @@ impl Write {
                         .ok_or(LedgerError::InvalidOption)?,
                 })
                 .map_err(LedgerError::Invalid)?;
-                json!({"before":null,"after":{"company_id":company,"currency_code":valid.currency_code,"minor_units":valid.minor_units,"controlled":true}})
+                let latest = duties::latest_change(client, tenant, company).await?;
+                let separation_required = input["separation_required"]
+                    .as_bool()
+                    .unwrap_or(duties::required(latest.as_ref()));
+                let reason = if input["separation_required"].is_boolean()
+                    && (!separation_required
+                        || separation_required != duties::required(latest.as_ref()))
+                {
+                    authorize_on(client, scope, company, MANAGE_DUTY_SEPARATION).await?;
+                    duties::validate_change(separation_required, input["approval_reason"].as_str())
+                        .map_err(LedgerError::Invalid)?
+                } else {
+                    None
+                };
+                json!({"before":null,"after":{"company_id":company,"currency_code":valid.currency_code,"minor_units":valid.minor_units,"controlled":true,"separation_required":separation_required,"approval_reason":reason},"duty_separation":duties::latest_change(client,tenant,company).await?})
             }
             Self::CreateAccount | Self::UpdateAccount => {
                 let all = accounts::list(client, tenant, company).await?;
@@ -631,17 +645,52 @@ impl WriteHandler for Write {
             )
             .await?;
             let record = match self {
-                Self::OpenBook => json!(Ledger::open_book_on(
-                    tx,
-                    scope,
-                    company,
-                    &NewBook {
-                        currency_code: text(input, "currency_code").map_err(invalid)?.into(),
-                        minor_units: input["minor_units"].as_i64().ok_or(Error::Invalid)?
+                Self::OpenBook => {
+                    let book = Ledger::open_book_on(
+                        tx,
+                        scope,
+                        company,
+                        &NewBook {
+                            currency_code: text(input, "currency_code").map_err(invalid)?.into(),
+                            minor_units: input["minor_units"].as_i64().ok_or(Error::Invalid)?,
+                        },
+                    )
+                    .await
+                    .map_err(invalid)?;
+                    if let Some(required) = input["separation_required"].as_bool() {
+                        let latest =
+                            duties::latest_change(tx.sql(), scope.tenant(), company).await?;
+                        if required != duties::required(latest.as_ref()) {
+                            authorize_on(tx.sql(), scope, company, MANAGE_DUTY_SEPARATION)
+                                .await
+                                .map_err(invalid)?;
+                            let reason = duties::validate_change(
+                                required,
+                                input["approval_reason"].as_str(),
+                            )
+                            .map_err(|e| invalid(LedgerError::Invalid(e)))?;
+                            let tenant = scope.tenant();
+                            let (actor, impersonator) = people(scope);
+                            tx.mutate(move |sql| {
+                                Box::pin(async move {
+                                    let change = duties::record_change(
+                                        sql,
+                                        tenant,
+                                        company,
+                                        actor,
+                                        impersonator,
+                                        required,
+                                        reason.as_deref(),
+                                    )
+                                    .await?;
+                                    Ok(((), vec![change]))
+                                })
+                            })
+                            .await?;
+                        }
                     }
-                )
-                .await
-                .map_err(invalid)?),
+                    json!(book)
+                }
                 Self::CreateAccount => json!(Ledger::create_account_on(
                     tx,
                     scope,
@@ -805,7 +854,7 @@ impl ReadHandler for Read {
             let limit = input["page_size"].as_u64().unwrap_or(100).min(100) as usize;
             let result = match self {
                 Self::Book => {
-                    json!({"book":books::find(client,tenant,company).await?,"controlled_bookkeeping":bookkeeping::latest(client,tenant,company).await?,"duty_separation":duties::latest_change(client,tenant,company).await?})
+                    json!({"book":books::find(client,tenant,company).await?,"controlled_bookkeeping":bookkeeping::latest(client,tenant,company).await?,"duty_separation":duties::latest_change(client,tenant,company).await?,"latest_entry_date":entries::latest_date(client,tenant,company).await?})
                 }
                 Self::Accounts => {
                     let mut rows = accounts::page(
@@ -935,7 +984,7 @@ fn output() -> Value {
 fn book_schema() -> Value {
     schema(
         &["currency_code", "minor_units"],
-        json!({"currency_code":string(3),"minor_units":{"type":"integer","minimum":0,"maximum":4}}),
+        json!({"currency_code":string(3),"minor_units":{"type":"integer","minimum":0,"maximum":4},"separation_required":boolean(),"approval_reason":string(500)}),
     )
 }
 fn account_schema() -> Value {

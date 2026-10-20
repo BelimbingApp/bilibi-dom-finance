@@ -61,6 +61,9 @@ impl Draft {
                     .map(|e| e.message.clone())
                     .collect(),
             );
+        if kind == InputKind::Date {
+            f = f.hint("Use the date order shown in the box. Dates are saved as YYYY-MM-DD.");
+        }
         if required {
             f = f.required();
         }

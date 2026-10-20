@@ -421,6 +421,7 @@ impl Journals {
                 .id("ledger-journal-date")
                 .label("Date")
                 .kind(InputKind::Date)
+                .hint("Use the date order shown in the box. Dates are saved as YYYY-MM-DD.")
                 .value(&draft.date)
                 .required()
                 .errors(errors("entry_date")),

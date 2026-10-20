@@ -442,7 +442,7 @@ impl Years {
             Field::in_form("year", "start_date")
                 .id("ledger-year-start")
                 .label("First day")
-                .kind(InputKind::Date)
+                .kind(InputKind::Date).hint("Use the date order shown in the box. Dates are saved as YYYY-MM-DD.")
                 .value(&opening.start)
                 .hint("The first of a month. Leave it empty to start the day after the last year ends. The first year needs a date.")
                 .errors(errors("start_date")),
@@ -452,6 +452,7 @@ impl Years {
                 .id("ledger-year-end")
                 .label("Last day")
                 .kind(InputKind::Date)
+                .hint("Use the date order shown in the box. Dates are saved as YYYY-MM-DD.")
                 .value(&opening.end)
                 .hint("The last day of a month. Leave it empty for twelve months.")
                 .errors(errors("end_date")),

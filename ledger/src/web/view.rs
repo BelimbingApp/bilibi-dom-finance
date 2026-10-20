@@ -144,10 +144,13 @@ pub(crate) fn parse<T: for<'de> Deserialize<'de>>(value: Value) -> Option<T> {
 /// An amount written with the book's decimal places, as a person reads it.
 pub(crate) fn amount(text: &str, minor_units: u8) -> String {
     match Decimal::from_str(text) {
-        Ok(mut value) => {
-            value.rescale(u32::from(minor_units));
-            value.to_string()
-        }
+        Ok(value) => crate::MinorUnits::new(i64::from(minor_units))
+            .and_then(|units| {
+                crate::Money::new(value, units)
+                    .ok()
+                    .map(|money| money.display(units))
+            })
+            .unwrap_or_else(|| text.to_owned()),
         Err(_) => text.to_owned(),
     }
 }

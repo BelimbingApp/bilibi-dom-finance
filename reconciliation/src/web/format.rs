@@ -43,7 +43,7 @@ pub(super) fn refusal(error: &E) -> String {
         E::RunningBalanceMismatch(row) => format!("Row {row}'s running balance does not follow from the amounts; check the amount sign or the balance column."),
         E::UnterminatedQuote(row) => format!("Row {row} opens a quote it never closes."),
         E::StrayQuote(row) => format!("Row {row} has a quote in the middle of a value."),
-        E::Attachment(bilibi_finance_attachments::AttachmentError::RetentionNotConfigured) => "Source documents cannot be kept yet; an operator must set up the file storage.".into(),
+        E::Attachment(bilibi_finance_attachments::AttachmentError::RetentionNotConfigured) => "Nothing was imported. Ask a server administrator to set Private document directory (artifacts.storage_root) and Document retention days (artifacts.retention_days) in Global settings at /system/settings.".into(),
         E::Attachment(bilibi_finance_attachments::AttachmentError::InvalidContentType) => "The file's type could not be recognised.".into(),
         other => other.to_string(),
     }

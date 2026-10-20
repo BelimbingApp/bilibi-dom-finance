@@ -26,6 +26,7 @@
 //! company configures in the [`SECTIONS`] setting (see `layout.rs`). Section
 //! headings and account choices are the company's data; a report reads them as
 //! they are when it runs.
+mod agent_operations;
 mod auditor_pack;
 mod configuration;
 mod contributions;
@@ -66,7 +67,7 @@ pub const VIEW: &str = "finance.ledger.view";
 
 /// Bump whenever the interpretation of issued content or a report's
 /// calculation changes.
-const IMPLEMENTATION_VERSION: &str = "1";
+const IMPLEMENTATION_VERSION: &str = "2";
 /// A report reads one to four columns.
 const MAX_COLUMNS: usize = 4;
 /// Entries an account's activity lists at a time when no limit is given.
@@ -76,7 +77,7 @@ inventory::submit! {
     Module {
         id: MODULE, layer: Layer::Domains,
         dependencies: &[
-            "base/authz", "base/database", "base/datetime", "base/locale", "base/menu",
+            "base/agent_api", "base/authz", "base/database", "base/datetime", "base/locale", "base/menu",
             "base/party_ids", "base/settings", "base/tenancy", "base/ui",
             "core/company", "base/artifacts", "finance/ledger",
             "finance/attachments", "finance/receivables", "finance/payables",
@@ -84,7 +85,7 @@ inventory::submit! {
             "finance/sst", "finance/fixed_assets",
         ],
         migrations: &[("finance-reports-001-issued", include_str!("../migrations/001-issued.sql"))],
-        services: &[Service { id: SERVICE, factory: |services| Ok(Arc::new(Reports {
+        services: &[Service { id: SERVICE, factory: |services| { let reports = Arc::new(Reports {
             db: services.get::<Db>("base/database.pool")?.as_ref().clone(),
             mutations: services.get("base/database.mutations")?,
             settings: services.get("base/settings.store")?,
@@ -100,9 +101,17 @@ inventory::submit! {
                 sst: services.get(bilibi_finance_sst::SERVICE)?,
                 fixed_assets: services.get(bilibi_finance_fixed_assets::SERVICE)?,
             },
-        })) }, Service { id: "finance/reports.pages", factory: |services| {
+        }); agent_operations::bind(reports.clone(), services.get("base/tenancy.parties")?)?; Ok(reports) } }, Service { id: "finance/reports.pages", factory: |services| {
             Ok(Arc::new(bilibi_ui::page::PageService::<Scope, Error>(Arc::new(web::Pages {
                 reports: services.get(SERVICE)?,
+                contracts: services.get(bilibi_agent_api::page::SERVICE)?,
+                display: services.get("base/datetime.display")?,
+                locales: services.get("base/locale.locales")?,
+            }))))
+        } }, Service { id: "finance/reports.section-pages", factory: |services| {
+            Ok(Arc::new(bilibi_ui::page::PageService::<Scope, Error>(Arc::new(web::Pages {
+                reports: services.get(SERVICE)?,
+                contracts: services.get(bilibi_agent_api::page::SERVICE)?,
                 display: services.get("base/datetime.display")?,
                 locales: services.get("base/locale.locales")?,
             }))))
@@ -146,6 +155,8 @@ pub enum ReportsError {
     /// The ledger's posting relay could not listen.
     #[error("Posting notices are unavailable")]
     NoticesUnavailable,
+    #[error("The cash account choices are unavailable. Try again.")]
+    CashAccountsUnavailable,
     /// Any other refusal of the ledger's facade, as the ledger words it.
     #[error(transparent)]
     Ledger(LedgerError),
@@ -409,6 +420,7 @@ struct Read {
     accounts: Vec<Account>,
     columns: Vec<Totals>,
     layout: Value,
+    cash_defaults: Option<Vec<i64>>,
 }
 impl Read {
     fn header(&self, columns: Vec<Column>) -> Header {
@@ -423,7 +435,12 @@ impl Read {
     /// One report's sections, each account's section and the unmatched codes.
     fn arrange(&self, report: &str) -> Arranged {
         let sections = layout::sections(&self.layout, report);
-        let (membership, unmatched) = layout::assign(&self.accounts, &sections);
+        let (mut membership, unmatched) = layout::assign(&self.accounts, &sections);
+        if report == "cash_position" {
+            if let Some(ids) = &self.cash_defaults {
+                membership.retain(|id, _| ids.contains(id));
+            }
+        }
         Arranged {
             sections,
             membership,
@@ -938,14 +955,53 @@ impl Reports {
             book.get_or_insert((totals.currency_code, totals.minor_units));
         }
         let (currency_code, minor_units) = book.ok_or(ReportsError::InvalidOption)?;
+        let accounts = self.ledger.list_accounts(scope, company_id).await?;
+        let mut layout = self.layout(scope, company_id).await?;
+        // An explicit cash section wins, including an intentionally empty one.
+        // The fallback covers exactly the bank accounts, never their descendants.
+        let mut cash_defaults = None;
+        if layout::sections(&layout, "cash_position").is_empty() {
+            let ids = self
+                .sources
+                .reconciliation
+                .cash_account_ids(scope, company_id)
+                .await
+                .map_err(|error| match error {
+                    bilibi_finance_reconciliation::ReconciliationError::Failed(error) => {
+                        ReportsError::Failed(error)
+                    }
+                    bilibi_finance_reconciliation::ReconciliationError::Unauthorized => {
+                        ReportsError::Unauthorized
+                    }
+                    _ => ReportsError::CashAccountsUnavailable,
+                })?;
+            cash_defaults = Some(ids.clone());
+            let codes: Vec<_> = accounts
+                .iter()
+                .filter(|a| ids.contains(&a.id))
+                .map(|a| a.code.clone())
+                .collect();
+            if !codes.is_empty() {
+                if !layout::valid(&layout) {
+                    layout = json!([]);
+                }
+                layout
+                    .as_array_mut()
+                    .ok_or(ReportsError::InvalidOption)?
+                    .push(
+                        json!({"report":"cash_position","name":"Cash and bank","accounts":codes}),
+                    );
+            }
+        }
         Ok(Read {
             company_id,
             currency_code,
             minor_units,
             through_entry_number: through.ok_or(ReportsError::InvalidOption)?,
-            accounts: self.ledger.list_accounts(scope, company_id).await?,
+            accounts,
             columns,
-            layout: self.layout(scope, company_id).await?,
+            layout,
+            cash_defaults,
         })
     }
 

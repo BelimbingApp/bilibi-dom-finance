@@ -45,6 +45,8 @@ struct RegisterLink;
 #[template(path = "assumptions.html")]
 struct AssumptionsView<'a> {
     detail: &'a AssetDetail,
+    cost: String,
+    residual: String,
     method: &'static str,
     heading: String,
     actor: String,
@@ -163,10 +165,23 @@ impl Detail {
                 ),
                 d.field(
                     "settlement_account_id",
-                    "Proceeds account ID (for a sale)",
-                    InputKind::Number,
+                    "Proceeds account (for a sale)",
+                    InputKind::Select,
                     false,
                     &prefix,
+                )
+                .options(
+                    std::iter::once(bilibi_ui::Choice::new("Choose an account", ""))
+                        .chain(
+                            self.pages
+                                .account_context(s)
+                                .await?
+                                .1
+                                .into_iter()
+                                .filter(|a| a.2 == "asset")
+                                .map(|a| bilibi_ui::Choice::new(a.1, a.0.to_string())),
+                        )
+                        .collect(),
                 ),
             ]);
         }
@@ -184,6 +199,7 @@ impl Detail {
         })
     }
     async fn body(&self, s: &Scope) -> Result<String> {
+        let units = self.pages.account_context(s).await?.0;
         let display = self.pages.display(s).await?;
         let read = match company(s) {
             Some(c) => self.pages.assets.get_asset(s, c, self.asset_id).await,
@@ -203,6 +219,8 @@ impl Detail {
         if let Some(d) = &detail {
             assumptions = render(AssumptionsView {
                 detail: d,
+                cost: d.asset.cost.display(units),
+                residual: d.asset.residual_value.display(units),
                 heading: format!("#{} {}", d.asset.asset_number, d.asset.description),
                 method: input::method(d.asset.assumptions.method),
                 actor: actor(
@@ -219,9 +237,9 @@ impl Detail {
                 .map(|r| {
                     FlexRow::new(r.period.to_string())
                         .cell("month", Cell::text(r.period.to_string()))
-                        .cell("amount", Cell::text(r.amount.to_string()))
-                        .cell("accumulated", Cell::text(r.accumulated.to_string()))
-                        .cell("carrying", Cell::text(r.carrying_value.to_string()))
+                        .cell("amount", Cell::text(r.amount.display(units)))
+                        .cell("accumulated", Cell::text(r.accumulated.display(units)))
+                        .cell("carrying", Cell::text(r.carrying_value.display(units)))
                 })
                 .collect();
             schedule = table(
@@ -252,7 +270,7 @@ impl Detail {
                     FlexRow::new(r.run_id.to_string())
                         .cell("run", Cell::text(r.run_id.to_string()))
                         .cell("month", Cell::text(r.period.to_string()))
-                        .cell("amount", Cell::text(r.amount.to_string()))
+                        .cell("amount", Cell::text(r.amount.display(units)))
                         .cell(
                             "entry",
                             Cell::text(
