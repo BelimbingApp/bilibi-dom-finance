@@ -3,7 +3,8 @@
 //! starts from an empty ledger. Never print credentials or plan codes.
 use bilibi_authz::grants::Grants;
 use bilibi_core::agent_access::{
-    code_challenge, AgentAccess, AuthorizeParams, CodeExchange, Decision, CLIENT_ID, OAUTH_CLIENTS,
+    code_challenge, AgentAccess, AuthorizeParams, ClientRegistration, CodeExchange, Decision,
+    CLIENT_ID,
 };
 use bilibi_database::{pool, Error, MutationBoundary};
 use bilibi_finance_walkthrough_fixture::sign_in;
@@ -88,16 +89,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             admin.mutation_context("walkthrough.agent.clients"),
         )
         .await?;
-    let callback = "https://example.test/ledger-proof/callback";
-    settings
-        .put(
-            &mut tx,
-            &admin,
-            Target::Global,
-            OAUTH_CLIENTS,
-            json!({"ledger-proof":{"name":"Ledger walkthrough","redirect_uris":[callback]}}),
-        )
-        .await?;
     // Bound only this disposable proof, not production defaults.
     for key in [
         "agent_api.mcp_requests_per_minute",
@@ -110,6 +101,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tx.commit().await?;
     drop(client);
     let access = services.get::<AgentAccess>("core/agent_access.grants")?;
+    // MCP uses a public, dynamically registered PKCE client (Platform Agent Access).
+    let callback = "https://example.test/ledger-proof/callback";
+    let registration = access
+        .register_client(&serde_json::from_value::<ClientRegistration>(json!({
+            "client_name": "Ledger walkthrough", "redirect_uris": [callback],
+            "token_endpoint_auth_method": "none"
+        }))?)
+        .await?;
+    let client_id = registration["client_id"]
+        .as_str()
+        .ok_or("registered client ID")?;
     let resource = format!("{}/mcp", origin.trim_end_matches('/'));
     let mut credentials = serde_json::Map::new();
     for (name, scope) in [
@@ -125,7 +127,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let api = access.exchange(CLIENT_ID, &device.device_code).await?;
         let verifier = "ledger-walkthrough-verifier-with-at-least-forty-three-characters";
         let params = AuthorizeParams {
-            client_id: "ledger-proof".into(),
+            client_id: client_id.into(),
             redirect_uri: callback.into(),
             response_type: "code".into(),
             resource: resource.clone(),
