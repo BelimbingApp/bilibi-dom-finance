@@ -3,7 +3,7 @@
 //! page for them; the requests are read through the facade and a new one is
 //! made on the request form.
 use super::{company, format as f, render, Pages, NEW_PAYMENT, PAYMENTS};
-use crate::{Payment, PaymentRequest, PaymentRequestPageQuery, SUBMIT_PAYMENTS};
+use crate::{Payment, PaymentQuery, PaymentRequest, PaymentRequestQuery, SUBMIT_PAYMENTS};
 use askama::Template;
 use bilibi_database::{Error, Result};
 use bilibi_finance_ledger::{Account, MinorUnits};
@@ -20,6 +20,10 @@ use std::{
 };
 
 const SIZES: [u64; 3] = [25, 50, 100];
+// The facade pages by request number, 500 at a time; a company with more
+// than this many requests sees the newest ones.
+const BATCH: i64 = 500;
+const BATCHES: usize = 5;
 
 static SPEC: LazyLock<Arc<ListSpec>> = LazyLock::new(|| {
     ListSpec {
@@ -97,28 +101,54 @@ impl Payments {
         };
         let status = params::blank_to_none(self.list.filters.get("status").map(String::as_str))
             .map(str::to_owned);
+        let mut all = Vec::new();
+        let mut after = None;
         self.unavailable = false;
-        let page = self
-            .pages
-            .payables
-            .page_payment_requests(
-                scope,
-                company,
-                &PaymentRequestPageQuery {
-                    status,
-                    search: self.list.search.trim().to_owned(),
-                    page: self.list.page.max(1) as i64,
-                    page_size: self.list.page_size as i64,
-                },
-            )
-            .await;
-        let Ok(page) = page else {
-            self.unavailable = true;
-            return Ok(());
-        };
-        self.total = page.total.max(0) as u64;
-        self.list.page = page.page.max(1) as u64;
-        self.requests = page.requests;
+        for _ in 0..BATCHES {
+            let batch = self
+                .pages
+                .payables
+                .list_payment_requests(
+                    scope,
+                    company,
+                    &PaymentRequestQuery {
+                        status: status.clone(),
+                        after,
+                        limit: Some(BATCH),
+                    },
+                )
+                .await;
+            let Ok(batch) = batch else {
+                self.unavailable = true;
+                return Ok(());
+            };
+            let more = batch.len() as i64 == BATCH;
+            after = batch.last().map(|r| r.request_number);
+            all.extend(batch);
+            if !more {
+                break;
+            }
+        }
+        let needle = self.list.search.trim().to_lowercase();
+        if !needle.is_empty() {
+            all.retain(|r| {
+                [
+                    r.party_name.as_str(),
+                    r.party_key.as_str(),
+                    r.reference.as_deref().unwrap_or(""),
+                    &r.request_number.to_string(),
+                ]
+                .iter()
+                .any(|text| text.to_lowercase().contains(&needle))
+            });
+        }
+        all.sort_by_key(|r| std::cmp::Reverse(r.request_number));
+        self.total = all.len() as u64;
+        let size = self.list.page_size.max(1);
+        let pages = self.total.div_ceil(size).max(1);
+        self.list.page = self.list.page.clamp(1, pages);
+        let from = ((self.list.page - 1) * size) as usize;
+        self.requests = all.into_iter().skip(from).take(size as usize).collect();
         self.units = self
             .pages
             .ledger
@@ -132,15 +162,20 @@ impl Payments {
             .list_accounts(scope, company)
             .await
             .unwrap_or_default();
-        let paid: Vec<i64> = self
-            .requests
-            .iter()
-            .filter_map(|r| r.decision.as_ref()?.payment_id)
-            .collect();
-        for id in paid {
-            if let Ok(payment) = self.pages.payables.get_payment(scope, company, id).await {
-                self.payments.insert(payment.id, payment);
-            }
+        if let Ok(payments) = self
+            .pages
+            .payables
+            .list_payments(
+                scope,
+                company,
+                &PaymentQuery {
+                    limit: Some(BATCH),
+                    ..PaymentQuery::default()
+                },
+            )
+            .await
+        {
+            self.payments = payments.into_iter().map(|p| (p.id, p)).collect();
         }
         self.columns.load(&self.requests, |r| r.id.to_string());
         Ok(())
