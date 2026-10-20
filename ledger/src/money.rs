@@ -82,12 +82,24 @@ impl Money {
     /// `shown` remains plain decimal notation for editable values and contracts.
     /// Without book access, retain the stored precision with at least two places.
     pub fn display(self, units: impl Into<Option<MinorUnits>>) -> String {
-        let units = units
-            .into()
-            .unwrap_or(MinorUnits(self.0.scale().max(2) as u8));
-        let fixed = self.abs().shown(units);
+        Self::display_decimal(self.0, units)
+    }
+    /// [`Money::display`] for a figure that is not an amount of the book, a
+    /// unit price or a report total read back as a bare decimal.
+    pub fn display_decimal(value: Decimal, units: impl Into<Option<MinorUnits>>) -> String {
+        let mut fixed = value.abs();
+        match units.into() {
+            Some(units) => fixed.rescale(u32::from(units.get())),
+            None => {
+                fixed = fixed.normalize();
+                if fixed.scale() < 2 {
+                    fixed.rescale(2);
+                }
+            }
+        }
+        let fixed = fixed.to_string();
         let (whole, fraction) = fixed.split_once('.').unwrap_or((&fixed, ""));
-        let mut out = if self.0.is_sign_negative() && !self.is_zero() {
+        let mut out = if value.is_sign_negative() && !value.is_zero() {
             "-".to_owned()
         } else {
             String::new()
@@ -98,7 +110,7 @@ impl Money {
             }
             out.push(digit);
         }
-        if units.get() > 0 {
+        if !fraction.is_empty() {
             out.push('.');
             out.push_str(fraction);
         }

@@ -3,7 +3,7 @@ use crate::{Document, MatchEvent, PayablesError, Tolerance, ToleranceKind};
 use askama::Template;
 use bilibi_database::{Error, Result};
 use bilibi_datetime::{DisplayContext, Format, Precision};
-use bilibi_finance_ledger::{LedgerError, MinorUnits, Money};
+use bilibi_finance_ledger::LedgerError;
 use bilibi_ui::{Badge, BadgeKind, Html};
 use rust_decimal::Decimal;
 
@@ -171,31 +171,6 @@ pub(super) fn refusal(action: &str, error: PayablesError) -> String {
             }
         }
     }
-}
-
-/// Digits in threes: `1234567.50` reads `1,234,567.50`. The text already
-/// carries the book's decimal places (`Money::shown`).
-pub(super) fn grouped(amount: &str) -> String {
-    let (sign, digits) = amount
-        .strip_prefix('-')
-        .map_or(("", amount), |rest| ("-", rest));
-    let (whole, fraction) = digits.split_once('.').map_or((digits, ""), |(w, f)| (w, f));
-    let mut out = String::with_capacity(amount.len() + whole.len() / 3);
-    for (i, c) in whole.chars().enumerate() {
-        if i > 0 && (whole.len() - i) % 3 == 0 {
-            out.push(',');
-        }
-        out.push(c);
-    }
-    if fraction.is_empty() {
-        format!("{sign}{out}")
-    } else {
-        format!("{sign}{out}.{fraction}")
-    }
-}
-/// An amount of the book, with its decimal places and digit groups.
-pub(super) fn money(amount: Money, units: MinorUnits) -> String {
-    grouped(&amount.shown(units))
 }
 
 pub(super) fn request_status(status: &str) -> Result<Html> {

@@ -204,9 +204,7 @@ impl Payments {
                         || format!("#{}", r.paid_from_account_id),
                         |a| format!("{} {}", a.code, a.name),
                     );
-                let amount = self
-                    .units
-                    .map_or_else(|| r.amount.to_string(), |units| f::money(r.amount, units));
+                let amount = r.amount.display(self.units);
                 let payment = r
                     .decision
                     .as_ref()

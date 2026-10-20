@@ -102,7 +102,12 @@ impl Detail {
             flash: None,
         })
     }
-    async fn form(&self, s: &Scope, op: &str) -> Result<Html> {
+    async fn form(
+        &self,
+        s: &Scope,
+        op: &str,
+        accounts: &[(i64, String, String)],
+    ) -> Result<Html> {
         let (d, cap, title, reason) = match op {
             "dispose" => (
                 &self.dispose,
@@ -173,13 +178,10 @@ impl Detail {
                 .options(
                     std::iter::once(bilibi_ui::Choice::new("Choose an account", ""))
                         .chain(
-                            self.pages
-                                .account_context(s)
-                                .await?
-                                .1
-                                .into_iter()
+                            accounts
+                                .iter()
                                 .filter(|a| a.2 == "asset")
-                                .map(|a| bilibi_ui::Choice::new(a.1, a.0.to_string())),
+                                .map(|a| bilibi_ui::Choice::new(&a.1, a.0.to_string())),
                         )
                         .collect(),
                 ),
@@ -199,7 +201,7 @@ impl Detail {
         })
     }
     async fn body(&self, s: &Scope) -> Result<String> {
-        let units = self.pages.account_context(s).await?.0;
+        let (units, accounts) = self.pages.account_context(s).await?;
         let display = self.pages.display(s).await?;
         let read = match company(s) {
             Some(c) => self.pages.assets.get_asset(s, c, self.asset_id).await,
@@ -322,7 +324,7 @@ impl Detail {
             )?;
         }
         let visible = detail.is_some();
-        View {register_link:render(RegisterLink)?,detail:detail.as_ref(),unavailable,flash:flash_map(&self.flash),assumptions,schedule,charges,events,dispose:if visible {self.form(s,"dispose").await?}else{Html::EMPTY},void:if detail.as_ref().is_some_and(|d|!d.voided){self.form(s,"void").await?}else{Html::EMPTY},reverse:if visible{self.form(s,"reverse").await?}else{Html::EMPTY},confirm:if self.pending_void.is_some(){render(ConfirmDialog {id:"asset-void-confirm",consequence:"Void acquisition",detail:"Depreciation already posted for this asset is reversed; other assets keep theirs. This cannot be undone.",confirm:"Void acquisition",working:"Recording…",confirm_event:"confirm_void",cancel_event:"cancel_void"})?}else{Html::EMPTY}}.render().map_err(|_|Error::Internal)
+        View {register_link:render(RegisterLink)?,detail:detail.as_ref(),unavailable,flash:flash_map(&self.flash),assumptions,schedule,charges,events,dispose:if visible {self.form(s,"dispose",&accounts).await?}else{Html::EMPTY},void:if detail.as_ref().is_some_and(|d|!d.voided){self.form(s,"void",&accounts).await?}else{Html::EMPTY},reverse:if visible{self.form(s,"reverse",&accounts).await?}else{Html::EMPTY},confirm:if self.pending_void.is_some(){render(ConfirmDialog {id:"asset-void-confirm",consequence:"Void acquisition",detail:"Depreciation already posted for this asset is reversed; other assets keep theirs. This cannot be undone.",confirm:"Void acquisition",working:"Recording…",confirm_event:"confirm_void",cancel_event:"cancel_void"})?}else{Html::EMPTY}}.render().map_err(|_|Error::Internal)
     }
     async fn perform(&self, s: &Scope, op: &str, d: &Draft) -> crate::Result<()> {
         let c = company(s).ok_or(FixedAssetsError::CompanyNotFound)?;

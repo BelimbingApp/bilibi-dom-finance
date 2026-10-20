@@ -5,7 +5,7 @@ use super::{company, format as f, render, Pages};
 use crate::{AgedDocument, AgedPayables, AgingQuery};
 use askama::Template;
 use bilibi_database::{Error, Result};
-use bilibi_finance_ledger::{MinorUnits, Money};
+use bilibi_finance_ledger::MinorUnits;
 use bilibi_tenancy::Scope;
 use bilibi_ui::{
     page::{LiveBody, LiveFuture, LiveInput, LiveRequest, LiveState},
@@ -135,11 +135,6 @@ impl Aged {
         Ok(())
     }
 
-    fn money(&self, amount: Money) -> String {
-        self.units
-            .map_or_else(|| amount.to_string(), |u| f::money(amount, u))
-    }
-
     fn bill_rows(&self, documents: Vec<&AgedDocument>, prefix: &str) -> Result<Vec<FlexRow>> {
         let mut rows = Vec::new();
         for d in documents {
@@ -168,7 +163,7 @@ impl Aged {
                             "—".into()
                         }),
                     )
-                    .cell("outstanding", Cell::text(self.money(d.outstanding))),
+                    .cell("outstanding", Cell::text(d.outstanding.display(self.units))),
             );
         }
         Ok(rows)
@@ -229,18 +224,18 @@ impl Aged {
                 Cell::text(format!("{} · {}", p.party_key, p.party_name)),
             );
             for (i, amount) in p.buckets.iter().enumerate() {
-                row = row.cell(&format!("b{i}"), Cell::text(self.money(*amount)));
+                row = row.cell(&format!("b{i}"), Cell::text(amount.display(self.units)));
             }
-            rows.push(row.cell("total", Cell::text(self.money(p.total))));
+            rows.push(row.cell("total", Cell::text(p.total.display(self.units))));
         }
         if !aged.parties.is_empty() {
             let mut row = FlexRow::new("all");
             row.dom_id = Some("payables-aged-total".into());
             row = row.cell("party", Cell::text("All suppliers"));
             for (i, amount) in aged.buckets.iter().enumerate().take(labels.len()) {
-                row = row.cell(&format!("b{i}"), Cell::text(self.money(*amount)));
+                row = row.cell(&format!("b{i}"), Cell::text(amount.display(self.units)));
             }
-            rows.push(row.cell("total", Cell::text(self.money(aged.total))));
+            rows.push(row.cell("total", Cell::text(aged.total.display(self.units))));
         }
         let documents = aged.parties.iter().flat_map(|p| &p.documents).collect();
         let bills = (!aged.parties.is_empty())

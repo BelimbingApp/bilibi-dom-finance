@@ -7,6 +7,7 @@ use crate::{
 };
 use askama::Template;
 use bilibi_database::{Error, Result};
+use bilibi_finance_ledger::MinorUnits;
 use bilibi_tenancy::Scope;
 use bilibi_ui::{
     page::{LiveBody, LiveFuture, LiveInput, LiveRequest, LiveState, PanelSpec},
@@ -25,6 +26,8 @@ pub(super) struct Bill {
     pages: Pages,
     id: i64,
     document: Option<Document>,
+    units: Option<MinorUnits>,
+    accounts: Vec<(i64, String, String)>,
     dialog: Option<Dialog>,
     reason: String,
     flash: Option<(StatusKind, String)>,
@@ -39,6 +42,8 @@ impl Bill {
             pages,
             id: params::positive_id(path.get("id").map(String::as_str)).unwrap_or(0),
             document: None,
+            units: None,
+            accounts: vec![],
             dialog: None,
             reason: String::new(),
             flash: None,
@@ -92,6 +97,7 @@ impl Bill {
                 .ok(),
             None => None,
         };
+        (self.units, self.accounts) = self.pages.account_context(scope).await?;
         if let Some(d) = &self.document {
             self.lines.load(&d.lines, |l| l.id.to_string());
             self.events.load(&d.match_events, |e| e.id.to_string());
@@ -144,7 +150,7 @@ impl Bill {
         let can_create = self.pages.allowed(scope, CREATE_DOCUMENTS).await?;
         let can_pay = self.pages.allowed(scope, SUBMIT_PAYMENTS).await?;
         let display = self.pages.display(scope).await?;
-        let (units, accounts) = self.pages.account_context(scope).await?;
+        let (units, accounts) = (self.units, &self.accounts);
         let party = render(Facts {
             id: "payables-bill-party-facts",
             items: vec![

@@ -116,7 +116,7 @@ impl Bills {
         self.documents.clear();
         self.total = 0;
         if let Ok(page) = result {
-            self.units = self.pages.account_context(scope).await?.0;
+            self.units = self.pages.units(scope).await;
             self.documents = page.documents;
             self.total = page.total as u64;
             self.list.page = page.page as u64;

@@ -369,7 +369,7 @@ impl PaymentForm {
                                     "{} · {} ({} {})",
                                     p.party_key,
                                     p.party_name,
-                                    f::money(p.total, units),
+                                    p.total.display(units),
                                     self.currency
                                 ),
                                 p.party_key.clone(),
@@ -412,7 +412,7 @@ impl PaymentForm {
                         .then(|| format!("{} days overdue", doc.days_overdue)),
                     owed: format!(
                         "Owed {} {}",
-                        f::money(doc.outstanding, units),
+                        doc.outstanding.display(units),
                         doc.currency_code
                     ),
                     amount: Field::in_form(PREFIX, &format!("amount_{}", doc.id))
@@ -435,7 +435,7 @@ impl PaymentForm {
                         } else {
                             "Total so far"
                         },
-                        &format!("{} {}", f::money(total, units), self.currency),
+                        &format!("{} {}", total.display(units), self.currency),
                     )],
                 })?)
             }

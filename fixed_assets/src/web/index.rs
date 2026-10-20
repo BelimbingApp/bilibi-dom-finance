@@ -312,7 +312,7 @@ impl Index {
         }
         fields
     }
-    async fn write_form(&self, s: &Scope) -> Result<Html> {
+    async fn write_form(&self, s: &Scope, accounts: &[(i64, String, String)]) -> Result<Html> {
         if !self.pages.allowed(s, self.kind.cap()).await? {
             return withheld(
                 "assets-write-withheld",
@@ -325,7 +325,7 @@ impl Index {
             event_name: "record_asset",
             button_dom: "assets-record",
             verb: "Record",
-            fields: self.fields(&self.pages.account_context(s).await?.1),
+            fields: self.fields(accounts),
             help: if self.kind == Kind::Runs {
                 "One charge through this month, including any scheduled depreciation still unposted. Closed periods are refused."
             } else {
@@ -378,13 +378,8 @@ impl Index {
     async fn rows(
         &self,
         s: &Scope,
+        units: Option<bilibi_finance_ledger::MinorUnits>,
     ) -> crate::Result<(Vec<(String, FlexRow)>, Option<RegisterReport>)> {
-        let units = self
-            .pages
-            .account_context(s)
-            .await
-            .map_err(crate::FixedAssetsError::Failed)?
-            .0;
         let c = company(s).ok_or(FixedAssetsError::CompanyNotFound)?;
         let mut rows = Vec::new();
         let report = match self.kind {
@@ -483,7 +478,7 @@ impl Index {
     }
     async fn body(&mut self, s: &Scope) -> Result<String> {
         let (units, accounts) = self.pages.account_context(s).await?;
-        let (mut rows, report, unavailable) = match self.rows(s).await {
+        let (mut rows, report, unavailable) = match self.rows(s, units).await {
             Ok((rows, r)) => (rows, r, Html::EMPTY),
             Err(e) => (
                 vec![],
@@ -574,7 +569,7 @@ impl Index {
             pager: render(pager)?,
             reconciliation,
             heading: self.kind.heading(),
-            form: self.write_form(s).await?,
+            form: self.write_form(s, &accounts).await?,
             reverse: self.reverse_form(s).await?,
         };
         view.render().map_err(|_| Error::Internal)

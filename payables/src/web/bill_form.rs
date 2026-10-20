@@ -593,7 +593,7 @@ impl BillForm {
                         "Still owed",
                         &b.outstanding.map_or_else(
                             || "—".into(),
-                            |m| format!("{} {}", f::money(m, units), b.currency_code),
+                            |m| format!("{} {}", m.display(units), b.currency_code),
                         ),
                     ),
                 ],
@@ -697,7 +697,7 @@ impl BillForm {
         };
         let totals = match self.totals() {
             Some((net, tax, total, complete)) => {
-                let shown = |m: Money| format!("{} {}", f::money(m, units), self.currency);
+                let shown = |m: Money| format!("{} {}", m.display(units), self.currency);
                 Some(render(Facts {
                     id: "payables-record-totals",
                     items: vec![

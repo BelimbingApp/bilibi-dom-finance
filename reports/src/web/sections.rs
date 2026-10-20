@@ -129,13 +129,18 @@ impl State {
                 .flatten()
                 .enumerate()
             {
+                let code = account.as_str().unwrap_or_default();
+                let mut options = self.accounts.clone();
+                if !code.is_empty() && !options.iter().any(|o| o.value == code) {
+                    options.push(Choice::new(format!("{code} (not in the chart)"), code));
+                }
                 body.push(&render(
                     Field::in_form("layout", &format!("account_{index}_{number}"))
                         .id(format!("report-section-{key}-account-{number}"))
                         .label("Account")
                         .kind(InputKind::Select)
-                        .value(account.as_str().unwrap_or_default())
-                        .options(self.accounts.clone()),
+                        .value(code)
+                        .options(options),
                 )?);
             }
             body.push(&render(Button {

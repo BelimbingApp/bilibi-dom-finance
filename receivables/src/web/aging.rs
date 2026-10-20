@@ -170,9 +170,8 @@ impl Aging {
                     .id("receivables-aging-as-of")
                     .label("As of")
                     .kind(InputKind::Date)
-                    .hint("Use the date order shown in the box. Dates are saved as YYYY-MM-DD.")
                     .value(self.as_of.clone())
-                    .hint("Invoices dated later, and money received later, are left out."),
+                    .hint("Invoices dated later, and money received later, are left out. Use the date order shown in the box. Dates are saved as YYYY-MM-DD."),
             )?,
             actions: render(Button {
                 id: "receivables-aging-show",

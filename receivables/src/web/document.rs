@@ -11,6 +11,7 @@ use super::{
 use crate::{Customer, Document as Record, Payment, Series, TaxCode, ISSUE, MANAGE_DOCUMENTS};
 use bilibi_database::{Error, Result};
 use bilibi_datetime::DisplayContext;
+use bilibi_finance_ledger::Money;
 use bilibi_tenancy::Scope;
 use bilibi_ui::{
     page::{LiveBody, LiveFuture, LiveInput, LiveRequest, LiveState, PanelSpec},
@@ -495,7 +496,7 @@ impl Document {
                 row.cell("number", Cell::text(l.line_number.to_string()))
                     .cell("description", Cell::text(&l.description))
                     .slot("quantity", f::tabular(&f::decimal(l.quantity))?)
-                    .slot("unit_price", f::tabular(&f::price_display(l.unit_price))?)
+                    .slot("unit_price", f::tabular(&Money::display_decimal(l.unit_price, None))?)
                     .cell("account", Cell::text(self.account(l.account_id)))
                     .cell(
                         "tax",

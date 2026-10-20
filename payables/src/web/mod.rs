@@ -365,6 +365,26 @@ inventory::submit! { bilibi_module_registry::Contribution::new(bilibi_module_reg
 }) }
 
 impl Pages {
+    /// The book's minor units, or none when the person may not read the book
+    /// or it cannot be read: a page then shows amounts as stored.
+    async fn units(&self, scope: &Scope) -> Option<bilibi_finance_ledger::MinorUnits> {
+        let company = scope.actor().organisation()?.get();
+        let book = self
+            .contracts
+            .read(
+                scope,
+                "finance.ledger.book.get",
+                &serde_json::json!({"company_id":company}),
+            )
+            .await
+            .ok()?;
+        book["result"]["book"]["minor_units"]
+            .as_i64()
+            .and_then(bilibi_finance_ledger::MinorUnits::new)
+    }
+
+    /// The book's minor units and chart for one render; a document viewer
+    /// need not have permission to read the chart, and then has no accounts.
     async fn account_context(
         &self,
         scope: &Scope,
@@ -374,29 +394,21 @@ impl Pages {
     )> {
         let company = scope.actor().organisation().ok_or(Error::Forbidden)?.get();
         let mut input = serde_json::json!({"company_id":company});
-        let book = match self
-            .contracts
-            .read(scope, "finance.ledger.book.get", &input)
-            .await
-        {
-            Ok(book) => book,
-            // A document viewer need not have permission to read the chart.
-            Err(
-                bilibi_agent_api::Error::Forbidden
-                | bilibi_agent_api::Error::Backend(Error::Forbidden | Error::Unauthorized),
-            ) => return Ok((None, Vec::new())),
-            Err(_) => return Err(Error::Internal),
-        };
-        let units = book["result"]["book"]["minor_units"]
-            .as_i64()
-            .and_then(bilibi_finance_ledger::MinorUnits::new);
+        let units = self.units(scope).await;
         let mut accounts = Vec::new();
         loop {
-            let page = self
+            let page = match self
                 .contracts
                 .read(scope, "finance.ledger.account.list", &input)
                 .await
-                .map_err(|_| Error::Internal)?;
+            {
+                Ok(page) => page,
+                Err(
+                    bilibi_agent_api::Error::Forbidden
+                    | bilibi_agent_api::Error::Backend(Error::Forbidden | Error::Unauthorized),
+                ) => return Ok((units, Vec::new())),
+                Err(_) => return Err(Error::Internal),
+            };
             for a in page["result"]["records"].as_array().into_iter().flatten() {
                 if let (Some(id), Some(code), Some(name), Some(kind)) = (
                     a["id"].as_i64(),

@@ -437,10 +437,9 @@ impl Payments {
                 .id("receivables-receipt-payment_date")
                 .label("Date received")
                 .kind(InputKind::Date)
-                .hint("Use the date order shown in the box. Dates are saved as YYYY-MM-DD.")
                 .value(value("payment_date"))
                 .required()
-                .hint("Invoices dated after this cannot be settled by it.")
+                .hint("Invoices dated after this cannot be settled by it. Use the date order shown in the box. Dates are saved as YYYY-MM-DD.")
                 .errors(draft.errors.of("payment_date")),
         )?);
         body.push(&render(

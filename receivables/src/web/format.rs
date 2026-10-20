@@ -6,6 +6,7 @@ use bilibi_ui::{
     error_sentence, Badge, BadgeKind, BuiltinColumn, ErrorSummary, Fact, FlashGroup, FlexRow,
     FlexTable, Html, ListColumns, Modal, ModalWidth, Page, PageVariant,
 };
+use bilibi_finance_ledger::{MinorUnits, Money};
 use rust_decimal::Decimal;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -84,28 +85,6 @@ pub(super) fn price(value: Decimal) -> String {
         value.rescale(2);
     }
     value.to_string()
-}
-
-/// A displayed unit price; editable prices stay in plain decimal notation.
-pub(super) fn price_display(value: Decimal) -> String {
-    let text = price(value.abs());
-    let (whole, fraction) = text.split_once('.').unwrap_or((&text, ""));
-    let mut out = if value.is_sign_negative() && !value.is_zero() {
-        "-".to_owned()
-    } else {
-        String::new()
-    };
-    for (i, c) in whole.char_indices() {
-        if i > 0 && (whole.len() - i).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(c);
-    }
-    if !fraction.is_empty() {
-        out.push('.');
-        out.push_str(fraction);
-    }
-    out
 }
 
 pub(super) fn actor(user: Option<i64>, impersonator: Option<i64>) -> String {
@@ -386,58 +365,32 @@ pub(super) fn commit_status(
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Figures {
     pub currency: String,
-    scale: Option<u32>,
+    units: Option<MinorUnits>,
 }
 
 impl Figures {
     pub(super) fn book(currency: &str, minor_units: u32) -> Self {
         Self {
             currency: currency.into(),
-            scale: Some(minor_units),
+            units: MinorUnits::new(i64::from(minor_units)),
         }
     }
 
-    pub(super) fn decimal(&self, mut value: Decimal) -> String {
-        match self.scale {
-            Some(scale) => value.rescale(scale),
-            None => {
-                value = value.normalize();
-                if value.scale() < 2 {
-                    value.rescale(2);
-                }
-            }
-        }
-        let text = value.abs().to_string();
-        let (whole, fraction) = text.split_once('.').unwrap_or((&text, ""));
-        let mut grouped = if value.is_sign_negative() && !value.is_zero() {
-            "-".to_owned()
-        } else {
-            String::new()
-        };
-        for (i, c) in whole.char_indices() {
-            if i > 0 && (whole.len() - i).is_multiple_of(3) {
-                grouped.push(',');
-            }
-            grouped.push(c);
-        }
-        if !fraction.is_empty() {
-            grouped.push('.');
-            grouped.push_str(fraction);
-        }
-        grouped
+    pub(super) fn decimal(&self, value: Decimal) -> String {
+        Money::display_decimal(value, self.units)
     }
 
-    pub(super) fn money(&self, value: bilibi_finance_ledger::Money) -> String {
-        self.decimal(value.amount())
+    pub(super) fn money(&self, value: Money) -> String {
+        value.display(self.units)
     }
 
-    pub(super) fn optional(&self, value: Option<bilibi_finance_ledger::Money>) -> String {
+    pub(super) fn optional(&self, value: Option<Money>) -> String {
         value.map_or_else(|| "—".into(), |m| self.money(m))
     }
 
     pub(super) fn with_currency(
         &self,
-        value: bilibi_finance_ledger::Money,
+        value: Money,
         fallback: &str,
     ) -> String {
         format!(
@@ -470,7 +423,7 @@ pub(super) fn buttons(buttons: Html) -> Result<Html> {
 impl Figures {
     pub(super) fn with_currency_opt(
         &self,
-        value: Option<bilibi_finance_ledger::Money>,
+        value: Option<Money>,
         fallback: &str,
     ) -> String {
         value.map_or_else(|| "—".into(), |m| self.with_currency(m, fallback))
