@@ -8,9 +8,10 @@
 use crate::{
     accounts, periods, Account, AccountTotal, LedgerError, Money, OwnerTotal, TotalsQuery,
 };
+use bilibi_agent_api::OperationClient;
 use jiff::civil::Date;
 use rust_decimal::Decimal;
-use tokio_postgres::{GenericClient, Row};
+use tokio_postgres::Row;
 
 /// A validated window: dates both inclusive, the pinned entry number, and
 /// whether year-end closing entries and their reversals are left out.
@@ -41,7 +42,7 @@ impl Window {
 /// Every account with a posting in the window, by code, with its debit and
 /// credit totals; and the entry number counted through.
 pub(crate) async fn by_account(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     tenant: i64,
     company_id: i64,
     window: &Window,
@@ -61,7 +62,7 @@ pub(crate) async fn by_account(
 /// The same sums split by the entries' owner module: one row per account and
 /// owner, by code and then owner, a manual entry's (`None`) first.
 pub(crate) async fn by_owner(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     tenant: i64,
     company_id: i64,
     window: &Window,
@@ -83,7 +84,7 @@ pub(crate) async fn by_owner(
 /// row always comes back, with no account when nothing was posted in the
 /// window.
 async fn sums(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     tenant: i64,
     company_id: i64,
     window: &Window,
@@ -122,8 +123,7 @@ async fn sums(
                 &window.exclude_closing,
             ],
         )
-        .await
-        .map_err(bilibi_database::Error::from)?;
+        .await?;
     let through = rows.first().map_or(0, |row| row.get("through"));
     let rows = rows
         .into_iter()

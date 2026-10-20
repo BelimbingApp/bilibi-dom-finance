@@ -69,9 +69,21 @@ they govern this code and are not copied here.
   scenarios, not with unit tests or mocks: the gate is
   `scripts/domain-ci.sh` mounted, and the running proof is the facade's own
   answers.
-- The ledger owns no CSS, JavaScript, pages or menu items (`web: nil` in
-  Bilimbi); a Finance module with pages uses only `bilibi_ui` components and
-  `FlexTable` for every list, per `apps/base/ui/AGENTS.md`.
+- The ledger owns no CSS or JavaScript. Bilimbi's ledger has no pages
+  (`web: nil`); this port's are in `ledger/src/web/`. A Finance module with
+  pages uses only `bilibi_ui` components and `FlexTable` for every list, per
+  `apps/base/ui/AGENTS.md`.
+- A ledger page reads and writes only through its operation contracts
+  (`PageContracts`: `read`, `submit` for a dialog the person filled in,
+  `review` then `commit` for a confirmation), never the `Ledger` facade for
+  something a contract covers. Add a contract in `ledger/src/agent_operations.rs`
+  when a page needs an action that has none. Declare `PageWrites` under the live
+  event name the browser raises (`create`, `do_confirm`), not an internal label:
+  the host permits a write by that name.
+- A dialog whose fields change together (a journal's lines) is a `Form` with
+  `change: true` and its buttons `type="button"` with their own `event`; the
+  server keeps the draft (`ledger/src/web/journals.rs`). Show a refusal beside
+  its field, and what has no field in the dialog's own alert (`Refusal::alert`).
 - Declare every page or panel service's write events in its `PageWrites`
   (Bilibi `apps/base/agent_api/README.md`): the host refuses, as
   `Error::Internal` at run time, a live-event write its service has not

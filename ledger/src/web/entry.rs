@@ -1,0 +1,548 @@
+//! One journal entry, read-only. A manual entry can be reversed from here: the
+//! ledger posts a mirror entry and keeps the original.
+use super::{
+    entries::{entry_status, INDEX},
+    error_text, event_type, figure, instant, no_company, render, shell, source_label, unavailable,
+    view, who, Announce, Failure, Flash, Pages, Read, Refusal,
+};
+use crate::POST_ENTRIES;
+use bilibi_database::{Error, Result};
+use bilibi_tenancy::Scope;
+use bilibi_ui::{
+    page::{LiveBody, LiveFuture, LiveInput, LiveRequest, LiveState},
+    params, Alert, BackLink, BuiltinColumn, Button, ButtonVariant, Card, Cell, EmptyState, Fact,
+    Facts, Field, FlexRow, FlexTable, Form, Header, Html, InputKind, ListColumns, Modal,
+    PageVariant, SectionHeading, StatusKind, TableEmpty,
+};
+use rust_decimal::Decimal;
+use serde_json::json;
+
+#[derive(Default)]
+struct Reverse {
+    date: String,
+    description: String,
+    reference: String,
+    refusal: Refusal,
+    notice: String,
+}
+
+pub(super) struct Entry {
+    pages: Pages,
+    id: i64,
+    flash: Flash,
+    lines: Option<ListColumns>,
+    reverse: Option<Reverse>,
+}
+
+impl Entry {
+    pub(super) fn new(pages: Pages, id: i64) -> Self {
+        Self {
+            pages,
+            id,
+            flash: Flash::default(),
+            lines: None,
+            reverse: None,
+        }
+    }
+
+    async fn view(&mut self, scope: &Scope) -> Result<LiveBody> {
+        if Pages::company(scope).is_none() {
+            return self.simple("Journal entry", no_company("ledger-entry-no-company")?);
+        }
+        let entry: view::Entry = match self
+            .pages
+            .read(
+                scope,
+                "finance.ledger.entry.get",
+                json!({"entry_id": self.id}),
+            )
+            .await?
+        {
+            Read::Found(value) => match view::parse(value) {
+                Some(entry) => entry,
+                None => {
+                    return self.simple(
+                        "Journal entry",
+                        unavailable("ledger-entry-refused", "this entry", &Read::Failed)?,
+                    )
+                }
+            },
+            Read::Failed | Read::Refused(_) => {
+                return self.simple(
+                    "Journal entry",
+                    render(
+                        EmptyState::missing(
+                            "This entry does not exist",
+                            "It may belong to another company. Go back to the journal entries.",
+                        )
+                        .id("ledger-entry-missing"),
+                    )?,
+                )
+            }
+            other => {
+                return self.simple(
+                    "Journal entry",
+                    unavailable("ledger-entry-refused", "this entry", &other)?,
+                )
+            }
+        };
+        let units = self
+            .pages
+            .book(scope)
+            .await?
+            .ok()
+            .and_then(|b| b.book)
+            .map_or(2, |b| b.minor_units);
+        let chart = self.pages.chart(scope).await?.unwrap_or_default();
+        let display = self.pages.display(scope).await?;
+        let can_post = self.pages.allowed(scope, POST_ENTRIES).await?;
+
+        let mut notices = Html::EMPTY;
+        let mut note = |id: &str, text: String, link: Option<(i64, &str)>| -> Result<()> {
+            let mut body = Html::text(&text);
+            if let Some((target, label)) = link {
+                body.push(&Html::text(" "));
+                body.push(&render(super::EntryLink { id: target, label })?);
+            }
+            notices.push(&render(Alert {
+                id,
+                kind: StatusKind::Info,
+                class: "mb-3",
+                body,
+            })?);
+            Ok(())
+        };
+        if let Some(by) = entry.reversed_by_entry_id {
+            note(
+                "ledger-entry-reversed",
+                "This entry has been reversed.".into(),
+                Some((by, "See the reversal")),
+            )?;
+        }
+        if let Some(of) = entry.reverses_entry_id {
+            note(
+                "ledger-entry-reversal",
+                "This entry reverses another entry.".into(),
+                Some((of, "See the original")),
+            )?;
+        }
+        if let Some(owner) = &entry.owner {
+            note(
+                "ledger-entry-owned",
+                format!(
+                    "{} posted this entry for {}. Correct it there, not here.",
+                    source_label(&owner.module),
+                    owner.record.replace(':', " ")
+                ),
+                None,
+            )?;
+        }
+
+        let debit_total: Decimal = entry.lines.iter().map(|l| view::decimal(&l.debit)).sum();
+        let facts = vec![
+            Fact {
+                title: "Number",
+                id: "ledger-entry-number",
+                value: Html::text(&entry.entry_number.to_string()),
+            },
+            Fact {
+                title: "Date",
+                id: "ledger-entry-date",
+                value: Html::text(&entry.entry_date),
+            },
+            Fact {
+                title: "Description",
+                id: "ledger-entry-description",
+                value: Html::text(&entry.description),
+            },
+            Fact {
+                title: "Reference",
+                id: "ledger-entry-reference",
+                value: Html::text(entry.reference.as_deref().unwrap_or("—")),
+            },
+            Fact {
+                title: "Source",
+                id: "ledger-entry-source",
+                value: Html::text(
+                    &entry
+                        .owner
+                        .as_ref()
+                        .map_or("Manual".to_owned(), |o| source_label(&o.module)),
+                ),
+            },
+            Fact {
+                title: "Currency",
+                id: "ledger-entry-currency",
+                value: Html::text(&entry.currency_code),
+            },
+            Fact {
+                title: "Total",
+                id: "ledger-entry-total",
+                value: Html::text(&view::amount(&debit_total.to_string(), units)),
+            },
+            Fact {
+                title: "Status",
+                id: "ledger-entry-status",
+                value: entry_status(&entry)?,
+            },
+            Fact {
+                title: "Posted by",
+                id: "ledger-entry-by",
+                value: Html::text(&who(
+                    entry.posted_by_user_id,
+                    entry.posted_by_impersonator_id,
+                )),
+            },
+            Fact {
+                title: "Posted at",
+                id: "ledger-entry-at",
+                value: instant(&display, &entry.posted_at, "ledger-entry-posted-at")?,
+            },
+        ];
+        let mut head = render(SectionHeading {
+            id: "ledger-entry-heading",
+            title: "Entry",
+            ..SectionHeading::default()
+        })?;
+        head.push(&render(Facts {
+            id: "ledger-entry-facts",
+            items: facts,
+        })?);
+        let mut content = notices;
+        content.push(&render(Card {
+            id: "ledger-entry-card",
+            inner_class: "p-5 sm:p-6",
+            role: "region",
+            labelledby: "ledger-entry-heading",
+            body: head,
+            ..Card::default()
+        })?);
+
+        // The lines.
+        if self.lines.is_none() {
+            self.lines = Some(
+                ListColumns::mount(
+                    "ledger-entry-lines",
+                    vec![
+                        BuiltinColumn::new("line", "Line"),
+                        BuiltinColumn::new("account", "Account"),
+                        BuiltinColumn::new("description", "Description"),
+                        BuiltinColumn::new("debit", "Debit").right(),
+                        BuiltinColumn::new("credit", "Credit").right(),
+                    ],
+                )
+                .map_err(|_| Error::Internal)?,
+            );
+        }
+        let columns = self.lines.as_mut().ok_or(Error::Internal)?;
+        columns.load(&entry.lines, |l| l.line_number.to_string());
+        let mut rows = Vec::new();
+        for line in &entry.lines {
+            let account = chart
+                .iter()
+                .find(|a| a.id == line.account_id)
+                .map_or(format!("Account #{}", line.account_id), |a| {
+                    format!("{} {}", a.code, a.name)
+                });
+            rows.push(
+                FlexRow::new(line.line_number.to_string())
+                    .cell("line", Cell::text(line.line_number.to_string()))
+                    .slot(
+                        "account",
+                        render(super::AccountLink {
+                            id: line.account_id,
+                            label: &account,
+                        })?,
+                    )
+                    .cell(
+                        "description",
+                        Cell::text(line.description.as_deref().unwrap_or("—")),
+                    )
+                    .slot("debit", figure(&view::amount_or_dash(&line.debit, units))?)
+                    .slot(
+                        "credit",
+                        figure(&view::amount_or_dash(&line.credit, units))?,
+                    ),
+            );
+        }
+        let credit_total: Decimal = entry.lines.iter().map(|l| view::decimal(&l.credit)).sum();
+        rows.push(
+            FlexRow::new("total")
+                .cell("line", Cell::text("Total"))
+                .slot(
+                    "debit",
+                    figure(&view::amount(&debit_total.to_string(), units))?,
+                )
+                .slot(
+                    "credit",
+                    figure(&view::amount(&credit_total.to_string(), units))?,
+                ),
+        );
+        let mut table = FlexTable::new("ledger-entry-lines", columns.flex_columns(), rows);
+        table.caption = "Lines of the entry";
+        table.framed = false;
+        table.zoom = columns.zoom;
+        table.empty = Some(TableEmpty::Content(Html::text("This entry has no lines.")));
+        let mut lines = render(SectionHeading {
+            id: "ledger-entry-lines-heading",
+            title: "Lines",
+            class: "p-5 pb-0",
+            ..SectionHeading::default()
+        })?;
+        lines.push(&render(table)?);
+        content.push(&render(Card {
+            id: "ledger-entry-lines-card",
+            inner_class: "p-0",
+            class: "mt-4",
+            role: "region",
+            labelledby: "ledger-entry-lines-heading",
+            body: lines,
+            ..Card::default()
+        })?);
+
+        let mut actions = Html::EMPTY;
+        let reversible = entry.owner.is_none()
+            && entry.reverses_entry_id.is_none()
+            && entry.reversed_by_entry_id.is_none();
+        if can_post && reversible {
+            actions.push(&render(Button {
+                id: "ledger-entry-reverse",
+                button_type: "button",
+                event: "open_reverse",
+                body: Html::text("Reverse entry"),
+                ..Button::default()
+            })?);
+        }
+        actions.push(&render(BackLink {
+            href: INDEX,
+            id: "ledger-entry-back",
+            title: "Back to the journal entries",
+            ..BackLink::default()
+        })?);
+        let mut page = render(Header {
+            title: Html::text(&format!("Entry {}", entry.entry_number)),
+            subtitle: &entry.description,
+            actions,
+            ..Header::default()
+        })?;
+        page.push(&render(Announce {
+            kind: crate::MODULE,
+            record_id: &entry.id.to_string(),
+        })?);
+        page.push(&content);
+        if let Some(reverse) = &self.reverse {
+            page.push(&render(Modal {
+                id: "ledger-entry-reverse-modal",
+                title: "Reverse entry",
+                cancel_event: "close_reverse",
+                description: "The ledger posts a new entry with the debits and credits swapped. The original entry stays.",
+                body: self.reverse_form(reverse)?,
+                ..Modal::default()
+            })?);
+        }
+        Ok(LiveBody {
+            html: shell("ledger-entry-page", PageVariant::Detail, &self.flash, page)?,
+            rows: entry.lines.len(),
+            ..LiveBody::default()
+        })
+    }
+
+    fn simple(&self, title: &str, body: Html) -> Result<LiveBody> {
+        let mut page = render(Header {
+            title: Html::text(title),
+            ..Header::default()
+        })?;
+        page.push(&body);
+        Ok(LiveBody {
+            html: shell("ledger-entry-page", PageVariant::Detail, &self.flash, page)?,
+            ..LiveBody::default()
+        })
+    }
+
+    fn reverse_form(&self, reverse: &Reverse) -> Result<Html> {
+        let errors = |name: &str| -> Vec<String> {
+            reverse
+                .refusal
+                .field(name)
+                .iter()
+                .map(|m| error_text(name, m))
+                .collect()
+        };
+        let mut body = Html::EMPTY;
+        let mut messages = reverse
+            .refusal
+            .alert(&["entry_date", "description", "reference"]);
+        if !reverse.notice.is_empty() {
+            messages.push(reverse.notice.clone());
+        }
+        if !messages.is_empty() {
+            body.push(&render(Alert {
+                id: "ledger-entry-reverse-notice",
+                kind: StatusKind::Error,
+                body: Html::text(&messages.join(" ")),
+                ..Alert::default()
+            })?);
+        }
+        for field in [
+            Field::in_form("reverse", "entry_date")
+                .id("ledger-reverse-date")
+                .label("Date of the reversal")
+                .kind(InputKind::Date)
+                .value(&reverse.date)
+                .required()
+                .hint("Not before the date of the entry. The period of this date must be open.")
+                .errors(errors("entry_date")),
+            Field::in_form("reverse", "description")
+                .id("ledger-reverse-description")
+                .label("Description")
+                .value(&reverse.description)
+                .required()
+                .errors(errors("description"))
+                .attr("data-debounce", "300"),
+            Field::in_form("reverse", "reference")
+                .id("ledger-reverse-reference")
+                .label("Reference")
+                .value(&reverse.reference)
+                .errors(errors("reference"))
+                .attr("data-debounce", "300"),
+        ] {
+            body.push(&render(field)?);
+        }
+        let mut actions = render(Button {
+            id: "ledger-reverse-cancel",
+            button_type: "button",
+            event: "close_reverse",
+            body: Html::text("Cancel"),
+            ..Button::default()
+        })?;
+        actions.push(&render(Button {
+            id: "ledger-reverse-submit",
+            button_type: "button",
+            event: "reverse",
+            variant: ButtonVariant::Primary,
+            working: "Reversing…",
+            body: Html::text("Reverse entry"),
+            ..Button::default()
+        })?);
+        render(Form {
+            id: "ledger-reverse-form",
+            event: "validate",
+            change: true,
+            class: "mt-4",
+            body,
+            actions,
+        })
+    }
+
+    async fn open_reverse(&mut self, scope: &Scope) -> Result<()> {
+        if !self.pages.allowed(scope, POST_ENTRIES).await? {
+            self.flash.error(super::DENIED);
+            return Ok(());
+        }
+        let Read::Found(value) = self
+            .pages
+            .read(
+                scope,
+                "finance.ledger.entry.get",
+                json!({"entry_id": self.id}),
+            )
+            .await?
+        else {
+            return Ok(());
+        };
+        let Some(entry) = view::parse::<view::Entry>(value) else {
+            return Ok(());
+        };
+        let today = self.pages.today(scope).await?.to_string();
+        let date = if today > entry.entry_date {
+            today
+        } else {
+            entry.entry_date.clone()
+        };
+        let mut description = format!(
+            "Reversal of entry {}: {}",
+            entry.entry_number, entry.description
+        );
+        description.truncate(
+            description
+                .char_indices()
+                .nth(500)
+                .map_or(description.len(), |(i, _)| i),
+        );
+        self.reverse = Some(Reverse {
+            date,
+            description,
+            ..Reverse::default()
+        });
+        Ok(())
+    }
+
+    async fn reverse_now(&mut self, r: &LiveRequest<'_, Scope>) -> Result<()> {
+        let Some(reverse) = &mut self.reverse else {
+            return Ok(());
+        };
+        let mut input = json!({
+            "entry_id": self.id,
+            "entry_date": reverse.date,
+            "description": reverse.description.trim(),
+        });
+        if !reverse.reference.trim().is_empty() {
+            input["reference"] = json!(reverse.reference.trim());
+        }
+        match self
+            .pages
+            .submit(
+                r.scope,
+                r.credential,
+                "reverse",
+                "finance.ledger.entry.reverse",
+                input,
+            )
+            .await?
+        {
+            Ok(done) => {
+                let number = done["result"]["record"]["entry_number"].as_i64();
+                self.reverse = None;
+                self.flash.success(match number {
+                    Some(n) => format!("The entry is reversed. The reversal is entry {n}."),
+                    None => "The entry is reversed.".into(),
+                });
+            }
+            Err(Failure::Refused(refusal)) => {
+                reverse.refusal = refusal;
+                reverse.notice.clear();
+            }
+            Err(failure) => reverse.notice = failure.text("The reversal"),
+        }
+        Ok(())
+    }
+}
+
+impl LiveState<Scope, Error> for Entry {
+    fn update<'a>(&'a mut self, r: LiveRequest<'a, Scope>) -> LiveFuture<'a, Error> {
+        Box::pin(async move {
+            if let LiveInput::Event(value) = r.input {
+                match event_type(value)? {
+                    "open_reverse" => self.open_reverse(r.scope).await?,
+                    "close_reverse" => self.reverse = None,
+                    "validate" => {
+                        if let Some(reverse) = &mut self.reverse {
+                            let fields = params::form_values(value, "reverse");
+                            reverse.date = fields.get("entry_date").cloned().unwrap_or_default();
+                            reverse.description =
+                                fields.get("description").cloned().unwrap_or_default();
+                            reverse.reference =
+                                fields.get("reference").cloned().unwrap_or_default();
+                            reverse.refusal = Refusal::default();
+                            reverse.notice.clear();
+                        }
+                    }
+                    "reverse" => self.reverse_now(&r).await?,
+                    "clear-flash" => self.flash.dismiss(value),
+                    _ => return Err(Error::Invalid),
+                }
+            }
+            self.view(r.scope).await
+        })
+    }
+}

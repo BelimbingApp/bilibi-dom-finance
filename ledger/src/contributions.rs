@@ -1,8 +1,8 @@
 //! What the ledger adds to the shared catalogs (Bilimbi
 //! `Bilimbi.Finance.Ledger.Contributions`): the `finance` authorization
 //! domain, its verbs, the twelve capability keys verbatim, and the
-//! `tenant_owner` role holding all of them. The ledger has no pages, menu
-//! items (`web: nil`). H1 agent operations are in `agent_operations.rs`.
+//! `tenant_owner` role holding all of them. H1 agent operations are in
+//! `agent_operations.rs`; its pages and their menu items are in `web/`.
 use crate::MODULE;
 use bilibi_authz::{CapabilityDefinition as C, RoleDefinition, VocabularyContribution, VOCABULARY};
 use bilibi_module_registry::{Contribution, Provenance};

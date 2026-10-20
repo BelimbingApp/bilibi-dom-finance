@@ -74,6 +74,7 @@ mod money;
 mod periods;
 mod postings;
 mod totals;
+mod web;
 
 pub use contributions::{
     APPROVE_JOURNALS, CAPABILITIES, LOCK_PERIODS, MANAGE_ACCOUNTS, MANAGE_CONTROLLED_BOOKKEEPING,
@@ -101,7 +102,7 @@ pub const SERVICE: &str = "finance/ledger.ledger";
 inventory::submit! {
     Module {
         id: MODULE, layer: Layer::Domains,
-        dependencies: &["base/agent_api", "base/authz", "base/database", "base/party_ids", "base/tenancy", "core/company"],
+        dependencies: &["base/agent_api", "base/authz", "base/database", "base/datetime", "base/locale", "base/menu", "base/party_ids", "base/tenancy", "base/ui", "core/company"],
         migrations: &[
             ("finance-ledger-001-books-and-accounts", include_str!("../migrations/001-books-and-accounts.sql")),
             ("finance-ledger-002-entries", include_str!("../migrations/002-entries.sql")),
@@ -115,7 +116,14 @@ inventory::submit! {
             db: services.get::<Db>("base/database.pool")?.as_ref().clone(),
             mutations: services.get("base/database.mutations")?,
             postings: postings::Relay::new(),
-        })) } }],
+        })) } }, Service { id: web::PAGES, factory: |services| {
+            Ok(Arc::new(bilibi_ui::page::PageService::<Scope, Error>(Arc::new(web::Pages {
+                db: services.get::<Db>("base/database.pool")?.as_ref().clone(),
+                contracts: services.get(bilibi_agent_api::page::SERVICE)?,
+                display: services.get("base/datetime.display")?,
+                locales: services.get("base/locale.locales")?,
+            }))))
+        } }],
     }
 }
 
@@ -938,6 +946,54 @@ pub struct PostingSubscription {
     receiver: tokio::sync::broadcast::Receiver<postings::Heard>,
 }
 
+/// The trial balance on one snapshot, for a caller that has already
+/// authorized the company ([`Ledger::trial_balance_on`] and the
+/// `finance.ledger.trial_balance.get` operation).
+pub(crate) async fn trial_balance_of(
+    client: &dyn bilibi_agent_api::OperationClient,
+    tenant: i64,
+    company_id: i64,
+    as_of: Date,
+    through_entry_number: Option<i64>,
+) -> Result<TrialBalance> {
+    let window = totals::Window::new(&TotalsQuery {
+        to: Some(as_of),
+        through_entry_number,
+        ..TotalsQuery::default()
+    })?;
+    let book = books::find(client, tenant, company_id)
+        .await?
+        .ok_or(LedgerError::BookNotOpen)?;
+    let (through, totals) = totals::by_account(client, tenant, company_id, &window).await?;
+    let rows: Vec<TrialBalanceRow> = totals
+        .into_iter()
+        .map(|total| {
+            let net = total.debits - total.credits;
+            TrialBalanceRow {
+                debit_balance: if net.is_positive() { net } else { Money::ZERO },
+                credit_balance: if (-net).is_positive() {
+                    -net
+                } else {
+                    Money::ZERO
+                },
+                account: total.account,
+                debits: total.debits,
+                credits: total.credits,
+            }
+        })
+        .collect();
+    Ok(TrialBalance {
+        company_id,
+        as_of,
+        through_entry_number: through,
+        currency_code: book.currency_code,
+        minor_units: book.minor_units,
+        total_debit: rows.iter().map(|row| row.debit_balance).sum(),
+        total_credit: rows.iter().map(|row| row.credit_balance).sum(),
+        rows,
+    })
+}
+
 /// The facade, resolved from the registry as [`SERVICE`].
 pub struct Ledger {
     db: Db,
@@ -1453,44 +1509,15 @@ impl Ledger {
         as_of: Date,
         through_entry_number: Option<i64>,
     ) -> Result<TrialBalance> {
-        let window = totals::Window::new(&TotalsQuery {
-            to: Some(as_of),
-            through_entry_number,
-            ..TotalsQuery::default()
-        })?;
         authorize(client, scope, company_id, VIEW).await?;
-        let tenant = scope.tenant();
-        let book = books::find(client, tenant, company_id)
-            .await?
-            .ok_or(LedgerError::BookNotOpen)?;
-        let (through, totals) = totals::by_account(client, tenant, company_id, &window).await?;
-        let rows: Vec<TrialBalanceRow> = totals
-            .into_iter()
-            .map(|total| {
-                let net = total.debits - total.credits;
-                TrialBalanceRow {
-                    debit_balance: if net.is_positive() { net } else { Money::ZERO },
-                    credit_balance: if (-net).is_positive() {
-                        -net
-                    } else {
-                        Money::ZERO
-                    },
-                    account: total.account,
-                    debits: total.debits,
-                    credits: total.credits,
-                }
-            })
-            .collect();
-        Ok(TrialBalance {
+        trial_balance_of(
+            client,
+            scope.tenant(),
             company_id,
             as_of,
-            through_entry_number: through,
-            currency_code: book.currency_code,
-            minor_units: book.minor_units,
-            total_debit: rows.iter().map(|row| row.debit_balance).sum(),
-            total_credit: rows.iter().map(|row| row.credit_balance).sum(),
-            rows,
-        })
+            through_entry_number,
+        )
+        .await
     }
 
     /// Each account's debit and credit totals over the entries dated `from`

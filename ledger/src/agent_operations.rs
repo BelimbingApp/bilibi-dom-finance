@@ -784,6 +784,7 @@ enum Read {
     Entry,
     Entries,
     Years,
+    TrialBalance,
 }
 impl ReadHandler for Read {
     fn owner(&self) -> &'static str {
@@ -881,6 +882,15 @@ impl ReadHandler for Read {
                     .map_err(invalid)?;
                     json!({"next_after":rows.last().map(|e|json!({"after_date":e.entry_date.to_string(),"after_id":e.id})),"records":rows})
                 }
+                Self::TrialBalance => json!(trial_balance_of(
+                    client,
+                    tenant,
+                    company,
+                    date(input, "as_of").map_err(invalid)?,
+                    input["through_entry_number"].as_i64(),
+                )
+                .await
+                .map_err(invalid)?),
                 Self::Years => {
                     let years = periods::state(client, tenant, company).await?.years;
                     let after = optional_date(input, "after_start_date").map_err(invalid)?;
@@ -920,7 +930,7 @@ fn schema(required: &[&str], properties: Value) -> Value {
     json!({"type":"object","required":required,"properties":properties})
 }
 fn output() -> Value {
-    json!({"type":"object","description":"Ledger records or deterministic review facts. Exact amounts are decimal strings. Ledger has no page; committed path is null."})
+    json!({"type":"object","description":"Ledger records or deterministic review facts. Exact amounts are decimal strings. A write commits no page path; it answers null."})
 }
 fn book_schema() -> Value {
     schema(
@@ -1018,6 +1028,12 @@ fn entries_schema() -> Value {
         json!({"from":day(),"to":day(),"after_date":day(),"after_id":identifier(),"account_id":identifier(),"through_entry_number":{"type":"integer","minimum":0},"exclude_closing":boolean(),"page_size":{"type":"integer","minimum":1,"maximum":100}}),
     )
 }
+fn trial_balance_schema() -> Value {
+    schema(
+        &["as_of"],
+        json!({"as_of":day(),"through_entry_number":{"type":"integer","minimum":0}}),
+    )
+}
 fn years_schema() -> Value {
     schema(
         &[],
@@ -1034,6 +1050,7 @@ inventory::submit! { Contribution::new(DEFINITIONS,"finance/ledger.operations",P
         Operation {key:"finance.ledger.entry.get",title:"Read an entry",summary:"Read immutable lines, ownership and reversal identifiers.",keywords:&[],capability:VIEW,input:entry_schema,output,handler:Handler::Read(&Read::Entry),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.entry.list",title:"List entries",summary:"Read entries by date and identifier with date, account and pinned-entry bounds.",keywords:&[],capability:VIEW,input:entries_schema,output,handler:Handler::Read(&Read::Entries),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.fiscal_year.list",title:"List fiscal years and periods",summary:"Read years in date order with periods, statuses and closing entry identifiers.",keywords:&[],capability:VIEW,input:years_schema,output,handler:Handler::Read(&Read::Years),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.ledger.trial_balance.get",title:"Read the trial balance",summary:"Read every account with a posting on or before a date, with debit and credit totals and its balance on one side, counted through a pinned entry number that reproduces the figures later.",keywords:&[],capability:VIEW,input:trial_balance_schema,output,handler:Handler::Read(&Read::TrialBalance),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.book.open",title:"Open the book",summary:"Permanently choose currency and minor units; enable controlled bookkeeping.",keywords:&[],capability:MANAGE_ACCOUNTS,input:book_schema,output,handler:Handler::SafeWrite(&Write::OpenBook),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.account.create",title:"Create an account",summary:"Create a chart account, optionally grouped or designated for retained earnings.",keywords:&[],capability:MANAGE_ACCOUNTS,input:account_schema,output,handler:Handler::SafeWrite(&Write::CreateAccount),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.account.update",title:"Change an account",summary:"Change name, grouping, active flag or retained-earnings designation; preserve code and type.",keywords:&[],capability:MANAGE_ACCOUNTS,input:change_schema,output,handler:Handler::SafeWrite(&Write::UpdateAccount),channels:Channels::Every,step_up:&[]},

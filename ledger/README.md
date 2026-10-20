@@ -87,13 +87,14 @@ H1 makes the facade-only writes reachable through the Platform's shared `/api/v1
 | `journal.get`, `journal.list` | Lines and decision; list by number with optional `status`, `after`, `next_after` |
 | `entry.get`, `entry.list` | Immutable lines and ownership/reversal identifiers; list filters `from`, `to`, `account_id`, `through_entry_number`, `exclude_closing`; cursor pair `after_date`, `after_id` in `next_after` |
 | `fiscal_year.list` | Years with periods/statuses; `after_start_date`, `next_after_start_date` |
+| `trial_balance.get` | Every account with a posting on or before `as_of`, with debit and credit balances, counted through a pinned `through_entry_number` |
 | `book.open`, `account.create`, `account.update` | Reviewed book/chart changes; account update preserves omitted fields and uses `clear_parent` to remove a grouping |
 | `journal.submit`, `journal.approve`, `journal.reject` | Submission does not post; approval posts once with separation of duties; rejection records a reason without posting |
 | `entry.reverse` | Mirror a manual entry once, never an owned or closing entry |
 | `fiscal_year.open`, `fiscal_year.close`, `fiscal_year.reopen`, `fiscal_year.lock` | Open monthly periods, close with computed entry, reopen with closing reversal, or atomically lock all remaining closed periods |
 | `period.close`, `period.reopen`, `period.lock` | Existing facade ordering, reason and permanent-lock rules |
 
-The seven reads return at most `page_size` records (1–100, default 100) on list operations. The fourteen writes require shared plan preview/commit; direct calls refuse writes. Preview validates normalized/defaulted values on the caller's connection, without business mutations, and shows exact proposed entry lines, current accounts/periods and consequential designation changes. Amounts are decimal strings, never binary floats. Commit reauthorizes and joins the shared audited transaction through private facade methods; all operations and audit rows roll back together on refusal. A successful record response has `path: null`: this module has no pages.
+The eight reads return at most `page_size` records (1–100, default 100) on list operations. The fourteen writes require shared plan preview/commit; direct calls refuse writes. Preview validates normalized/defaulted values on the caller's connection, without business mutations, and shows exact proposed entry lines, current accounts/periods and consequential designation changes. Amounts are decimal strings, never binary floats. Commit reauthorizes and joins the shared audited transaction through private facade methods; all operations and audit rows roll back together on refusal. A successful record response has `path: null`: this module has no pages.
 
 The pinned Platform previews every step before executing any. A transaction-local FIFO of review hashes rechecks each step immediately before mutation, so earlier steps cannot silently change later reviewed facts. Dependent steps need separate plans. Same-company account edits conservatively review the full chart, so even independent account edits need separate plans. Whole-year lock composes existing period locks in date order on the same transaction; it adds no year-lock event. No operation exposes direct posting, owner/settlement bypasses or disabling controls. See [guide.md](guide.md) for consent, staleness and safe ordering.
 
@@ -114,6 +115,28 @@ python3 apps/domains/finance/fixtures/walkthrough/agent-operations.py
 ```
 
 The wire walkthrough exercises all writes over both transports, observes preview non-mutation and code non-consumption on rollback, checks exact approval/reversal/closing amounts, traverses mixed-case/non-ASCII account cursors, and refuses precision, balance, same-person approval, closed/locked periods, double reversal, cross-tenant reads and actor spoofing. Two defaulted year opens in one plan prove the intra-plan fence and rollback of the first insert. Credentials expire after one hour; rerun on another fresh database for another proof.
+
+## Pages
+
+The ledger has pages so a person without an AI agent can do the same daily work. Bilimbi's ledger has none (`web: nil`), so these are this port's own. Reports keeps the older [Bookkeeping and Approval exceptions pages](../reports/README.md#bookkeeping-and-approval-exceptions-pages).
+
+| Menu (Finance, under Bookkeeping) | Route | What a person does there |
+| --- | --- | --- |
+| Book | `/finance/ledger/book` | Reads the currency and decimal places. Opens the book once. Sees whether controlled bookkeeping and separation of duties are on. |
+| Chart of accounts | `/finance/ledger/accounts` | Searches and filters the chart, adds an account in a dialog. |
+| (account record) | `/finance/ledger/accounts/{id}` | Edits the name and group in place, deactivates or activates the account, marks the retained earnings account, reads today's balance. |
+| Journal entries | `/finance/ledger/entries` | Lists entries oldest first, 100 at a time, by date or account. |
+| (entry record) | `/finance/ledger/entries/{id}` | Reads the lines. Reverses a manual entry in a dialog. |
+| Manual journals | `/finance/ledger/journals` | Lists journals by status. Submits one with its lines in a dialog. |
+| (journal record) | `/finance/ledger/journals/{id}` | Approves it (it posts) or rejects it with a reason. The ledger refuses the person who submitted it while the company separates duties. |
+| Fiscal years | `/finance/ledger/fiscal-years` | Opens a year. Closes, reopens and locks periods. Closes, reopens and locks a year. |
+| Trial balance | `/finance/ledger/trial-balance` | Reads the balances as of a date at a pinned entry number, and follows an account to its entries. |
+
+Every read goes through `PageContracts::read` and every write through its `submit` (a dialog the person just filled in) or `preview` then `commit` (a confirmation), so a page and an agent get the same checks, the same refusals and the same audit trail. The pages add one contract, `finance.ledger.trial_balance.get`, because the trial balance had none. A control the person may not use is not drawn. The ledger's own words explain a refusal.
+
+Two limits come from the contracts. The entry and journal lists are oldest first and show a "Later entries" link at 100 rows, because the contracts page by a cursor. The chart loads whole (up to 5,000 accounts) and the page searches and sorts it.
+
+Run the proof on a disposable PostgreSQL 18 database with `DATABASE_URL=… APP_ORIGIN=http://127.0.0.1:4361 BIND_ADDR=127.0.0.1:4361 BILIBI_SETTINGS_KEY=$(openssl rand -hex 32) cargo run -p bilibi-finance-walkthrough-fixture --bin ledger-ui`. It seeds a chart, two fiscal years with closed periods, entries, and manual journals in each state, then serves the app. Sign in as `manager@other.example.test` (submits), `reviewer@other.example.test` (approves) or `viewer@other.example.test` (reads), password `bilibi-dev`. Add `-- empty` to start with no book. [`screenshots/`](screenshots) shows the pages at desktop and phone width.
 
 ## Capabilities
 
