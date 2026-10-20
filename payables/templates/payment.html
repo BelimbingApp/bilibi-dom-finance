@@ -1,0 +1,23 @@
+{# One payment request and the payment it became. Lists use the shared FlexTable. #}
+{% import "components.html" as ui %}
+{% import "feedback.html" as feedback %}
+{% call feedback::flash_group(messages=flash) %}{% endcall %}
+{% call ui::page(id="payables-payment", variant=bilibi_ui::PageVariant::Detail) %}
+{% call ui::header(subtitle_html=status, actions=actions) %}{{ title }}{% endcall %}
+{% call ui::card(id="payables-payment-request", inner_class="p-5 sm:p-6", role="region", labelledby="payables-payment-request-heading") %}
+{% call ui::section_heading(id="payables-payment-request-heading", title="Request") %}{% endcall %}
+{{ facts|safe }}
+{% endcall %}
+{% if let Some(payment) = payment %}
+{% call ui::card(id="payables-payment-posted", inner_class="p-5 sm:p-6", role="region", labelledby="payables-payment-posted-heading") %}
+{% call ui::section_heading(id="payables-payment-posted-heading", title="Payment") %}{% endcall %}
+{{ payment|safe }}
+{% endcall %}
+{% endif %}
+{% call ui::card(id="payables-payment-bills", inner_class="p-0", role="region", labelledby="payables-payment-bills-heading") %}
+{% call ui::section_heading(id="payables-payment-bills-heading", title="Bills", class="p-5 pb-0") %}{% endcall %}
+{{ allocations|safe }}
+{% endcall %}
+<div id="payables-payment-attachments-slot" data-live-ignore><div id="payables-payment-attachments"></div></div>
+{% if let Some(dialog) = dialog %}{{ dialog|safe }}{% endif %}
+{% endcall %}

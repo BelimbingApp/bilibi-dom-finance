@@ -1,18 +1,20 @@
 //! Bilimbi Payables.Web.BillLive. The reviewed hold belongs to the dialog,
 //! not to a subsequent refreshed document or a value supplied by the browser.
-use super::{company, format as f, render, Pages};
+use super::{company, format as f, render, Pages, Written};
 use crate::{
-    Document, MatchApproval, PayablesError, APPROVE_DOCUMENTS, APPROVE_MATCH, POST_DOCUMENTS,
+    Document, MatchApproval, PayablesError, APPROVE_DOCUMENTS, APPROVE_MATCH, CREATE_DOCUMENTS,
+    POST_DOCUMENTS, SUBMIT_PAYMENTS,
 };
 use askama::Template;
 use bilibi_database::{Error, Result};
-use bilibi_datetime::DisplayContext;
+use bilibi_finance_ledger::{Account, MinorUnits};
 use bilibi_tenancy::Scope;
 use bilibi_ui::{
     page::{LiveBody, LiveFuture, LiveInput, LiveRequest, LiveState, PanelSpec},
     params, BadgeKind, BuiltinColumn, ButtonVariant, Cell, EmptyState, Fact, Facts, Field,
     FlashMap, FlexRow, FlexTable, Html, ListColumns, StatusKind, NO_FLASH,
 };
+use serde_json::{json, Value};
 use std::collections::HashMap;
 
 enum Dialog {
@@ -24,6 +26,8 @@ pub(super) struct Bill {
     pages: Pages,
     id: i64,
     document: Option<Document>,
+    units: Option<MinorUnits>,
+    accounts: Vec<Account>,
     dialog: Option<Dialog>,
     reason: String,
     flash: Option<(StatusKind, String)>,
@@ -38,6 +42,8 @@ impl Bill {
             pages,
             id: params::positive_id(path.get("id").map(String::as_str)).unwrap_or(0),
             document: None,
+            units: None,
+            accounts: vec![],
             dialog: None,
             reason: String::new(),
             flash: None,
@@ -91,6 +97,25 @@ impl Bill {
                 .ok(),
             None => None,
         };
+        self.units = match company(scope) {
+            Some(c) => self
+                .pages
+                .ledger
+                .get_book(scope, c)
+                .await
+                .ok()
+                .map(|b| b.minor_units),
+            None => None,
+        };
+        self.accounts = match company(scope) {
+            Some(c) => self
+                .pages
+                .ledger
+                .list_accounts(scope, c)
+                .await
+                .unwrap_or_default(),
+            None => vec![],
+        };
         if let Some(d) = &self.document {
             self.lines.load(&d.lines, |l| l.id.to_string());
             self.events.load(&d.match_events, |e| e.id.to_string());
@@ -101,14 +126,30 @@ impl Bill {
         Ok(())
     }
 
+    fn account(&self, id: i64) -> String {
+        self.accounts
+            .iter()
+            .find(|a| a.id == id)
+            .map_or_else(|| format!("#{id}"), |a| format!("{} {}", a.code, a.name))
+    }
+
+    fn money(&self, amount: bilibi_finance_ledger::Money) -> String {
+        self.units
+            .map_or_else(|| amount.to_string(), |u| f::money(amount, u))
+    }
+
+    /// `Bill #3`, or `Bill from Acme` while it has no number to name it by.
+    fn heading(&self, d: &Document) -> String {
+        match d.document_number {
+            Some(n) => format!("{} #{n}", f::kind(&d.document_type)),
+            None => format!("{} from {}", f::kind(&d.document_type), d.party.name),
+        }
+    }
+
     pub(super) fn title(&self) -> Option<String> {
-        self.document.as_ref().map(|d| {
-            format!(
-                "{} {} from {}",
-                f::kind(&d.document_type),
-                f::number(d.document_number),
-                d.party.name
-            )
+        self.document.as_ref().map(|d| match d.document_number {
+            Some(_) => format!("{} from {}", self.heading(d), d.party.name),
+            None => self.heading(d),
         })
     }
 
@@ -136,22 +177,24 @@ impl Bill {
         let can_approve = self.pages.allowed(scope, APPROVE_DOCUMENTS).await?;
         let can_post = self.pages.allowed(scope, POST_DOCUMENTS).await?;
         let can_match = self.pages.allowed(scope, APPROVE_MATCH).await?;
+        let can_create = self.pages.allowed(scope, CREATE_DOCUMENTS).await?;
+        let can_pay = self.pages.allowed(scope, SUBMIT_PAYMENTS).await?;
         let display = self.pages.display(scope).await?;
         let party = render(Facts {
             id: "payables-bill-party-facts",
             items: vec![
-                fact("Name", &d.party.name),
-                fact("Key", &d.party.key),
-                fact("Tax ID", f::optional(&d.party.tax_id)),
-                fact("Registration", f::optional(&d.party.registration_id)),
-                fact("Address", f::optional(&d.party.address)),
+                f::fact("Name", &d.party.name),
+                f::fact("Key", &d.party.key),
+                f::fact("Tax ID", f::optional(&d.party.tax_id)),
+                f::fact("Registration", f::optional(&d.party.registration_id)),
+                f::fact("Address", f::optional(&d.party.address)),
             ],
         })?;
         let mut items = vec![
-            fact("Party's number", f::optional(&d.party_document_number)),
-            fact("Date", &d.document_date.to_string()),
-            fact("Due", &d.due_date.to_string()),
-            fact("Description", f::optional(&d.description)),
+            f::fact("Party's number", f::optional(&d.party_document_number)),
+            f::fact("Date", &d.document_date.to_string()),
+            f::fact("Due", &d.due_date.to_string()),
+            f::fact("Description", f::optional(&d.description)),
             Fact {
                 title: "Corrects",
                 value: match d.corrects_document_id {
@@ -160,15 +203,17 @@ impl Bill {
                 },
                 ..Fact::default()
             },
-            fact(
+            f::fact(
                 "Outstanding",
-                &d.outstanding
-                    .map_or_else(|| "—".into(), |m| format!("{m} {}", d.currency_code)),
+                &d.outstanding.map_or_else(
+                    || "—".into(),
+                    |m| format!("{} {}", self.money(m), d.currency_code),
+                ),
             ),
-            fact("Ledger entry", &f::number(d.entry_number)),
+            f::fact("Ledger entry", &f::number(d.entry_number)),
             Fact {
                 title: "Recorded",
-                value: actor_at(
+                value: f::actor_at(
                     &display,
                     Some(d.created_by_user_id),
                     d.created_by_impersonator_id,
@@ -180,7 +225,7 @@ impl Bill {
             },
             Fact {
                 title: "Approved",
-                value: actor_at(
+                value: f::actor_at(
                     &display,
                     d.approved_by_user_id,
                     d.approved_by_impersonator_id,
@@ -192,7 +237,7 @@ impl Bill {
             },
             Fact {
                 title: "Posted",
-                value: actor_at(
+                value: f::actor_at(
                     &display,
                     d.posted_by_user_id,
                     d.posted_by_impersonator_id,
@@ -204,7 +249,7 @@ impl Bill {
             },
         ];
         if d.status == "voided" {
-            let mut value = actor_at(
+            let mut value = f::actor_at(
                 &display,
                 d.voided_by_user_id,
                 d.voided_by_impersonator_id,
@@ -226,9 +271,18 @@ impl Bill {
         let totals = render(Facts {
             id: "payables-bill-totals",
             items: vec![
-                fact("Net", &format!("{} {}", d.total_net, d.currency_code)),
-                fact("Tax", &format!("{} {}", d.total_tax, d.currency_code)),
-                fact("Total", &format!("{} {}", d.total, d.currency_code)),
+                f::fact(
+                    "Net",
+                    &format!("{} {}", self.money(d.total_net), d.currency_code),
+                ),
+                f::fact(
+                    "Tax",
+                    &format!("{} {}", self.money(d.total_tax), d.currency_code),
+                ),
+                f::fact(
+                    "Total",
+                    &format!("{} {}", self.money(d.total), d.currency_code),
+                ),
             ],
         })?;
         let last_match = f::last_match(d);
@@ -260,7 +314,7 @@ impl Bill {
             line_rows.push(
                 row.cell("number", Cell::text(l.line_number.to_string()))
                     .cell("description", Cell::text(&l.description))
-                    .cell("account", Cell::text(format!("#{}", l.account_id)))
+                    .cell("account", Cell::text(self.account(l.account_id)))
                     .cell(
                         "order_line",
                         Cell::text(l.order_line_id.map_or_else(
@@ -269,7 +323,7 @@ impl Bill {
                         )),
                     )
                     .cell("quantity", Cell::text(f::decimal(l.quantity)))
-                    .cell("amount", Cell::text(l.amount.to_string())),
+                    .cell("amount", Cell::text(self.money(l.amount))),
             );
         }
         let mut match_rows = Vec::new();
@@ -365,11 +419,7 @@ impl Bill {
         View {
             flash,
             record: d.id,
-            title: format!(
-                "{} {}",
-                f::kind(&d.document_type),
-                f::number(d.document_number)
-            ),
+            title: self.heading(d),
             status: f::status(&d.status)?,
             match_status: d
                 .match_status
@@ -377,6 +427,19 @@ impl Bill {
                 .map(|s| f::match_badge(s, "Match: "))
                 .transpose()?,
             actions: render(Actions {
+                correct: (can_create
+                    && can_approve
+                    && d.document_type == "bill"
+                    && d.status == "draft"
+                    && super::bill_form::corrigible(d))
+                .then(|| format!("{}?correct={}", super::NEW_BILL, d.id)),
+                note: (can_create && d.document_type == "bill" && d.status == "posted")
+                    .then(|| format!("{}?bill={}", super::NEW_NOTE, d.id)),
+                pay: (can_pay
+                    && d.document_type == "bill"
+                    && d.status == "posted"
+                    && d.outstanding.is_some_and(|m| m.is_positive()))
+                .then(|| format!("{}?bill={}", super::NEW_PAYMENT, d.id)),
                 approve: can_approve && d.status == "draft",
                 post: can_post && matches!(d.status.as_str(), "approved" | "held"),
                 approve_exception: can_match && d.match_status.as_deref() == Some("held"),
@@ -399,7 +462,7 @@ impl Bill {
         .map_err(|_| Error::Internal)
     }
 
-    async fn event(&mut self, scope: &Scope, v: &serde_json::Value) -> Result<bool> {
+    async fn event(&mut self, scope: &Scope, credential: &str, v: &Value) -> Result<bool> {
         let event = v["type"].as_str().ok_or(Error::Invalid)?;
         match event {
             "clear-flash" => {
@@ -478,26 +541,8 @@ impl Bill {
             self.dialog = None;
             return Ok(true);
         };
-        let result = match action {
-            "approve" => {
-                self.pages
-                    .payables
-                    .approve_document(scope, company, self.id)
-                    .await
-            }
-            "post" => {
-                self.pages
-                    .payables
-                    .post_document(scope, company, self.id)
-                    .await
-            }
-            "void" if matches!(self.dialog, Some(Dialog::Void)) => {
-                self.pages
-                    .payables
-                    .void_document(scope, company, self.id, reason(v).unwrap_or(""))
-                    .await
-            }
-            "approve_exception" => match self.dialog {
+        if action == "approve_exception" {
+            let result = match self.dialog {
                 Some(Dialog::ApproveException { held_event_id }) => {
                     self.pages
                         .payables
@@ -513,22 +558,84 @@ impl Bill {
                         .await
                 }
                 _ => Err(PayablesError::NotHeld),
-            },
-            _ => Err(PayablesError::NotVoidable),
+            };
+            self.dialog = None;
+            self.reason.clear();
+            self.flash = Some(match result {
+                Err(e) => (StatusKind::Error, f::refusal(action, e)),
+                Ok(_) => (
+                    StatusKind::Success,
+                    "Match exceptions approved; the bill may now be posted.".into(),
+                ),
+            });
+            return Ok(true);
+        }
+        // The rest are the contracts the agent doors call.
+        let (contract, input, verb) = match action {
+            "approve" => (
+                "finance.payables.document.approve",
+                json!({"company_id": company, "document_id": self.id}),
+                "The approval",
+            ),
+            "post" => (
+                "finance.payables.document.post",
+                json!({"company_id": company, "document_id": self.id}),
+                "The posting",
+            ),
+            "void" if matches!(self.dialog, Some(Dialog::Void)) => (
+                "finance.payables.document.void",
+                json!({"company_id": company, "document_id": self.id, "void_reason": reason(v).unwrap_or("")}),
+                "The void",
+            ),
+            _ => return Err(Error::Invalid),
         };
+        let written = self
+            .pages
+            .write(scope, credential, action, contract, input)
+            .await?;
         self.dialog = None;
         self.reason.clear();
-        self.flash = Some(match result {
-            Err(e) => (StatusKind::Error, f::refusal(action, e)),
-            Ok(d) => match action {
-                "approve" => (StatusKind::Success, "Document approved.".into()),
-                "post" if d.status == "held" => (StatusKind::Warning, format!("Not posted: the three-way match found {} exception(s), so the bill is held.", f::last_match(&d).map_or(0, f::exceptions))),
-                "post" => (StatusKind::Success, format!("Posted as number {}.", d.document_number.unwrap_or_default())),
-                "void" => (StatusKind::Success, "Document voided.".into()),
-                _ => (StatusKind::Success, "Match exceptions approved; the bill may now be posted.".into()),
-            },
+        let mut reload = true;
+        self.flash = Some(match written {
+            Written::Done(_) => {
+                // The page shows what the contract did, so read it back
+                // before wording the outcome (a post may be a hold).
+                self.reload(scope).await?;
+                reload = false;
+                let d = self.document.as_ref();
+                match action {
+                    "approve" => (StatusKind::Success, "Document approved.".into()),
+                    "post" if d.is_some_and(|d| d.status == "held") => (
+                        StatusKind::Warning,
+                        format!(
+                            "Not posted: the three-way match found {} exception(s), so the bill is held.",
+                            d.and_then(f::last_match).map_or(0, f::exceptions)
+                        ),
+                    ),
+                    "post" => (
+                        StatusKind::Success,
+                        format!(
+                            "Posted as number {}.",
+                            d.and_then(|d| d.document_number).unwrap_or_default()
+                        ),
+                    ),
+                    _ => (StatusKind::Success, "Document voided.".into()),
+                }
+            }
+            Written::Forbidden => (
+                StatusKind::Error,
+                f::refusal(action, PayablesError::Unauthorized),
+            ),
+            Written::Changed => (
+                StatusKind::Error,
+                format!("{verb} did not go through because the document changed. Review it and try again."),
+            ),
+            Written::Fields(fields) if action == "void" && fields.contains_key("void_reason") => {
+                (StatusKind::Error, "Give a reason of 1 to 500 characters.".into())
+            }
+            Written::Fields(fields) => (StatusKind::Error, f::refused(verb, &fields)),
         });
-        Ok(true)
+        Ok(reload)
     }
 }
 
@@ -537,7 +644,7 @@ impl LiveState<Scope, Error> for Bill {
         Box::pin(async move {
             let reload = match r.input {
                 LiveInput::Refresh | LiveInput::Params(_) => true,
-                LiveInput::Event(v) => self.event(r.scope, v).await?,
+                LiveInput::Event(v) => self.event(r.scope, r.credential, v).await?,
             };
             if reload {
                 self.reload(r.scope).await?;
@@ -591,28 +698,6 @@ fn table(columns: &ListColumns, event: &str, caption: &str, rows: Vec<FlexRow>) 
     table.suggestions = columns.flex_suggestions();
     table.add_query = &columns.add_query;
     render(table)
-}
-fn fact(title: &'static str, value: &str) -> Fact<'static> {
-    Fact {
-        title,
-        value: Html::text(value),
-        ..Fact::default()
-    }
-}
-fn actor_at(
-    display: &DisplayContext,
-    actor: Option<i64>,
-    impersonator: Option<i64>,
-    at: Option<&str>,
-    element: &str,
-    separator: &str,
-) -> Result<Html> {
-    let mut value = Html::text(&f::actor(actor, impersonator));
-    if let Some(at) = at {
-        value.push(&Html::text(separator));
-        value.push(&f::time(display, element, at)?);
-    }
-    Ok(value)
 }
 // Unlike form_values' general 1 KiB limit, 500 Unicode characters can use
 // 2 KiB. Pass the whole known field for facade validation, never truncate it.
@@ -675,6 +760,9 @@ struct Corrects {
 #[derive(Template)]
 #[template(path = "bill_actions.html")]
 struct Actions {
+    correct: Option<String>,
+    note: Option<String>,
+    pay: Option<String>,
     approve: bool,
     post: bool,
     approve_exception: bool,

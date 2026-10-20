@@ -1,6 +1,6 @@
 # Payables
 
-`finance/payables` owns a company's supplier documents. It mirrors Bilimbi.Finance.Payables settings, tax codes, bills, debit notes, document approvals, payment requests and payments, including aging, tax totals and control-account tie-out, and the three-way match. Reviewed agent operations expose the facade-only workflows. Slice NP4 adds the Bills list and bill detail pages; recording documents, settings and payments has no page.
+`finance/payables` owns a company's supplier documents. It mirrors Bilimbi.Finance.Payables settings, tax codes, bills, debit notes, document approvals, payment requests and payments, including aging, tax totals and control-account tie-out, and the three-way match. Reviewed agent operations expose the facade-only workflows. Slice NP4 adds the Bills list and bill detail pages. Slice NP5 adds the pages that record a bill or debit note, request, decide and reverse supplier payments, read aged payables and set payables up, so a person who has no AI agent can do every daily task; each page write is the contract the agent doors call.
 
 ## Facade
 
@@ -37,13 +37,30 @@ Posting calls `Ledger::post_entry_in` on the document's own transaction, owned a
 
 ## Bills pages
 
-`/finance/payables/bills` requires `finance.payables.view`. It preserves Bilimbi's `search`, `status`, `document_type`, `page` and `page_size` query names. Held bills applies the held filter while preserving search, type and page size. The FlexTable has eight built-in columns, column customization and compact/normal rows; no sortable headings, as in the reference. Search matches the party snapshot or the party's own number, not the internally assigned posting number. There is no create form.
+`/finance/payables/bills` requires `finance.payables.view`. It preserves Bilimbi's `search`, `status`, `document_type`, `page` and `page_size` query names. Held bills applies the held filter while preserving search, type and page size. The FlexTable has eight built-in columns, column customization and compact/normal rows; no sortable headings, as in the reference. Search matches the party snapshot or the party's own number, not the internally assigned posting number. "Record a bill" opens the recording form (below). Totals show the book's decimal places with digit groups.
 
 `/finance/payables/bills/{id}` shows the party snapshot, immutable lines and their order-line references, totals, outstanding, actors (including impersonation), ledger entry number, last comparison, exceptions and match history. All three detail lists are FlexTables. Timestamps use the reader's display policy at second precision. Record links and announcements use the workspace kind `finance/payables`.
 
-Approve and Post act immediately, as Bilimbi does. Void and Approve exceptions use shared reason modals with the reference confirmations and 1–500-character reasons. Exception approval retains the displayed hold ID when the dialog opens; a new hold refuses the stale approval and requires a fresh review. Every write-shaped event checks its capability again, and the facade checks inside the audited write. Refusals stay on the page as flashes, including separation of duties, archival and ledger refusals (the ledger's own access or archive refusal reads as the page's, as Bilimbi's shared `:unauthorized`/`:company_archived` do); a successful post returning a held bill is a warning, not success.
+Approve and Post act immediately, as Bilimbi does, and call `finance.payables.document.approve` / `.post` / `.void`. Void and Approve exceptions use shared reason modals with the reference confirmations and 1–500-character reasons. Exception approval retains the displayed hold ID when the dialog opens; a new hold refuses the stale approval and requires a fresh review. Every write-shaped event checks its capability again, and the facade checks inside the audited write. Refusals stay on the page as flashes, including separation of duties, archival and ledger refusals (the ledger's own access or archive refusal reads as the page's, as Bilimbi's shared `:unauthorized`/`:company_archived` do); a successful post returning a held bill is a warning, not success.
 
 The page mounts `finance.attachments-panel` for `finance/payables/document`. The source re-reads finality on every action: approval hides replace/remove but still allows additional evidence. Attachments owns uploads, retention and downloads; Payables owns no CSS or JavaScript.
+
+## Recording and payment pages (NP5)
+
+Bilimbi recorded documents, payments and settings through its API, so these pages have no Bilimbi counterpart. Each page write calls the operation contract an agent calls, through `PageContracts` (`Pages::write` in `src/web/mod.rs`; the events and contracts are the page service's `PageWrites`), so a person and an agent get the same validation, capability check, owner preview, audited transaction and separation of duties. Only approving match exceptions still writes through the facade, a listed `Pending` allowance, because no contract exists for it.
+
+| Page | Path | Needs | What it does |
+| --- | --- | --- | --- |
+| Record a bill | `/finance/payables/bills/new` | `finance.payables.documents.create` | Supplier (typed, or picked from recent bills), invoice number, dates, lines with an account picker and tax code, live totals; saves a draft (`bill.create`) and opens it |
+| Correct a draft | `/finance/payables/bills/new?correct={id}` | create and approve | The same form filled from a draft. Documents are immutable, so saving voids the draft (`document.void`) and records the corrected bill; if the new bill is then refused, the old draft is already void and the form says so. A draft that names order lines is not offered, because the form has no place for them |
+| Record a debit note | `/finance/payables/debit-notes/new?bill={id}` | create | Lines against a posted bill (`debit_note.create`); the supplier is the bill's |
+| Payments | `/finance/payables/payments` | view | Payment requests newest first with status filter and search (the facade pages by request number, so the newest 2,500 are read) |
+| Request a payment | `/finance/payables/payments/new` | `finance.payables.payments.submit` | Date, supplier (from the bills still owed on that date, `aged_payables`), paid-from account, an amount per bill; saves `payment.submit`. `?bill={id}` starts from one bill |
+| Payment request | `/finance/payables/payments/{id}` | view | Facts, bills paid, the payment and its reversal; Approve and pay, Reject (reason) and Reverse payment (date) call `payment.approve`, `.reject` and `.reverse` (`finance.payables.payments.post`); mounts the payment attachments panel |
+| Aged payables | `/finance/payables/aged` | view | Buckets by supplier and the bills behind them, as of a day (`?as_of=`), with credit balances apart |
+| Payables setup | `/finance/payables/setup` | view; change needs `finance.payables.settings.manage` | The payable account and tolerances (`settings.put`), tax codes: add and turn on or off (`tax_code.create` / `.update`) |
+
+The recording forms keep their draft on the server and send every field as `bill[...]` (a line's are `bill[line_<id>_...]`), because `params::form_values` stops at 64 fields. Totals are worked out on the page with the facade's rules (tax rounded half up once per code) for display only; the saved draft has the facade's own. An amount, date or account the contract refuses is shown on its field and in the summary in the contract's words. Lines are limited to 100 here (the contract allows 500).
 
 ## Source documents and later slices
 

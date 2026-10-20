@@ -62,6 +62,8 @@ inventory::submit! { Module {
     }); agent_operations::bind(payables.clone(), s.get("base/tenancy.parties")?)?; Ok(payables) } }, Service { id: web::PAGES, factory: |s| Ok(Arc::new(bilibi_ui::page::PageService::<Scope, Error>(Arc::new(web::Pages {
         db: s.get::<Db>("base/database.pool")?.as_ref().clone(),
         payables: s.get(SERVICE)?,
+        ledger: s.get(bilibi_finance_ledger::SERVICE)?,
+        contracts: s.get(bilibi_agent_api::page::SERVICE)?,
         display: s.get("base/datetime.display")?,
         locales: s.get("base/locale.locales")?,
     })))) }],

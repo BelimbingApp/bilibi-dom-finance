@@ -1,0 +1,31 @@
+{# Request a supplier payment. Shared components own the DOM. #}
+{% import "components.html" as ui %}
+{% import "forms.html" as form %}
+{% call ui::page(id="payables-pay", variant=bilibi_ui::PageVariant::Form) %}
+{% call ui::header(subtitle="It is paid only after someone else approves it.", actions=back) %}Request a payment{% endcall %}
+{% if let Some(summary) = summary %}{{ summary|safe }}{% endif %}
+{% if let Some(notice) = notice %}{{ notice|safe }}{% endif %}
+<form id="payables-pay-form" data-event="edit" data-change data-submit-event="save_payment" class="space-y-3">
+{% call form::section(labelledby="payables-pay-details-heading", heading="Payment") %}
+<div class="grid gap-x-6 gap-y-2 md:grid-cols-2">
+{% for field in details %}{% call form::input(field=field) %}{% endcall %}{% endfor %}
+{% call form::combobox(combo=account) %}{% endcall %}
+</div>
+{% endcall %}
+{% call form::section(labelledby="payables-pay-bills-heading", heading="Bills to pay") %}
+{% if none_owed %}<p id="payables-pay-none" class="text-sm text-ink-muted">No bills are waiting to be paid on this date.</p>
+{% else if !chosen %}<p id="payables-pay-choose" class="text-sm text-ink-muted">Choose a supplier to see the bills still owed to them.</p>{% endif %}
+{% for row in rows %}
+<div id="{{ row.dom_id }}" class="grid items-center gap-x-3 gap-y-2 py-2 md:grid-cols-4{% if !loop.first %} border-t border-line{% endif %}">
+<div><a href="/finance/payables/bills/{{ row.bill_id }}" class="text-action hover:underline">{{ row.bill }}</a><span class="block text-xs text-ink-muted">{{ row.detail }}</span></div>
+<div class="text-sm text-ink">{{ row.due }}{% if let Some(overdue) = row.overdue %}<span class="block text-xs text-ink-muted">{{ overdue }}</span>{% endif %}</div>
+<div class="text-sm tabular-nums text-ink">{{ row.owed }}</div>
+{% call form::input(field=row.amount) %}{% endcall %}
+</div>
+{% endfor %}
+{% if let Some(buttons) = fill %}<div class="mt-2 flex flex-wrap items-center gap-2">{{ buttons.0|safe }}{{ buttons.1|safe }}</div>{% endif %}
+{% endcall %}
+{% if let Some(total) = total %}{{ total|safe }}{% endif %}
+<div class="flex flex-wrap items-center gap-2">{{ save|safe }}</div>
+</form>
+{% endcall %}

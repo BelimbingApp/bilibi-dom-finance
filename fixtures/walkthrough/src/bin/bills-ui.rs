@@ -360,6 +360,37 @@ async fn main() -> Outcome<()> {
     println!(
         "refusal survives refresh and an old success dismissal; matching error dismissal succeeds"
     );
+    // NP5: the pages that record, pay, age and set up mount and render for the
+    // people who may use them, and keep their controls from a reader. Writes
+    // need a browser session, so they are tried in the browser.
+    for (operation, marker) in [
+        ("bills", "id=\"payables-bills-new\""),
+        ("bill_new", "id=\"payables-record-form\""),
+        ("payments", "payables-payments-table"),
+        ("payment_new", "id=\"payables-pay-form\""),
+        ("aged", "payables-aged-parties"),
+        ("setup", "id=\"payables-settings-form\""),
+    ] {
+        assert!(
+            page_html(&pages, operation, &manager, &path, &query)
+                .await?
+                .contains(marker),
+            "{operation} renders {marker} for the recorder"
+        );
+    }
+    for (operation, marker) in [
+        ("bills", "id=\"payables-bills-new\""),
+        ("setup", "id=\"payables-settings-form\""),
+        ("payments", "id=\"payables-payments-new\""),
+    ] {
+        assert!(
+            !page_html(&pages, operation, &viewer, &path, &query)
+                .await?
+                .contains(marker),
+            "{operation} hides {marker} from a reader"
+        );
+    }
+    println!("recording pages: the recorder gets the bill, payment and setup forms; a reader gets none of their controls");
     println!("Fixture accounts: manager@example.test (recorder), admin@example.test (independent reviewer), viewer@example.test (read only); the walkthrough fixture's password applies");
     // The real queue executor delivers mounted Supply Chain events into
     // Payables' own copy; the fixture never writes order or receipt facts.
@@ -379,4 +410,26 @@ async fn main() -> Outcome<()> {
     let _ = worker.await;
     served?;
     Ok(())
+}
+
+/// One page's first render for a signed-in person (NP5).
+async fn page_html(
+    pages: &PageService<Scope, Error>,
+    operation: &'static str,
+    scope: &Scope,
+    path: &HashMap<String, String>,
+    query: &HashMap<String, String>,
+) -> Result<String, Error> {
+    Ok(pages
+        .0
+        .render(PageRequest {
+            operation,
+            scope: Some(scope),
+            path,
+            query,
+            body: &[],
+            framed: false,
+        })
+        .await?
+        .html)
 }

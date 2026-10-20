@@ -1,14 +1,15 @@
 //! Bilimbi Payables.Web.BillsLive: filters, paging and built-in ListColumns.
-use super::{company, format, render, Pages, INDEX};
-use crate::{Document, DocumentPageQuery};
+use super::{company, format, render, Pages, INDEX, NEW_BILL};
+use crate::{Document, DocumentPageQuery, CREATE_DOCUMENTS};
 use askama::Template;
 use bilibi_database::{Error, Result};
+use bilibi_finance_ledger::MinorUnits;
 use bilibi_tenancy::Scope;
 use bilibi_ui::{
     page::{LiveBody, LiveFuture, LiveInput, LiveRequest, LiveState},
-    params, BadgeKind, BuiltinColumn, Cell, Choice, EmptyState, Filter, FilterToolbar, FlexRow,
-    FlexTable, Html, ListColumns, ListSpec, ListState, PageCounts, Pagination, RecordLink,
-    TableEmpty, ToolbarControl,
+    params, BadgeKind, BuiltinColumn, Cell, Choice, CreateButton, EmptyState, Filter,
+    FilterToolbar, FlexRow, FlexTable, Html, ListColumns, ListSpec, ListState, PageCounts,
+    Pagination, RecordLink, TableEmpty, ToolbarControl,
 };
 use std::{
     collections::HashMap,
@@ -42,6 +43,8 @@ pub(super) struct Bills {
     columns: ListColumns,
     documents: Vec<Document>,
     total: u64,
+    units: Option<MinorUnits>,
+    can_create: bool,
     unavailable: bool,
     framed: bool,
 }
@@ -75,12 +78,25 @@ impl Bills {
                 .map_err(|_| Error::Internal)?,
             documents: vec![],
             total: 0,
+            units: None,
+            can_create: false,
             unavailable: false,
             framed,
         })
     }
 
     pub(super) async fn reload(&mut self, scope: &Scope) -> Result<()> {
+        self.can_create = self.pages.allowed(scope, CREATE_DOCUMENTS).await?;
+        self.units = match company(scope) {
+            Some(c) => self
+                .pages
+                .ledger
+                .get_book(scope, c)
+                .await
+                .ok()
+                .map(|b| b.minor_units),
+            None => None,
+        };
         let result = match company(scope) {
             Some(company) => {
                 self.pages
@@ -121,9 +137,17 @@ impl Bills {
     pub(super) fn body(&self) -> Result<String> {
         let mut held = self.list.clone();
         held.apply_filters(&HashMap::from([("status".into(), "held".into())]));
-        let actions = render(HeldLink {
+        let mut actions = render(HeldLink {
             href: params::address(INDEX, &held.to_params()),
         })?;
+        if self.can_create {
+            actions.push(&render(CreateButton {
+                noun: "Bill",
+                href: NEW_BILL,
+                id: "payables-bills-new",
+                ..CreateButton::default()
+            })?);
+        }
         let mut content = Html::EMPTY;
         let mut toolbar = FilterToolbar::new(
             "payables-bills-filters",
@@ -205,7 +229,14 @@ impl Bills {
                     .slot(
                         "total",
                         render(Tabular {
-                            text: format!("{} {}", d.total, d.currency_code),
+                            text: format!(
+                                "{} {}",
+                                self.units.map_or_else(
+                                    || d.total.to_string(),
+                                    |u| format::money(d.total, u)
+                                ),
+                                d.currency_code
+                            ),
                         })?,
                     )
                     .slot("status", format::status(&d.status)?)
@@ -226,7 +257,11 @@ impl Bills {
             table.zoom = self.columns.zoom;
             table.suggestions = self.columns.flex_suggestions();
             table.add_query = &self.columns.add_query;
-            table.empty = Some(TableEmpty::Content(Html::text("No documents match the current filters. Bills are recorded through the payables API.")));
+            table.empty = Some(TableEmpty::Content(Html::text(if self.can_create {
+                "No documents match the current filters. Record a bill to start."
+            } else {
+                "No documents match the current filters."
+            })));
             content.push(&render(table)?);
             let mut pager = Pagination::new(
                 "payables-bills-pagination",

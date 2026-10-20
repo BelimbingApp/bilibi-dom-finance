@@ -87,11 +87,16 @@ they govern this code and are not copied here.
 - Declare every page or panel service's write events in its `PageWrites`
   (Bilibi `apps/base/agent_api/README.md`): the host refuses, as
   `Error::Internal` at run time, a live-event write its service has not
-  declared, and the build does not catch it. The existing pages keep a
-  `Pending::Every` allowance with its reason beside their routes; a new write
-  event calls its operation contract through `PageContracts` where one exists.
+  declared, and the build does not catch it. Payables' pages write
+  through contracts (`Pages::write`, `payables/src/web/mod.rs`), except approving
+  match exceptions, a listed `Pending` allowance; the other
+  existing pages keep a `Pending::Every` allowance with its reason beside
+  their routes, and a new write event calls its operation contract through
+  `PageContracts` where one exists.
 - Build a page on contracts, not the facade: use `Pages::read`, `read_all` and `write` in `receivables/src/web/mod.rs` (they go through `PageContracts` and unwrap the envelope), and name each write event's contract in `PAGE_WRITES` with `Pending::None`. A read with no contract gets a contract in the owning module (`aging.get`), not a facade call from the page.
 - Show an amount with the book's minor units through `web/format.rs` `Figures`, never `Money`/`Decimal` `to_string`: records carry the storage scale of four places, so `12.50` would read `12.5000`.
+- Write from a page with `Pages::write` (the contract the agent doors call, event listed in `PageWrites`), never `Payables::approve_document` and the other facade writes: the facade skips the contract's validation and review, so a person and an agent stop getting the same answer. Show `Written::Fields` (keyed by input path) on the fields, not as one flash.
+- A recorded document is immutable, so "edit a draft" is a corrected draft that replaces it, through `finance.payables.bill.replace_draft` (`Payables::replace_draft_on` voids the old draft and records the new one in one transaction, so a refusal leaves the draft as it was); never void then create in two calls, and do not add an update path. List a page of payment requests with `page_payment_requests` (newest first, the total from SQL), never by loading batches of `list_payment_requests` and cutting them, which drops the newest. Show money with `format::money(amount, units)` (the book's places, digit groups), not `{}` of a `Money`. A form with many fields reads its own `name[...]` keys: `params::form_values` keeps only 64.
 - Agent writes join the shared plan's audited transaction through the ledger's private `*_on` methods, never the pool-owning public wrappers: nested commits would escape plan rollback. Preview on the handed `OperationClient`; retain the transaction-local review fence because the pinned engine previews every step before executing any.
 
 - Post an entry only through `Ledger::post_entry` and read it through

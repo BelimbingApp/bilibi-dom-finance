@@ -1,6 +1,6 @@
 {# Bilimbi Finance.Payables.Web.BillsLive. Shared components own the DOM. #}
 {% import "components.html" as ui %}
 {% call ui::page(id="payables-bills") %}
-{% call ui::header(subtitle="Bills and debit notes from this company's parties, newest first.", actions=actions) %}Bills{% endcall %}
+{% call ui::header(subtitle="Bills and debit notes from suppliers, newest first.", actions=actions) %}Bills{% endcall %}
 {{ content|safe }}
 {% endcall %}

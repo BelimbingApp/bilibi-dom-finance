@@ -3,7 +3,7 @@ use crate::{Document, MatchEvent, PayablesError, Tolerance, ToleranceKind};
 use askama::Template;
 use bilibi_database::{Error, Result};
 use bilibi_datetime::{DisplayContext, Format, Precision};
-use bilibi_finance_ledger::LedgerError;
+use bilibi_finance_ledger::{LedgerError, MinorUnits, Money};
 use bilibi_ui::{Badge, BadgeKind, Html};
 use rust_decimal::Decimal;
 
@@ -171,4 +171,85 @@ pub(super) fn refusal(action: &str, error: PayablesError) -> String {
             }
         }
     }
+}
+
+/// Digits in threes: `1234567.50` reads `1,234,567.50`. The text already
+/// carries the book's decimal places (`Money::shown`).
+pub(super) fn grouped(amount: &str) -> String {
+    let (sign, digits) = amount
+        .strip_prefix('-')
+        .map_or(("", amount), |rest| ("-", rest));
+    let (whole, fraction) = digits.split_once('.').map_or((digits, ""), |(w, f)| (w, f));
+    let mut out = String::with_capacity(amount.len() + whole.len() / 3);
+    for (i, c) in whole.chars().enumerate() {
+        if i > 0 && (whole.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    if fraction.is_empty() {
+        format!("{sign}{out}")
+    } else {
+        format!("{sign}{out}.{fraction}")
+    }
+}
+/// An amount of the book, with its decimal places and digit groups.
+pub(super) fn money(amount: Money, units: MinorUnits) -> String {
+    grouped(&amount.shown(units))
+}
+
+pub(super) fn request_status(status: &str) -> Result<Html> {
+    let (label, kind) = match status {
+        "submitted" => ("waiting for approval", BadgeKind::Neutral),
+        "posted" => ("paid", BadgeKind::Success),
+        "rejected" => ("rejected", BadgeKind::Danger),
+        other => (other, BadgeKind::Neutral),
+    };
+    badge(label, kind, true)
+}
+
+pub(super) fn fact(title: &'static str, value: &str) -> bilibi_ui::Fact<'static> {
+    bilibi_ui::Fact {
+        title,
+        value: Html::text(value),
+        ..bilibi_ui::Fact::default()
+    }
+}
+
+/// Who did it and, when known, when: `User #2 · 2026-10-20 09:30:00`.
+pub(super) fn actor_at(
+    display: &DisplayContext,
+    actor: Option<i64>,
+    impersonator: Option<i64>,
+    at: Option<&str>,
+    element: &str,
+    separator: &str,
+) -> Result<Html> {
+    let mut value = Html::text(&self::actor(actor, impersonator));
+    if let Some(at) = at {
+        value.push(&Html::text(separator));
+        value.push(&time(display, element, at)?);
+    }
+    Ok(value)
+}
+
+/// The owner's refusal in the words a person acts on. Its own wording stays
+/// when this page has no better.
+pub(super) fn refused(
+    action: &str,
+    fields: &std::collections::BTreeMap<String, Vec<String>>,
+) -> String {
+    let message = fields
+        .values()
+        .flatten()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(" ");
+    if message.contains("cannot approve it") {
+        return "This company separates duties: someone other than whoever recorded it must approve it.".into();
+    }
+    if message.is_empty() {
+        return format!("{action} did not go through. Try again.");
+    }
+    format!("{action} did not go through: {message}")
 }
