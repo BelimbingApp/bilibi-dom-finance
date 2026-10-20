@@ -38,6 +38,14 @@ pub(crate) struct Pages {
     pub locales: Arc<Locales>,
 }
 
+// Menu group (a bookkeeper's section of the Finance menu); its pages sit under it.
+bilibi_menu::contribute!(
+    "finance/reconciliation",
+    bilibi_menu::MenuItem::container("finance.group.bank", "Bank")
+        .under("finance")
+        .order(30)
+);
+
 bilibi_menu::contribute!(
     "finance/reconciliation",
     bilibi_menu::MenuItem::page(
@@ -46,9 +54,9 @@ bilibi_menu::contribute!(
         "/finance/reconciliation"
     )
     .icon("building-library")
-    .under("finance")
+    .under("finance.group.bank")
     .requires(bilibi_menu::Requirement::Capability(crate::VIEW))
-    .order(15)
+    .order(1)
 );
 
 macro_rules! route {

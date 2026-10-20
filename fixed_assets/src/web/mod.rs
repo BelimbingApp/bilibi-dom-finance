@@ -42,6 +42,14 @@ route!("register", "/finance/fixed-assets/register");
 route!("categories", "/finance/fixed-assets/categories");
 route!("runs", "/finance/fixed-assets/runs");
 route!("asset", "/finance/fixed-assets/register/{id}");
+// Menu group (a bookkeeper's section of the Finance menu); its pages sit under it.
+bilibi_menu::contribute!(
+    "finance/fixed_assets",
+    bilibi_menu::MenuItem::container("finance.group.fixed-assets", "Fixed assets")
+        .under("finance")
+        .order(40)
+);
+
 macro_rules! menu {
     ($kind:literal, $label:literal, $order:literal) => {
         bilibi_menu::contribute!(
@@ -52,15 +60,15 @@ macro_rules! menu {
                 concat!("/finance/fixed-assets/", $kind)
             )
             .icon("clipboard-document-list")
-            .under("finance")
+            .under("finance.group.fixed-assets")
             .requires(bilibi_menu::Requirement::Capability(crate::VIEW))
             .order($order)
         );
     };
 }
-menu!("register", "Fixed assets", 40);
-menu!("categories", "Asset categories", 41);
-menu!("runs", "Depreciation runs", 42);
+menu!("register", "Fixed assets", 1);
+menu!("runs", "Depreciation runs", 2);
+menu!("categories", "Asset categories", 3);
 
 fn render(t: impl Template) -> Result<Html> {
     Html::render(&t).map_err(|_| Error::Internal)

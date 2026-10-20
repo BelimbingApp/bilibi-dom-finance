@@ -52,12 +52,20 @@ inventory::submit! { Contribution::new(ROUTES, "finance/reports.activity", prove
     method: Method::Get, path: "/finance/reports/accounts/{account_id}", service: "finance/reports.pages",
     operation: "activity", access: Access::Capability(crate::VIEW), framed: true,
 }) }
+// Menu group (a bookkeeper's section of the Finance menu); its pages sit under it.
+bilibi_menu::contribute!(
+    "finance/reports",
+    bilibi_menu::MenuItem::container("finance.group.bookkeeping", "Bookkeeping")
+        .under("finance")
+        .order(10)
+);
+
 bilibi_menu::contribute!(
     "finance/reports",
     bilibi_menu::MenuItem::page("finance.reports", "Reports", "/finance/reports")
-        .under("finance")
+        .under("finance.group.bookkeeping")
         .requires(bilibi_menu::Requirement::Capability(crate::VIEW))
-        .order(20)
+        .order(4)
 );
 
 // Bilimbi Reports.Web.{BookkeepingLive,ApprovalExceptionsLive} routes/menu.
@@ -74,9 +82,9 @@ bilibi_menu::contribute!(
         "Bookkeeping",
         "/finance/reports/bookkeeping"
     )
-    .under("finance")
+    .under("finance.group.bookkeeping")
     .requires(bilibi_menu::Requirement::Capability(crate::VIEW))
-    .order(22)
+    .order(1)
 );
 bilibi_menu::contribute!(
     "finance/reports",
@@ -85,9 +93,9 @@ bilibi_menu::contribute!(
         "Approval exceptions",
         "/finance/reports/approval-exceptions"
     )
-    .under("finance")
+    .under("finance.group.bookkeeping")
     .requires(bilibi_menu::Requirement::Capability(crate::VIEW))
-    .order(21)
+    .order(3)
 );
 
 // Bilimbi Reports.Web.AuditorPackController: every click reauthorizes the artifact.

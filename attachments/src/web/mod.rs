@@ -54,9 +54,9 @@ bilibi_menu::contribute!(
         "/finance/attachments"
     )
     .icon("shield-check")
-    .under("finance")
+    .under("finance.group.bookkeeping")
     .requires(bilibi_menu::Requirement::Capability(crate::VIEW))
-    .order(18)
+    .order(2)
 );
 
 inventory::submit! { Contribution::new(ROUTES, "finance/attachments.index", provenance!(), &Route {

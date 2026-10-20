@@ -47,21 +47,29 @@ pub(crate) struct Pages {
 }
 
 // Bilimbi `Contributions.menu`: id, label, icon, parent, route, capability, order.
+// Menu group (a bookkeeper's section of the Finance menu); its pages sit under it.
+bilibi_menu::contribute!(
+    "finance/sst",
+    bilibi_menu::MenuItem::container("finance.group.tax", "Tax")
+        .under("finance")
+        .order(50)
+);
+
 bilibi_menu::contribute!(
     "finance/sst",
     bilibi_menu::MenuItem::page("finance.sst", "SST returns", INDEX)
         .icon("shield-check")
-        .under("finance")
+        .under("finance.group.tax")
         .requires(bilibi_menu::Requirement::Capability(VIEW))
-        .order(18)
+        .order(1)
 );
 bilibi_menu::contribute!(
     "finance/sst",
     bilibi_menu::MenuItem::page("finance.sst.setup", "SST setup", SETUP)
         .icon("cog-6-tooth")
-        .under("finance")
+        .under("finance.group.tax")
         .requires(bilibi_menu::Requirement::Capability(VIEW))
-        .order(19)
+        .order(2)
 );
 
 macro_rules! provenance {

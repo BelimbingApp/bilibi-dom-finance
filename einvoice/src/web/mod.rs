@@ -23,6 +23,14 @@ pub(crate) const PAGES: &str = "finance/einvoice.pages";
 pub(crate) const FILES: &str = "finance/einvoice.files";
 pub(super) const ADDRESS: &str = "/finance/einvoice/documents";
 
+// Menu group (a bookkeeper's section of the Finance menu); its pages sit under it.
+bilibi_menu::contribute!(
+    "finance/einvoice",
+    bilibi_menu::MenuItem::container("finance.group.einvoicing", "E-invoicing")
+        .under("finance")
+        .order(60)
+);
+
 bilibi_menu::contribute!(
     "finance/einvoice",
     bilibi_menu::MenuItem::page(
@@ -31,9 +39,9 @@ bilibi_menu::contribute!(
         "/finance/einvoice/documents"
     )
     .icon("circle-stack")
-    .under("finance")
+    .under("finance.group.einvoicing")
     .requires(bilibi_menu::Requirement::Capability(crate::VIEW))
-    .order(8)
+    .order(1)
 );
 
 inventory::submit! { Contribution::new(ROUTES, "finance/einvoice.documents", provenance!(), &Route {

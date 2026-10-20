@@ -19,13 +19,21 @@ inventory::submit! { Contribution::new(ROUTES, "finance/payroll.postings", Prove
 inventory::submit! { Contribution::new(ROUTES, "finance/payroll.setup", Provenance { module: MODULE, source: file!(), line: line!() }, &Route {
     method: Method::Get, path: "/finance/payroll/setup", service: "finance/payroll.pages", operation: "setup", access: Access::Capability(VIEW), framed: true,
 }) }
+// Menu group (a bookkeeper's section of the Finance menu); its pages sit under it.
+bilibi_menu::contribute!(
+    "finance/payroll",
+    bilibi_menu::MenuItem::container("finance.group.payroll", "Payroll")
+        .under("finance")
+        .order(70)
+);
+
 bilibi_menu::contribute!(
     "finance/payroll",
     bilibi_menu::MenuItem::page("finance.payroll", "Payroll and claims", "/finance/payroll")
-        .under("finance")
+        .under("finance.group.payroll")
         .icon("users")
         .requires(bilibi_menu::Requirement::Capability(VIEW))
-        .order(12)
+        .order(1)
 );
 
 // ADR 01 gap, listed so it stays visible: these pages still write through

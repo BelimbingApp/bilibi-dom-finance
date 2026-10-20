@@ -31,13 +31,21 @@ pub(crate) struct Pages {
     pub locales: Arc<Locales>,
 }
 
+// Menu group (a bookkeeper's section of the Finance menu); its pages sit under it.
+bilibi_menu::contribute!(
+    "finance/payables",
+    bilibi_menu::MenuItem::container("finance.group.payables", "Payables")
+        .under("finance")
+        .order(20)
+);
+
 bilibi_menu::contribute!(
     "finance/payables",
     bilibi_menu::MenuItem::page("finance.payables.bills", "Bills", INDEX)
         .icon("clipboard-document-list")
-        .under("finance")
+        .under("finance.group.payables")
         .requires(bilibi_menu::Requirement::Capability(VIEW))
-        .order(5)
+        .order(1)
 );
 
 macro_rules! route {
