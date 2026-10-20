@@ -256,10 +256,7 @@ impl Write {
                 let separation_required = input["separation_required"]
                     .as_bool()
                     .unwrap_or(duties::required(latest.as_ref()));
-                let reason = if input["separation_required"].is_boolean()
-                    && (!separation_required
-                        || separation_required != duties::required(latest.as_ref()))
-                {
+                let reason = if separation_required != duties::required(latest.as_ref()) {
                     authorize_on(client, scope, company, MANAGE_DUTY_SEPARATION).await?;
                     duties::validate_change(separation_required, input["approval_reason"].as_str())
                         .map_err(LedgerError::Invalid)?
