@@ -613,6 +613,42 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         )
         .await?;
     println!("manager closes the first year: {}", year(&closed));
+    let registry = services.get::<bilibi_agent_api::Registry>("base/agent_api.registry")?;
+    let default_month = registry
+        .call(
+            &**client,
+            &manager,
+            "finance.ledger.book.get",
+            &serde_json::json!({"company_id":COMPANY}),
+        )
+        .await?["result"]["latest_entry_date"]
+        .as_str()
+        .map(str::to_owned);
+    let real = ledger
+        .list_entries(
+            &manager,
+            COMPANY,
+            &EntryQuery {
+                limit: Some(500),
+                exclude_closing: true,
+                ..EntryQuery::default()
+            },
+        )
+        .await?;
+    let latest_real = real.iter().map(|e| e.entry_date.to_string()).max();
+    let closing_date = match closed.closing_entry_id {
+        Some(id) => Some(ledger.get_entry(&manager, COMPANY, id).await?.entry_date),
+        None => None,
+    };
+    if default_month != latest_real {
+        return Err(format!(
+            "reports would open on {default_month:?}, not the latest posting {latest_real:?}"
+        )
+        .into());
+    }
+    println!(
+        "reports open on the month of {default_month:?}, the latest posting; the year-end closing entry dated {closing_date:?} does not move it"
+    );
     if let Some(id) = closed.closing_entry_id {
         show(
             "the closing entry (income and expense to zero, profit to 9300)",

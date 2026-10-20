@@ -220,9 +220,6 @@ pub(super) fn refused(
         .map(String::as_str)
         .collect::<Vec<_>>()
         .join(" ");
-    if message.contains("cannot approve it") {
-        return "This company separates duties: someone other than whoever recorded it must approve it.".into();
-    }
     if message.is_empty() {
         return format!("{action} did not go through. Try again.");
     }

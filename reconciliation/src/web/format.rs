@@ -44,7 +44,7 @@ pub(super) fn refusal(error: &E) -> String {
         E::UnterminatedQuote(row) => format!("Row {row} opens a quote it never closes."),
         E::StrayQuote(row) => format!("Row {row} has a quote in the middle of a value."),
         E::Attachment(bilibi_finance_attachments::AttachmentError::RetentionNotConfigured) => "Nothing was imported. Ask a server administrator to set Storage folder (artifacts.storage_root) and Document retention days (artifacts.retention_days) in Global settings at /system/settings.".into(),
-        E::Attachment(missing @ bilibi_finance_attachments::AttachmentError::StorageFolderMissing(_)) => format!("Nothing was imported. {missing}"),
+        E::Attachment(missing @ (bilibi_finance_attachments::AttachmentError::StorageFolderMissing(_) | bilibi_finance_attachments::AttachmentError::StorageFolderUnsafe)) => format!("Nothing was imported. {missing}"),
         E::Attachment(bilibi_finance_attachments::AttachmentError::InvalidContentType) => "The file's type could not be recognised.".into(),
         other => other.to_string(),
     }

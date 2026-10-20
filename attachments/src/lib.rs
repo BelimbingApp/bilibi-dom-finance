@@ -216,6 +216,9 @@ pub enum AttachmentError {
     /// the text is Base's own, naming the folder.
     #[error("{0} Global settings: /system/settings")]
     StorageFolderMissing(String),
+    /// The Storage folder is empty or not an absolute, private folder.
+    #[error("Storage folder (artifacts.storage_root) must be the absolute path of an existing private folder (permission 0700). Ask a server administrator to set it in Global settings: /system/settings")]
+    StorageFolderUnsafe,
     /// The file is larger than Base Artifacts' `artifacts.max_bytes`.
     #[error("The file is larger than the storage limit")]
     InvalidSize,
@@ -267,6 +270,7 @@ impl From<StorageError> for AttachmentError {
             StorageError::RetentionNotExtended => Self::RetentionNotExtended,
             StorageError::AlreadyOnHold => Self::AlreadyOnHold,
             StorageError::NotOnHold => Self::NotOnHold,
+            StorageError::UnsafeRoot => Self::StorageFolderUnsafe,
             StorageError::MissingRoot(_) => Self::StorageFolderMissing(error.to_string()),
             StorageError::Database(error) => refusal_of(error),
             other => Self::Storage(other.code()),
