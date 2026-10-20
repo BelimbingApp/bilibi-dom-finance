@@ -78,6 +78,10 @@ struct Targets {
     close: Option<i64>,
     reopen: Option<i64>,
     lock: Option<i64>,
+    can_close: bool,
+    can_reopen: bool,
+    can_lock: bool,
+    can_post: bool,
 }
 
 /// What the person chose, and the ledger's review of it once it has one.
@@ -187,20 +191,32 @@ impl Years {
                                 .filter(|i| all[*i].status == "closed")
                                 .map(|i| all[i].id);
                             let close = all.iter().find(|p| p.status == "open").map(|p| p.id);
+                            let can_close = self
+                                .pages
+                                .allowed(scope, capability_for("close_period"))
+                                .await?;
+                            let can_reopen = self
+                                .pages
+                                .allowed(scope, capability_for("reopen_period"))
+                                .await?;
+                            let can_lock = self
+                                .pages
+                                .allowed(scope, capability_for("lock_period"))
+                                .await?;
+                            let can_post = self.pages.allowed(scope, crate::POST_ENTRIES).await?;
                             for year in years.iter().rev() {
-                                body.push(
-                                    &self
-                                        .year(
-                                            scope,
-                                            year,
-                                            Targets {
-                                                close,
-                                                reopen,
-                                                lock,
-                                            },
-                                        )
-                                        .await?,
-                                );
+                                body.push(&self.year(
+                                    year,
+                                    Targets {
+                                        close,
+                                        reopen,
+                                        lock,
+                                        can_close,
+                                        can_reopen,
+                                        can_lock,
+                                        can_post,
+                                    },
+                                )?);
                             }
                         }
                         other => body.push(&unavailable(
@@ -241,25 +257,16 @@ impl Years {
         })
     }
 
-    async fn year(&mut self, scope: &Scope, year: &view::Year, targets: Targets) -> Result<Html> {
+    fn year(&mut self, year: &view::Year, targets: Targets) -> Result<Html> {
         let Targets {
             close: close_id,
             reopen: reopen_id,
             lock: lock_id,
+            can_close: manage,
+            can_reopen: reopen,
+            can_lock: lock,
+            can_post: post,
         } = targets;
-        let manage = self
-            .pages
-            .allowed(scope, capability_for("close_period"))
-            .await?;
-        let reopen = self
-            .pages
-            .allowed(scope, capability_for("reopen_period"))
-            .await?;
-        let lock = self
-            .pages
-            .allowed(scope, capability_for("lock_period"))
-            .await?;
-        let post = self.pages.allowed(scope, crate::POST_ENTRIES).await?;
         let closed = year.status == "closed";
         let all_locked = year.periods.iter().all(|p| p.status == "locked");
         if self.columns.is_none() {

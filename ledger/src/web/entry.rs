@@ -301,9 +301,24 @@ impl Entry {
         })?);
 
         let mut actions = Html::EMPTY;
-        let reversible = entry.owner.is_none()
+        let mut reversible = entry.owner.is_none()
             && entry.reverses_entry_id.is_none()
             && entry.reversed_by_entry_id.is_none();
+        if can_post && reversible {
+            if let Read::Found(value) = self
+                .pages
+                .read(
+                    scope,
+                    "finance.ledger.fiscal_year.list",
+                    json!({"page_size": 100}),
+                )
+                .await?
+            {
+                let years: Vec<view::Year> =
+                    view::parse(value["records"].clone()).unwrap_or_default();
+                reversible = !years.iter().any(|y| y.closing_entry_id == Some(entry.id));
+            }
+        }
         if can_post && reversible {
             actions.push(&render(Button {
                 id: "ledger-entry-reverse",

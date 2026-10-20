@@ -75,14 +75,21 @@ impl Trial {
                                 shown = trial.rows.len();
                                 self.table(&trial, &mut body)?;
                             }
-                            None => body.push(&unavailable("ledger-trial-refused", "the trial balance", &Read::Failed)?),
+                            None => {
+                                body.push(&Self::as_of_control(&as_of)?);
+                                body.push(&unavailable("ledger-trial-refused", "the trial balance", &Read::Failed)?);
+                            }
                         },
                         Read::Refused(text) => {
                             // A date the ledger will not read (a mistyped day).
                             self.pin = None;
+                            body.push(&Self::as_of_control(&as_of)?);
                             body.push(&unavailable("ledger-trial-refused", "the trial balance", &Read::Refused(text))?);
                         }
-                        other => body.push(&unavailable("ledger-trial-refused", "the trial balance", &other)?),
+                        other => {
+                            body.push(&Self::as_of_control(&as_of)?);
+                            body.push(&unavailable("ledger-trial-refused", "the trial balance", &other)?);
+                        }
                     }
                 }
             }
@@ -101,17 +108,21 @@ impl Trial {
         })
     }
 
-    fn table(&mut self, trial: &view::TrialBalance, body: &mut Html) -> Result<()> {
-        let units = trial.minor_units;
-        body.push(&render(FilterToolbar::new(
+    fn as_of_control(as_of: &str) -> Result<Html> {
+        render(FilterToolbar::new(
             "ledger-trial-filters",
             vec![ToolbarControl::date(
                 "ledger-trial-as-of",
                 "as_of",
                 "As of",
-                &trial.as_of,
+                as_of,
             )],
-        ))?);
+        ))
+    }
+
+    fn table(&mut self, trial: &view::TrialBalance, body: &mut Html) -> Result<()> {
+        let units = trial.minor_units;
+        body.push(&Self::as_of_control(&trial.as_of)?);
         let balanced = view::decimal(&trial.total_debit) == view::decimal(&trial.total_credit);
         let mut status = render(Badge::status(
             if balanced {

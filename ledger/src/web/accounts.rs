@@ -133,6 +133,7 @@ impl Accounts {
         let mut body = Html::EMPTY;
         let mut actions = Html::EMPTY;
         let mut rows_shown = 0;
+        let mut chart: Vec<view::Account> = Vec::new();
         if Pages::company(scope).is_none() {
             body.push(&no_company("ledger-accounts-no-company")?);
         } else {
@@ -142,7 +143,8 @@ impl Accounts {
                     "the chart of accounts",
                     &refused,
                 )?),
-                Ok(chart) => {
+                Ok(listed) => {
+                    chart = listed;
                     let book = self.pages.book(scope).await?.ok();
                     let book_open = book.as_ref().is_some_and(|b| b.book.is_some());
                     if can_manage && book_open {
@@ -183,7 +185,7 @@ impl Accounts {
         })?;
         page.push(&body);
         if self.draft.is_some() && can_manage {
-            let form = self.form(scope).await?;
+            let form = self.form(&chart)?;
             page.push(&render(Modal {
                 id: "ledger-account-modal",
                 title: "New account",
@@ -345,9 +347,8 @@ impl Accounts {
         Ok(page.len())
     }
 
-    async fn form(&self, scope: &Scope) -> Result<Html> {
+    fn form(&self, chart: &[view::Account]) -> Result<Html> {
         let draft = self.draft.as_ref().ok_or(Error::Internal)?;
-        let chart = self.pages.chart(scope).await?.unwrap_or_default();
         let mut parents = vec![Choice::new("No group", "")];
         parents.extend(chart.iter().filter(|a| a.active).map(|a| {
             Choice::new(

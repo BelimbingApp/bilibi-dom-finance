@@ -108,6 +108,7 @@ pub(crate) struct Year {
     pub start_date: String,
     pub end_date: String,
     pub status: String,
+    pub closing_entry_id: Option<i64>,
     pub periods: Vec<Period>,
 }
 

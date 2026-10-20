@@ -202,7 +202,6 @@ impl Journals {
         let mut body = Html::EMPTY;
         let mut actions = Html::EMPTY;
         let mut shown = 0;
-        let mut accounts: Vec<view::Account> = Vec::new();
         if Pages::company(scope).is_none() {
             body.push(&no_company("ledger-journals-no-company")?);
         } else {
@@ -231,7 +230,6 @@ impl Journals {
                                 ..CreateButton::default()
                             })?);
                         }
-                        accounts = self.pages.chart(scope).await?.unwrap_or_default();
                         shown = self.table(scope, book.minor_units, &mut body).await?;
                     }
                 },
@@ -245,6 +243,7 @@ impl Journals {
         })?;
         page.push(&body);
         if self.draft.is_some() && can_submit {
+            let accounts = self.pages.chart(scope).await?.unwrap_or_default();
             let form = self.form(&accounts)?;
             page.push(&render(Modal {
                 id: "ledger-journal-modal",

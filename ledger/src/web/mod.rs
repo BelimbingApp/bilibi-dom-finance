@@ -179,12 +179,7 @@ inventory::submit! { Contribution::new(PAGE_WRITES, PAGES, Provenance { module: 
 /// is not drawn (Bilimbi hides it; it does not explain).
 pub(crate) fn capability_for(event: &str) -> &'static str {
     match event {
-        "open_book" | "create_account" | "save_field" | "set_active" | "designate_retained" => {
-            MANAGE_ACCOUNTS
-        }
-        "reverse_entry" => POST_ENTRIES,
-        "submit_journal" => crate::SUBMIT_JOURNALS,
-        "approve_journal" | "reject_journal" => APPROVE_JOURNALS,
+        "create_account" => MANAGE_ACCOUNTS,
         "reopen_period" | "reopen_year" => crate::REOPEN_PERIODS,
         "lock_period" | "lock_year" => crate::LOCK_PERIODS,
         _ => MANAGE_PERIODS,
