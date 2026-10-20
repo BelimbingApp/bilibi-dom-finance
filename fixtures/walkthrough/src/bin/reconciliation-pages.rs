@@ -678,7 +678,7 @@ async fn main() -> Outcome<()> {
     shows(
         "the manager who opened it finalises",
         &html,
-        &["someone other than whoever opened the reconciliation must finalise it"],
+        &["Someone else must finalise this because the company requires separation of duties"],
     )?;
     let html = event(&mut watcher, &staff, json!({"type":"finalise"})).await?;
     shows(
