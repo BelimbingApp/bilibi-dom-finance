@@ -78,6 +78,8 @@ they govern this code and are not copied here.
   declared, and the build does not catch it. The existing pages keep a
   `Pending::Every` allowance with its reason beside their routes; a new write
   event calls its operation contract through `PageContracts` where one exists.
+- Build a page on contracts, not the facade: use `Pages::read`, `read_all` and `write` in `receivables/src/web/mod.rs` (they go through `PageContracts` and unwrap the envelope), and name each write event's contract in `PAGE_WRITES` with `Pending::None`. A read with no contract gets a contract in the owning module (`aging.get`), not a facade call from the page.
+- Show an amount with the book's minor units through `web/format.rs` `Figures`, never `Money`/`Decimal` `to_string`: records carry the storage scale of four places, so `12.50` would read `12.5000`.
 - Agent writes join the shared plan's audited transaction through the ledger's private `*_on` methods, never the pool-owning public wrappers: nested commits would escape plan rollback. Preview on the handed `OperationClient`; retain the transaction-local review fence because the pinned engine previews every step before executing any.
 
 - Post an entry only through `Ledger::post_entry` and read it through

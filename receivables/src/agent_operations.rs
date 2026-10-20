@@ -387,6 +387,7 @@ enum Read {
     Documents,
     Payment,
     Payments,
+    Aging,
 }
 impl ReadHandler for Read {
     fn owner(&self) -> &'static str {
@@ -424,6 +425,15 @@ impl ReadHandler for Read {
                             else {store::decode::<Series>(r).map(|r|json!(r))}
                         }).collect::<std::result::Result<_,_>>()?;
                         json!({"records":records,"next_after_code":next})
+                    }
+                    Self::Aging => {
+                        let as_of: jiff::civil::Date = input["as_of"].as_str().ok_or(ReceivableError::InvalidOption)?.parse().map_err(|_| invalid("as_of", "is not a date"))?;
+                        let mut options = AgingOptions::default();
+                        if let Some(days) = input["bucket_days"].as_array() {
+                            options.bucket_days = days.iter().filter_map(Value::as_i64).collect();
+                        }
+                        // A read holds no company lock, so the facade's own connection is safe here.
+                        json!(service.aged_receivables(scope, company, as_of, &options).await?)
                     }
                     Self::Customer => json!(store::decode::<Customer>(store::find(client,CUSTOMERS,tenant,company,Some(id(input,"customer_id")?)).await?.ok_or(ReceivableError::CustomerNotFound)?)?),
                     Self::Document => json!(documents::read(client,tenant,company,id(input,"document_id")?).await?),
@@ -588,6 +598,12 @@ fn documents() -> Value {
     p["customer_id"] = identifier();
     schema(&[], p)
 }
+fn aging() -> Value {
+    schema(
+        &["as_of"],
+        json!({"as_of":day(),"bucket_days":{"type":"array","items":{"type":"integer","minimum":1,"maximum":36500}}}),
+    )
+}
 fn payments() -> Value {
     let mut p = page_fields();
     p["customer_id"] = identifier();
@@ -606,6 +622,7 @@ inventory::submit! { Contribution::new(DEFINITIONS,"finance/receivables.operatio
         Operation {key:"finance.receivables.document.get",title:"Read a receivables document",summary:"Read saved lines, tax and party snapshots, entry identifiers and current outstanding.",keywords:&[],capability:VIEW,input:document,output,handler:Handler::Read(&Read::Document),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.payment.list",title:"List receipts",summary:"Read numbered receipts with allocations and reversal, by identifier and optional customer.",keywords:&[],capability:VIEW,input:payments,output,handler:Handler::Read(&Read::Payments),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.payment.get",title:"Read a receipt",summary:"Read the original receipt, its allocations and optional dated reversal.",keywords:&[],capability:VIEW,input:payment,output,handler:Handler::Read(&Read::Payment),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.receivables.aging.get",title:"Read receivables aging",summary:"Read who owes what as of a date, by days overdue, per customer and invoice, with the pinned posting number it was read at. Also requires ledger view.",keywords:&[],capability:VIEW,input:aging,output,handler:Handler::Read(&Read::Aging),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.setup.configure",title:"Configure receivables",summary:"Choose active asset control and income accounts for future documents. Also requires ledger view.",keywords:&[],capability:MANAGE_SETUP,input:configure,output,handler:Handler::SafeWrite(&Write::Configure),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.series.create",title:"Create a numbering series",summary:"Create an invoice, credit note or payment series with a unique code and prefix.",keywords:&[],capability:MANAGE_SETUP,input:series_create,output,handler:Handler::SafeWrite(&Write::Code(SERIES,None)),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.series.update",title:"Change a numbering series",summary:"Change name or active flag; never change its code, kind, prefix or width.",keywords:&[],capability:MANAGE_SETUP,input:series_update,output,handler:Handler::SafeWrite(&Write::Code(SERIES,Some("series_id"))),channels:Channels::Every,step_up:&[]},

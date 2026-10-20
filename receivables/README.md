@@ -31,7 +31,7 @@ Attributes are JSON objects with Bilimbi's field names. Partial updates preserve
 
 Migration `finance-receivables-001-receivables` is the fresh final reference schema: eleven tables, identity/append-only/draft guards, database numbering and settlement constraints. It deliberately includes the final payment tables/functions so future migrations need not rewrite the reference guards. No Laravel adoption or legacy entry claiming is ported. Composite keys keep this module's references inside one company; ledger account and entry IDs have no storage-level dependency on sibling tables.
 
-Receivables has no pages, menu, CSS or JavaScript, matching Bilimbi's `web: nil`. H2 exposes its facade-only actions through the shared reviewed agent API; no new UI is invented.
+Bilimbi's Receivables has no pages (`web: nil`). H2 exposes its facade-only actions through the shared reviewed agent API, and the pages below call those same contracts so a person without an agent does the same work (ADR 01). The module owns no CSS or JavaScript.
 
 ## Issuance and settlement
 
@@ -58,6 +58,23 @@ All reads require Receivables view; aging additionally reads the book through le
 
 Tax reports return rows, not a captured watermark: pass the first report's pin for a reproducible multi-report reading. Aggregate amounts are `Decimal` because a sum of valid rows can exceed `Money`'s per-row storage bound. There is no `legacy` field: Laravel adoption is deliberately absent.
 
+## Pages
+
+Menu: Finance → Receivables, for people with `finance.receivables.view`. Controls the reader may not use are hidden. Every page reads and writes through `base/agent_api.pages` (`PageContracts`) and declares each write event in its `PageWrites`; no page touches the facade or a table. The lists read the contracts' cursors (up to 2,000 records) and filter, sort and page them on the server.
+
+| Page | Path | What it does |
+| --- | --- | --- |
+| Customers | `/finance/receivables/customers` | Search and filter, Add customer dialog (`customer.create`). |
+| Customer | `/finance/receivables/customers/{id}` | Details and address edited in place (`customer.update`); the customer's invoices, credit notes and receipts. |
+| Invoices | `/finance/receivables/invoices` | Invoices and credit notes by type, status (draft, issued, unpaid, discarded) and customer; New invoice and New credit note dialogs (`draft.create`). |
+| Invoice | `/finance/receivables/invoices/{id}` | Dates and description edited in place and lines in a dialog while a draft (`draft.update`); Issue and Discard after a confirmation (`document.issue`, `draft.discard`); party, lines, tax, totals, posting status, receipts and credits applied, source documents. |
+| Receipts | `/finance/receivables/receipts` | Record receipt dialog: the customer's open invoices with an amount each, applied in full (`payment.record`). |
+| Receipt | `/finance/receivables/receipts/{id}` | Facts, the invoices it settles, source documents, Reverse receipt dialog (`payment.reverse`). |
+| Aging | `/finance/receivables/aging` | Who owes what by days late as of a date, read at one posting number (`aging.get`). |
+| Settings | `/finance/receivables/settings` | Default accounts (`setup.configure`), numbering series and tax codes (`series.*`, `tax_code.*`) and the account change history. |
+
+`finance.receivables.aging.get` is the one contract these pages added: the aged figures had a facade method (`aged_receivables`) and no operation. It takes `as_of` and optional `bucket_days`, needs receivables view and ledger view, and returns the report with the posting number it was read at.
+
 ## Source documents and evidence
 
 Contributed sources are `finance/receivables/document` (Receivables document) and `finance/receivables/payment` (Payment received). They authorize and read on the supplied connection; consumers attach only through `Attachments`. Labels use document/payment numbers, not references. Discarded documents and payments are final: files can be added, never replaced or removed.
@@ -83,7 +100,7 @@ The NR2 section runs last and proves issue-time snapshots, numbering races, revo
 
 ## Reviewed agent operations (H2)
 
-Discover `finance.receivables.*` through the shared `/api/v1` or `/mcp` edge and read the contributed `finance.receivables` guide ([guide.md](guide.md)). All inputs name `company_id`; identity and tenant come from the credential. The thirteen safe writes are `setup.configure`, `series.create/update`, `tax_code.create/update`, `customer.create/update`, `draft.create/update/discard`, `document.issue`, `payment.record` and `payment.reverse`. The ten reads are `setup.get/changes`, `series.list`, `tax_code.list`, `customer.get/list`, `document.get/list` and `payment.get/list`.
+Discover `finance.receivables.*` through the shared `/api/v1` or `/mcp` edge and read the contributed `finance.receivables` guide ([guide.md](guide.md)). All inputs name `company_id`; identity and tenant come from the credential. The thirteen safe writes are `setup.configure`, `series.create/update`, `tax_code.create/update`, `customer.create/update`, `draft.create/update/discard`, `document.issue`, `payment.record` and `payment.reverse`. The eleven reads are `setup.get/changes`, `series.list`, `tax_code.list`, `customer.get/list`, `document.get/list`, `payment.get/list` and `aging.get`.
 
 Writes reuse the same private facade preparation and transaction-taking methods as pooled callers. Preview validates on the handed `OperationClient`, without allocating IDs or touching business/audit/queue rows. Ledger's posting/reversal previews own accounting validation. Execution joins the plan's `MutationTransaction`; no nested commit or pooled side read escapes its rollback. The owner reauthorizes and locks the writable company at preview and execution. Required capabilities remain the facade's existing ones, including reversal without setup/ledger view and issuance without source view. Committed results carry `record` and `path:null`.
 
@@ -107,6 +124,6 @@ amp orb service start receivables-proof --port 3100 --command \
 python3 apps/domains/finance/fixtures/walkthrough/receivables-operations.py
 ```
 
-The bootstrap saves real resource-bound OAuth credentials in a new mode-0600 file; never print it or use a production database. `receivables-control` makes only fixture-scoped grant/archive changes through normal facades in a second session. The wire proof exercises all 23 operations on HTTP and MCP, exact half-up totals and posting sides, preserved/cleared snapshots and dates, controls after setup changes, original-owned reversal, repeated non-mutating previews, replay, strict schemas, capability revocation, tenant isolation, archived targets, ICU/ID paging, mixed H1/H2 independent batching, dependent-plan rollback and late audit-capture failure/recovery. Run the H1 wire walkthrough on a separate fresh database to check the shared Ledger seams. No unit tests are added.
+The bootstrap saves real resource-bound OAuth credentials in a new mode-0600 file; never print it or use a production database. `receivables-control` makes only fixture-scoped grant/archive changes through normal facades in a second session. The wire proof exercises the 23 pre-existing operations on HTTP and MCP (`aging.get` is proved through its page), exact half-up totals and posting sides, preserved/cleared snapshots and dates, controls after setup changes, original-owned reversal, repeated non-mutating previews, replay, strict schemas, capability revocation, tenant isolation, archived targets, ICU/ID paging, mixed H1/H2 independent batching, dependent-plan rollback and late audit-capture failure/recovery. Run the H1 wire walkthrough on a separate fresh database to check the shared Ledger seams. No unit tests are added.
 
 `evidence_page_on` is the same authorized evidence contract on a caller-supplied PostgreSQL client or transaction. Use it for every page of one repeatable-read export (Reports auditor pack); the pooled `evidence_page` wrapper is a live read per page. Schema helpers remain private.

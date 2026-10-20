@@ -1,5 +1,6 @@
 //! Receivables documents, settlements and figures, mirroring Bilimbi.Finance.Receivables.
-//! H2 exposes reviewed agent operations; the reference has no pages (`web: nil`).
+//! H2 exposes reviewed agent operations. The reference has no pages (`web: nil`);
+//! `web/` adds them, calling those same operations (ADR 01).
 mod agent_operations;
 mod configuration;
 mod contributions;
@@ -11,6 +12,7 @@ mod reports;
 mod sources;
 mod store;
 mod validation;
+mod web;
 
 pub use contributions::{
     CAPABILITIES, ISSUE, MANAGE_CUSTOMERS, MANAGE_DOCUMENTS, MANAGE_SETUP, POST_PAYMENTS, VIEW,
@@ -41,7 +43,7 @@ pub const SERVICE: &str = "finance/receivables.receivables";
 inventory::submit! {
     Module {
         id: MODULE, layer: Layer::Domains,
-        dependencies: &["base/agent_api", "base/authz", "base/database", "base/party_ids", "base/tenancy", "core/company", "finance/ledger", "finance/attachments"],
+        dependencies: &["base/agent_api", "base/authz", "base/database", "base/datetime", "base/locale", "base/menu", "base/party_ids", "base/tenancy", "base/ui", "core/company", "finance/ledger", "finance/attachments"],
         migrations: &[("finance-receivables-001-receivables", include_str!("../migrations/001-receivables.sql"))],
         services: &[Service { id: SERVICE, factory: |services| {
             let receivables = Arc::new(Receivables {
@@ -52,7 +54,12 @@ inventory::submit! {
             });
             agent_operations::bind(receivables.clone())?;
             Ok(receivables)
-        }}],
+        }}, Service { id: web::PAGES, factory: |services| Ok(Arc::new(bilibi_ui::page::PageService::<Scope, Error>(Arc::new(web::Pages {
+            db: services.get::<Db>("base/database.pool")?.as_ref().clone(),
+            contracts: services.get(bilibi_agent_api::page::SERVICE)?,
+            display: services.get("base/datetime.display")?,
+            locales: services.get("base/locale.locales")?,
+        })))) }],
     }
 }
 

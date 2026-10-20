@@ -49,6 +49,11 @@ browser_roles!(
     bilibi_finance_payroll::CAPABILITIES
 );
 browser_roles!(
+    "walkthrough.browser.receivables",
+    "finance/receivables",
+    bilibi_finance_receivables::CAPABILITIES
+);
+browser_roles!(
     "walkthrough.browser.sst",
     "finance/sst",
     bilibi_finance_sst::CAPABILITIES
@@ -178,6 +183,129 @@ async fn main() -> Outcome<()> {
                 },
             )
             .await?;
+    }
+    // Receivables sample data for the receivables pages: a chart default,
+    // numbering, a tax code, four customers, invoices (drafts and issued, one
+    // credited), receipts (one reversed). Every record is made by its facade.
+    let ar = services
+        .get::<bilibi_finance_receivables::Receivables>(bilibi_finance_receivables::SERVICE)?;
+    if ar.list_customers(&manager, COMPANY).await?.is_empty() {
+        ar.configure(
+            &manager,
+            COMPANY,
+            &json!({"receivable_account_id": account("1100")?, "income_account_id": account("4000")?}),
+        )
+        .await?;
+        let invoices = ar.create_series(&manager, COMPANY, &json!({"code":"INV","name":"Invoices","kind":"invoice","prefix":"INV-","number_width":5})).await?;
+        let credits = ar.create_series(&manager, COMPANY, &json!({"code":"CN","name":"Credit notes","kind":"credit_note","prefix":"CN-","number_width":5})).await?;
+        let receipts = ar.create_series(&manager, COMPANY, &json!({"code":"RCP","name":"Receipts","kind":"payment","prefix":"RCP-","number_width":5})).await?;
+        let tax = ar.create_tax_code(&manager, COMPANY, &json!({"code":"SVC","name":"Service tax","rate":"6","account_id":account("2100")?})).await?;
+        let mut customer = Vec::new();
+        for (code, name, terms, email, city) in [
+            (
+                "ACME",
+                "Acme Trading Sdn Bhd",
+                30,
+                "accounts@acme.example.test",
+                "Kuala Lumpur",
+            ),
+            (
+                "BORNEO",
+                "Borneo Supplies",
+                14,
+                "ap@borneo.example.test",
+                "Kuching",
+            ),
+            (
+                "CAHAYA",
+                "Cahaya Retail",
+                0,
+                "hello@cahaya.example.test",
+                "Penang",
+            ),
+            (
+                "DELTA",
+                "Delta Works",
+                45,
+                "finance@delta.example.test",
+                "Johor Bahru",
+            ),
+        ] {
+            customer.push(
+                ar.create_customer(
+                    &manager,
+                    COMPANY,
+                    &json!({
+                        "code": code, "name": name, "payment_terms_days": terms, "email": email,
+                        "phone": "+60 3 5555 0100", "line1": "12 Jalan Contoh", "locality": city,
+                        "postcode": "50000", "country_iso": "MY"
+                    }),
+                )
+                .await?,
+            );
+        }
+        let draft = |customer: i64, date: &str, lines: serde_json::Value| {
+            let attrs = json!({"kind":"invoice","series_id":invoices.id,"customer_id":customer,"issue_date":date,"lines":lines});
+            let (ar, manager) = (&ar, &manager);
+            async move { ar.create_draft(manager, COMPANY, &attrs).await }
+        };
+        let lines = |n: &str, price: &str, taxed: bool| {
+            let mut line = json!({"description":"Consulting","quantity":n,"unit_price":price});
+            if taxed {
+                line["tax_code_id"] = json!(tax.id)
+            }
+            json!([line, {"description":"Travel","quantity":"1","unit_price":"80.00"}])
+        };
+        let mut issued = Vec::new();
+        for (who, date, n, price, taxed) in [
+            (0, "2026-07-01", "10", "150.00", true),
+            (0, "2026-09-15", "5", "200.00", true),
+            (1, "2026-08-10", "4", "320.00", false),
+            (2, "2026-10-05", "2", "99.90", true),
+            (3, "2026-05-20", "8", "175.00", true),
+        ] {
+            let d = draft(customer[who].id, date, lines(n, price, taxed)).await?;
+            issued.push(ar.issue_document(&manager, COMPANY, d.id).await?);
+        }
+        let credit = ar.create_draft(&manager, COMPANY, &json!({
+            "kind":"credit_note","series_id":credits.id,"customer_id":customer[0].id,
+            "credited_document_id":issued[1].id,"issue_date":"2026-09-25",
+            "lines":[{"description":"Travel not charged","quantity":"1","unit_price":"80.00"}]
+        })).await?;
+        ar.issue_document(&manager, COMPANY, credit.id).await?;
+        draft(customer[2].id, "2026-10-18", lines("3", "120.00", true)).await?;
+        ar.create_draft(
+            &manager,
+            COMPANY,
+            &json!({"kind":"invoice","series_id":invoices.id,"customer_id":customer[3].id}),
+        )
+        .await?;
+        let first = ar.record_payment(&manager, COMPANY, &json!({
+            "series_id":receipts.id,"customer_id":customer[0].id,"payment_date":"2026-08-05",
+            "amount":issued[0].total.to_string(),"deposit_account_id":account("1000")?,
+            "reference":"TRF 88121","allocations":[{"document_id":issued[0].id,"amount":issued[0].total.to_string()}]
+        })).await?;
+        ar.record_payment(&manager, COMPANY, &json!({
+            "series_id":receipts.id,"customer_id":customer[1].id,"payment_date":"2026-09-01",
+            "amount":"500.00","deposit_account_id":account("1000")?,
+            "reference":"Cheque 4471","allocations":[{"document_id":issued[2].id,"amount":"500.00"}]
+        })).await?;
+        let wrong = ar.record_payment(&manager, COMPANY, &json!({
+            "series_id":receipts.id,"customer_id":customer[3].id,"payment_date":"2026-10-02",
+            "amount":"100.00","deposit_account_id":account("1000")?,
+            "reference":"Posted twice","allocations":[{"document_id":issued[4].id,"amount":"100.00"}]
+        })).await?;
+        ar.reverse_payment(
+            &manager,
+            COMPANY,
+            wrong.id,
+            &json!({"reversal_date":"2026-10-03","reason":"Bank reversed the transfer"}),
+        )
+        .await?;
+        println!(
+            "Receivables: /finance/receivables/invoices (first receipt {})",
+            first.id
+        );
     }
     if std::env::args().any(|arg| arg == "serve") {
         let _authority = bilibi_finance_walkthrough_fixture::browser::prepare_einvoice(
