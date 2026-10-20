@@ -392,7 +392,9 @@ impl Pages {
         Option<bilibi_finance_ledger::MinorUnits>,
         Vec<(i64, String, String)>,
     )> {
-        let company = scope.actor().organisation().ok_or(Error::Forbidden)?.get();
+        let Some(company) = scope.actor().organisation().map(|c| c.get()) else {
+            return Ok((None, Vec::new()));
+        };
         let mut input = serde_json::json!({"company_id":company});
         let units = self.units(scope).await;
         let mut accounts = Vec::new();
