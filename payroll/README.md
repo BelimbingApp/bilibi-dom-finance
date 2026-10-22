@@ -83,3 +83,9 @@ Its page scenarios run through the registered PageService: settings and mapping 
 `evidence_page_on` is the same authorized evidence contract on a caller-supplied PostgreSQL client or transaction. Use it for every page of one repeatable-read export (Reports auditor pack); the pooled `evidence_page` wrapper is a live read per page. Schema helpers remain private.
 
 The shared `clear-flash` event clears only the current message kind, so a delayed success timeout cannot erase a newer settings or mapping refusal.
+
+### People event proof
+
+`bilibi-finance-payroll-source` extends the walkthrough without importing People. Run `prepare` on an empty database with both Domains mounted. Through the People facades, create and approve `FY1-run` with an earning of `12.345678 × 1.234567`, and three claims of `80.00` in the fixture book's currency; reimburse the newest claim. Run the binary with `post` to deliver the real outbox through Base Queue and post the run and one claim.
+
+The proof checks the twelve-place source amount, rounding to the book's minor units, a missing-mapping refusal and retry, local standing, duplicate posting, evidence pagination, authorization, audit and a safe replay. The remaining claims are available for the browser's Post and Post every unposted claim actions. Rebuild without People and run `absent` against the same database: source lists and writes refuse, while local postings and evidence remain. Remounting restores the copied lists; it does not recreate postings.

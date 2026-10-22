@@ -133,7 +133,7 @@ impl State {
                         .iter()
                         .map(|(key, label)| {
                             let col = BuiltinColumn::new(key, label);
-                            if *key == "total" {
+                            if matches!(*key, "total" | "amount") {
                                 col.right()
                             } else {
                                 col

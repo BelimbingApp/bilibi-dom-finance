@@ -42,6 +42,13 @@ async fn main() -> Outcome<()> {
     let ledger = services.get::<Ledger>(bilibi_finance_ledger::SERVICE)?;
     let grants = services.get::<Grants>("base/authz.grants")?;
     if mode == "prepare" {
+        if payroll.people_available() {
+            assert!(payroll.list_payroll_runs(&manager, 1).await?.is_empty());
+            assert!(payroll.list_claims(&manager, 1).await?.is_empty());
+            let html = page(&services, &manager, None).await?;
+            assert!(html.contains("No payroll runs yet."));
+            assert!(html.contains("No approved claims."));
+        }
         println!("FY1: ledger chart and open fiscal year ready; no People facts injected");
         return Ok(());
     }
@@ -195,6 +202,20 @@ async fn main() -> Outcome<()> {
                 .await?;
         }
     }
+    let components = payroll
+        .evidence_page(&manager, 1, "source_component", Some(1), None)
+        .await?;
+    assert_eq!(components.rows[0]["amount"], "15.241566651426");
+    assert!(payroll
+        .evidence_page(&manager, 1, "source_component", Some(1), components.next)
+        .await?
+        .rows
+        .is_empty());
+    let claim_evidence = payroll
+        .evidence_page(&manager, 1, "source_claim", Some(500), None)
+        .await?;
+    assert_eq!(claim_evidence.rows.len(), 3);
+    assert!(claim_evidence.rows.iter().any(|r| r["reimbursed"] == true));
     let post = payroll.post_payroll_run(&manager, 1, run_id).await?;
     assert_eq!(post.total, "15.2400");
     assert!(matches!(
