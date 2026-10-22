@@ -1,6 +1,5 @@
 //! Atomic recognition/reversal and attempt history, mirroring Bilimbi
-//! Payroll.Posting. Source facts remain private and unavailable until People
-//! publishes a contract; no fixture injection or arbitrary-input posting API.
+//! Payroll.Posting. Source facts are read only from the owned event projection.
 use crate::{
     authorize, ledger_error, reason, source, store, Mapping, Payroll, PayrollError, Posting,
     Result, Reversal, Settings, MODULE, POST_POSTINGS,
@@ -44,7 +43,8 @@ impl Payroll {
     pub async fn post_payroll_run(&self, scope: &Scope, company: i64, id: i64) -> Result<Posting> {
         let client = self.db.get().await.map_err(Error::from)?;
         authorize(&**client, scope, company, POST_POSTINGS).await?;
-        let run = source::run(scope, company, id).await?;
+        self.require_source()?;
+        let run = source::run(&**client, scope, company, id).await?;
         if !run.finalised {
             return Err(PayrollError::NotFinalised);
         }
@@ -70,7 +70,8 @@ impl Payroll {
     ) -> Result<Vec<(i64, Result<Posting>)>> {
         let client = self.db.get().await.map_err(Error::from)?;
         authorize(&**client, scope, company, POST_POSTINGS).await?;
-        let claims = source::claims(scope, company).await?;
+        self.require_source()?;
+        let claims = source::claims(&**client, scope, company).await?;
         drop(client);
         let mut results = Vec::new();
         for id in ids {
@@ -148,7 +149,7 @@ impl Payroll {
         let refreshed;
         let document = match document {
             Document::Run(run) => {
-                refreshed = Document::Run(source::run(scope, company, run.id).await?);
+                refreshed = Document::Run(source::run(tx.sql(), scope, company, run.id).await?);
                 &refreshed
             }
             other => other,

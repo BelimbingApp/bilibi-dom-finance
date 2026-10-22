@@ -4,17 +4,27 @@
 
 ## Pages
 
-`/finance/payroll` (“Payroll and claims”) shows the People-absent notice and local postings with standing and reversal reasons. `/finance/payroll/setup` (“Payroll posting accounts”) shows the company's posting accounts, component/category mappings and their two change histories. Both routes require `finance.payroll.view`; their menu item is “Payroll and claims” in the Payroll group under Finance. Setup is linked from Postings, not a second menu item.
+`/finance/payroll` (“Payroll and claims”) shows approved runs and claims copied from People events, together with their posting standing and reversal reasons. Without People it shows the existing absent-source notice and local postings. `/finance/payroll/setup` (“Payroll posting accounts”) shows the company's posting accounts, component/category mappings and their two change histories. Both routes require `finance.payroll.view`; their menu item is “Payroll and claims” in the Payroll group under Finance. Setup is linked from Postings, not a second menu item.
 
 All lists use shared FlexTable/ListColumns on ListState, with independent column arrangement and row-height controls. Bilimbi enables no sort, filter or pager here, so these pages add none. Active accounts of the required types populate the forms; retained records still label inactive accounts, and a reader without Ledger view sees `#ID`. Mapping “Change” fills the upsert-by-key form, not an ID-based edit. Claim categories always save direction `claim`. Refusals keep drafts and display field errors; typing never writes. Every write-shaped event reauthorizes before calling the facade.
 
-Reversal retains Bilimbi's reason/date form and adds the Platform-required ConfirmDialog. Its confirmation consumes the server-held posting ID, reason and validated optional date exactly once. Cancel, a stale confirmation or a revoked grant makes no change. Only a blank date selects the company's today. People-backed lists and posting controls remain absent until People publishes its event contract; historical correction does not prove recognition.
+Reversal retains Bilimbi's reason/date form and adds the Platform-required ConfirmDialog. Its confirmation consumes the server-held posting ID, reason and validated optional date exactly once. Cancel, a stale confirmation or a revoked grant makes no change. Only a blank date selects the company's today. Source lists and posting controls appear while People declares all three source events. Before the first delivery the lists are empty. Unmounting People hides the source lists; existing postings and their corrections remain available.
 
-## People is unavailable
+## People events and availability
 
-People is not mounted and has no published domain-event contract. `people_available()` is false. Authorized run/claim lists and run/single-claim/batch posting return `PayrollError::PeopleUnavailable` (“The payroll and claims source is not installed.”), without creating attempts or entries. Authorization happens first. Local settings, mappings, logs, evidence and correction of existing postings still work.
+Finance keeps its own copy of three documented People events, all version 1:
 
-The captain's cross-domain rule supersedes Bilimbi's runtime `PeopleSource`: no People port, Cargo dependency, descriptor edge, SQL or invented event subscription. `source.rs` contains the `TODO(domain events)` seam for an owned projection after People documents its event names, versions and facts. Its private normalized records are accounting inputs, not a wire contract or a public arbitrary-input posting API. Successful recognition remains unproven until that integration exists; the walkthrough's historical entries prove reversal, not People posting.
+| Event | Copied facts |
+| --- | --- |
+| `people/payroll.run_approved` | Company, run ID, reference, currency, pay date, exact components by code and direction |
+| `people/claims.request_approved` | Company, claim ID, reference, currency, exact approved amount, approval date, category code |
+| `people/claims.request_reimbursed` | The same approval facts, plus reimbursement standing |
+
+`source.rs` parses these contracts into private Finance types. Migration `finance-payroll-002-people-source` creates `finance_payroll_source_runs`, `finance_payroll_source_components` and `finance_payroll_source_claims`. Exact amounts stay decimal text until the posting code rounds them to the book's minor units. Delivery locks the company and commits every changed projection row with the Base Events receipt and audit. A reimbursement retains the original approval facts and cannot make a posted claim eligible for another entry.
+
+There is no People Cargo dependency, descriptor edge, port call or table read. `people_available()` checks the mounted event declarations. When any required publisher is absent, authorized source lists and posting calls return `PeopleUnavailable` (“The payroll and claims source is not installed.”), without attempts or entries. Local settings, mappings, logs, evidence and correction still work. Remounting restores the source lists from the retained copy.
+
+The tenant administrator must grant the `domain-events` principal `events.delivery.deliver`. For events recorded before this subscriber was mounted, use the Events page to replay `finance/payroll.people`; nothing replays on boot. See the Platform's `apps/base/events/README.md` for delivery, retry and replay rules. The People `payroll/README.md` and `claims/README.md` define the wire contracts.
 
 ## Facade and authorization
 
@@ -41,7 +51,7 @@ Writes open `Ledger::write`, recheck the owner's capability inside the audited t
 
 All accounts must be active and company-owned at configuration time. Optional reasons trim blank to null and allow at most 500 characters. A reason alone or unchanged account values create no history. Histories preserve old/new account IDs, actor, impersonator and database-clock time. Settings and mappings remain retained; their identities and all history/event rows are protected from change/delete/truncate.
 
-## Accounting contract behind the unavailable source
+## Accounting contract
 
 Runs aggregate components by code/direction, resolve every mapping even for a rounded-zero amount, then round each aggregate half away from zero to the book's minor units and construct `Money`. Earnings debit expense-side accounts; deductions credit liabilities; employer amounts do both. Net pay is rounded earnings minus rounded deductions: credit the net-pay liability when positive, debit when negative, omit when zero. Employer contributions never affect net pay. Negative components are not flipped to another side; Ledger refuses invalid lines. A zero run is refused.
 
@@ -55,7 +65,7 @@ Preflight and duplicate refusals create no attempt. Other accounting refusals ro
 
 ## Evidence and bounds
 
-`evidence_datasets()` lists `mapping`, `mapping_change`, `posting_event`, `settings`, `settings_change`. `evidence_page(scope, company, dataset, limit, after)` exposes explicit field order, JSON rows and next cursor; IDs ascend, `limit` is 1–500 (default 500), `after` is nonnegative (default zero). A full final page returns its last ID, so the caller may need an empty follow-up. Exact decimal totals and ISO dates/times are strings. Each call is a live authorized read, not a pinned multi-page snapshot. Change/event convenience lists traverse those pages in ascending ID order. The unpaged Postings page returns all originals with standing, newest first, so old originals remain reachable for correction. Mappings are ordered by kind/code/direction.
+`evidence_datasets()` lists `mapping`, `mapping_change`, `posting_event`, `settings`, `settings_change`, `source_run`, `source_component`, `source_claim`. `evidence_page(scope, company, dataset, limit, after)` exposes explicit field order, JSON rows and next cursor; IDs ascend, `limit` is 1–500 (default 500), `after` is nonnegative (default zero). A full final page returns its last ID, so the caller may need an empty follow-up. Exact decimal totals and ISO dates/times are strings. Each call is a live authorized read, not a pinned multi-page snapshot. Change/event convenience lists traverse those pages in ascending ID order. The unpaged Postings page returns all originals with standing, newest first, so old originals remain reachable for correction. Mappings are ordered by kind/code/direction.
 
 ## Running proof
 
@@ -66,7 +76,7 @@ DATABASE_URL=postgres://…/disposable BILIBI_SETTINGS_KEY=$(openssl rand -hex 3
   cargo run -p bilibi-finance-walkthrough-fixture
 ```
 
-The Payroll section asserts configuration/no-op histories, account roles, isolation and withheld writes, source `unavailable` without attempts, Ledger owner rollback and independent grants, an explicitly labelled historical posting's reasoned reversal, earlier-date failure and retry, concurrent reversal, mirrored lines, all five evidence cursors, audited affected rows, and PostgreSQL retention/uniqueness/event-shape refusals. No unit tests, provider stubs or production seeds.
+The Payroll section asserts configuration/no-op histories, account roles, isolation and withheld writes, source `unavailable` without attempts, Ledger owner rollback and independent grants, an explicitly labelled historical posting's reasoned reversal, earlier-date failure and retry, concurrent reversal, mirrored lines, all evidence cursors, audited affected rows, and PostgreSQL retention/uniqueness/event-shape refusals. No unit tests, provider stubs or production seeds.
 
 Its page scenarios run through the registered PageService: settings and mapping saves, change-only forms, a 400-character Unicode reason, field errors and retained drafts, independent column controls, Ledger-withheld labels, grants revoked after mount, malformed reversal dates, cancel and one-shot confirmation, and complete change history beyond 500 rows. Browser proof uses this disposable database and the real app; it never seeds a product installation.
 

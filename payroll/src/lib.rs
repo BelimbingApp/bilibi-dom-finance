@@ -1,6 +1,5 @@
 //! Payroll recognition, mirroring Bilimbi `Bilimbi.Finance.Payroll`.
-//! Only this facade is public. People is absent; no cross-domain calls or
-//! invented publisher contract are made (see `source.rs`).
+//! Only this facade is public. People events feed a Finance-owned projection.
 mod configuration;
 mod contributions;
 mod evidence;
@@ -28,12 +27,13 @@ pub type Result<T> = std::result::Result<T, PayrollError>;
 inventory::submit! {
     Module {
         id: MODULE, layer: Layer::Domains,
-        dependencies: &["base/authz", "base/database", "base/datetime", "base/locale", "base/menu", "base/settings", "base/tenancy", "base/ui", "core/company", "finance/ledger"],
-        migrations: &[("finance-payroll-001-payroll", include_str!("../migrations/001-payroll.sql"))],
+        dependencies: &["base/authz", "base/database", "base/datetime", "base/events", "base/locale", "base/menu", "base/settings", "base/tenancy", "base/ui", "core/company", "finance/ledger"],
+        migrations: &[("finance-payroll-001-payroll", include_str!("../migrations/001-payroll.sql")), ("finance-payroll-002-people-source", include_str!("../migrations/002-people-source.sql"))],
         services: &[Service { id: SERVICE, factory: |services| Ok(Arc::new(Payroll {
             db: services.get::<Db>("base/database.pool")?.as_ref().clone(),
             ledger: services.get(bilibi_finance_ledger::SERVICE)?,
             settings: services.get("base/settings.store")?,
+            events: services.get(bilibi_events::SERVICE)?,
         })) }, Service { id: "finance/payroll.pages", factory: |services| {
             Ok(Arc::new(bilibi_ui::page::PageService::<Scope, Error>(Arc::new(web::Pages {
                 payroll: services.get(SERVICE)?,
@@ -46,6 +46,7 @@ inventory::submit! {
 
 #[derive(Clone)]
 pub struct Payroll {
+    events: Arc<bilibi_events::Events>,
     db: Db,
     ledger: Arc<Ledger>,
     settings: Arc<bilibi_settings::Settings>,
@@ -183,25 +184,66 @@ impl Payroll {
         &["earning", "deduction", "employer"]
     }
     pub fn people_available(&self) -> bool {
-        source::available()
+        source::available(&self.events)
     }
     pub fn evidence_datasets() -> &'static [&'static str] {
         evidence::DATASETS
+    }
+
+    fn require_source(&self) -> Result<()> {
+        if self.people_available() {
+            Ok(())
+        } else {
+            Err(PayrollError::PeopleUnavailable)
+        }
     }
 
     /// People-dependent reads authorize before answering unavailable.
     pub async fn list_payroll_runs(&self, scope: &Scope, company: i64) -> Result<Vec<Value>> {
         let client = self.db.get().await.map_err(Error::from)?;
         authorize(&**client, scope, company, VIEW).await?;
-        source::runs(scope, company).await
+        self.require_source()?;
+        let mut rows = source::runs(&**client, scope, company).await?;
+        self.source_standing(&**client, scope, company, "payroll_run", &mut rows)
+            .await?;
+        Ok(rows)
     }
     pub async fn list_claims(&self, scope: &Scope, company: i64) -> Result<Vec<Value>> {
         let client = self.db.get().await.map_err(Error::from)?;
         authorize(&**client, scope, company, VIEW).await?;
-        source::claims(scope, company).await?;
-        // The source is absent. Its eventual list projection must add local
-        // posting standing, without accepting arbitrary source input here.
-        Err(PayrollError::PeopleUnavailable)
+        self.require_source()?;
+        let claims = source::claims(&**client, scope, company).await?;
+        let mut rows = claims.iter().map(|c| serde_json::json!({"id":c.id,"reference":c.reference,"currency_code":c.currency_code,"approved_on":c.approved_on.map(|d|d.to_string()),"amount":c.amount.to_string(),"category_code":c.category_code})).collect::<Vec<_>>();
+        self.source_standing(&**client, scope, company, "claim", &mut rows)
+            .await?;
+        Ok(rows)
+    }
+
+    async fn source_standing(
+        &self,
+        client: &impl GenericClient,
+        scope: &Scope,
+        company: i64,
+        kind: &str,
+        rows: &mut [Value],
+    ) -> Result<()> {
+        let postings = store::postings(client, scope.tenant(), company).await?;
+        let events = client.query("SELECT source_id,jsonb_build_object('reason',reason) FROM finance_payroll_posting_events WHERE tenant_id=$1 AND company_id=$2 AND source_kind=$3 AND event='posting_failed' ORDER BY id DESC", &[&scope.tenant(),&company,&kind]).await?;
+        for row in rows {
+            let id = row["id"].as_i64();
+            let posting = postings
+                .iter()
+                .find(|p| p.source_kind == kind && Some(p.source_id) == id);
+            row["posting"] = serde_json::to_value(posting).map_err(|_| Error::Internal)?;
+            row["last_failure"] = match posting {
+                Some(p) => serde_json::to_value(&p.last_failure).map_err(|_| Error::Internal)?,
+                None => events
+                    .iter()
+                    .find(|e| Some(e.get::<_, i64>(0)) == id)
+                    .map_or(Value::Null, |e| e.get(1)),
+            };
+        }
+        Ok(())
     }
 
     pub async fn list_postings(&self, scope: &Scope, company: i64) -> Result<Vec<Posting>> {

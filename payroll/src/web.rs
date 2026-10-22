@@ -1,5 +1,5 @@
 //! Bilimbi Payroll.Web.{PostingsLive,SetupLive} at 4abfaf829321f8540581d833752a086b21b45ba9.
-//! People has no event contract yet: only Finance-owned records are rendered.
+//! Runs and claims come from Finance-owned copies of People events.
 use crate::{
     MappingChange, Payroll, PayrollError, Reversal, SettingsChange, MANAGE_SETTINGS, POST_POSTINGS,
 };
@@ -89,17 +89,40 @@ impl State {
                 ),
             ]
         } else {
-            &[(
-                "payroll-postings-table",
-                &[
-                    ("source", "Source"),
-                    ("entry", "Entry"),
-                    ("date", "Entry date"),
-                    ("total", "Total"),
-                    ("standing", "Standing"),
-                    ("reason", "Reversal reason"),
-                ],
-            )]
+            &[
+                (
+                    "payroll-runs-table",
+                    &[
+                        ("reference", "Run"),
+                        ("date", "Pay date"),
+                        ("status", "Run status"),
+                        ("standing", "In the books"),
+                        ("failure", "Last failure"),
+                    ],
+                ),
+                (
+                    "payroll-claims-table",
+                    &[
+                        ("reference", "Claim"),
+                        ("category", "Category"),
+                        ("date", "Approved on"),
+                        ("amount", "Amount"),
+                        ("standing", "In the books"),
+                        ("failure", "Last failure"),
+                    ],
+                ),
+                (
+                    "payroll-postings-table",
+                    &[
+                        ("source", "Source"),
+                        ("entry", "Entry"),
+                        ("date", "Entry date"),
+                        ("total", "Total"),
+                        ("standing", "Standing"),
+                        ("reason", "Reversal reason"),
+                    ],
+                ),
+            ]
         };
         let columns = tables
             .iter()
@@ -401,16 +424,57 @@ impl State {
                 }
             }
             "post_run" | "post_claim" | "post_all_claims" => {
-                // No source controls while People is absent. Forged requests
-                // still get the facade's authorized unavailable refusal.
+                // Resolve the source and standing again for every write.
                 let id = params::positive_id(value["id"].as_str()).unwrap_or(0);
-                let result = match event {
-                    "post_run" => payroll.post_payroll_run(scope, company, id).await.map(drop),
-                    "post_claim" => payroll.post_claim(scope, company, id).await.map(drop),
-                    _ => payroll.post_claims(scope, company, &[]).await.map(drop),
-                };
-                if let Err(e) = result {
-                    self.refusal("", e);
+                if event == "post_all_claims" {
+                    match payroll.list_claims(scope, company).await {
+                        Ok(claims) => {
+                            let ids = claims
+                                .iter()
+                                .filter(|c| c["posting"].is_null())
+                                .filter_map(|c| c["id"].as_i64())
+                                .collect::<Vec<_>>();
+                            match payroll.post_claims(scope, company, &ids).await {
+                                Ok(outcomes) => {
+                                    let posted = outcomes.iter().filter(|(_, r)| r.is_ok()).count();
+                                    let failed = outcomes.len() - posted;
+                                    self.flash = Some((
+                                        if failed == 0 {
+                                            StatusKind::Success
+                                        } else {
+                                            StatusKind::Error
+                                        },
+                                        format!("{posted} claims posted, {failed} failed."),
+                                    ));
+                                }
+                                Err(e) => self.refusal("", e),
+                            }
+                        }
+                        Err(e) => self.refusal("", e),
+                    }
+                } else {
+                    let result = if event == "post_run" {
+                        payroll.post_payroll_run(scope, company, id).await
+                    } else {
+                        payroll.post_claim(scope, company, id).await
+                    };
+                    match result {
+                        Ok(p) => {
+                            self.flash = Some((
+                                StatusKind::Success,
+                                format!(
+                                    "{} posted as entry {}.",
+                                    if event == "post_run" {
+                                        "Payroll run"
+                                    } else {
+                                        "Claim"
+                                    },
+                                    p.entry_number
+                                ),
+                            ))
+                        }
+                        Err(e) => self.refusal("", e),
+                    }
                 }
             }
             _ => {}
@@ -469,7 +533,12 @@ impl State {
     }
 
     async fn postings_parts(&mut self, scope: &Scope) -> Result<Vec<Html>> {
-        let mut parts = vec![render(EmptyState::missing("No payroll or claims source is installed", "Runs and claims are listed once the People Domain is mounted. The postings already made are listed below.").id("payroll-source-unavailable"))?];
+        let mut parts = Vec::new();
+        if self.pages.payroll.people_available() {
+            parts.extend(self.source_parts(scope).await?);
+        } else {
+            parts.push(render(EmptyState::missing("No payroll or claims source is installed", "Runs and claims are listed once the People Domain is mounted. The postings already made are listed below.").id("payroll-source-unavailable"))?);
+        }
         let payroll = self.pages.payroll.clone();
         let company = company(scope)?;
         let can_post = self.allowed(scope, POST_POSTINGS).await?;
@@ -581,7 +650,7 @@ impl State {
                     rows.push(row);
                 }
                 self.table(
-                    0,
+                    2,
                     rows,
                     "Postings made",
                     "Nothing has been posted yet.",
@@ -599,6 +668,163 @@ impl State {
         )?);
         if self.pending.is_some() {
             parts.push(render(ConfirmDialog { id: "payroll-reversal-dialog", consequence: "Reverse a posting", detail: "The reversal is a new entry with the sides swapped; the original stays in the books.", confirm: "Reverse posting", working: "Reversing…", confirm_event: "commit_reversal", cancel_event: "cancel_confirmation" })?);
+        }
+        Ok(parts)
+    }
+
+    async fn source_parts(&mut self, scope: &Scope) -> Result<Vec<Html>> {
+        let payroll = self.pages.payroll.clone();
+        let company = company(scope)?;
+        let can_post = self.allowed(scope, POST_POSTINGS).await?;
+        let units = payroll
+            .ledger
+            .get_book(scope, company)
+            .await
+            .map(|b| b.minor_units)
+            .unwrap_or(MinorUnits::new(2));
+        let mut parts = Vec::new();
+        for (index, claims) in [false, true].into_iter().enumerate() {
+            let (kind, title, empty) = if claims {
+                ("claim", "Approved claims", "No approved claims.")
+            } else {
+                ("run", "Payroll runs", "No payroll runs yet.")
+            };
+            let result = if claims {
+                payroll.list_claims(scope, company).await
+            } else {
+                payroll.list_payroll_runs(scope, company).await
+            };
+            let mut content = Html::EMPTY;
+            match result {
+                Err(_) => content.push(&render(
+                    EmptyState::forbidden(if claims {
+                        "read the company's approved claims"
+                    } else {
+                        "read the company's payroll runs"
+                    })
+                    .id(&format!("payroll-{kind}s-unavailable")),
+                )?),
+                Ok(sources) => {
+                    if claims && can_post && !sources.is_empty() {
+                        content.push(&action(
+                            "payroll-post-all-claims",
+                            "post_all_claims",
+                            0,
+                            "Post every unposted claim",
+                        )?);
+                    }
+                    let mut rows = Vec::new();
+                    for source in sources {
+                        let id = source["id"].as_i64().ok_or(Error::Internal)?;
+                        let posting = &source["posting"];
+                        let reversed = !posting["reversal"].is_null();
+                        let posted = !posting.is_null();
+                        let failure = source["last_failure"]["reason"].as_str();
+                        let standing = if posted {
+                            format!(
+                                "{}entry {}{}",
+                                if reversed { "reversed (" } else { "" },
+                                posting["entry_number"],
+                                if reversed { ")" } else { "" }
+                            )
+                        } else if failure.is_some() {
+                            "failed".into()
+                        } else {
+                            "not posted".into()
+                        };
+                        let mut cells = vec![
+                            (
+                                "reference",
+                                source["reference"].as_str().unwrap_or("—").to_owned(),
+                            ),
+                            (
+                                "date",
+                                source[if claims { "approved_on" } else { "pay_date" }]
+                                    .as_str()
+                                    .unwrap_or(if claims {
+                                        "unknown"
+                                    } else {
+                                        "missing or invalid"
+                                    })
+                                    .to_owned(),
+                            ),
+                            ("failure", failure.unwrap_or("—").to_owned()),
+                        ];
+                        if claims {
+                            let amount = source["amount"]
+                                .as_str()
+                                .and_then(|v| v.parse::<Decimal>().ok())
+                                .map(|v| Money::display_decimal(v, units))
+                                .unwrap_or_else(|| "—".into());
+                            cells.push((
+                                "amount",
+                                format!(
+                                    "{amount} {}",
+                                    source["currency_code"].as_str().unwrap_or("")
+                                ),
+                            ));
+                            cells.push((
+                                "category",
+                                source["category_code"].as_str().unwrap_or("—").to_owned(),
+                            ));
+                        } else {
+                            cells.push(("status", "approved".into()));
+                        }
+                        let mut row = row(&format!("payroll-{kind}-{id}"), &cells).slot(
+                            "standing",
+                            render(Badge::status(
+                                if reversed {
+                                    BadgeKind::Warning
+                                } else if posted {
+                                    BadgeKind::Success
+                                } else if failure.is_some() {
+                                    BadgeKind::Danger
+                                } else {
+                                    BadgeKind::Neutral
+                                },
+                                &standing,
+                            ))?,
+                        );
+                        if can_post && !posted {
+                            row = row.action(action(
+                                &format!("payroll-post-{kind}-{id}"),
+                                if claims { "post_claim" } else { "post_run" },
+                                id,
+                                if failure.is_some() {
+                                    "Retry posting"
+                                } else {
+                                    "Post"
+                                },
+                            )?);
+                        } else if can_post && posted && !reversed {
+                            row = row.action(action(
+                                &format!("payroll-reverse-{kind}-{id}"),
+                                "reverse",
+                                posting["id"].as_i64().ok_or(Error::Internal)?,
+                                "Reverse",
+                            )?);
+                        }
+                        rows.push(row);
+                    }
+                    content.push(&self.table(index, rows, title, empty, true)?);
+                }
+            }
+            parts.push(section(
+                if claims {
+                    "payroll-claims"
+                } else {
+                    "payroll-runs"
+                },
+                if claims {
+                    "payroll-claims-heading"
+                } else {
+                    "payroll-runs-heading"
+                },
+                title,
+                "",
+                None,
+                content,
+            )?);
         }
         Ok(parts)
     }
@@ -1132,7 +1358,11 @@ fn section(
 ) -> Result<Html> {
     let flat = matches!(
         id,
-        "payroll-mappings" | "payroll-changes" | "payroll-postings-list"
+        "payroll-mappings"
+            | "payroll-changes"
+            | "payroll-postings-list"
+            | "payroll-runs"
+            | "payroll-claims"
     );
     let mut body = render(SectionHeading {
         id: heading,

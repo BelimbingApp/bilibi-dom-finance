@@ -10,6 +10,9 @@ pub(crate) const DATASETS: &[&str] = &[
     "posting_event",
     "settings",
     "settings_change",
+    "source_run",
+    "source_component",
+    "source_claim",
 ];
 
 #[derive(Clone, Debug, Serialize)]
@@ -100,6 +103,47 @@ fn dataset(name: &str) -> Option<(&'static str, &'static [&'static str])> {
                 "actor_user_id",
                 "actor_impersonator_id",
                 "occurred_at",
+            ],
+        ),
+        "source_run" => (
+            "finance_payroll_source_runs",
+            &[
+                "id",
+                "tenant_id",
+                "company_id",
+                "run_id",
+                "reference",
+                "currency_code",
+                "pay_date",
+                "event_key",
+            ],
+        ),
+        "source_component" => (
+            "finance_payroll_source_components",
+            &[
+                "id",
+                "tenant_id",
+                "company_id",
+                "run_id",
+                "code",
+                "direction",
+                "amount",
+            ],
+        ),
+        "source_claim" => (
+            "finance_payroll_source_claims",
+            &[
+                "id",
+                "tenant_id",
+                "company_id",
+                "claim_id",
+                "reference",
+                "currency_code",
+                "approved_on",
+                "amount",
+                "category_code",
+                "reimbursed",
+                "event_key",
             ],
         ),
         _ => return None,
