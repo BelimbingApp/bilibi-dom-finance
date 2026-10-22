@@ -680,7 +680,7 @@ impl State {
             .ledger
             .get_book(scope, company)
             .await
-            .map(|b| b.minor_units)
+            .map(|b| Some(b.minor_units))
             .unwrap_or(MinorUnits::new(2));
         let mut parts = Vec::new();
         for (index, claims) in [false, true].into_iter().enumerate() {
@@ -786,7 +786,7 @@ impl State {
                             ))?,
                         );
                         if can_post && !posted {
-                            row = row.action(action(
+                            row.actions.push(&action(
                                 &format!("payroll-post-{kind}-{id}"),
                                 if claims { "post_claim" } else { "post_run" },
                                 id,
@@ -797,7 +797,7 @@ impl State {
                                 },
                             )?);
                         } else if can_post && posted && !reversed {
-                            row = row.action(action(
+                            row.actions.push(&action(
                                 &format!("payroll-reverse-{kind}-{id}"),
                                 "reverse",
                                 posting["id"].as_i64().ok_or(Error::Internal)?,

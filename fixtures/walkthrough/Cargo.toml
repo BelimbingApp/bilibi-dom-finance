@@ -78,3 +78,8 @@ workspace = true
 [[bin]]
 name = "bilibi-finance-reconciliation-pages"
 path = "src/bin/reconciliation-pages.rs"
+
+# FY1: real delivered People events, then retained postings without People.
+[[bin]]
+name = "bilibi-finance-payroll-source"
+path = "src/bin/payroll-source.rs"
