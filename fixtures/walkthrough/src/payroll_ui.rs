@@ -67,16 +67,21 @@ pub async fn run(db: &Db, services: &Services, historical: i64) -> Outcome<()> {
     let entries = payroll.list_posting_events(&manager, 1).await?;
     let mut postings = mount(services, &manager, "postings").await?;
     let html = refresh(postings.as_mut(), &manager).await?;
-    assert!(html.contains("No payroll or claims source is installed"));
-    assert!(!html.contains("id=\"payroll-runs\""));
-    for kind in ["post_run", "post_claim", "post_all_claims"] {
-        let html = event(
-            postings.as_mut(),
-            &manager,
-            json!({"type": kind, "id": "9003"}),
-        )
-        .await?;
-        assert!(html.contains("The payroll and claims source is not installed."));
+    if !payroll.people_available() {
+        assert!(html.contains("No payroll or claims source is installed"));
+        assert!(!html.contains("id=\"payroll-runs\""));
+        for kind in ["post_run", "post_claim", "post_all_claims"] {
+            let html = event(
+                postings.as_mut(),
+                &manager,
+                json!({"type": kind, "id": "9003"}),
+            )
+            .await?;
+            assert!(html.contains("The payroll and claims source is not installed."));
+        }
+    } else {
+        assert!(html.contains("id=\"payroll-runs-table\""));
+        assert!(html.contains("id=\"payroll-claims-table\""));
     }
     assert_eq!(payroll.list_posting_events(&manager, 1).await?, entries);
 

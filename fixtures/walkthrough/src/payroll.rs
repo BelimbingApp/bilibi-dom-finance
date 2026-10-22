@@ -1,5 +1,5 @@
 //! Executable Payroll contracts, mirroring Bilimbi Finance.Payroll.
-//! People is deliberately absent. Historical records below prove correction,
+//! Historical records below prove correction independently of People,
 //! not recognition of People facts, and introduce no production provider.
 use crate::sign_in;
 use bilibi_database::{Change, Db};
@@ -28,7 +28,7 @@ macro_rules! walkthrough_payroll_roles {
 }
 
 pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
-    println!("\n== Payroll facade contracts (People absent; historical correction fixture)");
+    println!("\n== Payroll facade contracts (historical correction fixture)");
     let payroll = services.get::<Payroll>(bilibi_finance_payroll::SERVICE)?;
     let ledger = services.get::<Ledger>(bilibi_finance_ledger::SERVICE)?;
     let manager = sign_in(db, services, 1, 1).await?;
@@ -145,48 +145,57 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
             .is_err());
     }
     assert_eq!(payroll.list_mappings(&viewer, 1).await?.len(), 4);
-    assert!(!payroll.people_available());
-    let before = payroll.list_posting_events(&manager, 1).await?.len();
-    let entries_before = ledger
-        .list_entries(&manager, 1, &Default::default())
-        .await?;
-    assert!(matches!(
-        payroll.list_payroll_runs(&manager, 1).await,
-        Err(PayrollError::PeopleUnavailable)
-    ));
-    assert!(matches!(
-        payroll.list_claims(&manager, 1).await,
-        Err(PayrollError::PeopleUnavailable)
-    ));
-    assert!(matches!(
-        payroll.post_payroll_run(&manager, 1, 101).await,
-        Err(PayrollError::PeopleUnavailable)
-    ));
-    assert!(matches!(
-        payroll.post_claim(&manager, 1, 102).await,
-        Err(PayrollError::PeopleUnavailable)
-    ));
-    assert!(matches!(
-        payroll.post_claims(&manager, 1, &[102, 103]).await,
-        Err(PayrollError::PeopleUnavailable)
-    ));
-    assert!(matches!(
-        payroll.post_claim(&viewer, 1, 102).await,
-        Err(PayrollError::Unauthorized)
-    ));
-    assert_eq!(
-        payroll.list_posting_events(&manager, 1).await?.len(),
-        before
-    );
-    assert_eq!(
-        ledger
+    if !payroll.people_available() {
+        let before = payroll.list_posting_events(&manager, 1).await?.len();
+        let entries_before = ledger
             .list_entries(&manager, 1, &Default::default())
-            .await?,
-        entries_before
-    );
-    println!(
-        "People source: unavailable; run, claim and batch refused without entries or attempts"
-    );
+            .await?;
+        assert!(matches!(
+            payroll.list_payroll_runs(&manager, 1).await,
+            Err(PayrollError::PeopleUnavailable)
+        ));
+        assert!(matches!(
+            payroll.list_claims(&manager, 1).await,
+            Err(PayrollError::PeopleUnavailable)
+        ));
+        assert!(matches!(
+            payroll.post_payroll_run(&manager, 1, 101).await,
+            Err(PayrollError::PeopleUnavailable)
+        ));
+        assert!(matches!(
+            payroll.post_claim(&manager, 1, 102).await,
+            Err(PayrollError::PeopleUnavailable)
+        ));
+        assert!(matches!(
+            payroll.post_claims(&manager, 1, &[102, 103]).await,
+            Err(PayrollError::PeopleUnavailable)
+        ));
+        assert!(matches!(
+            payroll.post_claim(&viewer, 1, 102).await,
+            Err(PayrollError::Unauthorized)
+        ));
+        assert_eq!(
+            payroll.list_posting_events(&manager, 1).await?.len(),
+            before
+        );
+        assert_eq!(
+            ledger
+                .list_entries(&manager, 1, &Default::default())
+                .await?,
+            entries_before
+        );
+        println!(
+            "People source: unavailable; run, claim and batch refused without entries or attempts"
+        );
+    } else {
+        assert!(payroll.list_payroll_runs(&manager, 1).await?.is_empty());
+        assert!(payroll.list_claims(&manager, 1).await?.is_empty());
+        assert!(matches!(
+            payroll.post_payroll_run(&manager, 1, 101).await,
+            Err(PayrollError::SourceNotFound)
+        ));
+        println!("People source: available; no approval events have arrived in this fresh fixture");
+    }
 
     // Use a fresh year, independent of periods closed by preceding scenarios.
     ledger
