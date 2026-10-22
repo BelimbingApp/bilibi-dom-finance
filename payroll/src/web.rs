@@ -695,6 +695,7 @@ impl State {
                 payroll.list_payroll_runs(scope, company).await
             };
             let mut content = Html::EMPTY;
+            let mut actions = Html::EMPTY;
             match result {
                 Err(_) => content.push(&render(
                     EmptyState::forbidden(if claims {
@@ -706,12 +707,12 @@ impl State {
                 )?),
                 Ok(sources) => {
                     if claims && can_post && !sources.is_empty() {
-                        content.push(&action(
+                        actions = action(
                             "payroll-post-all-claims",
                             "post_all_claims",
                             0,
                             "Post every unposted claim",
-                        )?);
+                        )?;
                     }
                     let mut rows = Vec::new();
                     for source in sources {
@@ -809,22 +810,33 @@ impl State {
                     content.push(&self.table(index, rows, title, empty, true)?);
                 }
             }
-            parts.push(section(
-                if claims {
-                    "payroll-claims"
-                } else {
-                    "payroll-runs"
-                },
-                if claims {
-                    "payroll-claims-heading"
-                } else {
-                    "payroll-runs-heading"
-                },
+            let section_id = if claims {
+                "payroll-claims"
+            } else {
+                "payroll-runs"
+            };
+            let heading_id = if claims {
+                "payroll-claims-heading"
+            } else {
+                "payroll-runs-heading"
+            };
+            let mut body = render(SectionHeading {
+                id: heading_id,
                 title,
-                "",
-                None,
-                content,
-            )?);
+                class: "p-5 pb-0",
+                actions,
+                ..SectionHeading::default()
+            })?;
+            body.push(&content);
+            parts.push(render(Card {
+                id: section_id,
+                class: "mt-6",
+                inner_class: "p-0",
+                role: "region",
+                labelledby: heading_id,
+                body,
+                ..Card::default()
+            })?);
         }
         Ok(parts)
     }
