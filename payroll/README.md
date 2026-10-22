@@ -55,7 +55,7 @@ All accounts must be active and company-owned at configuration time. Optional re
 
 Runs aggregate components by code/direction, resolve every mapping even for a rounded-zero amount, then round each aggregate half away from zero to the book's minor units and construct `Money`. Earnings debit expense-side accounts; deductions credit liabilities; employer amounts do both. Net pay is rounded earnings minus rounded deductions: credit the net-pay liability when positive, debit when negative, omit when zero. Employer contributions never affect net pay. Negative components are not flipped to another side; Ledger refuses invalid lines. A zero run is refused.
 
-Claims round the approved amount the same way, debit the category account and credit claims payable. Zero/negative rounded amounts, missing category/date, missing mappings and currency disagreement are refused. There is no currency conversion. Runs use pay date, claims use the source's company-local approval date. Entry total is sum of debits, not net pay.
+Claims round the approved amount the same way, debit the category account and credit claims payable. Zero/negative rounded amounts, missing category/date, missing mappings and currency disagreement are refused. There is no currency conversion. Runs use pay date. Claims use the approval date recorded by People (the UTC approval date in v1). Entry total is sum of debits, not net pay.
 
 Entries are owned by `finance/payroll` with `payroll_run:<id>` or `claim:<id>`. `Ledger::post_entry_in` and the Payroll `posted` event share one transaction. Company locking and database unique indexes allow one original per source, including after reversal. A batch takes one source snapshot, preserves request order and posts each claim in its own transaction, returning individual outcomes; source/authorization refusal fails the whole batch before attempts.
 
@@ -76,7 +76,7 @@ DATABASE_URL=postgres://…/disposable BILIBI_SETTINGS_KEY=$(openssl rand -hex 3
   cargo run -p bilibi-finance-walkthrough-fixture
 ```
 
-The Payroll section asserts configuration/no-op histories, account roles, isolation and withheld writes, source `unavailable` without attempts, Ledger owner rollback and independent grants, an explicitly labelled historical posting's reasoned reversal, earlier-date failure and retry, concurrent reversal, mirrored lines, all evidence cursors, audited affected rows, and PostgreSQL retention/uniqueness/event-shape refusals. No unit tests, provider stubs or production seeds.
+The Payroll section asserts configuration/no-op histories, account roles, isolation and withheld writes, source `unavailable` without attempts when People is absent, empty source lists before delivery when People is mounted, Ledger owner rollback and independent grants, an explicitly labelled historical posting's reasoned reversal, earlier-date failure and retry, concurrent reversal, mirrored lines, all evidence cursors, audited affected rows, and PostgreSQL retention/uniqueness/event-shape refusals. No unit tests, provider stubs or production seeds.
 
 Its page scenarios run through the registered PageService: settings and mapping saves, change-only forms, a 400-character Unicode reason, field errors and retained drafts, independent column controls, Ledger-withheld labels, grants revoked after mount, malformed reversal dates, cancel and one-shot confirmation, and complete change history beyond 500 rows. Browser proof uses this disposable database and the real app; it never seeds a product installation.
 
