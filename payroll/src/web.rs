@@ -702,7 +702,7 @@ impl State {
                     } else {
                         "read the company's payroll runs"
                     })
-                    .id(&format!("payroll-{kind}s-unavailable")),
+                    .id(format!("payroll-{kind}s-unavailable")),
                 )?),
                 Ok(sources) => {
                     if claims && can_post && !sources.is_empty() {
