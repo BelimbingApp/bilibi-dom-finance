@@ -128,7 +128,7 @@ async fn main() -> Outcome<()> {
     let delivered = tokio::time::timeout(Duration::from_secs(60), async {
         loop {
             let c = db.get().await?;
-            let pending = events.deliveries(&*c, &admin, 1, true, 500).await?;
+            let pending = events.deliveries(&**c, &admin, 1, true, 500).await?;
             drop(c);
             if !pending
                 .iter()
