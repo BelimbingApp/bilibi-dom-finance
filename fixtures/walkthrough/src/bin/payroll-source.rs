@@ -125,15 +125,21 @@ async fn main() -> Outcome<()> {
     )?;
     let (stop, shutdown) = tokio::sync::watch::channel(false);
     let worker = tokio::spawn(executor.run(shutdown));
-    let delivered=tokio::time::timeout(Duration::from_secs(60),async {
+    let delivered = tokio::time::timeout(Duration::from_secs(60), async {
         loop {
-            let c=db.get().await?;
-            let n:i64=c.query_one("SELECT count(*) FROM base_events_deliveries WHERE tenant_id=1 AND subscriber='finance/payroll.people' AND delivered_at IS NULL",&[]).await?.get(0);
+            let c = db.get().await?;
+            let pending = events.deliveries(&*c, &admin, 1, true, 500).await?;
             drop(c);
-            if n==0 {return Ok::<_,Error>(());}
+            if !pending
+                .iter()
+                .any(|d| d.subscriber == "finance/payroll.people")
+            {
+                return Ok::<_, Error>(());
+            }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-    }).await;
+    })
+    .await;
     let _ = stop.send(true);
     worker.await??;
     delivered??;
