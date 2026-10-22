@@ -82,6 +82,21 @@ async fn main() -> Outcome<()> {
         return Ok(());
     }
     assert!(payroll.people_available());
+    if mode == "retained" {
+        let runs = payroll.list_payroll_runs(&manager, 1).await?;
+        let claims = payroll.list_claims(&manager, 1).await?;
+        assert!(runs
+            .iter()
+            .any(|r| r["reference"] == "FY1-run" && !r["posting"].is_null()));
+        assert_eq!(claims.len(), 3);
+        let postings = payroll.list_postings(&manager, 1).await?;
+        assert!(postings.len() >= 2);
+        let html = page(&services, &manager, None).await?;
+        assert!(html.contains("id=\"payroll-runs-table\""));
+        assert!(!html.contains("No payroll or claims source is installed"));
+        println!("FY1: People remounted; copied sources and original postings retained");
+        return Ok(());
+    }
     grants
         .set_system(
             &admin,
