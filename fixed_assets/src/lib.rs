@@ -11,7 +11,6 @@ mod store;
 mod web;
 
 pub use activity::{DisposalInput, Event, EventAction, EventInput, Run, RunException, RunItem};
-use bilibi_company::organisation;
 use bilibi_database::{Db, Error, MutationTransaction};
 use bilibi_finance_ledger::{FieldError, Ledger, LedgerError, Money};
 use bilibi_finance_payables::{Payables, PayablesError};
@@ -293,7 +292,7 @@ impl FixedAssets {
     }
 }
 async fn authorize(c: &impl GenericClient, s: &Scope, company: i64, cap: &str) -> Result<()> {
-    organisation::authorize_target(c, s, company, cap)
+    bilibi_company::authorize_target(c, s, company, cap)
         .await
         .map(|_| ())
         .map_err(|e| match e {

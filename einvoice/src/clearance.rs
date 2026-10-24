@@ -33,7 +33,7 @@ use crate::{
 };
 use bilibi_agent_api::OperationClient;
 use bilibi_audit::Attribution;
-use bilibi_company::{organisation, WriteError};
+use bilibi_company::WriteError;
 use bilibi_database::{Error, MutationTransaction};
 use bilibi_finance_ledger::LedgerError;
 use bilibi_party_ids::OrganisationId;
@@ -151,7 +151,7 @@ impl Einvoice {
                 "finance.einvoice.issue_document",
             )
             .await?;
-        let name = organisation::identity(tx.sql(), scope, company_id)
+        let name = bilibi_company::identity(tx.sql(), scope, company_id)
             .await?
             .ok_or(EinvoiceError::CompanyNotFound)?
             .display_name;
@@ -312,7 +312,7 @@ impl Einvoice {
         prepared: PreparedIssue,
     ) -> Result<i64> {
         authorize(tx.sql(), scope, company_id, ISSUE).await?;
-        organisation::require_writable(tx.sql(), scope, company_id, true)
+        bilibi_company::require_writable(tx.sql(), scope, company_id, true)
             .await
             .map_err(write_refusal)?;
         let PreparedIssue {
@@ -1726,7 +1726,7 @@ impl Einvoice {
             }
             Writer::Job(execution) => execution.begin(client, action).await.map_err(refusal)?,
         };
-        organisation::require_writable(tx.sql(), scope, company_id, true)
+        bilibi_company::require_writable(tx.sql(), scope, company_id, true)
             .await
             .map_err(write_refusal)?;
         Ok(tx)

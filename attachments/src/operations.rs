@@ -10,7 +10,7 @@ use crate::{
     DELETE, MANAGE_RETENTION, VIEW,
 };
 use bilibi_artifacts::Retention as StorageRetention;
-use bilibi_company::{organisation, WriteError};
+use bilibi_company::WriteError;
 use bilibi_database::{Change, Error, MutationTransaction};
 use bilibi_party_ids::OrganisationId;
 use bilibi_tenancy::Scope;
@@ -29,7 +29,7 @@ pub(crate) async fn authorize(
     company_id: i64,
     capability: &str,
 ) -> Result<()> {
-    organisation::authorize_target(client, scope, company_id, capability)
+    bilibi_company::authorize_target(client, scope, company_id, capability)
         .await
         .map(|_| ())
         .map_err(crate::refusal_of)
@@ -933,7 +933,7 @@ pub(crate) async fn ensure_writable(
     company_id: i64,
     lock: bool,
 ) -> Result<()> {
-    organisation::require_writable(client, scope, company_id, lock)
+    bilibi_company::require_writable(client, scope, company_id, lock)
         .await
         .map(|_| ())
         .map_err(|error| match error {

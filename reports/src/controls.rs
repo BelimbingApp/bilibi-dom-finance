@@ -2,7 +2,6 @@
 //! 4abfaf829321f8540581d833752a086b21b45ba9. Ledger owns all reads and writes.
 use crate::{Reports, VIEW};
 use askama::Template;
-use bilibi_company::organisation;
 use bilibi_database::{Error, Result};
 use bilibi_datetime::{
     Clock, DisplayContext, DisplayPolicy, Format, Period, PeriodFilter, Precision,
@@ -217,7 +216,8 @@ impl State {
     }
     async fn allowed(&self, scope: &Scope, capability: &str) -> Result<bool> {
         let client = self.pages.reports.db.get().await?;
-        match organisation::authorize_target(&**client, scope, company(scope)?, capability).await {
+        match bilibi_company::authorize_target(&**client, scope, company(scope)?, capability).await
+        {
             Ok(_) => Ok(true),
             Err(Error::Forbidden | Error::Unauthorized | Error::NotFound) => Ok(false),
             Err(error) => Err(error),

@@ -1,7 +1,6 @@
 //! Attachment sources mirroring Bilimbi `Receivables.Attachments.Document`
 //! and `Receivables.Attachments.Payment`, on the caller's connection only.
 use crate::{MODULE, VIEW};
-use bilibi_company::organisation;
 use bilibi_database::Error;
 use bilibi_finance_attachments::{
     on_source_client, Source, SourceClient, SourceDefinition, SourceDocument, SourceFuture,
@@ -40,7 +39,7 @@ async fn read(
     id: i64,
     payment: bool,
 ) -> Result<SourceDocument, SourceRefusal> {
-    organisation::authorize_target(client, scope, company_id, VIEW)
+    bilibi_company::authorize_target(client, scope, company_id, VIEW)
         .await
         .map_err(refusal)?;
     // SourceDocument requires a Date unlike Bilimbi's nullable date. For an

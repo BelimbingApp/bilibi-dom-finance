@@ -43,7 +43,7 @@ pub use configuration::SECTIONS;
 pub use contributions::{CAPABILITIES, EXPORT, ISSUE};
 pub use issued::{EvidencePage, IssuedReport};
 
-use bilibi_company::{organisation, WriteError};
+use bilibi_company::WriteError;
 use bilibi_database::{Change, Db, Error, MutationBoundary, MutationTransaction};
 use bilibi_finance_ledger::{
     Account, AccountType, Entry, EntryQuery, Ledger, LedgerError, MinorUnits, Money, TotalsQuery,
@@ -1044,7 +1044,7 @@ impl Reports {
             .mutations
             .begin(client, scope.mutation_context(action))
             .await?;
-        organisation::require_writable(tx.sql(), scope, company_id, true)
+        bilibi_company::require_writable(tx.sql(), scope, company_id, true)
             .await
             .map_err(|error| match error {
                 WriteError::NotFound => ReportsError::CompanyNotFound,
@@ -1109,7 +1109,7 @@ async fn authorize(
     company_id: i64,
     capability: &str,
 ) -> Result<()> {
-    organisation::authorize_target(client, scope, company_id, capability)
+    bilibi_company::authorize_target(client, scope, company_id, capability)
         .await
         .map(|_| ())
         .map_err(refusal)

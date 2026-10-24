@@ -28,7 +28,6 @@ pub use reports::{
     TaxTotal,
 };
 
-use bilibi_company::organisation;
 use bilibi_database::{Db, Error, MutationTransaction};
 use bilibi_finance_attachments::Attachments;
 use bilibi_finance_ledger::{Ledger, LedgerError};
@@ -131,7 +130,7 @@ pub(crate) async fn authorize(
     company: i64,
     capability: &str,
 ) -> Result<()> {
-    organisation::authorize_target(client, scope, company, capability)
+    bilibi_company::authorize_target(client, scope, company, capability)
         .await
         .map(|_| ())
         .map_err(refusal)
