@@ -1417,7 +1417,7 @@ impl Sst {
     ) -> Result<(String, ReturnReport)> {
         let c = self.db.get().await.map_err(Error::from)?;
         authorize(&**c, s, company, VIEW).await?;
-        let name = organisation::identity(&**c, s, company)
+        let name = bilibi_company::identity(&**c, s, company)
             .await?
             .ok_or(SstError::CompanyNotFound)?
             .display_name;

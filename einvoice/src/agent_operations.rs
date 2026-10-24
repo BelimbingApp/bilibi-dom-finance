@@ -290,7 +290,7 @@ impl WriteHandler for Issue {
             authorize(tx.sql(), scope, company, ISSUE)
                 .await
                 .map_err(failure)?;
-            organisation::require_writable(tx.sql(), scope, company, true)
+            bilibi_company::require_writable(tx.sql(), scope, company, true)
                 .await
                 .map_err(|e| {
                     failure(match e {

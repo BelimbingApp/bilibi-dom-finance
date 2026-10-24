@@ -101,13 +101,7 @@ fn render(template: impl Template) -> Result<Html> {
 impl Pages {
     async fn allowed(&self, scope: &Scope, capability: &str) -> Result<bool> {
         let client = self.db.get().await?;
-        match bilibi_company::organisation::authorize_target(
-            &**client,
-            scope,
-            company(scope)?,
-            capability,
-        )
-        .await
+        match bilibi_company::authorize_target(&**client, scope, company(scope)?, capability).await
         {
             Ok(_) => Ok(true),
             Err(Error::Forbidden | Error::Unauthorized | Error::NotFound) => Ok(false),

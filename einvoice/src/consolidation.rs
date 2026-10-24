@@ -28,7 +28,6 @@ use crate::documents::{
     RELEASING,
 };
 use crate::{authorize, supplier_profile, Einvoice, EinvoiceError, Result, ISSUE, VIEW};
-use bilibi_company::organisation;
 use bilibi_database::{Change, Error, MutationTransaction};
 use bilibi_tenancy::Scope;
 use jiff::civil::Date;
@@ -395,7 +394,7 @@ impl Einvoice {
             return Err(EinvoiceError::MixedSourceLinks);
         }
         let lines = group(&sources);
-        let name = organisation::identity(tx.sql(), scope, company_id)
+        let name = bilibi_company::identity(tx.sql(), scope, company_id)
             .await?
             .ok_or(EinvoiceError::CompanyNotFound)?
             .display_name;

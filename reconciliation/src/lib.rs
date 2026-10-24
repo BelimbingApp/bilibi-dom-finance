@@ -71,7 +71,6 @@ pub use mapping::{
 pub use posting::KINDS as POSTING_KINDS;
 pub use source::STATEMENT_SOURCE;
 
-use bilibi_company::organisation;
 use bilibi_database::{Db, Error, MutationTransaction};
 use bilibi_finance_attachments::{AttachmentError, Attachments, NewFile};
 use bilibi_finance_ledger::{Approval, Entry, Ledger, LedgerError, MinorUnits, Money, Preparer};
@@ -1741,7 +1740,7 @@ async fn authorize(
     company_id: i64,
     capability: &str,
 ) -> Result<()> {
-    organisation::authorize_target(client, scope, company_id, capability)
+    bilibi_company::authorize_target(client, scope, company_id, capability)
         .await
         .map(|_| ())
         .map_err(refusal)

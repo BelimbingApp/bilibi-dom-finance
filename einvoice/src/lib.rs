@@ -71,7 +71,7 @@ pub use myinvois::signer::SigningKey;
 pub use pdf::{qr_code_svg, PdfArtifact, PdfFile, ARTIFACT_OWNER};
 
 use bilibi_artifacts::Artifacts;
-use bilibi_company::{organisation, WriteError};
+use bilibi_company::WriteError;
 use bilibi_database::{Change, Db, Error, MutationBoundary, MutationTransaction};
 use bilibi_finance_ledger::Ledger;
 use bilibi_integration::Integration;
@@ -477,7 +477,7 @@ impl Einvoice {
     pub async fn setup(&self, scope: &Scope, company_id: i64) -> Result<Setup> {
         let client = self.db.get().await.map_err(Error::from)?;
         authorize(&**client, scope, company_id, SETTINGS).await?;
-        let name = organisation::identity(&**client, scope, company_id)
+        let name = bilibi_company::identity(&**client, scope, company_id)
             .await?
             .ok_or(EinvoiceError::CompanyNotFound)?
             .display_name;
@@ -654,7 +654,7 @@ impl Einvoice {
             .mutations
             .begin(client, scope.mutation_context(action))
             .await?;
-        organisation::require_writable(tx.sql(), scope, company_id, true)
+        bilibi_company::require_writable(tx.sql(), scope, company_id, true)
             .await
             .map_err(|error| match error {
                 WriteError::NotFound => EinvoiceError::CompanyNotFound,
@@ -731,7 +731,7 @@ pub(crate) async fn authorize(
     company_id: i64,
     capability: &str,
 ) -> Result<()> {
-    organisation::authorize_target(client, scope, company_id, capability)
+    bilibi_company::authorize_target(client, scope, company_id, capability)
         .await
         .map(|_| ())
         .map_err(refusal)
