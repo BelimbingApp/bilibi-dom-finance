@@ -26,7 +26,6 @@ mod store;
 mod web;
 
 use bilibi_agent_api::OperationClient;
-use bilibi_company::organisation;
 use bilibi_database::{Db, Error, MutationTransaction};
 use bilibi_finance_ledger::{FieldError, Ledger, LedgerError, Money};
 use bilibi_module_registry::{Layer, Module, Service};
@@ -433,7 +432,7 @@ impl Payables {
     }
 }
 async fn authorize(c: &impl GenericClient, s: &Scope, company: i64, cap: &str) -> Result<()> {
-    organisation::authorize_target(c, s, company, cap)
+    bilibi_company::authorize_target(c, s, company, cap)
         .await
         .map(|_| ())
         .map_err(refusal)
@@ -458,7 +457,7 @@ fn as_text<S: serde::Serializer>(
 
 async fn join(tx: &MutationTransaction<'_>, s: &Scope, company: i64, cap: &str) -> Result<()> {
     authorize(tx.sql(), s, company, cap).await?;
-    organisation::require_writable(tx.sql(), s, company, true)
+    bilibi_company::require_writable(tx.sql(), s, company, true)
         .await
         .map(|_| ())
         .map_err(|e| match e {

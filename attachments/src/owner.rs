@@ -18,7 +18,7 @@
 //! proven.
 use crate::{CREATE, DELETE, MANAGE_RETENTION, VIEW};
 use bilibi_artifacts::{Operation, Owner, Reference};
-use bilibi_company::organisation::Directory;
+use bilibi_company::Directory;
 use bilibi_database::Error;
 use bilibi_party_ids::OrganisationId;
 use bilibi_tenancy::{OrganisationDirectory, ProofClient, ProofFuture, Scope};

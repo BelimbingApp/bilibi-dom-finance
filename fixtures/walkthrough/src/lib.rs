@@ -196,7 +196,6 @@ macro_rules! walkthrough_ledger_roles {
 /// stands in for them so the attachments facade can be shown on a draft and
 /// a final record.
 pub mod records {
-    use bilibi_company::organisation;
     use bilibi_database::{Db, Error};
     use bilibi_finance_attachments::{
         on_source_client, Source, SourceClient, SourceDefinition, SourceDocument, SourceFuture,
@@ -248,7 +247,7 @@ pub mod records {
             company_id: i64,
             document_id: i64,
         ) -> Result<SourceDocument, SourceRefusal> {
-            organisation::authorize_target(client, scope, company_id, self.view)
+            bilibi_company::authorize_target(client, scope, company_id, self.view)
                 .await
                 .map_err(|error| match error {
                     Error::Forbidden | Error::Unauthorized => SourceRefusal::Unauthorized,

@@ -15,7 +15,7 @@ use crate::documents::{self, DocumentView, NewEvent};
 use crate::{authorize, Authority, Einvoice, EinvoiceError, PartySnapshot, Result, VIEW};
 use bilibi_artifacts::pdf::{self as serializer, Block, Metadata};
 use bilibi_artifacts::{Operation, Owner, PdfOwner, Reference, RenderFuture};
-use bilibi_company::organisation::Directory;
+use bilibi_company::Directory;
 use bilibi_database::Error;
 use bilibi_party_ids::OrganisationId;
 use bilibi_tenancy::{OrganisationDirectory, ProofClient, ProofFuture, Scope};

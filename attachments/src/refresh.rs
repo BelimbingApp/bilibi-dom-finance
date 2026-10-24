@@ -30,7 +30,7 @@ use crate::{
     Attachment, AttachmentError, Attachments, Refresh, Result, REFRESH_PRINCIPAL,
 };
 use bilibi_authz::SystemScope;
-use bilibi_company::{organisation, WriteError};
+use bilibi_company::WriteError;
 use bilibi_database::{Error, MutationTransaction};
 use bilibi_queue::execution::{Execution, Handler, HandlerFuture, Identity, Outcome};
 use bilibi_tenancy::Scope;
@@ -165,7 +165,7 @@ impl Attachments {
         if !document.is_final {
             return Err(AttachmentError::DocumentNotFinal);
         }
-        organisation::require_live(tx.sql(), scope, company_id)
+        bilibi_company::require_live(tx.sql(), scope, company_id)
             .await
             .map_err(|_| AttachmentError::CompanyNotFound)?;
         authorize(tx.sql(), scope, company_id, bilibi_finance_ledger::VIEW).await?;
@@ -230,7 +230,7 @@ impl Attachments {
                 }
                 _ => Outcome::Retry("retention_refresh_failed"),
             })?;
-        organisation::require_live(&**client, &scope, job.company_id)
+        bilibi_company::require_live(&**client, &scope, job.company_id)
             .await
             .map_err(|_| Outcome::Cancel("company_not_found"))?;
         let standing = store::standing_for_record(
@@ -280,7 +280,7 @@ impl Attachments {
             let tx = execution
                 .begin(&mut client, "finance.attachments.retention_refresh_check")
                 .await?;
-            organisation::require_writable(tx.sql(), scope, job.company_id, true)
+            bilibi_company::require_writable(tx.sql(), scope, job.company_id, true)
                 .await
                 .map_err(|error| match error {
                     WriteError::Archived => AttachmentError::CompanyArchived,

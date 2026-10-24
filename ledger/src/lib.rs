@@ -84,7 +84,7 @@ pub use contributions::{
 pub use evidence::EvidencePage;
 pub use money::{MinorUnits, Money, MoneyError};
 
-use bilibi_company::{organisation, WriteError};
+use bilibi_company::WriteError;
 use bilibi_database::{Change, Db, Error, MutationBoundary, MutationTransaction};
 use bilibi_module_registry::{Layer, Module, Service};
 use bilibi_tenancy::Scope;
@@ -3126,7 +3126,7 @@ async fn join(
 /// Holds the company's row lock for the transaction (Bilimbi
 /// `lock_writable_company/2`): an archived company is refused.
 async fn lock(tx: &MutationTransaction<'_>, scope: &Scope, company_id: i64) -> Result<()> {
-    organisation::require_writable(tx.sql(), scope, company_id, true)
+    bilibi_company::require_writable(tx.sql(), scope, company_id, true)
         .await
         .map(|_| ())
         .map_err(|error| match error {
@@ -3299,7 +3299,7 @@ async fn authorize(
     company_id: i64,
     capability: &str,
 ) -> Result<()> {
-    organisation::authorize_target(client, scope, company_id, capability)
+    bilibi_company::authorize_target(client, scope, company_id, capability)
         .await
         .map(|_| ())
         .map_err(refusal)

@@ -7,7 +7,6 @@
 //! immutable from its import, so it is always final: its file is never
 //! replaced or removed.
 use crate::{contributions::VIEW, MODULE};
-use bilibi_company::organisation;
 use bilibi_database::Error;
 use bilibi_finance_attachments::{
     on_source_client, Source, SourceClient, SourceDefinition, SourceDocument, SourceFuture,
@@ -48,7 +47,7 @@ async fn read(
     company_id: i64,
     statement_id: i64,
 ) -> Result<SourceDocument, SourceRefusal> {
-    organisation::authorize_target(client, scope, company_id, VIEW)
+    bilibi_company::authorize_target(client, scope, company_id, VIEW)
         .await
         .map_err(|error| match error {
             Error::Forbidden | Error::Unauthorized => SourceRefusal::Unauthorized,

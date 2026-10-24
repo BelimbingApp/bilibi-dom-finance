@@ -8,7 +8,6 @@ mod source;
 mod store;
 mod web;
 
-use bilibi_company::organisation;
 use bilibi_database::{Db, Error};
 use bilibi_finance_ledger::{FieldError, Ledger, LedgerError};
 use bilibi_module_registry::{Layer, Module, Service};
@@ -289,7 +288,7 @@ async fn authorize(
     company: i64,
     capability: &str,
 ) -> Result<()> {
-    organisation::authorize_target(client, scope, company, capability)
+    bilibi_company::authorize_target(client, scope, company, capability)
         .await
         .map(|_| ())
         .map_err(|error| match error {

@@ -30,7 +30,6 @@ mod returns;
 mod store;
 mod web;
 
-use bilibi_company::organisation;
 use bilibi_database::{Db, Error, MutationTransaction};
 use bilibi_finance_ledger::{FieldError, Ledger, LedgerError};
 use bilibi_finance_payables::{Payables, PayablesError};
@@ -394,7 +393,7 @@ fn today() -> Date {
 }
 
 async fn authorize(c: &impl GenericClient, s: &Scope, company: i64, cap: &str) -> Result<()> {
-    organisation::authorize_target(c, s, company, cap)
+    bilibi_company::authorize_target(c, s, company, cap)
         .await
         .map(|_| ())
         .map_err(|e| match e {
