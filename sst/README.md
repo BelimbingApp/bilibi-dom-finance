@@ -159,7 +159,7 @@ The numbering triggers rely on the facade's company write lock to serialize a co
 - Return writes take typed arguments (`TaxType`, `Date`, `AdjustmentInput`, a `reason`) instead of attribute maps, and results are typed (`TaxReturn`, `ReturnReport`, `Adjustment`) instead of plain maps.
 - Bilimbi finalises by reading the figures inside the locked transaction. The Receivables and Payables tax totals have only pooled reads, so here `finalise_return` reads the figures before taking the company lock, then checks under the lock that the return is still open and that no adjustment of it and no mapping was recorded in between; if one was, it reads again (three times at most, then `Failed(Conflict)`). A posting in between is harmless: the reading is pinned at its entry number and the snapshot records it.
 - A finalised return's snapshot names the service tax basis of its registration version, which Bilimbi's leaves out; its figures are otherwise the stored rows.
-- Part A's name in an export is the company's display name (its legal name when it has one), from `organisation::identity`.
+- Part A's name in an export is the company's display name (its legal name when it has one), from `bilibi_company::identity`.
 
 ## Running proof
 

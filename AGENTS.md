@@ -47,10 +47,10 @@ they govern this code and are not copied here.
 ## Facade rules
 
 - Authorize every facade call inside the facade with
-  `bilibi_company::organisation::authorize_target` and the scope it was
+  `bilibi_company::authorize_target` and the scope it was
   handed, and open every write with `Ledger::write` (the capability, then the
   audited `MutationBoundary` transaction holding
-  `organisation::require_writable(.., lock = true)`), never a bare
+  `bilibi_company::require_writable(.., lock = true)`), never a bare
   `client.transaction()`: the boundary is what records every affected row as a
   `Change`, and the company lock is what serializes a company's ledger writes
   and refuses an archived company. Never take an actor or actor id as an
