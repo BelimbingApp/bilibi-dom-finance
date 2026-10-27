@@ -487,7 +487,7 @@ impl Years {
                 .label("Last day")
                 .kind(InputKind::Date)
                 .value(&opening.end)
-                .hint(&end_hint(opening))
+                .hint(end_hint(opening))
                 .errors(errors("end_date")),
         )?);
         let mut actions = render(Button {
