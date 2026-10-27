@@ -129,7 +129,7 @@ The ledger has pages so a person without an AI agent can do the same daily work.
 | (entry record) | `/finance/ledger/entries/{id}` | Reads the lines. Reverses a manual entry in a dialog. |
 | Manual journals | `/finance/ledger/journals` | Lists journals by status. Submits one with its lines in a dialog. |
 | (journal record) | `/finance/ledger/journals/{id}` | Approves it (it posts) or rejects it with a reason. The ledger refuses the person who submitted it while the company separates duties. |
-| Fiscal years | `/finance/ledger/fiscal-years` | Opens a year. Closes, reopens and locks periods. Closes, reopens and locks a year. |
+| Fiscal years | `/finance/ledger/fiscal-years` | Opens a year after a review that names the company and shows the calculated last day. Closes, reopens and locks periods. Closes, reopens and locks a year. |
 | Trial balance | `/finance/ledger/trial-balance` | Reads the balances as of a date at a pinned entry number, and follows an account to its entries. |
 
 Every read goes through `PageContracts::read` and every write through its `submit` (a dialog the person just filled in) or `preview` then `commit` (a confirmation), so a page and an agent get the same checks, the same refusals and the same audit trail. The pages add one contract, `finance.ledger.trial_balance.get`, because the trial balance had none. A control the person may not use is not drawn. The ledger's own words explain a refusal.
