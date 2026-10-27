@@ -457,7 +457,11 @@ impl Documents {
                     .value(value("credited_document_id"))
                     .required()
                     .hint("It must be an issued invoice to the same customer.")
-                    .errors(draft.errors.under("credited_document_id", "Credited invoice")),
+                    .errors(
+                        draft
+                            .errors
+                            .under("credited_document_id", "Credited invoice"),
+                    ),
             )?);
         }
         let mut dates = Html::EMPTY;

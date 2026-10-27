@@ -792,9 +792,8 @@ impl Document {
             })
             .collect();
         for (i, line) in lines.rows.iter().enumerate() {
-            let err = |key: &str, label: &str| {
-                lines.errors.under(&format!("lines.{i}.{key}"), label)
-            };
+            let err =
+                |key: &str, label: &str| lines.errors.under(&format!("lines.{i}.{key}"), label);
             body.push(&render(SectionHeading {
                 title: &format!("Line {}", i + 1),
                 actions: render(Button {
