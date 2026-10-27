@@ -8,12 +8,19 @@
 //! 100), `reviewer@other.example.test` (the administrator, who approves the
 //! manager's journals) or `viewer@other.example.test` (view only), with the
 //! walkthrough password. Pass `empty` to stop before the book is opened.
-use bilibi_database::pool;
+//! After seeding it drives the Journal entries page's period control through
+//! its real `LiveState` and prints one proof line.
+use bilibi_database::{pool, Error};
 use bilibi_finance_ledger::{
     AccountType, Ledger, Money, NewAccount, NewBook, NewEntry, NewFiscalYear, NewLine, PostOptions,
 };
 use bilibi_finance_walkthrough_fixture::{install, sign_in};
+use bilibi_module_registry::Services;
+use bilibi_tenancy::Scope;
+use bilibi_ui::page::{LiveBody, LiveInput, LiveRequest, LiveState, PageRequest, PageService};
 use jiff::civil::{date, Date};
+use serde_json::json;
+use std::collections::HashMap;
 
 bilibi_walkthrough_fixture::walkthrough_vocabulary!();
 bilibi_walkthrough_fixture::walkthrough_module_roles!();
@@ -22,6 +29,7 @@ bilibi_finance_walkthrough_fixture::walkthrough_ledger_roles!();
 const COMPANY: i64 = 100;
 
 type Outcome<T> = Result<T, Box<dyn std::error::Error>>;
+type State = Box<dyn LiveState<Scope, Error>>;
 
 #[tokio::main]
 async fn main() -> Outcome<()> {
@@ -67,7 +75,8 @@ async fn main() -> Outcome<()> {
         Err(bilibi_finance_ledger::LedgerError::BookNotOpen)
     );
     if unopened && !std::env::args().any(|arg| arg == "empty") {
-        seed(&ledger, &manager, &reviewer).await?;
+        let (account, pin) = seed(&ledger, &manager, &reviewer).await?;
+        period_proof(services, &manager, account, pin).await?;
     }
     println!(
         "Ledger fixture at {origin}: manager@other.example.test, reviewer@other.example.test, viewer@other.example.test; walkthrough password"
@@ -86,7 +95,7 @@ async fn seed(
     ledger: &Ledger,
     manager: &bilibi_tenancy::Scope,
     reviewer: &bilibi_tenancy::Scope,
-) -> Outcome<()> {
+) -> Outcome<(i64, i64)> {
     let book = ledger
         .open_book(
             manager,
@@ -353,6 +362,250 @@ async fn seed(
     println!(
         "Ledger seeded: wrong-account entry {}; journal waiting for approval is the latest",
         wrong.id
+    );
+    Ok((ids["1010"], wrong.entry_number))
+}
+
+async fn update(state: &mut State, scope: &Scope, input: LiveInput<'_>) -> Outcome<LiveBody> {
+    Ok(state
+        .update(LiveRequest {
+            scope,
+            credential: "",
+            input,
+        })
+        .await?)
+}
+
+async fn mount(
+    services: &Services,
+    scope: &Scope,
+    query: &HashMap<String, String>,
+) -> Outcome<State> {
+    let pages = services.get::<PageService<Scope, Error>>("finance/ledger.pages")?;
+    Ok(pages
+        .0
+        .mount(PageRequest {
+            operation: "entries",
+            scope: Some(scope),
+            path: &HashMap::new(),
+            query,
+            body: &[],
+            framed: false,
+        })
+        .await?
+        .expect("the journal entries page mounts"))
+}
+
+fn has(body: &LiveBody, expected: &str) {
+    assert!(body.html.contains(expected), "page missing {expected}");
+}
+
+fn lacks(body: &LiveBody, unexpected: &str) {
+    assert!(!body.html.contains(unexpected), "page shows {unexpected}");
+}
+
+/// The address a person would reload: no sentinel year, and every date key
+/// that is there parses as a date.
+fn address(body: &LiveBody) {
+    for (key, value) in &body.query {
+        assert!(
+            !value.contains("0001-01-01") && !value.contains("9999-12-31"),
+            "{key}={value} is a sentinel"
+        );
+    }
+}
+
+fn all_dates(body: &LiveBody) {
+    for key in ["period", "from", "to"] {
+        assert!(!body.query.contains_key(key), "{key} is in the address");
+    }
+    address(body);
+}
+
+fn shows_all_dates(body: &LiveBody) {
+    all_dates(body);
+    has(body, "ledger-entries-period-all");
+    lacks(body, "ledger-entries-period-clear");
+}
+
+/// Journal entries' period control, through the page's own live state on the
+/// seeded entries: All dates by default, a preset, the custom range dialog
+/// (refused, cancelled, applied with both ends inclusive), the return to All
+/// dates, a `to`-only address, and the first-entry reset on every new period.
+async fn period_proof(services: &Services, scope: &Scope, account: i64, pin: i64) -> Outcome<()> {
+    const FILTER: &str = "ledger-entries-period";
+    let last = jiff::Zoned::now().year() - 1;
+    let none = HashMap::new();
+    let select = |period: &str| json!({"type": format!("period_select:{FILTER}"), "period_filter[period]": period});
+    let apply = |from: Date, to: Date| {
+        json!({
+            "type": format!("period_apply:{FILTER}"),
+            "range[from]": from.to_string(),
+            "range[to]": to.to_string(),
+        })
+    };
+    let cancel = json!({"type": format!("period_cancel:{FILTER}")});
+    let clear = json!({"type": format!("period_clear:{FILTER}")});
+    let (march_15, march_20, march_28) = (date(last, 3, 15), date(last, 3, 20), date(last, 3, 28));
+
+    let mut state = mount(services, scope, &none).await?;
+    let every = update(&mut state, scope, LiveInput::Refresh).await?;
+    assert!(every.rows > 3 && every.rows < 100, "{} entries", every.rows);
+    shows_all_dates(&every);
+    has(&every, "All dates");
+    let first_id = every
+        .html
+        .split("id=\"ledger-entry-")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .expect("an entry row");
+
+    // A later page (the address carries a cursor) starts again from the
+    // first matching entry once a period is applied.
+    let after = HashMap::from([("after".to_owned(), format!("{last}-01-02:{first_id}"))]);
+    let mut paged = mount(services, scope, &after).await?;
+    let later = update(&mut paged, scope, LiveInput::Refresh).await?;
+    assert!(later.query.contains_key("after"));
+    let today = update(&mut paged, scope, LiveInput::Event(&select("today"))).await?;
+    assert!(!today.query.contains_key("after"));
+    assert_eq!(today.query["period"], "today");
+    assert_eq!(today.query["from"], today.query["to"]);
+    assert!(today.rows <= every.rows);
+    address(&today);
+    has(&today, "ledger-entries-period-clear");
+    lacks(&today, "ledger-entries-period-all");
+
+    // A refused range and Cancel leave the applied preset as it was.
+    let open = update(&mut paged, scope, LiveInput::Event(&select("custom"))).await?;
+    has(&open, "ledger-entries-period-range");
+    address(&open);
+    let refused = update(
+        &mut paged,
+        scope,
+        LiveInput::Event(&apply(march_28, march_15)),
+    )
+    .await?;
+    has(&refused, "Start date must be on or before end date.");
+    assert_eq!(refused.query["period"], "today");
+    assert_eq!(refused.query["from"], today.query["from"]);
+    let cancelled = update(&mut paged, scope, LiveInput::Event(&cancel)).await?;
+    lacks(&cancelled, "ledger-entries-period-range");
+    assert_eq!(cancelled.query["period"], "today");
+    assert_eq!(cancelled.query["from"], today.query["from"]);
+
+    // From All dates the dialog opens on a recent range, not on the date
+    // field's limits, and Cancel stays on All dates.
+    let open = update(&mut state, scope, LiveInput::Event(&select("custom"))).await?;
+    has(&open, "ledger-entries-period-range");
+    lacks(&open, "value=\"0001-01-01\"");
+    lacks(&open, "value=\"9999-12-31\"");
+    address(&open);
+    let refused = update(
+        &mut state,
+        scope,
+        LiveInput::Event(&apply(march_28, march_15)),
+    )
+    .await?;
+    has(&refused, "Start date must be on or before end date.");
+    all_dates(&refused);
+    let cancelled = update(&mut state, scope, LiveInput::Event(&cancel)).await?;
+    lacks(&cancelled, "ledger-entries-period-range");
+    shows_all_dates(&cancelled);
+
+    // Both ends of a custom range are inclusive.
+    let span = update(
+        &mut state,
+        scope,
+        LiveInput::Event(&apply(march_15, march_28)),
+    )
+    .await?;
+    assert_eq!(span.query["period"], "custom");
+    assert_eq!(span.query["from"], march_15.to_string());
+    assert_eq!(span.query["to"], march_28.to_string());
+    assert_eq!(span.rows, 3);
+    address(&span);
+    let one = update(
+        &mut state,
+        scope,
+        LiveInput::Event(&apply(march_28, march_28)),
+    )
+    .await?;
+    assert_eq!(one.rows, 1);
+
+    // Reload keeps the range; Back to the bare address is All dates.
+    let reloaded = update(&mut state, scope, LiveInput::Params(&span.query)).await?;
+    assert_eq!(reloaded.rows, 3);
+    assert_eq!(reloaded.query, span.query);
+    let back = update(&mut state, scope, LiveInput::Params(&none)).await?;
+    assert_eq!(back.rows, every.rows);
+    shows_all_dates(&back);
+
+    // The date field's own limits are no range: applying them is All dates.
+    update(
+        &mut state,
+        scope,
+        LiveInput::Event(&apply(march_15, march_28)),
+    )
+    .await?;
+    let widest = update(
+        &mut state,
+        scope,
+        LiveInput::Event(&apply(date(1, 1, 1), date(9999, 12, 31))),
+    )
+    .await?;
+    assert_eq!(widest.rows, every.rows);
+    shows_all_dates(&widest);
+
+    // The account filter and the trial balance pin survive every change.
+    let keep = HashMap::from([
+        ("account".to_owned(), account.to_string()),
+        ("through".to_owned(), pin.to_string()),
+    ]);
+    let mut kept = mount(services, scope, &keep).await?;
+    let base = update(&mut kept, scope, LiveInput::Refresh).await?;
+    assert!(base.rows > 0 && base.rows <= every.rows);
+    shows_all_dates(&base);
+    let ranged = update(
+        &mut kept,
+        scope,
+        LiveInput::Event(&apply(march_15, march_28)),
+    )
+    .await?;
+    assert_eq!(ranged.rows, 3);
+    assert_eq!(ranged.query["account"], account.to_string());
+    assert_eq!(ranged.query["through"], pin.to_string());
+    let cleared = update(&mut kept, scope, LiveInput::Event(&clear)).await?;
+    assert_eq!(cleared.rows, base.rows);
+    assert_eq!(cleared.query["account"], account.to_string());
+    assert_eq!(cleared.query["through"], pin.to_string());
+    shows_all_dates(&cleared);
+
+    // The trial balance opens the list with a `to` and no `from`: the start
+    // stays open, in the address and in the list.
+    let to_only = HashMap::from([("to".to_owned(), march_20.to_string())]);
+    let mut opened = mount(services, scope, &to_only).await?;
+    let until = update(&mut opened, scope, LiveInput::Refresh).await?;
+    assert_eq!(until.query["to"], march_20.to_string());
+    for key in ["period", "from"] {
+        assert!(!until.query.contains_key(key), "{key} is in the address");
+    }
+    address(&until);
+    has(&until, "ledger-entries-period-clear");
+    let mut bounded = mount(services, scope, &none).await?;
+    let january = update(
+        &mut bounded,
+        scope,
+        LiveInput::Event(&apply(date(last, 1, 1), march_20)),
+    )
+    .await?;
+    assert!(until.rows > 0 && until.rows < every.rows);
+    assert_eq!(until.rows, january.rows);
+    let everything = update(&mut opened, scope, LiveInput::Event(&clear)).await?;
+    assert_eq!(everything.rows, every.rows);
+    shows_all_dates(&everything);
+
+    println!(
+        "Journal entries period proof: All dates by default and after Clear; preset restarts the list; refused range and Cancel keep the period; inclusive custom range; reload and Back; account and pin kept; to-only start open; no sentinel year in the address"
     );
     Ok(())
 }
