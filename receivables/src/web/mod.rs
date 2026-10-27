@@ -156,6 +156,7 @@ inventory::submit! { Contribution::new(PAGE_WRITES, PAGES, Provenance { module: 
         ("save_receipt", "finance.receivables.payment.record"),
         ("reverse", "finance.receivables.payment.reverse"),
         ("configure", "finance.receivables.setup.configure"),
+        ("confirm_receivable", "finance.receivables.setup.configure"),
         ("save_series", "finance.receivables.series.create"),
         ("save_series", "finance.receivables.series.update"),
         ("save_tax", "finance.receivables.tax_code.create"),
@@ -266,6 +267,12 @@ impl Pages {
     /// The company's accounts, for choosing one. An account the person cannot
     /// read (no ledger view) shows by its number alone.
     pub(super) async fn accounts(&self, scope: &Scope) -> Vec<Account> {
+        self.chart(scope).await.unwrap_or_default()
+    }
+
+    /// The company's accounts, or `None` when the chart could not be read
+    /// (no ledger view, or a failed read), which is not the same as an empty one.
+    pub(super) async fn chart(&self, scope: &Scope) -> Option<Vec<Account>> {
         self.read_all(
             scope,
             "finance.ledger.account.list",
@@ -273,8 +280,8 @@ impl Pages {
             ("after_code", "next_after_code"),
         )
         .await
+        .ok()
         .map(|(accounts, _)| accounts)
-        .unwrap_or_default()
     }
 
     pub(super) fn call<'a>(

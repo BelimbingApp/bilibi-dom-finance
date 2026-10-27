@@ -15,18 +15,18 @@ use super::{
     format::{self as f, Errors},
     render, Account, Flash, Pages, Written, DENIED,
 };
-use crate::{Series, Setup, SetupChange, TaxCode, MANAGE_SETUP};
+use crate::{Payment, Series, Setup, SetupChange, TaxCode, MANAGE_SETUP};
 use bilibi_database::{Error, Result};
 use bilibi_tenancy::Scope;
 use bilibi_ui::{
     page::{LiveBody, LiveFuture, LiveInput, LiveRequest, LiveState},
     params, Alert, Badge, BadgeKind, Button, ButtonVariant, Card, Cell, Choice, CommitStates,
-    CommitStatus, Facts, Field, FlexRow, Fold, Form, Header, Html, IconButton, IconContext,
-    InlineChoice, InlineEdit, InlineField, InputKind, ListColumns, ModalWidth, PageVariant,
-    SectionHeading, StatusKind,
+    CommitStatus, ConfirmDialog, Facts, Field, FlexRow, Fold, Form, Header, Html, IconButton,
+    IconContext, InlineChoice, InlineEdit, InlineField, InputKind, ListColumns, ModalWidth,
+    PageVariant, SectionHeading, StatusKind,
 };
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// The chart of accounts page, where an account the setup needs is added.
 const CHART: &str = "/finance/ledger/accounts";
@@ -58,10 +58,18 @@ pub(super) struct Settings {
     /// The accounts chosen so far while the setup is not configured yet:
     /// `setup.configure` needs both, so one choice waits here for the other.
     pending: HashMap<&'static str, i64>,
+    /// A different receivable account picked while the setup exists, waiting
+    /// on the confirmation before it is written.
+    switching: Option<i64>,
     changes: Vec<SetupChange>,
     series: Vec<Series>,
     taxes: Vec<TaxCode>,
     accounts: Vec<Account>,
+    /// Whether the chart of accounts was read: an empty chart and an unread one
+    /// are told apart.
+    chart_read: bool,
+    /// The accounts this company's receipts are recorded as paid into.
+    receipts_into: HashSet<i64>,
     can_manage: bool,
     statuses: CommitStates,
     flash: Flash,
@@ -78,10 +86,13 @@ impl Settings {
             company: String::new(),
             setup: None,
             pending: HashMap::new(),
+            switching: None,
             changes: vec![],
             series: vec![],
             taxes: vec![],
             accounts: vec![],
+            chart_read: false,
+            receipts_into: HashSet::new(),
             can_manage: false,
             statuses: CommitStates::default(),
             flash: Flash::default(),
@@ -141,6 +152,8 @@ impl Settings {
             .and_then(|v| serde_json::from_value(v.clone()).ok());
         if self.setup.is_some() {
             self.pending.clear();
+        } else {
+            self.switching = None;
         }
         self.changes = self
             .pages
@@ -172,7 +185,20 @@ impl Settings {
             )
             .await?
             .0;
-        self.accounts = self.pages.accounts(scope).await;
+        let chart = self.pages.chart(scope).await;
+        self.chart_read = chart.is_some();
+        self.accounts = chart.unwrap_or_default();
+        self.receipts_into = self
+            .pages
+            .read_all::<Payment>(
+                scope,
+                "finance.receivables.payment.list",
+                json!({}),
+                ("after", "next_after"),
+            )
+            .await
+            .map(|(payments, _)| payments.iter().map(|p| p.deposit_account_id).collect())
+            .unwrap_or_default();
         self.can_manage = self.pages.allowed(scope, MANAGE_SETUP).await?;
         self.series_cols.load(&self.series, |s| s.id.to_string());
         self.tax_cols.load(&self.taxes, |t| t.id.to_string());
@@ -186,6 +212,28 @@ impl Settings {
             .iter()
             .filter(|a| a.active && a.account_type == kind)
             .map(|a| Choice::new(a.choice_label(), a.id.to_string()))
+            .collect()
+    }
+
+    /// The receivable account choices: an asset account that receipts have
+    /// been recorded as paid into is listed after the others and says so. That
+    /// is all Receivables knows; no account is called a bank account.
+    fn receivable_choices(&self) -> Vec<Choice> {
+        let asset = |a: &&Account| a.active && a.account_type == "asset";
+        let (paid_into, others): (Vec<&Account>, Vec<&Account>) = self
+            .accounts
+            .iter()
+            .filter(asset)
+            .partition(|a| self.receipts_into.contains(&a.id));
+        others
+            .into_iter()
+            .map(|a| Choice::new(a.choice_label(), a.id.to_string()))
+            .chain(paid_into.into_iter().map(|a| {
+                Choice::new(
+                    format!("{} – receipts are paid into this account", a.choice_label()),
+                    a.id.to_string(),
+                )
+            }))
             .collect()
     }
 
@@ -246,7 +294,11 @@ impl Settings {
             .kind(InputKind::Select)
             .prompt("Choose an account")
             .value(current.map(|id| id.to_string()).unwrap_or_default())
-            .options(self.account_choices(kind));
+            .options(if key == "receivable_account_id" {
+                self.receivable_choices()
+            } else {
+                self.account_choices(kind)
+            });
         Ok(f::fact_html(
             label,
             render(InlineChoice {
@@ -269,7 +321,11 @@ impl Settings {
                 "Receivables is not set up yet. Someone who manages its setup must choose the default accounts."
             }));
         }
-        if self.can_manage {
+        if self.can_manage && !self.chart_read {
+            lines.push(Html::text(
+                "The chart of accounts could not be read, so no account can be chosen here. Viewing the ledger is needed to choose accounts.",
+            ));
+        } else if self.can_manage {
             let missing: Vec<&str> = [("asset", "asset"), ("income", "income")]
                 .into_iter()
                 .filter(|(kind, _)| {
@@ -407,7 +463,7 @@ impl Settings {
                     "receivable_account_id",
                     "Receivable account",
                     "asset",
-                    "The control account for what customers owe. Not the bank account receipts are paid into.",
+                    "The control account for what customers owe. It is not the account receipts are paid into.",
                 )?,
                 self.default_fact(
                     "income_account_id",
@@ -580,7 +636,7 @@ impl Settings {
             ..Card::default()
         })?);
 
-        let modal = self.dialog_html()?;
+        let modal = self.switch_dialog()?.or(self.dialog_html()?);
         f::frame(
             "receivables-settings",
             PageVariant::Detail,
@@ -651,6 +707,34 @@ impl Settings {
             open: false,
             body: table,
         })
+    }
+
+    /// The confirmation before the receivable account is changed: the new
+    /// account applies to new invoices only.
+    fn switch_dialog(&self) -> Result<Option<Html>> {
+        let (Some(setup), Some(picked)) = (&self.setup, self.switching) else {
+            return Ok(None);
+        };
+        let named = |id: i64| {
+            self.accounts.iter().find(|a| a.id == id).map_or_else(
+                || "an account that is not shown".into(),
+                Account::choice_label,
+            )
+        };
+        render(ConfirmDialog {
+            id: "receivables-receivable-confirm",
+            consequence: &format!(
+                "Change the receivable account from {} to {}?",
+                named(setup.receivable_account_id),
+                named(picked)
+            ),
+            detail: "It applies to new invoices only. Invoices already issued keep the receivable account they were issued with.",
+            confirm: "Change account",
+            working: "Changing…",
+            confirm_event: "confirm_receivable",
+            cancel_event: "cancel_receivable",
+        })
+        .map(Some)
     }
 
     fn dialog_html(&self) -> Result<Option<Html>> {
@@ -825,7 +909,12 @@ impl Settings {
             return Ok(());
         }
         let chosen = super::account_label(&self.accounts, id);
-        if self.setup.is_some() {
+        if let Some(setup) = &self.setup {
+            if key == "receivable_account_id" {
+                self.switching = (id != setup.receivable_account_id).then_some(id);
+                self.statuses.put(key, CommitStatus::None);
+                return Ok(());
+            }
             let written = self
                 .pages
                 .write(
@@ -884,6 +973,44 @@ impl Settings {
             self.flash
                 .set(StatusKind::Success, "Default accounts saved.");
         }
+        Ok(())
+    }
+
+    /// The receivable account change the person confirmed.
+    async fn confirm_receivable(&mut self, scope: &Scope, credential: &str) -> Result<()> {
+        let key = "receivable_account_id";
+        let Some(id) = self.switching.take() else {
+            return Ok(());
+        };
+        if self.setup.is_none() {
+            return Ok(());
+        }
+        if !self.can_manage {
+            self.statuses.put(
+                key,
+                CommitStatus::Error("You do not have permission to change the setup.".into()),
+            );
+            return Ok(());
+        }
+        let written = self
+            .pages
+            .write(
+                scope,
+                credential,
+                "confirm_receivable",
+                "finance.receivables.setup.configure",
+                json!({key: id}),
+            )
+            .await?;
+        self.statuses.put(
+            key,
+            f::commit_status(
+                &written,
+                key,
+                "Receivable account",
+                &super::account_label(&self.accounts, id),
+            ),
+        );
         Ok(())
     }
 
@@ -1099,6 +1226,8 @@ impl Settings {
                 self.change_cols.handle(&params::string_values(v));
             }
             "configure" => self.save_default(scope, credential, v).await?,
+            "confirm_receivable" => self.confirm_receivable(scope, credential).await?,
+            "cancel_receivable" => self.switching = None,
             "show_series" | "show_tax" => {
                 if !self.can_manage {
                     self.flash.set(StatusKind::Error, DENIED);
