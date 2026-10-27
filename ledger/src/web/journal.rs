@@ -122,14 +122,18 @@ impl Journal {
         let mine = scope.user() == journal.submitted_by_user_id;
 
         let mut content = Html::EMPTY;
-        if waiting && mine && required {
+        if waiting && mine {
             content.push(&render(Alert {
                 id: "ledger-journal-own",
                 kind: StatusKind::Info,
                 class: "mb-3",
-                body: Html::text(
-                    "You submitted this journal. Your company asks someone else to approve it.",
-                ),
+                body: Html::text(if required {
+                    "You submitted this journal. Someone else must approve it before it posts."
+                } else if can_decide {
+                    "You submitted this journal. Approval is required before it posts. Self-approval is permitted under the company policy and records an approval exception."
+                } else {
+                    "You submitted this journal. Approval is required before it posts. An authorized person may approve their own work; this records an approval exception."
+                }),
             })?);
         }
         let total: Decimal = journal.lines.iter().map(|l| view::decimal(&l.debit)).sum();
