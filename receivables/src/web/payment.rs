@@ -314,7 +314,7 @@ impl Payment {
                 .value(values.get("reversal_date").cloned().unwrap_or_default())
                 .required()
                 .hint(format!("On or after {}, the receipt date.", p.payment_date))
-                .errors(errors.of("reversal_date")),
+                .errors(errors.under("reversal_date", "Reversal date")),
         )?);
         body.push(&render(
             Field::in_form("reverse", "reason")
@@ -324,7 +324,7 @@ impl Payment {
                 .attr("maxlength", "500")
                 .value(values.get("reason").cloned().unwrap_or_default())
                 .required()
-                .errors(errors.of("reason")),
+                .errors(errors.under("reason", "Reason (1 to 500 characters)")),
         )?);
         for message in errors.base() {
             body.push(&Html::text(&message));

@@ -421,7 +421,7 @@ impl Documents {
                 .value(value("series_id"))
                 .required()
                 .hint("The numbering the document takes when it is issued.")
-                .errors(draft.errors.of("series_id")),
+                .errors(draft.errors.under("series_id", "Series")),
         )?);
         who.push(&render(
             Field::in_form("draft", "customer_id")
@@ -432,7 +432,7 @@ impl Documents {
                 .options(customers)
                 .value(value("customer_id"))
                 .required()
-                .errors(draft.errors.of("customer_id")),
+                .errors(draft.errors.under("customer_id", "Customer")),
         )?);
         body.push(&f::two(who)?);
         if credit {
@@ -457,7 +457,7 @@ impl Documents {
                     .value(value("credited_document_id"))
                     .required()
                     .hint("It must be an issued invoice to the same customer.")
-                    .errors(draft.errors.of("credited_document_id")),
+                    .errors(draft.errors.under("credited_document_id", "Credited invoice")),
             )?);
         }
         let mut dates = Html::EMPTY;
@@ -480,7 +480,7 @@ impl Documents {
                     .kind(InputKind::Date)
                     .value(value(key))
                     .hint(hint)
-                    .errors(draft.errors.of(key)),
+                    .errors(draft.errors.under(key, label)),
             )?);
         }
         body.push(&f::two(dates)?);
@@ -491,7 +491,7 @@ impl Documents {
                 .kind(InputKind::Textarea)
                 .attr("maxlength", "500")
                 .value(value("description"))
-                .errors(draft.errors.of("description")),
+                .errors(draft.errors.under("description", "Description")),
         )?);
         let mut actions = render(Button {
             id: "receivables-draft-cancel",
@@ -517,7 +517,7 @@ impl Documents {
             actions: f::actions(actions)?,
         })?;
         f::modal(
-            "receivables-draft",
+            "receivables-draft-modal",
             if credit {
                 "New credit note"
             } else {

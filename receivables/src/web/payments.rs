@@ -421,7 +421,7 @@ impl Payments {
                 .options(customers)
                 .value(value("customer_id"))
                 .required()
-                .errors(draft.errors.of("customer_id")),
+                .errors(draft.errors.under("customer_id", "Customer")),
         )?);
         who.push(&render(
             Field::in_form("receipt", "series_id")
@@ -436,7 +436,7 @@ impl Payments {
                 .options(series)
                 .value(value("series_id"))
                 .required()
-                .errors(draft.errors.of("series_id")),
+                .errors(draft.errors.under("series_id", "Series")),
         )?);
         body.push(&f::two(who)?);
         let mut money = Html::EMPTY;
@@ -448,7 +448,7 @@ impl Payments {
                 .value(value("payment_date"))
                 .required()
                 .hint("A receipt cannot settle an invoice dated after it.")
-                .errors(draft.errors.of("payment_date")),
+                .errors(draft.errors.under("payment_date", "Date received")),
         )?);
         money.push(&render(
             Field::in_form("receipt", "amount")
@@ -457,7 +457,7 @@ impl Payments {
                 .attr("inputmode", "decimal")
                 .value(value("amount"))
                 .required()
-                .errors(draft.errors.of("amount")),
+                .errors(draft.errors.under("amount", "Amount received")),
         )?);
         body.push(&f::two(money)?);
         let mut deposit = Html::EMPTY;
@@ -470,7 +470,7 @@ impl Payments {
                 .options(deposits)
                 .value(value("deposit_account_id"))
                 .required()
-                .errors(draft.errors.of("deposit_account_id")),
+                .errors(draft.errors.under("deposit_account_id", "Deposited to")),
         )?);
         deposit.push(&render(
             Field::in_form("receipt", "reference")
@@ -479,7 +479,7 @@ impl Payments {
                 .attr("maxlength", "100")
                 .hint("A cheque or transfer number, if there is one.")
                 .value(value("reference"))
-                .errors(draft.errors.of("reference")),
+                .errors(draft.errors.under("reference", "Reference")),
         )?);
         body.push(&f::two(deposit)?);
         body.push(&render(
@@ -488,7 +488,7 @@ impl Payments {
                 .label("Description")
                 .attr("maxlength", "500")
                 .value(value("description"))
-                .errors(draft.errors.of("description")),
+                .errors(draft.errors.under("description", "Description")),
         )?);
         body.push(&render(SectionHeading {
             title: "Apply to invoices",
@@ -564,7 +564,7 @@ impl Payments {
         let mut inner = form;
         inner.push(&f::buttons(buttons)?);
         f::modal(
-            "receivables-receipt",
+            "receivables-receipt-modal",
             "Record receipt",
             "Recording numbers the receipt and posts it to the ledger.",
             "cancel_record",

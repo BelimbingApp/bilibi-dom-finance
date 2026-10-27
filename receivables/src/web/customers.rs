@@ -332,7 +332,7 @@ impl Customers {
                 .label(*label)
                 .kind(*kind)
                 .value(values.get(*key).cloned().unwrap_or_default())
-                .errors(errors.of(key));
+                .errors(errors.under(key, label));
             field = if *kind == InputKind::Number {
                 field
                     .attr("min", "0")
