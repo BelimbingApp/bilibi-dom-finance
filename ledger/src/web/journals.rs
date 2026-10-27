@@ -28,6 +28,9 @@ const LIMIT: usize = 100;
 /// Fields a posted form keeps are bounded (64), so a journal has at most this many lines.
 const MAX_LINES: usize = 12;
 
+const BOOK_UNREADABLE: &str =
+    "The company's book could not be read. Reload the page and try again.";
+
 static SPEC: LazyLock<Arc<ListSpec>> = LazyLock::new(|| {
     ListSpec {
         page_sizes: vec![100],
@@ -152,9 +155,9 @@ impl Draft {
     /// that balances it, once the other line has its one amount and this
     /// line has its account. `before` holds the lines as the person last saw
     /// them. The value stays visible and editable: an amount the person typed
-    /// is never touched and a line they just emptied is left empty, an edited
-    /// suggestion becomes theirs, a cleared one stays clear until the amount
-    /// it balanced changes, and a suggestion whose basis is gone (the amount
+    /// is never touched, an edited suggestion becomes theirs, an amount the
+    /// person clears, suggested or their own, stays clear until the amount it
+    /// balanced changes, and a suggestion whose basis is gone (the amount
     /// changed, cleared, made invalid, both sides filled, the account unset, a
     /// third line added) is withdrawn or refilled from the new amount.
     fn suggest(&mut self, before: &[LineDraft]) {
@@ -170,8 +173,6 @@ impl Draft {
                 // below while it still balances.
                 self.lines[fill.line].set(fill.side, "");
                 withdrawn = Some(fill.line);
-            } else if shown.is_empty() {
-                self.declined = Some(fill.amount);
             }
             // Otherwise the person made the amount their own.
         }
@@ -186,6 +187,10 @@ impl Draft {
                     Some(line) => line.no_amount(),
                     None => true,
                 };
+            if !was_empty && self.lines[target].no_amount() {
+                self.declined = Some(amount);
+                continue;
+            }
             if !was_empty
                 || !self.lines[target].no_amount()
                 || self.lines[target].account.is_empty()
@@ -780,18 +785,23 @@ impl LiveState<Scope, Error> for Journals {
                         if self.pages.allowed(r.scope, SUBMIT_JOURNALS).await? {
                             // The book's minor units decide which amounts the
                             // dialog can balance against; no book, no dialog.
-                            let units = self
-                                .pages
-                                .book(r.scope)
-                                .await?
-                                .ok()
-                                .and_then(|state| state.book)
-                                .and_then(|book| {
-                                    crate::MinorUnits::new(i64::from(book.minor_units))
-                                });
-                            if let Some(units) = units {
-                                let today = self.pages.today(r.scope).await?.to_string();
-                                self.draft = Some(Draft::new(today, units));
+                            let units = match self.pages.book(r.scope).await? {
+                                Ok(state) => state
+                                    .book
+                                    .and_then(|book| {
+                                        crate::MinorUnits::new(i64::from(book.minor_units))
+                                    })
+                                    .ok_or_else(|| BOOK_UNREADABLE.to_owned()),
+                                Err(Read::Denied) => Err(super::DENIED.to_owned()),
+                                Err(Read::Refused(text)) => Err(text),
+                                Err(_) => Err(BOOK_UNREADABLE.to_owned()),
+                            };
+                            match units {
+                                Ok(units) => {
+                                    let today = self.pages.today(r.scope).await?.to_string();
+                                    self.draft = Some(Draft::new(today, units));
+                                }
+                                Err(text) => self.flash.error(text),
                             }
                         }
                     }
