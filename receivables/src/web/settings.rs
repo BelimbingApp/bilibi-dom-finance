@@ -535,8 +535,15 @@ impl Settings {
             "Invoice and credit note numbers are assigned on issue, receipt numbers when a receipt is recorded. Code, use, prefix and digits are fixed once saved.".to_owned()
         } else {
             format!(
-                "Add an active series for {}. Invoice and credit note numbers are assigned on issue, receipt numbers when a receipt is recorded. Code, use, prefix and digits are fixed once saved.",
-                join_words(&missing)
+                "{} Invoice and credit note numbers are assigned on issue, receipt numbers when a receipt is recorded. Code, use, prefix and digits are fixed once saved.",
+                if self.can_manage {
+                    format!("Add an active series for {}.", join_words(&missing))
+                } else {
+                    format!(
+                        "No active series for {} yet; someone who manages the setup must add one.",
+                        join_words(&missing)
+                    )
+                }
             )
         };
         body.push(&render(SectionHeading {
