@@ -477,7 +477,8 @@ its poster; a posted entry is corrected only by a reversal, once, and an owned
 one only through its owner; the person who prepares a record does not
 approve it unless the company has turned separation off, and every such
 approval and every override is listed for an independent reviewer; a manual
-journal posts only once someone else approves it; any past trial balance or
+journal posts only once it is approved, by someone independent while
+separation of duties is required; any past trial balance or
 account total reproduces exactly from its `through_entry_number`; every
 table is exported to the auditor field by field; every write is attributed
 to the signed-in actor and any impersonator through the Platform's audit

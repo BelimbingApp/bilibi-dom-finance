@@ -487,7 +487,7 @@ impl Years {
                 .label("Last day")
                 .kind(InputKind::Date)
                 .value(&opening.end)
-                .hint(if opening.end == opening.calculated_end { "Calculated as twelve months from the first day. You may choose another month-end." } else { "Custom end date. Choose the last day of a month." })
+                .hint(&end_hint(opening))
                 .errors(errors("end_date")),
         )?);
         let mut actions = render(Button {
@@ -811,6 +811,19 @@ impl Years {
             Err(failure) => opening.notice = failure.text("The fiscal year"),
         }
         Ok(())
+    }
+}
+
+fn end_hint(opening: &Opening) -> String {
+    if opening.end.trim().is_empty() && !opening.calculated_end.is_empty() {
+        format!(
+            "Left empty, the twelve-month default applies: {}. You may choose another month-end.",
+            opening.calculated_end
+        )
+    } else if opening.end == opening.calculated_end {
+        "Calculated as twelve months from the first day. You may choose another month-end.".into()
+    } else {
+        "Custom end date. Choose the last day of a month.".into()
     }
 }
 
