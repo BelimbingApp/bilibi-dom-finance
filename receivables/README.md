@@ -71,7 +71,7 @@ Menu: Finance → Receivables, for people with `finance.receivables.view`. Contr
 | Receipts | `/finance/receivables/receipts` | Record receipt dialog: the customer's open invoices with an amount each, applied in full (`payment.record`). |
 | Receipt | `/finance/receivables/receipts/{id}` | Facts, the invoices it settles, source documents, Reverse receipt dialog (`payment.reverse`). |
 | Aging | `/finance/receivables/aging` | Who owes what by days late as of a date, read at one posting number (`aging.get`). |
-| Settings | `/finance/receivables/settings` | Default accounts (`setup.configure`), numbering series and tax codes (`series.*`, `tax_code.*`) and the account change history. |
+| Settings | `/finance/receivables/settings` | For the company named under the title: the default accounts chosen in place (`setup.configure`; before the setup exists the first choice waits on the page until the second, then both are saved in one call), their change history folded under History, the numbering series and tax codes with name, status and tax account edited in their rows (`series.update`, `tax_code.update`) and Add dialogs for new ones (`series.create`, `tax_code.create`), and what is still missing before the first invoice (default accounts, an active series for invoices, credit notes and receipts; tax codes are optional). |
 
 `finance.receivables.aging.get` is the one contract these pages added: the aged figures had a facade method (`aged_receivables`) and no operation. It takes `as_of` and optional `bucket_days`, needs receivables view and ledger view, and returns the report with the posting number it was read at.
 

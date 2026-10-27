@@ -227,26 +227,31 @@ pub(super) fn put(input: &mut Value, key: &str, text: &str) {
 }
 
 /// A page with its flash outlet and body, as every Receivables page draws it.
+/// A dialog goes inside the page element, never after it: the page carries
+/// the `data-shared-ui` boundary that stops the Platform's legacy element
+/// rules (`legacy-compat.css`), and a dialog outside it gets its labels laid
+/// out as columns, with required stars and checkboxes dropped under their
+/// text. A modal `<dialog>` renders in the top layer wherever it sits.
 pub(super) fn frame(
     id: &str,
     variant: PageVariant,
     flash: &Flash,
-    body: Html,
+    mut body: Html,
     modal: Option<Html>,
 ) -> Result<String> {
     let mut html = render(FlashGroup {
         id: "flash-group",
         flash: flash.map(),
     })?;
+    if let Some(modal) = modal {
+        body.push(&modal);
+    }
     html.push(&render(Page {
         id,
         variant,
         class: "",
         body,
     })?);
-    if let Some(modal) = modal {
-        html.push(&modal);
-    }
     Ok(html.to_string())
 }
 
@@ -290,7 +295,8 @@ pub(super) fn columns(id: &str, cols: &[(&str, &str)], right: &[&str]) -> Result
     .map_err(|_| Error::Internal)
 }
 
-/// A table of a record page, drawn with the shared notch.
+/// A table of a record page, drawn with the shared notch, inside a `p-0`
+/// card that is its one frame.
 pub(super) fn table(
     columns: &ListColumns,
     event: &str,
@@ -298,10 +304,22 @@ pub(super) fn table(
     rows: Vec<FlexRow>,
     empty: &str,
 ) -> Result<Html> {
+    table_in(columns, event, caption, rows, empty, false)
+}
+
+/// The same table; `framed` draws its own border where no `p-0` card does.
+pub(super) fn table_in(
+    columns: &ListColumns,
+    event: &str,
+    caption: &str,
+    rows: Vec<FlexRow>,
+    empty: &str,
+    framed: bool,
+) -> Result<Html> {
     let mut table = FlexTable::new(&columns.id, columns.flex_columns(), rows);
     table.event = event;
     table.caption = caption;
-    table.framed = false;
+    table.framed = framed;
     table.zoom = columns.zoom;
     table.suggestions = columns.flex_suggestions();
     table.add_query = &columns.add_query;
