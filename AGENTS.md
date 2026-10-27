@@ -87,6 +87,17 @@ they govern this code and are not copied here.
   `change: true` and its buttons `type="button"` with their own `event`; the
   server keeps the draft (`ledger/src/web/journals.rs`). Show a refusal beside
   its field, and what has no field in the dialog's own alert (`Refusal::alert`).
+- Lay a form dialog out as the shared specimen does
+  (`apps/base/ui/templates/ui_feedback_specimen/modal_templates.html`): the
+  `Form` gets `class: "mt-4"` under the title, and its actions are Cancel then
+  the one primary verb at the end of the row, through `dialog_actions`
+  (`ledger/src/web/mod.rs`) or `format::actions` (Receivables), never the bare
+  `Form` row, which starts at the left. Render the dialog inside the page
+  element, not after it: outside `data-shared-ui` the legacy sheet drops
+  required marks and checkboxes under their labels. Name a dialog
+  `<record>-modal`, because the shared dialog owns `{id}-title`,
+  `{id}-description` and `{id}-body`, and a `description` field in a dialog
+  named `<record>` would share its id and lose its label.
   Let that round trip also drop what a changed field no longer allows (a group
   of another type once the type changes, `Draft::reconcile` in
   `ledger/src/web/accounts.rs`) and offer only eligible choices, instead of a

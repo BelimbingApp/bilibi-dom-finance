@@ -2,8 +2,8 @@
 //! lock its periods, and close or reopen the year. Each action calls the same
 //! contract an agent calls; the ledger decides what is allowed and says why not.
 use super::{
-    capability_for, dialog_actions, error_text, event_type, no_company, render, shell,
-    unavailable, view, Failure, Flash, Pages, Read, Refusal, Review,
+    capability_for, dialog_actions, error_text, event_type, no_company, render, shell, unavailable,
+    view, Failure, Flash, Pages, Read, Refusal, Review,
 };
 use crate::MANAGE_PERIODS;
 use bilibi_database::{Error, Result};

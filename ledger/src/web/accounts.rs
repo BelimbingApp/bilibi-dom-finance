@@ -1,8 +1,8 @@
 //! The chart of accounts: every account of the company's book, and a dialog to
 //! add one. Each account's page is `account.rs`.
 use super::{
-    account_name, capability_for, dialog_actions, error_text, event_type, no_company, render, shell,
-    unavailable, view, Failure, Flash, Pages, Refusal,
+    account_name, capability_for, dialog_actions, error_text, event_type, no_company, render,
+    shell, unavailable, view, Failure, Flash, Pages, Refusal,
 };
 use crate::{AccountType, MANAGE_ACCOUNTS};
 use bilibi_database::{Error, Result};
