@@ -47,6 +47,7 @@ pub(crate) struct Pages {
     pub contracts: Arc<PageContracts>,
     pub display: Arc<DisplayPolicy>,
     pub locales: Arc<Locales>,
+    pub parties: Arc<bilibi_tenancy::PartyProofs>,
 }
 
 macro_rules! route {
@@ -161,6 +162,7 @@ inventory::submit! { Contribution::new(PAGE_WRITES, PAGES, Provenance { module: 
         ("approve", "finance.ledger.journal.approve"),
         ("reject", "finance.ledger.journal.reject"),
         ("open_year", "finance.ledger.fiscal_year.open"),
+        ("confirm_open_year", "finance.ledger.fiscal_year.open"),
         ("choose", "finance.ledger.period.close"),
         ("choose", "finance.ledger.period.lock"),
         ("choose", "finance.ledger.fiscal_year.close"),

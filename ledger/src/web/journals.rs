@@ -1,4 +1,4 @@
-//! Manual journals: adjustments someone submits and someone else approves.
+//! Manual journals: adjustments submitted for approval.
 //! An approved journal posts as an entry; a submitted one posts nothing yet.
 use super::{
     error_text, event_type, figure, instant, no_company, render, shell, unavailable, view, who,
@@ -339,6 +339,7 @@ impl Journals {
         let mut body = Html::EMPTY;
         let mut actions = Html::EMPTY;
         let mut shown = 0;
+        let mut guidance = "Submission does not post a journal. Approval is required.";
         if Pages::company(scope).is_none() {
             body.push(&no_company("ledger-journals-no-company")?);
         } else {
@@ -348,33 +349,45 @@ impl Journals {
                     "manual journals",
                     &refused,
                 )?),
-                Ok(state) => match state.book {
-                    None => body.push(&render(
-                        EmptyState::missing(
-                            "The book is not open yet",
-                            "Open the company's book before you submit a journal.",
-                        )
-                        .id("ledger-journals-no-book"),
-                    )?),
-                    Some(book) => {
-                        if can_submit {
-                            actions.push(&render(CreateButton {
-                                noun: "Journal",
-                                id: "ledger-journal-new",
-                                class: "text-xs",
-                                event: "new",
-                                button_type: "button",
-                                ..CreateButton::default()
-                            })?);
+                Ok(state) => {
+                    let required = state
+                        .duty_separation
+                        .as_ref()
+                        .and_then(|c| c.required)
+                        .unwrap_or(true);
+                    guidance = if required {
+                        "Submission does not post a journal. Someone else must approve it."
+                    } else {
+                        "Submission does not post a journal. An authorized person may approve their own journal; this records an approval exception."
+                    };
+                    match state.book {
+                        None => body.push(&render(
+                            EmptyState::missing(
+                                "The book is not open yet",
+                                "Open the company's book before you submit a journal.",
+                            )
+                            .id("ledger-journals-no-book"),
+                        )?),
+                        Some(book) => {
+                            if can_submit {
+                                actions.push(&render(CreateButton {
+                                    noun: "Journal",
+                                    id: "ledger-journal-new",
+                                    class: "text-xs",
+                                    event: "new",
+                                    button_type: "button",
+                                    ..CreateButton::default()
+                                })?);
+                            }
+                            shown = self.table(scope, book.minor_units, &mut body).await?;
                         }
-                        shown = self.table(scope, book.minor_units, &mut body).await?;
                     }
-                },
+                }
             }
         }
         let mut page = render(Header {
             title: Html::text("Manual journals"),
-            subtitle: "Submitted journals post when approved.",
+            subtitle: guidance,
             actions,
             ..Header::default()
         })?;
@@ -382,12 +395,16 @@ impl Journals {
         if self.draft.is_some() && can_submit {
             let accounts = self.pages.chart(scope).await?.unwrap_or_default();
             let form = self.form(&accounts)?;
+            // The line rule, then the approval guidance the page header shows.
+            let description = format!(
+                "Each line takes an account and one amount, a debit or a credit. Debits and credits must balance. {guidance}"
+            );
             page.push(&render(Modal {
                 id: "ledger-journal-modal",
                 title: "New manual journal",
                 cancel_event: "close_modal",
                 width: ModalWidth::Wide,
-                description: "Each line takes an account and one amount, a debit or a credit. Debits and credits must balance. The journal posts when approved.",
+                description: &description,
                 body: form,
                 ..Modal::default()
             })?);
