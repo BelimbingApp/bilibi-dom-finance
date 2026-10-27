@@ -13,7 +13,7 @@
 //! choice is kept on the page (never persisted) until the second arrives.
 use super::{
     format::{self as f, Errors},
-    render, Account, Flash, Pages, Written, DENIED,
+    render, Account, Flash, Pages, Written, DENIED, READ_LIMIT,
 };
 use crate::{Payment, Series, Setup, SetupChange, TaxCode, MANAGE_SETUP};
 use bilibi_database::{Error, Result};
@@ -70,6 +70,9 @@ pub(super) struct Settings {
     chart_read: bool,
     /// The accounts this company's receipts are recorded as paid into.
     receipts_into: HashSet<i64>,
+    /// Whether that read stopped at the page's read limit, so the marking may
+    /// be incomplete.
+    receipts_cut: bool,
     can_manage: bool,
     statuses: CommitStates,
     flash: Flash,
@@ -93,6 +96,7 @@ impl Settings {
             accounts: vec![],
             chart_read: false,
             receipts_into: HashSet::new(),
+            receipts_cut: false,
             can_manage: false,
             statuses: CommitStates::default(),
             flash: Flash::default(),
@@ -136,6 +140,19 @@ impl Settings {
     }
 
     pub(super) async fn first(&mut self, scope: &Scope) -> Result<String> {
+        if let Ok((payments, cut)) = self
+            .pages
+            .read_all::<Payment>(
+                scope,
+                "finance.receivables.payment.list",
+                json!({}),
+                ("after", "next_after"),
+            )
+            .await
+        {
+            self.receipts_into = payments.iter().map(|p| p.deposit_account_id).collect();
+            self.receipts_cut = cut;
+        }
         self.load(scope).await?;
         self.body(scope).await
     }
@@ -188,17 +205,6 @@ impl Settings {
         let chart = self.pages.chart(scope).await;
         self.chart_read = chart.is_some();
         self.accounts = chart.unwrap_or_default();
-        self.receipts_into = self
-            .pages
-            .read_all::<Payment>(
-                scope,
-                "finance.receivables.payment.list",
-                json!({}),
-                ("after", "next_after"),
-            )
-            .await
-            .map(|(payments, _)| payments.iter().map(|p| p.deposit_account_id).collect())
-            .unwrap_or_default();
         self.can_manage = self.pages.allowed(scope, MANAGE_SETUP).await?;
         self.series_cols.load(&self.series, |s| s.id.to_string());
         self.tax_cols.load(&self.taxes, |t| t.id.to_string());
@@ -278,6 +284,10 @@ impl Settings {
                 } else {
                     "receivable account"
                 }
+            )
+        } else if key == "receivable_account_id" && self.receipts_cut {
+            format!(
+                "{hint} Only the first {READ_LIMIT} receipts were checked for accounts receipts are paid into."
             )
         } else {
             hint.to_owned()

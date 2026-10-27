@@ -45,7 +45,7 @@ pub(crate) const SETTINGS: &str = "/finance/receivables/settings";
 /// The most records one page reads before it says the list is cut short. Lists
 /// are read through the contracts' cursors and filtered, sorted and paged
 /// here, so a page never asks the database for more than this.
-const READ_LIMIT: usize = 2000;
+pub(super) const READ_LIMIT: usize = 2000;
 
 #[derive(Clone)]
 pub(crate) struct Pages {
