@@ -659,6 +659,21 @@ pub(crate) fn unavailable(id: &str, what: &str, refused: &Read) -> Result<Html> 
     }
 }
 
+/// Dialog actions sit at the end of the row. The shared form starts its
+/// action line at the left, so this row fills that line.
+pub(crate) fn dialog_actions(buttons: Html) -> Result<Html> {
+    render(DialogActions { buttons })
+}
+
+#[derive(askama::Template)]
+#[template(
+    source = r#"<div class="flex w-full flex-wrap justify-end gap-2">{{ buttons|safe }}</div>"#,
+    ext = "html"
+)]
+struct DialogActions {
+    buttons: Html,
+}
+
 pub(crate) fn render(template: impl Template) -> Result<Html> {
     Html::render(&template).map_err(|_| Error::Internal)
 }

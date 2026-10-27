@@ -29,11 +29,11 @@
 {% endcall %}
 {% if let Some(reason) = r.abandon %}
 {% call dialog::modal(id="abandon-modal", title="Abandon this reconciliation", cancel_event="cancel_abandon", description="It stays on record as abandoned with this reason, and a new one can be opened.") %}
-<form id="abandon-form" data-event="abandon_change" data-change data-submit-event="abandon" class="space-y-3">
+<form id="abandon-form" data-event="abandon_change" data-change data-submit-event="abandon" class="mt-4">
 {% call form::input(field=reason) %}{% endcall %}
-<div class="flex gap-2">
-{% call ui::button(id="abandon-submit", button_type="submit", variant=bilibi_ui::ButtonVariant::Danger, working="Abandoning…") %}Abandon{% endcall %}
+<div class="mt-4 flex flex-wrap justify-end gap-2">
 {% call ui::button(id="abandon-cancel", button_type="button", event="cancel_abandon") %}Cancel{% endcall %}
+{% call ui::button(id="abandon-submit", button_type="submit", variant=bilibi_ui::ButtonVariant::Danger, working="Abandoning…") %}Abandon{% endcall %}
 </div>
 </form>
 {% endcall %}

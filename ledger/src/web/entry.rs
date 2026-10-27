@@ -1,6 +1,7 @@
 //! One journal entry, read-only. A manual entry can be reversed from here: the
 //! ledger posts a mirror entry and keeps the original.
 use super::{
+    dialog_actions,
     entries::{entry_status, INDEX},
     error_text, event_type, figure, instant, no_company, render, shell, source_label, unavailable,
     view, who, Announce, Failure, Flash, Pages, Read, Refusal,
@@ -447,7 +448,7 @@ impl Entry {
             change: true,
             class: "mt-4",
             body,
-            actions,
+            actions: dialog_actions(actions)?,
         })
     }
 

@@ -35,11 +35,11 @@
 {% endcall %}
 {% if let Some(u) = unmatching %}
 {% call dialog::modal(id="unmatch-modal", title=u.title, cancel_event="cancel_unmatch", description="Its statement lines and ledger entries become unmatched again; the match and this reason stay on record.") %}
-<form id="unmatch-form" data-event="unmatch_change" data-change data-submit-event="unmatch" class="space-y-3">
+<form id="unmatch-form" data-event="unmatch_change" data-change data-submit-event="unmatch" class="mt-4">
 {% call form::input(field=u.reason) %}{% endcall %}
-<div class="flex gap-2">
-{% call ui::button(id="unmatch-submit", button_type="submit", variant=bilibi_ui::ButtonVariant::Danger, working="Unmatching…") %}Unmatch{% endcall %}
+<div class="mt-4 flex flex-wrap justify-end gap-2">
 {% call ui::button(id="unmatch-cancel", button_type="button", event="cancel_unmatch") %}Cancel{% endcall %}
+{% call ui::button(id="unmatch-submit", button_type="submit", variant=bilibi_ui::ButtonVariant::Danger, working="Unmatching…") %}Unmatch{% endcall %}
 </div>
 </form>
 {% endcall %}

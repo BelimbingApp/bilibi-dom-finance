@@ -227,13 +227,19 @@ pub(super) fn put(input: &mut Value, key: &str, text: &str) {
 }
 
 /// A page with its flash outlet and body, as every Receivables page draws it.
+/// The dialog belongs inside the page. Outside `data-shared-ui`, the legacy
+/// sheet stacks a label's required mark under the words and centres a
+/// checkbox over its label.
 pub(super) fn frame(
     id: &str,
     variant: PageVariant,
     flash: &Flash,
-    body: Html,
+    mut body: Html,
     modal: Option<Html>,
 ) -> Result<String> {
+    if let Some(modal) = modal {
+        body.push(&modal);
+    }
     let mut html = render(FlashGroup {
         id: "flash-group",
         flash: flash.map(),
@@ -244,9 +250,6 @@ pub(super) fn frame(
         class: "",
         body,
     })?);
-    if let Some(modal) = modal {
-        html.push(&modal);
-    }
     Ok(html.to_string())
 }
 
@@ -403,7 +406,7 @@ impl Figures {
 
 #[derive(askama::Template)]
 #[template(
-    source = r#"<div class="mt-3 flex flex-wrap items-center gap-2">{{ buttons|safe }}</div>"#,
+    source = r#"<div class="mt-4 flex w-full flex-wrap justify-end gap-2">{{ buttons|safe }}</div>"#,
     ext = "html"
 )]
 struct ButtonRow {
@@ -411,9 +414,42 @@ struct ButtonRow {
 }
 
 /// Buttons that sit under a dialog's change-tracking form: they raise their
-/// own events, so the form's values must already be on the server.
+/// own events, so the form's values must already be on the server. Cancel
+/// comes first; the primary action follows, at the end of the row.
 pub(super) fn buttons(buttons: Html) -> Result<Html> {
     render(ButtonRow { buttons })
+}
+
+#[derive(askama::Template)]
+#[template(
+    source = r#"<div class="flex w-full flex-wrap justify-end gap-2">{{ buttons|safe }}</div>"#,
+    ext = "html"
+)]
+struct ActionRow {
+    buttons: Html,
+}
+
+/// The actions of a shared `Form` in a dialog. The form's own row starts at
+/// the left, so this row fills that line and keeps Cancel, then the verb, at
+/// the end.
+pub(super) fn actions(buttons: Html) -> Result<Html> {
+    render(ActionRow { buttons })
+}
+
+#[derive(askama::Template)]
+#[template(
+    source = r#"{% import "forms.html" as forms %}{% call forms::section(labelledby=id, heading=heading) %}<div class="grid items-start gap-x-3 sm:grid-cols-2">{{ body|safe }}</div>{% endcall %}"#,
+    ext = "html"
+)]
+struct FieldGroup<'a> {
+    id: &'a str,
+    heading: &'a str,
+    body: Html,
+}
+
+/// Related fields in one bordered section, two columns from the `sm` width up.
+pub(super) fn group(id: &str, heading: &str, body: Html) -> Result<Html> {
+    render(FieldGroup { id, heading, body })
 }
 
 impl Figures {
@@ -442,7 +478,7 @@ pub(super) fn announce(record: i64) -> Result<Html> {
 
 #[derive(askama::Template)]
 #[template(
-    source = r#"<div class="grid grid-cols-2 gap-x-3 sm:grid-cols-4">{{ body|safe }}</div>"#,
+    source = r#"<div class="grid grid-cols-2 items-start gap-x-3 sm:grid-cols-4">{{ body|safe }}</div>"#,
     ext = "html"
 )]
 struct Four {
@@ -451,7 +487,7 @@ struct Four {
 
 #[derive(askama::Template)]
 #[template(
-    source = r#"<div class="grid gap-x-3 sm:grid-cols-2">{{ body|safe }}</div>"#,
+    source = r#"<div class="grid items-start gap-x-3 sm:grid-cols-2">{{ body|safe }}</div>"#,
     ext = "html"
 )]
 struct Two {

@@ -2,7 +2,7 @@
 //! permission approves it (and it posts) or rejects it with a reason. The
 //! ledger refuses the person who submitted it when the company separates duties.
 use super::{
-    error_text, event_type, figure, instant,
+    dialog_actions, error_text, event_type, figure, instant,
     journals::{status_badge, INDEX},
     no_company, render, shell, unavailable, view, who, Announce, EntryLink, Failure, Flash, Pages,
     Read, Refusal, Review,
@@ -452,7 +452,7 @@ impl Journal {
             change: true,
             class: "mt-4",
             body,
-            actions,
+            actions: dialog_actions(actions)?,
         })
     }
 

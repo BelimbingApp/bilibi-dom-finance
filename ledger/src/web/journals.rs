@@ -1,8 +1,8 @@
 //! Manual journals: adjustments someone submits and someone else approves.
 //! An approved journal posts as an entry; a submitted one posts nothing yet.
 use super::{
-    error_text, event_type, figure, instant, no_company, render, shell, unavailable, view, who,
-    Failure, Flash, Pages, Read, Refusal,
+    dialog_actions, error_text, event_type, figure, instant, no_company, render, shell,
+    unavailable, view, who, Failure, Flash, Pages, Read, Refusal,
 };
 use crate::SUBMIT_JOURNALS;
 use askama::Template;
@@ -511,6 +511,7 @@ impl Journals {
             id: "ledger-journal-add-line",
             button_type: "button",
             event: "add_line",
+            class: "mr-auto",
             disabled: draft.lines.len() >= MAX_LINES,
             body: Html::text("Add line"),
             ..Button::default()
@@ -537,7 +538,7 @@ impl Journals {
             change: true,
             class: "mt-4",
             body,
-            actions,
+            actions: dialog_actions(actions)?,
         })
     }
 
@@ -587,7 +588,7 @@ pub(super) fn status_badge(status: &str) -> Result<Html> {
 
 #[derive(Template)]
 #[template(
-    source = r#"<div id="ledger-journal-line-{{ n }}" class="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-4"><div class="sm:col-span-2">{{ account|safe }}</div>{{ debit|safe }}{{ credit|safe }}<div class="sm:col-span-2">{{ note|safe }}</div><div>{{ remove|safe }}</div></div>"#,
+    source = r#"<div id="ledger-journal-line-{{ n }}" class="mt-3 grid grid-cols-1 items-start gap-2 sm:grid-cols-4"><div class="sm:col-span-2">{{ account|safe }}</div>{{ debit|safe }}{{ credit|safe }}<div class="sm:col-span-2">{{ note|safe }}</div><div>{{ remove|safe }}</div></div>"#,
     ext = "html"
 )]
 struct LineRow {

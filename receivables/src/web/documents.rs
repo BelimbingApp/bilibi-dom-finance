@@ -400,7 +400,14 @@ impl Documents {
             .filter(|s| s.kind == draft.kind && s.active)
             .map(|s| Choice::new(format!("{} ({})", s.name, s.code), s.id.to_string()))
             .collect();
-        body.push(&render(
+        let customers: Vec<Choice> = self
+            .customers
+            .iter()
+            .filter(|c| c.active || credit)
+            .map(|c| Choice::new(format!("{} {}", c.code, c.name), c.id.to_string()))
+            .collect();
+        let mut who = Html::EMPTY;
+        who.push(&render(
             Field::in_form("draft", "series_id")
                 .id("receivables-draft-series_id")
                 .label("Series")
@@ -416,13 +423,7 @@ impl Documents {
                 .hint("The numbering the document takes when it is issued.")
                 .errors(draft.errors.of("series_id")),
         )?);
-        let customers: Vec<Choice> = self
-            .customers
-            .iter()
-            .filter(|c| c.active || credit)
-            .map(|c| Choice::new(format!("{} {}", c.code, c.name), c.id.to_string()))
-            .collect();
-        body.push(&render(
+        who.push(&render(
             Field::in_form("draft", "customer_id")
                 .id("receivables-draft-customer_id")
                 .label("Customer")
@@ -433,6 +434,7 @@ impl Documents {
                 .required()
                 .errors(draft.errors.of("customer_id")),
         )?);
+        body.push(&f::two(who)?);
         if credit {
             let invoices: Vec<Choice> = self
                 .all
@@ -458,6 +460,7 @@ impl Documents {
                     .errors(draft.errors.of("credited_document_id")),
             )?);
         }
+        let mut dates = Html::EMPTY;
         for (key, label, hint) in [
             (
                 "issue_date",
@@ -470,7 +473,7 @@ impl Documents {
                 "Leave empty to use the customer's payment terms.",
             ),
         ] {
-            body.push(&render(
+            dates.push(&render(
                 Field::in_form("draft", key)
                     .id(format!("receivables-draft-{key}"))
                     .label(label)
@@ -480,6 +483,7 @@ impl Documents {
                     .errors(draft.errors.of(key)),
             )?);
         }
+        body.push(&f::two(dates)?);
         body.push(&render(
             Field::in_form("draft", "description")
                 .id("receivables-draft-description")
@@ -490,27 +494,27 @@ impl Documents {
                 .errors(draft.errors.of("description")),
         )?);
         let mut actions = render(Button {
+            id: "receivables-draft-cancel",
+            button_type: "button",
+            event: "cancel_create",
+            body: Html::text("Cancel"),
+            ..Button::default()
+        })?;
+        actions.push(&render(Button {
             id: "receivables-draft-save",
             button_type: "submit",
             variant: ButtonVariant::Primary,
             working: "Saving…",
             body: Html::text("Save draft"),
             ..Button::default()
-        })?;
-        actions.push(&render(Button {
-            id: "receivables-draft-cancel",
-            button_type: "button",
-            event: "cancel_create",
-            body: Html::text("Cancel"),
-            ..Button::default()
         })?);
         let form = render(Form {
             id: "receivables-draft-form",
             event: "create_draft",
             change: false,
-            class: "",
+            class: "mt-4",
             body,
-            actions,
+            actions: f::actions(actions)?,
         })?;
         f::modal(
             "receivables-draft",
@@ -521,7 +525,7 @@ impl Documents {
             },
             "A draft has no number and posts nothing until you issue it.",
             "cancel_create",
-            ModalWidth::Narrow,
+            ModalWidth::Wide,
             &self.flash,
             form,
         )

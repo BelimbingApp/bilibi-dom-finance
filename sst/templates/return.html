@@ -65,11 +65,11 @@
 {% endcall %}
 {% if let Some(m) = r.modal %}
 {% call dialog::modal(id="sst-reason-modal", title=m.title, cancel_event="close_modal", description=m.description) %}
-<form id="sst-reason-form" data-event="reason_change" data-change data-submit-event="submit_reason" class="space-y-3">
+<form id="sst-reason-form" data-event="reason_change" data-change data-submit-event="submit_reason" class="mt-4">
 {% call form::input(field=m.reason_field) %}{% endcall %}
-<div class="flex gap-2">
-{% call ui::button(id="sst-reason-submit", button_type="submit", variant=bilibi_ui::ButtonVariant::Primary, working="Confirming…") %}Confirm{% endcall %}
+<div class="mt-4 flex flex-wrap justify-end gap-2">
 {% call ui::button(id="sst-reason-cancel", button_type="button", event="close_modal") %}Cancel{% endcall %}
+{% call ui::button(id="sst-reason-submit", button_type="submit", variant=bilibi_ui::ButtonVariant::Primary, working="Confirming…") %}Confirm{% endcall %}
 </div>
 </form>
 {% endcall %}

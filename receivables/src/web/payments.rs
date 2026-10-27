@@ -399,7 +399,20 @@ impl Payments {
             .iter()
             .map(|c| Choice::new(format!("{} {}", c.code, c.name), c.id.to_string()))
             .collect();
-        body.push(&render(
+        let series: Vec<Choice> = self
+            .series
+            .iter()
+            .filter(|s| s.kind == "payment" && s.active)
+            .map(|s| Choice::new(format!("{} ({})", s.name, s.code), s.id.to_string()))
+            .collect();
+        let deposits: Vec<Choice> = self
+            .accounts
+            .iter()
+            .filter(|a| a.active && a.account_type == "asset")
+            .map(|a| Choice::new(a.label(), a.id.to_string()))
+            .collect();
+        let mut who = Html::EMPTY;
+        who.push(&render(
             Field::in_form("receipt", "customer_id")
                 .id("receivables-receipt-customer_id")
                 .label("Customer")
@@ -410,13 +423,7 @@ impl Payments {
                 .required()
                 .errors(draft.errors.of("customer_id")),
         )?);
-        let series: Vec<Choice> = self
-            .series
-            .iter()
-            .filter(|s| s.kind == "payment" && s.active)
-            .map(|s| Choice::new(format!("{} ({})", s.name, s.code), s.id.to_string()))
-            .collect();
-        body.push(&render(
+        who.push(&render(
             Field::in_form("receipt", "series_id")
                 .id("receivables-receipt-series_id")
                 .label("Series")
@@ -431,7 +438,9 @@ impl Payments {
                 .required()
                 .errors(draft.errors.of("series_id")),
         )?);
-        body.push(&render(
+        body.push(&f::two(who)?);
+        let mut money = Html::EMPTY;
+        money.push(&render(
             Field::in_form("receipt", "payment_date")
                 .id("receivables-receipt-payment_date")
                 .label("Date received")
@@ -441,7 +450,7 @@ impl Payments {
                 .hint("A receipt cannot settle an invoice dated after it.")
                 .errors(draft.errors.of("payment_date")),
         )?);
-        body.push(&render(
+        money.push(&render(
             Field::in_form("receipt", "amount")
                 .id("receivables-receipt-amount")
                 .label("Amount received")
@@ -450,13 +459,9 @@ impl Payments {
                 .required()
                 .errors(draft.errors.of("amount")),
         )?);
-        let deposits: Vec<Choice> = self
-            .accounts
-            .iter()
-            .filter(|a| a.active && a.account_type == "asset")
-            .map(|a| Choice::new(a.label(), a.id.to_string()))
-            .collect();
-        body.push(&render(
+        body.push(&f::two(money)?);
+        let mut deposit = Html::EMPTY;
+        deposit.push(&render(
             Field::in_form("receipt", "deposit_account_id")
                 .id("receivables-receipt-deposit_account_id")
                 .label("Deposited to")
@@ -467,7 +472,7 @@ impl Payments {
                 .required()
                 .errors(draft.errors.of("deposit_account_id")),
         )?);
-        body.push(&render(
+        deposit.push(&render(
             Field::in_form("receipt", "reference")
                 .id("receivables-receipt-reference")
                 .label("Reference")
@@ -476,6 +481,7 @@ impl Payments {
                 .value(value("reference"))
                 .errors(draft.errors.of("reference")),
         )?);
+        body.push(&f::two(deposit)?);
         body.push(&render(
             Field::in_form("receipt", "description")
                 .id("receivables-receipt-description")
@@ -527,7 +533,7 @@ impl Payments {
             id: "receivables-receipt-form",
             event: "receipt_change",
             change: true,
-            class: "",
+            class: "mt-4",
             body,
             actions: Html::EMPTY,
         })?;
@@ -535,9 +541,17 @@ impl Payments {
             id: "receivables-receipt-fill",
             button_type: "button",
             event: "apply_oldest",
+            class: "mr-auto",
             body: Html::text("Apply to oldest first"),
             ..Button::default()
         })?;
+        buttons.push(&render(Button {
+            id: "receivables-receipt-cancel",
+            button_type: "button",
+            event: "cancel_record",
+            body: Html::text("Cancel"),
+            ..Button::default()
+        })?);
         buttons.push(&render(Button {
             id: "receivables-receipt-save",
             button_type: "button",
@@ -547,13 +561,6 @@ impl Payments {
             body: Html::text("Record receipt"),
             ..Button::default()
         })?);
-        buttons.push(&render(Button {
-            id: "receivables-receipt-cancel",
-            button_type: "button",
-            event: "cancel_record",
-            body: Html::text("Cancel"),
-            ..Button::default()
-        })?);
         let mut inner = form;
         inner.push(&f::buttons(buttons)?);
         f::modal(
@@ -561,7 +568,7 @@ impl Payments {
             "Record receipt",
             "Recording numbers the receipt and posts it to the ledger.",
             "cancel_record",
-            ModalWidth::Narrow,
+            ModalWidth::Wide,
             &self.flash,
             inner,
         )

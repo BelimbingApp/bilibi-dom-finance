@@ -2,9 +2,9 @@
 {% import "forms.html" as form %}
 {% import "dialog.html" as dialog %}
 {% call dialog::modal(id=modal_id, title=title, cancel_event="close_dialog", description=description) %}
-<form id="{{ form_id }}" data-event="reason" data-change data-submit-event="{{ event }}">
+<form id="{{ form_id }}" data-event="reason" data-change data-submit-event="{{ event }}" class="mt-4">
 {% call form::input(field=reason_field) %}{% endcall %}
-<div class="mt-4 flex justify-end gap-2">
+<div class="mt-4 flex flex-wrap justify-end gap-2">
 {% call ui::button(id=close_id, button_type="button", event="close_dialog") %}{{ cancel }}{% endcall %}
 {% call ui::button(id=confirm_id, button_type="submit", variant=variant, working=working) %}{{ confirm }}{% endcall %}
 </div>

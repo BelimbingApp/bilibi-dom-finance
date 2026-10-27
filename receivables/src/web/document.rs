@@ -857,7 +857,7 @@ impl Document {
             id: "receivables-lines-form",
             event: "lines_change",
             change: true,
-            class: "",
+            class: "mt-4",
             body,
             actions: Html::EMPTY,
         })?;
@@ -865,9 +865,17 @@ impl Document {
             id: "receivables-lines-add",
             button_type: "button",
             event: "add_line",
+            class: "mr-auto",
             body: Html::text("Add line"),
             ..Button::default()
         })?;
+        buttons.push(&render(Button {
+            id: "receivables-lines-cancel",
+            button_type: "button",
+            event: "cancel_lines",
+            body: Html::text("Cancel"),
+            ..Button::default()
+        })?);
         buttons.push(&render(Button {
             id: "receivables-lines-save",
             button_type: "button",
@@ -875,13 +883,6 @@ impl Document {
             variant: ButtonVariant::Primary,
             working: "Saving…",
             body: Html::text("Save lines"),
-            ..Button::default()
-        })?);
-        buttons.push(&render(Button {
-            id: "receivables-lines-cancel",
-            button_type: "button",
-            event: "cancel_lines",
-            body: Html::text("Cancel"),
             ..Button::default()
         })?);
         let mut inner = form;

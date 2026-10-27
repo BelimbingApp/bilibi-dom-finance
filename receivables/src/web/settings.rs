@@ -573,18 +573,18 @@ impl Settings {
         let mut inner = render(errors.summary(&format!("receivables-{kind}-errors"), &labels))?;
         inner.push(&body);
         let mut actions = render(Button {
+            id: &format!("receivables-{kind}-cancel"),
+            button_type: "button",
+            event: "cancel_dialog",
+            body: Html::text("Cancel"),
+            ..Button::default()
+        })?;
+        actions.push(&render(Button {
             id: &format!("receivables-{kind}-save"),
             button_type: "submit",
             variant: ButtonVariant::Primary,
             working: "Saving…",
             body: Html::text("Save"),
-            ..Button::default()
-        })?;
-        actions.push(&render(Button {
-            id: &format!("receivables-{kind}-cancel"),
-            button_type: "button",
-            event: "cancel_dialog",
-            body: Html::text("Cancel"),
             ..Button::default()
         })?);
         let form = render(Form {
@@ -595,9 +595,9 @@ impl Settings {
                 "save_tax"
             },
             change: false,
-            class: "",
+            class: "mt-4",
             body: inner,
-            actions,
+            actions: f::actions(actions)?,
         })?;
         Ok(Some(f::modal(
             &format!("receivables-{kind}"),

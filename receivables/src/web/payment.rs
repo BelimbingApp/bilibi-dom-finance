@@ -330,27 +330,27 @@ impl Payment {
             body.push(&Html::text(&message));
         }
         let mut actions = render(Button {
+            id: "receivables-reverse-cancel",
+            button_type: "button",
+            event: "cancel_reverse",
+            body: Html::text("Keep receipt"),
+            ..Button::default()
+        })?;
+        actions.push(&render(Button {
             id: "receivables-reverse-confirm",
             button_type: "submit",
             variant: ButtonVariant::Danger,
             working: "Reversing…",
             body: Html::text("Reverse receipt"),
             ..Button::default()
-        })?;
-        actions.push(&render(Button {
-            id: "receivables-reverse-cancel",
-            button_type: "button",
-            event: "cancel_reverse",
-            body: Html::text("Keep receipt"),
-            ..Button::default()
         })?);
         let form = render(Form {
             id: "receivables-reverse-form",
             event: "reverse",
             change: false,
-            class: "",
+            class: "mt-4",
             body,
-            actions,
+            actions: f::actions(actions)?,
         })?;
         f::modal(
             "receivables-reverse",

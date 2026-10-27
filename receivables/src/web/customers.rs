@@ -323,7 +323,9 @@ impl Customers {
             })
             .collect();
         let mut body = render(errors.summary("receivables-customer-new-errors", &labels))?;
-        let mut grid = Html::EMPTY;
+        let mut customer = Html::EMPTY;
+        let mut contact = Html::EMPTY;
+        let mut address = Html::EMPTY;
         for (key, label, kind, max, required, hint) in FIELDS {
             let mut field = Field::in_form("customer", key)
                 .id(format!("receivables-customer-new-{key}"))
@@ -345,32 +347,58 @@ impl Customers {
             if !hint.is_empty() {
                 field = field.hint(*hint);
             }
-            grid.push(&render(field)?);
+            // A long hint takes the row, so a short neighbour does not sit
+            // beside a taller one.
+            if *key == "payment_terms_days" || *key == "country_iso" {
+                field = field.wrapper_class("mb-3 sm:col-span-2");
+            }
+            let rendered = render(field)?;
+            match *key {
+                "code" | "name" | "payment_terms_days" => customer.push(&rendered),
+                "email" | "phone" | "tax_identifier" | "registration_identifier" => {
+                    contact.push(&rendered)
+                }
+                _ => address.push(&rendered),
+            }
         }
-        body.push(&f::two(grid)?);
+        body.push(&f::group(
+            "receivables-customer-identity",
+            "Customer",
+            customer,
+        )?);
+        body.push(&f::group(
+            "receivables-customer-contact",
+            "Contact and tax",
+            contact,
+        )?);
+        body.push(&f::group(
+            "receivables-customer-address",
+            "Address",
+            address,
+        )?);
         let actions = {
             let mut a = render(Button {
+                id: "receivables-customer-new-cancel",
+                button_type: "button",
+                event: "cancel_create",
+                body: Html::text("Cancel"),
+                ..Button::default()
+            })?;
+            a.push(&render(Button {
                 id: "receivables-customer-new-save",
                 button_type: "submit",
                 variant: ButtonVariant::Primary,
                 working: "Adding…",
                 body: Html::text("Add customer"),
                 ..Button::default()
-            })?;
-            a.push(&render(Button {
-                id: "receivables-customer-new-cancel",
-                button_type: "button",
-                event: "cancel_create",
-                body: Html::text("Cancel"),
-                ..Button::default()
             })?);
-            a
+            f::actions(a)?
         };
         let form = render(Form {
             id: "receivables-customer-new-form",
             event: "create_customer",
             change: false,
-            class: "",
+            class: "mt-4",
             body,
             actions,
         })?;
