@@ -112,7 +112,7 @@ impl Window {
     fn apply(&mut self, period: Period) {
         self.from = (period.from != earliest()).then_some(period.from);
         self.to = (period.to != latest()).then_some(period.to);
-        self.preset = Some(period.preset).filter(|_| self.from.is_some() && self.to.is_some());
+        self.preset = (self.from.is_some() && self.to.is_some()).then_some(period.preset);
     }
 
     fn clear(&mut self) {
