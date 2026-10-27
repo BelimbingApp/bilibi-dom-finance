@@ -280,7 +280,7 @@ impl Returns {
                 .value(value("tax_type")),
             period_field: Field::in_form("prepare", "period_start")
                 .id("prepare-period-start")
-                .kind(InputKind::Date).hint("Use the date order shown in the box. Dates are saved as YYYY-MM-DD.")
+                .kind(InputKind::Date)
                 .label("Period starts")
                 .value(value("period_start"))
                 .required(),

@@ -344,10 +344,7 @@ impl Request {
                     .kind(InputKind::Date)
                     .label("Reversal date")
                     .value(self.date.clone())
-                    .hint(format!(
-                        "Not before {}. Use the date order shown in the box. Dates are saved as YYYY-MM-DD.",
-                        r.payment_date
-                    ))
+                    .hint(format!("Not before {}.", r.payment_date))
                     .required(),
             );
             fields.push(
