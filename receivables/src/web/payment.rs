@@ -204,11 +204,21 @@ impl Payment {
             );
         }
         let mut body = f::announce(p.id)?;
+        let pin_name = if p.payment_reference.trim().is_empty() {
+            format!("Receipt {}", p.id)
+        } else {
+            p.payment_reference.clone()
+        };
         body.push(&render(Header {
-            title: Html::text(&p.payment_reference),
+            title: Html::text(&pin_name),
+            title_actions: super::record_pin(
+                "receivables-receipt-pin",
+                "receipt",
+                &pin_name,
+                &format!("{}/{}", super::RECEIPTS, p.id),
+            )?,
             subtitle: &format!("Receipt from {customer_name}"),
             actions,
-            ..Header::default()
         })?);
         body.push(&render(Card {
             id: "receivables-receipt-details",

@@ -53,7 +53,7 @@ bilibi_menu::contribute!(
         "Source documents",
         "/finance/attachments"
     )
-    .icon("shield-check")
+    .icon("gmdi-money-r")
     .under("finance.group.bookkeeping")
     .requires(bilibi_menu::Requirement::Capability(crate::VIEW))
     .order(2)

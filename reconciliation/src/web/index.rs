@@ -92,6 +92,7 @@ pub(super) struct Index {
 #[derive(Template)]
 #[template(path = "bank_accounts.html")]
 struct View<'a> {
+    title_actions: Html,
     flash: FlashMap<'a>,
     table: Option<Html>,
     forbidden: Html,
@@ -284,6 +285,11 @@ impl Index {
             None
         };
         View {
+            title_actions: super::menu_pin(
+                "bank-accounts-pin",
+                "nav-finance-reconciliation",
+                "Bank reconciliation",
+            )?,
             flash: flash_map(&self.flash),
             table,
             forbidden: render(

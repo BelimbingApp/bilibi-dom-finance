@@ -79,6 +79,7 @@ fn columns(id: &str, values: &[(&str, &str)]) -> Result<ListColumns> {
 #[derive(Template)]
 #[template(path = "matching.html")]
 struct View<'a> {
+    title_actions: Html,
     flash: FlashMap<'a>,
     account: &'a BankAccount,
     can_match: bool,
@@ -624,6 +625,12 @@ impl Matching {
             Money::display_decimal(items.into_iter().sum(), MinorUnits::new(i64::from(units)))
         };
         View {
+            title_actions: super::record_pin(
+                "bank-matching-pin",
+                "matching page",
+                &format!("{} matching", l.account.name),
+                &format!("/finance/reconciliation/accounts/{}/matching", l.account.id),
+            )?,
             flash: flash_map(&self.flash),
             account: &l.account,
             can_match: l.can_match,

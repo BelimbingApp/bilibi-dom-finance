@@ -8,7 +8,7 @@
 {% call feedback::flash_group(messages=flash) %}{% endcall %}
 {% if flash.error.contains("/system/settings") %}{% call ui::button(id="attachments-storage-settings", href="/system/settings") %}File storage settings{% endcall %}{% endif %}
 {% call ui::page(id="finance-attachments") %}
-{% call ui::header() %}Source documents{% endcall %}
+{% call ui::header(title_actions=title_actions) %}Source documents{% endcall %}
 
 {% call ui::card(id="attachments-retention", inner_class="p-5 sm:p-6", role="region", labelledby="attachments-retention-heading") %}
 {% call ui::section_heading(title="Retention", id="attachments-retention-heading", description="Documents are retained for this many years after the end of the record's financial year. Retention can only be extended.") %}{% endcall %}

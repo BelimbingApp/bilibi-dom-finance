@@ -225,9 +225,22 @@ pub(super) fn header(
     }
     // Bilimbi shows only the back link above a refused account's empty state.
     let missing = activity && !matches!(report, Some(Report::Activity(_)));
+    let title_actions = if let Some(id) = account_id.as_deref() {
+        super::record_pin(
+            "report-activity-pin",
+            "account",
+            &title,
+            &format!("/finance/reports/accounts/{id}"),
+        )?
+    } else if missing {
+        Html::EMPTY
+    } else {
+        super::menu_pin("reports-pin", "nav-finance-reports", "Reports")?
+    };
     render(HeaderView {
         title: &title,
         subtitle,
+        title_actions,
         actions,
         back,
         account_id: account_id.as_deref(),
@@ -731,6 +744,7 @@ struct Text<'a> {
 struct HeaderView<'a> {
     title: &'a str,
     subtitle: Html,
+    title_actions: Html,
     actions: Html,
     back: Html,
     account_id: Option<&'a str>,

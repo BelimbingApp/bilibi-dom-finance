@@ -694,18 +694,25 @@ impl Return {
                 .required(),
         });
 
+        let title = format!(
+            "{} return {}: {} to {}",
+            f::tax_name(tax_type),
+            r.return_number,
+            r.period_start,
+            r.period_end
+        );
         View {
             flash: flash(&self.flash),
             refusal,
             record: Some(RecordView {
                 record: r.id,
-                title: format!(
-                    "{} return {}: {} to {}",
-                    f::tax_name(tax_type),
-                    r.return_number,
-                    r.period_start,
-                    r.period_end
-                ),
+                title_actions: super::record_pin(
+                    "sst-return-pin",
+                    "return",
+                    &title,
+                    &format!("/finance/sst/returns/{}", r.id),
+                )?,
+                title,
                 subtitle,
                 actions,
                 particulars,
@@ -1044,6 +1051,7 @@ struct View<'a> {
 struct RecordView {
     record: i64,
     title: String,
+    title_actions: Html,
     subtitle: Html,
     actions: Html,
     particulars: Html,

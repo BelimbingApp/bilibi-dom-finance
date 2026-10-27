@@ -359,6 +359,11 @@ impl Documents {
         }
         let mut body = render(Header {
             title: Html::text("Invoices"),
+            title_actions: super::menu_pin(
+                "receivables-invoices-pin",
+                "nav-finance-receivables-invoices",
+                "Invoices",
+            )?,
             actions,
             ..Header::default()
         })?;

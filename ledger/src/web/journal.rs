@@ -354,11 +354,13 @@ impl Journal {
             title: "Back to the manual journals",
             ..BackLink::default()
         })?);
+        let name = format!("Journal {}", journal.journal_number);
+        let url = format!("/finance/ledger/journals/{}", journal.id);
         let mut page = render(Header {
-            title: Html::text(&format!("Journal {}", journal.journal_number)),
+            title: Html::text(&name),
             subtitle: &journal.description,
+            title_actions: super::record_pin("ledger-journal-pin", "journal", &name, &url)?,
             actions,
-            ..Header::default()
         })?;
         page.push(&render(Announce {
             kind: crate::MODULE,

@@ -60,6 +60,7 @@ bilibi_menu::contribute!(
     "finance/receivables",
     bilibi_menu::MenuItem::container("finance.group.receivables", "Receivables")
         .under("finance")
+        .icon("iconoir-receive-dollars")
         .order(15)
 );
 macro_rules! menu {
@@ -78,35 +79,35 @@ menu!(
     "finance.receivables.customers",
     "Customers",
     CUSTOMERS,
-    "users",
+    "iconoir-receive-dollars",
     10
 );
 menu!(
     "finance.receivables.invoices",
     "Invoices",
     INVOICES,
-    "clipboard-document-list",
+    "vaadin-invoice",
     20
 );
 menu!(
     "finance.receivables.receipts",
     "Receipts",
     RECEIPTS,
-    "clipboard-document-list",
+    "iconoir-receive-dollars",
     30
 );
 menu!(
     "finance.receivables.aging",
     "Aging",
     AGING,
-    "clipboard-document-list",
+    "iconoir-receive-dollars",
     40
 );
 menu!(
     "finance.receivables.settings",
     "Settings",
     SETTINGS,
-    "cog-6-tooth",
+    "iconoir-receive-dollars",
     50
 );
 
@@ -428,6 +429,41 @@ pub(super) fn account_html(accounts: &[Account], id: i64) -> Result<Html> {
 
 pub(super) fn render(fragment: impl Template) -> Result<Html> {
     Html::render(&fragment).map_err(|_| Error::Internal)
+}
+
+pub(super) fn menu_pin(id: &str, nav: &str, page: &str) -> Result<Html> {
+    let label = format!("Pin {page} to sidebar");
+    render(bilibi_ui::IconButton {
+        context: bilibi_ui::IconContext::Inline,
+        id,
+        nav_pin: nav,
+        ..bilibi_ui::IconButton::new("bilimbi-pin", &label)
+    })
+}
+
+pub(super) fn record_pin(id: &str, noun: &str, name: &str, url: &str) -> Result<Html> {
+    let label = format!("Pin this {noun} to sidebar");
+    // The shell keeps the last `/` segment of a pin label, so a name that
+    // contains one would be stored as only its tail.
+    let pin_label = name.replace('/', " ");
+    render(RecordPin {
+        id,
+        label: &label,
+        pin_label: &pin_label,
+        url,
+    })
+}
+
+#[derive(Template)]
+#[template(
+    source = r#"{% import "components.html" as ui %}{% call ui::icon_button(icon="bilimbi-pin", label=label, context=bilibi_ui::IconContext::Inline, id=id, nav_pin="record", record_label=pin_label, record_url=url) %}{% endcall %}"#,
+    ext = "html"
+)]
+struct RecordPin<'a> {
+    id: &'a str,
+    label: &'a str,
+    pin_label: &'a str,
+    url: &'a str,
 }
 
 /// A page's one flash message, shown by kind.

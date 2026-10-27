@@ -396,10 +396,17 @@ impl Bill {
         }
         .map(render)
         .transpose()?;
+        let title = self.heading(d);
         View {
             flash,
             record: d.id,
-            title: self.heading(d),
+            title_actions: super::record_pin(
+                "payables-bill-pin",
+                "document",
+                &title,
+                &format!("/finance/payables/bills/{}", d.id),
+            )?,
+            title,
             status: f::status(&d.status)?,
             match_status: d
                 .match_status
@@ -690,6 +697,7 @@ fn reason(v: &serde_json::Value) -> Option<&str> {
 struct View<'a> {
     flash: FlashMap<'a>,
     record: i64,
+    title_actions: Html,
     title: String,
     status: Html,
     match_status: Option<Html>,

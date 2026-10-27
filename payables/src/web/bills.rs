@@ -255,15 +255,24 @@ impl Bills {
             pager.filters_event = "filter";
             content.push(&render(pager)?);
         }
-        View { actions, content }
-            .render()
-            .map_err(|_| Error::Internal)
+        View {
+            title_actions: super::menu_pin(
+                "payables-bills-pin",
+                "nav-finance-payables-bills",
+                "Bills",
+            )?,
+            actions,
+            content,
+        }
+        .render()
+        .map_err(|_| Error::Internal)
     }
 }
 
 #[derive(Template)]
 #[template(path = "bills.html")]
 struct View {
+    title_actions: Html,
     actions: Html,
     content: Html,
 }

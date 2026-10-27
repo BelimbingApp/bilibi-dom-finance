@@ -50,6 +50,7 @@ struct View<'a> {
 struct RecordView {
     id: i64,
     title: String,
+    title_actions: Html,
     subtitle: Html,
     actions: Html,
     figures: Html,
@@ -541,12 +542,19 @@ impl Detail {
         table.add_query = &self.events.add_query;
         let events = render(table)?;
 
+        let title = format!(
+            "Reconciliation {} as of {}",
+            report.reconciliation_number, report.end_date
+        );
         view.record = Some(RecordView {
             id: report.id,
-            title: format!(
-                "Reconciliation {} as of {}",
-                report.reconciliation_number, report.end_date
-            ),
+            title_actions: super::record_pin(
+                "reconciliation-pin",
+                "reconciliation",
+                &title,
+                &format!("/finance/reconciliation/reconciliations/{}", report.id),
+            )?,
+            title,
             subtitle,
             actions: render(Actions {
                 href: format!("/finance/reconciliation/accounts/{}/matching", account.id),

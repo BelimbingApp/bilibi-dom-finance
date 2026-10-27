@@ -305,15 +305,35 @@ impl State {
                 .display(&**client, scope, None, locale)
                 .await?
         };
-        let (title, subtitle) = match self.operation {
-            "consolidation" => ("E-invoice Consolidation", "One consolidated document reports a month's sales that no buyer asked an individual e-invoice for."),
-            "reconciliation" => ("E-invoice Reconciliation", "Validated documents without a ledger entry, and entries whose document is cancelled."),
-            _ => ("E-invoice Setup", "Credentials, certificate, and supplier profile for this company."),
+        let (title, subtitle, pin_nav, pin_label) = match self.operation {
+            "consolidation" => (
+                "E-invoice Consolidation",
+                "One consolidated document reports a month's sales that no buyer asked an individual e-invoice for.",
+                "nav-finance-einvoice-consolidation",
+                "E-invoice consolidation",
+            ),
+            "reconciliation" => (
+                "E-invoice Reconciliation",
+                "Validated documents without a ledger entry, and entries whose document is cancelled.",
+                "nav-finance-einvoice-reconciliation",
+                "E-invoice reconciliation",
+            ),
+            _ => (
+                "E-invoice Setup",
+                "Credentials, certificate, and supplier profile for this company.",
+                "nav-finance-einvoice-setup",
+                "E-invoice setup",
+            ),
         };
         let page_id = format!("einvoice-{}", self.operation);
         let setup = self.operation == "setup";
         let mut parts = vec![render(Header {
             title: Html::text(title),
+            title_actions: super::menu_pin(
+                &format!("einvoice-{}-pin", self.operation),
+                pin_nav,
+                pin_label,
+            )?,
             subtitle,
             actions: render(Button {
                 id: if setup {
@@ -335,7 +355,6 @@ impl State {
                 }),
                 ..Button::default()
             })?,
-            ..Header::default()
         })?];
         match self.operation {
             "consolidation" => parts.extend(self.consolidation(scope, &display).await?),

@@ -304,9 +304,16 @@ impl Request {
             .payment
             .as_ref()
             .is_some_and(|p| p.reversed_by_payment_id.is_none() && p.reverses_payment_id.is_none());
+        let title = format!("Payment request #{}", r.request_number);
         View {
             flash,
-            title: format!("Payment request #{}", r.request_number),
+            title_actions: super::record_pin(
+                "payables-payment-pin",
+                "payment request",
+                &title,
+                &format!("/finance/payables/payments/{}", self.id),
+            )?,
+            title,
             status: f::request_status(&r.status)?,
             actions: render(Actions {
                 approve: self.can_decide && waiting,
@@ -559,6 +566,7 @@ impl LiveState<Scope, Error> for Request {
 #[template(path = "payment.html")]
 struct View<'a> {
     flash: FlashMap<'a>,
+    title_actions: Html,
     title: String,
     status: Html,
     actions: Html,

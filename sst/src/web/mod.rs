@@ -48,17 +48,20 @@ pub(crate) struct Pages {
 
 // Bilimbi `Contributions.menu`: id, label, icon, parent, route, capability, order.
 // Menu group (a bookkeeper's section of the Finance menu); its pages sit under it.
+// Tax uses Tabler `receipt-tax` (MIT). Shopify Polaris `polaris-tax-icon` is
+// not vendored: its licence only allows apps that interoperate with Shopify.
 bilibi_menu::contribute!(
     "finance/sst",
     bilibi_menu::MenuItem::container("finance.group.tax", "Tax")
         .under("finance")
+        .icon("tabler-receipt-tax")
         .order(50)
 );
 
 bilibi_menu::contribute!(
     "finance/sst",
     bilibi_menu::MenuItem::page("finance.sst", "SST returns", INDEX)
-        .icon("shield-check")
+        .icon("tabler-receipt-tax")
         .under("finance.group.tax")
         .requires(bilibi_menu::Requirement::Capability(VIEW))
         .order(1)
@@ -66,7 +69,7 @@ bilibi_menu::contribute!(
 bilibi_menu::contribute!(
     "finance/sst",
     bilibi_menu::MenuItem::page("finance.sst.setup", "SST setup", SETUP)
-        .icon("cog-6-tooth")
+        .icon("tabler-receipt-tax")
         .under("finance.group.tax")
         .requires(bilibi_menu::Requirement::Capability(VIEW))
         .order(2)
@@ -179,6 +182,41 @@ fn company(scope: &Scope) -> Option<i64> {
 
 fn render(fragment: impl Template) -> Result<Html> {
     Html::render(&fragment).map_err(|_| Error::Internal)
+}
+
+/// Sidebar pin for a menu page. A return the page could not load, and the
+/// print and CSV downloads, are not pinned.
+pub(super) fn menu_pin(id: &str, nav: &str, page: &str) -> Result<Html> {
+    let label = format!("Pin {page} to sidebar");
+    render(bilibi_ui::IconButton {
+        context: bilibi_ui::IconContext::Inline,
+        id,
+        nav_pin: nav,
+        ..bilibi_ui::IconButton::new("bilimbi-pin", &label)
+    })
+}
+
+pub(super) fn record_pin(id: &str, noun: &str, name: &str, url: &str) -> Result<Html> {
+    let label = format!("Pin this {noun} to sidebar");
+    let pin_label = name.replace('/', " ");
+    render(RecordPin {
+        id,
+        label: &label,
+        pin_label: &pin_label,
+        url,
+    })
+}
+
+#[derive(Template)]
+#[template(
+    source = r#"{% import "components.html" as ui %}{% call ui::icon_button(icon="bilimbi-pin", label=label, context=bilibi_ui::IconContext::Inline, id=id, nav_pin="record", record_label=pin_label, record_url=url) %}{% endcall %}"#,
+    ext = "html"
+)]
+struct RecordPin<'a> {
+    id: &'a str,
+    label: &'a str,
+    pin_label: &'a str,
+    url: &'a str,
 }
 
 /// The one message a page shows, as Bilimbi's `put_flash`.

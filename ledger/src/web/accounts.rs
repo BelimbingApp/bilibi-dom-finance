@@ -206,6 +206,11 @@ impl Accounts {
         }
         let mut page = render(Header {
             title: Html::text("Chart of accounts"),
+            title_actions: super::menu_pin(
+                "ledger-accounts-pin",
+                "nav-finance-ledger-accounts",
+                "Chart of accounts",
+            )?,
             actions,
             ..Header::default()
         })?;

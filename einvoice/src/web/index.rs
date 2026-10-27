@@ -54,6 +54,7 @@ pub(super) struct Index {
 #[derive(Template)]
 #[template(path = "documents.html")]
 struct View {
+    title_actions: Html,
     actions: Html,
     toolbar: Html,
     table: Html,
@@ -254,6 +255,11 @@ impl Index {
             Html::EMPTY
         };
         View {
+            title_actions: super::menu_pin(
+                "einvoice-documents-pin",
+                "nav-finance-einvoice-documents",
+                "E-invoices",
+            )?,
             actions: render(HeaderLinks)?,
             toolbar: render(toolbar)?,
             table: render(grid)?,

@@ -661,11 +661,17 @@ impl Document {
             .transpose()?;
 
         let mut body = f::announce(d.id)?;
+        let pin_name = reference(&d);
         body.push(&render(Header {
-            title: Html::text(&reference(&d)),
+            title: Html::text(&pin_name),
+            title_actions: super::record_pin(
+                "receivables-invoice-pin",
+                "invoice",
+                &pin_name,
+                &format!("{}/{}", super::INVOICES, d.id),
+            )?,
             subtitle: &format!("{kind} for {customer_name}"),
             actions,
-            ..Header::default()
         })?);
         let mut top = render(Card {
             id: "receivables-invoice-document",

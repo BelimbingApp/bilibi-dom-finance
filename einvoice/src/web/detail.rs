@@ -27,6 +27,7 @@ pub(super) struct Detail {
 struct View<'a> {
     document: Option<&'a DocumentView>,
     title: String,
+    title_actions: Html,
     header_subtitle: Html,
     actions: Html,
     supplier: Vec<String>,
@@ -379,6 +380,7 @@ impl Detail {
         let mut view = View {
             document: self.document.as_ref(),
             title: self.title().unwrap_or_default(),
+            title_actions: Html::EMPTY,
             header_subtitle: Html::EMPTY,
             actions: Html::EMPTY,
             supplier: vec![],
@@ -394,6 +396,12 @@ impl Detail {
             flash,
         };
         if let Some(d) = &self.document {
+            view.title_actions = super::record_pin(
+                "einvoice-document-pin",
+                "document",
+                &view.title,
+                &format!("/finance/einvoice/documents/{}", d.document.id),
+            )?;
             let can_submit = self.pages.allowed(scope, SUBMIT).await?;
             let can_cancel = self.pages.allowed(scope, CANCEL).await?;
             view.header_subtitle = render(Subtitle {

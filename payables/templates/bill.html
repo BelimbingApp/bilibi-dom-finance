@@ -5,7 +5,7 @@
 {% call feedback::flash_group(messages=flash) %}{% endcall %}
 {% call ui::page(id="payables-bill", variant=bilibi_ui::PageVariant::Detail) %}
 {% call workspace::announce(kind="finance/payables", record_id=record) %}{% endcall %}
-{% call ui::header(subtitle_html=self.subtitle()?, actions=actions) %}{{ title }}{% endcall %}
+{% call ui::header(subtitle_html=self.subtitle()?, title_actions=title_actions, actions=actions) %}{{ title }}{% endcall %}
 {% if let Some(attention) = attention %}{{ attention|safe }}{% endif %}
 <div class="grid gap-4 lg:grid-cols-2">
 {% call ui::card(id="payables-bill-party", inner_class="p-5 sm:p-6", role="region", labelledby="payables-bill-party-heading") %}

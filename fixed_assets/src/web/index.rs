@@ -116,6 +116,7 @@ pub(super) struct Index {
 struct View<'a> {
     page_dom: String,
     title: &'static str,
+    title_actions: Html,
     flash: FlashMap<'a>,
     toolbar: Html,
     period: Html,
@@ -561,6 +562,11 @@ impl Index {
         let view = View {
             page_dom: format!("assets-{}", self.kind.key()),
             title: self.kind.title(),
+            title_actions: super::menu_pin(
+                &format!("assets-{}-pin", self.kind.key()),
+                &format!("nav-finance-fixed-assets-{}", self.kind.key()),
+                self.kind.title(),
+            )?,
             flash: flash_map(&self.flash),
             toolbar: render(toolbar)?,
             period: if self.kind == Kind::Register {

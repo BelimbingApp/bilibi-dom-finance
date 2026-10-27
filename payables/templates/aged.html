@@ -1,7 +1,7 @@
 {# What suppliers are owed, by how late it is. Lists use the shared FlexTable. #}
 {% import "components.html" as ui %}
 {% call ui::page(id="payables-aged") %}
-{% call ui::header(subtitle="What is owed to suppliers, by how late it is.") %}Aged payables{% endcall %}
+{% call ui::header(subtitle="What is owed to suppliers, by how late it is.", title_actions=title_actions) %}Aged payables{% endcall %}
 {{ date|safe }}
 {% if let Some(empty) = empty %}{{ empty|safe }}{% endif %}
 {% if let Some(parties) = parties %}

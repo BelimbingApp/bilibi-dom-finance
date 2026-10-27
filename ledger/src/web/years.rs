@@ -247,8 +247,12 @@ impl Years {
         let mut page = render(Header {
             title: Html::text("Fiscal years"),
             subtitle: &company_name,
+            title_actions: super::menu_pin(
+                "ledger-years-pin",
+                "nav-finance-ledger-years",
+                "Fiscal years",
+            )?,
             actions,
-            ..Header::default()
         })?;
         page.push(&body);
         if let Some(opening) = &self.opening {

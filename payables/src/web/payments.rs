@@ -270,18 +270,27 @@ impl Payments {
             pager.filters_event = "filter";
             content.push(&render(pager)?);
         }
-        View { actions, content }
-            .render()
-            .map_err(|_| Error::Internal)
+        View {
+            title_actions: super::menu_pin(
+                "payables-payments-pin",
+                "nav-finance-payables-payments",
+                "Payments",
+            )?,
+            actions,
+            content,
+        }
+        .render()
+        .map_err(|_| Error::Internal)
     }
 }
 
 #[derive(Template)]
 #[template(
-    source = r#"{% import "components.html" as ui %}{% call ui::page(id="payables-payments") %}{% call ui::header(subtitle="Supplier payments waiting for approval, paid or rejected.", actions=actions) %}Payments{% endcall %}{{ content|safe }}{% endcall %}"#,
+    source = r#"{% import "components.html" as ui %}{% call ui::page(id="payables-payments") %}{% call ui::header(subtitle="Supplier payments waiting for approval, paid or rejected.", title_actions=title_actions, actions=actions) %}Payments{% endcall %}{{ content|safe }}{% endcall %}"#,
     ext = "html"
 )]
 struct View {
+    title_actions: Html,
     actions: Html,
     content: Html,
 }

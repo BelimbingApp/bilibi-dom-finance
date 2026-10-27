@@ -57,12 +57,14 @@ bilibi_menu::contribute!(
     "finance/reports",
     bilibi_menu::MenuItem::container("finance.group.bookkeeping", "Bookkeeping")
         .under("finance")
+        .icon("gmdi-money-r")
         .order(10)
 );
 
 bilibi_menu::contribute!(
     "finance/reports",
     bilibi_menu::MenuItem::page("finance.reports", "Reports", "/finance/reports")
+        .icon("gmdi-money-r")
         .under("finance.group.bookkeeping")
         .requires(bilibi_menu::Requirement::Capability(crate::VIEW))
         .order(4)
@@ -82,6 +84,7 @@ bilibi_menu::contribute!(
         "Bookkeeping",
         "/finance/reports/bookkeeping"
     )
+    .icon("gmdi-money-r")
     .under("finance.group.bookkeeping")
     .requires(bilibi_menu::Requirement::Capability(crate::VIEW))
     .order(1)
@@ -93,6 +96,7 @@ bilibi_menu::contribute!(
         "Approval exceptions",
         "/finance/reports/approval-exceptions"
     )
+    .icon("gmdi-money-r")
     .under("finance.group.bookkeeping")
     .requires(bilibi_menu::Requirement::Capability(crate::VIEW))
     .order(3)
@@ -127,6 +131,7 @@ bilibi_menu::contribute!(
         "Report sections",
         "/finance/reports/sections"
     )
+    .icon("gmdi-money-r")
     .under("finance.group.bookkeeping")
     .requires(bilibi_menu::Requirement::Capability(
         bilibi_finance_ledger::MANAGE_ACCOUNTS

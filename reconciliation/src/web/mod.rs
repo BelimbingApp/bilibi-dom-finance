@@ -43,6 +43,7 @@ bilibi_menu::contribute!(
     "finance/reconciliation",
     bilibi_menu::MenuItem::container("finance.group.bank", "Bank")
         .under("finance")
+        .icon("gmdi-money-r")
         .order(30)
 );
 
@@ -53,7 +54,7 @@ bilibi_menu::contribute!(
         "Bank reconciliation",
         "/finance/reconciliation"
     )
-    .icon("building-library")
+    .icon("gmdi-money-r")
     .under("finance.group.bank")
     .requires(bilibi_menu::Requirement::Capability(crate::VIEW))
     .order(1)
@@ -97,6 +98,42 @@ fn company(scope: &Scope) -> Result<i64> {
 }
 fn render(template: impl Template) -> Result<Html> {
     Html::render(&template).map_err(|_| Error::Internal)
+}
+
+/// Sidebar pin for a menu page. A bank account, matching screen or
+/// reconciliation the page could not load is not pinned. Statement file
+/// downloads are not pages.
+pub(super) fn menu_pin(id: &str, nav: &str, page: &str) -> Result<Html> {
+    let label = format!("Pin {page} to sidebar");
+    render(bilibi_ui::IconButton {
+        context: bilibi_ui::IconContext::Inline,
+        id,
+        nav_pin: nav,
+        ..bilibi_ui::IconButton::new("bilimbi-pin", &label)
+    })
+}
+
+pub(super) fn record_pin(id: &str, noun: &str, name: &str, url: &str) -> Result<Html> {
+    let label = format!("Pin this {noun} to sidebar");
+    let pin_label = name.replace('/', " ");
+    render(RecordPin {
+        id,
+        label: &label,
+        pin_label: &pin_label,
+        url,
+    })
+}
+
+#[derive(Template)]
+#[template(
+    source = r#"{% import "components.html" as ui %}{% call ui::icon_button(icon="bilimbi-pin", label=label, context=bilibi_ui::IconContext::Inline, id=id, nav_pin="record", record_label=pin_label, record_url=url) %}{% endcall %}"#,
+    ext = "html"
+)]
+struct RecordPin<'a> {
+    id: &'a str,
+    label: &'a str,
+    pin_label: &'a str,
+    url: &'a str,
 }
 impl Pages {
     async fn allowed(&self, scope: &Scope, capability: &str) -> Result<bool> {

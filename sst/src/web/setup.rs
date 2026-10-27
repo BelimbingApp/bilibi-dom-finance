@@ -254,6 +254,7 @@ impl Setup {
             })
             .transpose()?;
         View {
+            title_actions: super::menu_pin("sst-setup-pin", "nav-finance-sst-setup", "SST setup")?,
             flash: flash(&self.flash),
             actions,
             forbidden,
@@ -704,6 +705,7 @@ fn fact<'a>(title: &'a str, id: &'a str, value: &str) -> Fact<'a> {
 #[derive(Template)]
 #[template(path = "setup.html")]
 struct View<'a> {
+    title_actions: Html,
     flash: FlashMap<'a>,
     actions: Html,
     forbidden: Option<Html>,

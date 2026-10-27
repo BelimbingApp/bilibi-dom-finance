@@ -445,6 +445,11 @@ impl Setup {
                 .transpose()
         };
         View {
+            title_actions: super::menu_pin(
+                "payables-setup-pin",
+                "nav-finance-payables-setup",
+                "Payables setup",
+            )?,
             flash,
             configured: self.settings.is_some(),
             can_manage: self.can_manage,
@@ -796,6 +801,7 @@ impl LiveState<Scope, Error> for Setup {
 #[derive(Template)]
 #[template(path = "setup.html")]
 struct View<'a> {
+    title_actions: Html,
     flash: FlashMap<'a>,
     configured: bool,
     can_manage: bool,

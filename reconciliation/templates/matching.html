@@ -8,7 +8,7 @@
 {% call feedback::flash_group(messages=flash) %}{% endcall %}
 {% call ui::page(id="matching", variant=bilibi_ui::PageVariant::Detail) %}
 {% call ui::back_link(id="matching-back", href="/finance/reconciliation/accounts/{}"|format(account.id), title=account.name) %}{% endcall %}
-{% call ui::header(subtitle="Tick statement lines and ledger entries whose amounts agree, then match them; or accept a suggestion.") %}{{ account.name }}: matching{% endcall %}
+{% call ui::header(subtitle="Tick statement lines and ledger entries whose amounts agree, then match them; or accept a suggestion.", title_actions=title_actions) %}{{ account.name }}: matching{% endcall %}
 {{ forbidden|safe }}
 <div class="grid gap-4 lg:grid-cols-2">
 {% call ui::card(id="unmatched-lines", inner_class="p-0", role="region", labelledby="unmatched-lines-heading") %}

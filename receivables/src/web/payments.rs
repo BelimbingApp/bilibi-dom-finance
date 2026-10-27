@@ -335,6 +335,11 @@ impl Payments {
         }
         let mut body = render(Header {
             title: Html::text("Receipts"),
+            title_actions: super::menu_pin(
+                "receivables-receipts-pin",
+                "nav-finance-receivables-receipts",
+                "Receipts",
+            )?,
             actions,
             ..Header::default()
         })?;

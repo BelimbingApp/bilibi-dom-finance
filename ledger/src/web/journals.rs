@@ -388,8 +388,12 @@ impl Journals {
         let mut page = render(Header {
             title: Html::text("Manual journals"),
             subtitle: guidance,
+            title_actions: super::menu_pin(
+                "ledger-journals-pin",
+                "nav-finance-ledger-journals",
+                "Manual journals",
+            )?,
             actions,
-            ..Header::default()
         })?;
         page.push(&body);
         if self.draft.is_some() && can_submit {

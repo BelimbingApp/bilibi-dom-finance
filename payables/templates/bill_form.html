@@ -2,6 +2,7 @@
 {% import "components.html" as ui %}
 {% import "forms.html" as form %}
 {% call ui::page(id="payables-record", variant=bilibi_ui::PageVariant::Form) %}
+{# A new bill or debit note has no stable record yet, so this page is not pinned. #}
 {% call ui::header(subtitle=subtitle, actions=back) %}{{ title }}{% endcall %}
 {% if let Some(summary) = summary %}{{ summary|safe }}{% endif %}
 {% if let Some(notice) = notice %}{{ notice|safe }}{% endif %}

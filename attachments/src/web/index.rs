@@ -114,6 +114,7 @@ struct RetentionForm {
 #[derive(Template)]
 #[template(path = "index.html")]
 struct View<'a> {
+    title_actions: Html,
     flash: FlashMap<'a>,
     retention: Option<RetentionView>,
     retention_form: Option<RetentionForm>,
@@ -136,6 +137,16 @@ struct FilterForm {
 
 fn render(fragment: impl Template) -> Result<Html> {
     Html::render(&fragment).map_err(|_| Error::Internal)
+}
+
+fn menu_pin(id: &str, nav: &str, page: &str) -> Result<Html> {
+    let label = format!("Pin {page} to sidebar");
+    render(bilibi_ui::IconButton {
+        context: bilibi_ui::IconContext::Inline,
+        id,
+        nav_pin: nav,
+        ..bilibi_ui::IconButton::new("bilimbi-pin", &label)
+    })
 }
 
 /// A refusal told as the page tells it; a failure is not a refusal.
@@ -484,6 +495,11 @@ impl Index {
             }
         }
         View {
+            title_actions: menu_pin(
+                "attachments-pin",
+                "nav-finance-attachments",
+                "Source documents",
+            )?,
             flash,
             retention: retention_view,
             retention_form,

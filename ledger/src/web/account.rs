@@ -270,8 +270,11 @@ impl Account {
             title: "Back to the chart of accounts",
             ..BackLink::default()
         })?);
+        let name = format!("{} {}", account.code, account.name);
+        let url = format!("/finance/ledger/accounts/{}", account.id);
         let mut page = render(Header {
             title: account_name(&account)?,
+            title_actions: super::record_pin("ledger-account-pin", "account", &name, &url)?,
             actions,
             ..Header::default()
         })?;

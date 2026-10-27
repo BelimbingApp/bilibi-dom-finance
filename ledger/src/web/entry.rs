@@ -334,11 +334,13 @@ impl Entry {
             title: "Back to the journal entries",
             ..BackLink::default()
         })?);
+        let name = format!("Entry {}", entry.entry_number);
+        let url = format!("/finance/ledger/entries/{}", entry.id);
         let mut page = render(Header {
-            title: Html::text(&format!("Entry {}", entry.entry_number)),
+            title: Html::text(&name),
             subtitle: &entry.description,
+            title_actions: super::record_pin("ledger-entry-pin", "entry", &name, &url)?,
             actions,
-            ..Header::default()
         })?;
         page.push(&render(Announce {
             kind: crate::MODULE,

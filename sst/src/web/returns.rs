@@ -189,6 +189,7 @@ impl Returns {
             None => None,
         };
         View {
+            title_actions: super::menu_pin("sst-returns-pin", "nav-finance-sst", "SST returns")?,
             flash: flash(&self.flash),
             actions,
             refusal,
@@ -439,6 +440,7 @@ impl LiveState<Scope, Error> for Returns {
 #[derive(Template)]
 #[template(path = "returns.html")]
 struct View<'a> {
+    title_actions: Html,
     flash: FlashMap<'a>,
     actions: Html,
     refusal: Option<Html>,

@@ -181,6 +181,18 @@ they govern this code and are not copied here.
   Call `refresh_retention` in the transaction that finalises a record whose
   date can change while it is a draft; never extend retention yourself.
 - Show a record's source documents by mounting the embed `finance.attachments-panel` (`PANEL_EMBED`) as a `PanelSpec` (path `panel`, `source`, `document`; `attachments/README.md`), not an upload form, a download route or `Attachments` calls of your own: the panel owns the live upload, asks the facade on every action and reads whether the record is final from your `Source`, so a page passing its own flag cannot offer replace on a final record. Link a file as `/finance/attachments/{id}/download`; that route reauthorizes on every click.
+- Put the sidebar pin beside every page title through `Header::title_actions`: a
+  menu page renders the Platform's `bilibi_ui::IconButton` with `nav_pin` set to
+  `nav-` plus its menu id (dots as hyphens), and a record page renders its
+  module's `record_pin` (`ledger/src/web/mod.rs`), never a pin markup or a
+  `data-nav-pin` attribute of the page's own: the shell owns pin state,
+  `aria-pressed` and the sidebar row. A compose screen, a download and a record
+  the page could not load have no pin. Finance identity icons (`gmdi-money-r`
+  default; `tabler-receipt-tax` tax, `vaadin-invoice` invoices,
+  `iconoir-receive-dollars` receivables, `iconoir-send-dollars` payables,
+  `carbon-financial-assets` assets) are vendored in the Platform's
+  `apps/base/ui/assets/vendor/product-icons/`; a new glyph is a Platform change
+  with its licence, not an SVG in this repository.
 - In an Askama template never name a variable `id` (or any macro parameter name) used inside a `{% call ui::... %}` body: it resolves to the macro's own, so `{{ id }}-form` renders as the card's id.
 - Name a system principal as one lowercase hyphenated segment
   (`finance-attachments-retention-refresh`): Bilibi's vocabulary refuses

@@ -207,6 +207,11 @@ impl Aged {
             );
             empty.id = "payables-aged-unavailable".into();
             return View {
+                title_actions: super::menu_pin(
+                    "payables-aged-pin",
+                    "nav-finance-payables-aged",
+                    "Aged payables",
+                )?,
                 date,
                 parties: None,
                 bills: None,
@@ -261,6 +266,11 @@ impl Aged {
             })
             .transpose()?;
         View {
+            title_actions: super::menu_pin(
+                "payables-aged-pin",
+                "nav-finance-payables-aged",
+                "Aged payables",
+            )?,
             date,
             parties: Some(Self::table(
                 &self.parties,
@@ -280,6 +290,7 @@ impl Aged {
 #[derive(Template)]
 #[template(path = "aged.html")]
 struct View {
+    title_actions: Html,
     date: Html,
     parties: Option<Html>,
     bills: Option<Html>,

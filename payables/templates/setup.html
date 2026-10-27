@@ -4,7 +4,7 @@
 {% import "forms.html" as form %}
 {% call feedback::flash_group(messages=flash) %}{% endcall %}
 {% call ui::page(id="payables-setup", variant=bilibi_ui::PageVariant::Detail) %}
-{% call ui::header() %}Payables setup{% endcall %}
+{% call ui::header(title_actions=title_actions) %}Payables setup{% endcall %}
 {% call ui::card(id="payables-settings", inner_class="p-5 sm:p-6", role="region", labelledby="payables-settings-heading") %}
 {% call ui::section_heading(id="payables-settings-heading", title="Payable account and matching") %}{% endcall %}
 {% if !configured %}<p id="payables-settings-unset" class="text-sm text-ink-muted">Not set up yet. Choose the account bills are owed on before posting a bill.</p>{% else if !can_manage %}{{ saved|safe }}{% endif %}

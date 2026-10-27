@@ -28,6 +28,7 @@ bilibi_menu::contribute!(
     "finance/einvoice",
     bilibi_menu::MenuItem::container("finance.group.einvoicing", "E-invoicing")
         .under("finance")
+        .icon("vaadin-invoice")
         .order(60)
 );
 
@@ -38,7 +39,7 @@ bilibi_menu::contribute!(
         "E-invoices",
         "/finance/einvoice/documents"
     )
-    .icon("circle-stack")
+    .icon("vaadin-invoice")
     .under("finance.group.einvoicing")
     .requires(bilibi_menu::Requirement::Capability(crate::VIEW))
     .order(1)
@@ -73,6 +74,41 @@ fn company(scope: &Scope) -> Result<i64> {
 }
 fn render(template: impl Template) -> Result<Html> {
     Html::render(&template).map_err(|_| Error::Internal)
+}
+
+/// Sidebar pin for a menu page. A document the page could not load, and the
+/// PDF download, are not pinned.
+pub(super) fn menu_pin(id: &str, nav: &str, page: &str) -> Result<Html> {
+    let label = format!("Pin {page} to sidebar");
+    render(bilibi_ui::IconButton {
+        context: bilibi_ui::IconContext::Inline,
+        id,
+        nav_pin: nav,
+        ..bilibi_ui::IconButton::new("bilimbi-pin", &label)
+    })
+}
+
+pub(super) fn record_pin(id: &str, noun: &str, name: &str, url: &str) -> Result<Html> {
+    let label = format!("Pin this {noun} to sidebar");
+    let pin_label = name.replace('/', " ");
+    render(RecordPin {
+        id,
+        label: &label,
+        pin_label: &pin_label,
+        url,
+    })
+}
+
+#[derive(Template)]
+#[template(
+    source = r#"{% import "components.html" as ui %}{% call ui::icon_button(icon="bilimbi-pin", label=label, context=bilibi_ui::IconContext::Inline, id=id, nav_pin="record", record_label=pin_label, record_url=url) %}{% endcall %}"#,
+    ext = "html"
+)]
+struct RecordPin<'a> {
+    id: &'a str,
+    label: &'a str,
+    pin_label: &'a str,
+    url: &'a str,
 }
 fn type_label(code: &str) -> String {
     Einvoice::authority().document_type_name(code)

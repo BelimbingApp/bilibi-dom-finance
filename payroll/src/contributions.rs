@@ -24,6 +24,7 @@ bilibi_menu::contribute!(
     "finance/payroll",
     bilibi_menu::MenuItem::container("finance.group.payroll", "Payroll")
         .under("finance")
+        .icon("gmdi-money-r")
         .order(70)
 );
 
@@ -31,7 +32,7 @@ bilibi_menu::contribute!(
     "finance/payroll",
     bilibi_menu::MenuItem::page("finance.payroll", "Payroll and claims", "/finance/payroll")
         .under("finance.group.payroll")
-        .icon("users")
+        .icon("gmdi-money-r")
         .requires(bilibi_menu::Requirement::Capability(VIEW))
         .order(1)
 );

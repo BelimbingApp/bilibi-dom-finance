@@ -183,6 +183,11 @@ impl Aging {
         })?;
         let mut body = render(Header {
             title: Html::text("Receivables aging"),
+            title_actions: super::menu_pin(
+                "receivables-aging-pin",
+                "nav-finance-receivables-aging",
+                "Aging",
+            )?,
             subtitle: "Who owes you money, and how late it is.",
             ..Header::default()
         })?;

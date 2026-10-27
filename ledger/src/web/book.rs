@@ -60,6 +60,7 @@ impl Book {
         }
         let mut page = render(Header {
             title: Html::text("Book"),
+            title_actions: super::menu_pin("ledger-book-pin", "nav-finance-ledger-book", "Book")?,
             ..Header::default()
         })?;
         page.push(&body);

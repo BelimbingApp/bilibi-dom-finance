@@ -11,7 +11,7 @@
 {{ refusal|safe }}
 {% if let Some(r) = record %}
 {% call workspace::announce(kind="finance/reconciliation/reconciliation", record_id=r.id.to_string()) %}{% endcall %}
-{% call ui::header(subtitle_html=r.subtitle, actions=r.actions) %}{{ r.title }}{% endcall %}
+{% call ui::header(subtitle_html=r.subtitle, title_actions=r.title_actions, actions=r.actions) %}{{ r.title }}{% endcall %}
 {% call ui::card(id="reconciliation-figures", inner_class="p-5 sm:p-6", role="region", labelledby="reconciliation-figures-heading") %}
 {% call ui::section_heading(id="reconciliation-figures-heading", title="Figures") %}{% endcall %}
 {{ r.figures|safe }}

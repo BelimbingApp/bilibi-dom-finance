@@ -66,7 +66,7 @@ page!(
     "/finance/einvoice/consolidation",
     "E-invoice consolidation",
     VIEW,
-    "squares-2x2",
+    "vaadin-invoice",
     2
 );
 page!(
@@ -74,7 +74,7 @@ page!(
     "/finance/einvoice/reconciliation",
     "E-invoice reconciliation",
     VIEW,
-    "chart-bar",
+    "vaadin-invoice",
     3
 );
 page!(
@@ -82,6 +82,6 @@ page!(
     "/finance/einvoice/setup",
     "E-invoice setup",
     SETTINGS,
-    "clipboard-document-list",
+    "vaadin-invoice",
     4
 );

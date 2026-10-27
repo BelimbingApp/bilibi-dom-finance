@@ -269,6 +269,11 @@ impl Entries {
         }
         let mut page = render(Header {
             title: Html::text("Journal entries"),
+            title_actions: super::menu_pin(
+                "ledger-entries-pin",
+                "nav-finance-ledger-entries",
+                "Journal entries",
+            )?,
             ..Header::default()
         })?;
         page.push(&body);

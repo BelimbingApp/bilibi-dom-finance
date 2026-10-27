@@ -4,5 +4,5 @@
 {{ back }}
 {% if !missing %}
 {% let details = subtitle %}
-{% call ui::header(subtitle_html=details, actions=actions) %}{{ title }}{% endcall %}
+{% call ui::header(subtitle_html=details, title_actions=title_actions, actions=actions) %}{{ title }}{% endcall %}
 {% endif %}

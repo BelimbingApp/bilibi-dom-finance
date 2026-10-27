@@ -55,6 +55,7 @@ pub(super) struct Account {
 #[derive(Template)]
 #[template(path = "account.html")]
 struct View<'a> {
+    title_actions: Html,
     flash: FlashMap<'a>,
     account: Option<BankAccount>,
     refusal: Html,
@@ -214,6 +215,7 @@ impl Account {
                 .await,
         )?;
         let mut view = View {
+            title_actions: Html::EMPTY,
             flash: flash_map(&self.flash),
             account: None,
             refusal: Html::EMPTY,
@@ -238,6 +240,12 @@ impl Account {
                 return view.render().map_err(|_| Error::Internal);
             }
         };
+        view.title_actions = super::record_pin(
+            "bank-account-pin",
+            "bank account",
+            &account.name,
+            &format!("/finance/reconciliation/accounts/{}", account.id),
+        )?;
         let (statements, reconciliations, files) = self.data(scope).await?;
         view.statement_count = Some(statements.len());
         view.reconciliation_count = Some(reconciliations.len());

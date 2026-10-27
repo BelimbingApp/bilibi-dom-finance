@@ -6,7 +6,7 @@
 {% call ui::page(id="einvoice-document", variant=bilibi_ui::PageVariant::Detail) %}
 {% if let Some(d) = document %}
   {% call workspace::announce(kind="finance/einvoice", record_id=d.document.id.to_string()) %}{% endcall %}
-  {% call ui::header(subtitle_html=header_subtitle, actions=actions) %}{{ title }}{% endcall %}
+  {% call ui::header(subtitle_html=header_subtitle, title_actions=title_actions, actions=actions) %}{{ title }}{% endcall %}
   {% if !attention.is_empty() %}
   {% call ui::card(id="einvoice-document-attention", inner_class="p-5 sm:p-6", role="alert") %}
     {% call ui::section_heading(id="einvoice-document-attention-heading", title="Needs attention") %}{% endcall %}
