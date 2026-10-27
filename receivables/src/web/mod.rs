@@ -45,7 +45,7 @@ pub(crate) const SETTINGS: &str = "/finance/receivables/settings";
 /// The most records one page reads before it says the list is cut short. Lists
 /// are read through the contracts' cursors and filtered, sorted and paged
 /// here, so a page never asks the database for more than this.
-const READ_LIMIT: usize = 2000;
+pub(super) const READ_LIMIT: usize = 2000;
 
 #[derive(Clone)]
 pub(crate) struct Pages {
@@ -53,6 +53,7 @@ pub(crate) struct Pages {
     pub contracts: Arc<PageContracts>,
     pub display: Arc<DisplayPolicy>,
     pub locales: Arc<Locales>,
+    pub parties: Arc<bilibi_tenancy::PartyProofs>,
 }
 
 bilibi_menu::contribute!(
@@ -155,6 +156,7 @@ inventory::submit! { Contribution::new(PAGE_WRITES, PAGES, Provenance { module: 
         ("save_receipt", "finance.receivables.payment.record"),
         ("reverse", "finance.receivables.payment.reverse"),
         ("configure", "finance.receivables.setup.configure"),
+        ("confirm_receivable", "finance.receivables.setup.configure"),
         ("save_series", "finance.receivables.series.create"),
         ("save_series", "finance.receivables.series.update"),
         ("save_tax", "finance.receivables.tax_code.create"),
@@ -172,6 +174,25 @@ impl Pages {
     pub(super) async fn allowed(&self, scope: &Scope, capability: &str) -> Result<bool> {
         let c = self.db.get().await?;
         Ok(bilibi_authz::decide(&**c, scope, capability).await?.allowed)
+    }
+
+    /// The name of the company the person works in, so a page can say whose
+    /// settings it changes (the shell's account menu reads it the same way).
+    /// Display only: a company the directory cannot name is "Company
+    /// unavailable", never a refusal.
+    pub(super) async fn company_name(&self, scope: &Scope) -> String {
+        let Some(id) = scope.actor().organisation() else {
+            return "Company unavailable".into();
+        };
+        let Ok(c) = self.db.get().await else {
+            return "Company unavailable".into();
+        };
+        self.parties
+            .organisation_name(&**c, scope, id)
+            .await
+            .ok()
+            .flatten()
+            .map_or_else(|| "Company unavailable".into(), |o| o.name)
     }
 
     pub(super) async fn display(&self, scope: &Scope) -> Result<DisplayContext> {
@@ -246,6 +267,12 @@ impl Pages {
     /// The company's accounts, for choosing one. An account the person cannot
     /// read (no ledger view) shows by its number alone.
     pub(super) async fn accounts(&self, scope: &Scope) -> Vec<Account> {
+        self.chart(scope).await.unwrap_or_default()
+    }
+
+    /// The company's accounts, or `None` when the chart could not be read
+    /// (no ledger view, or a failed read), which is not the same as an empty one.
+    pub(super) async fn chart(&self, scope: &Scope) -> Option<Vec<Account>> {
         self.read_all(
             scope,
             "finance.ledger.account.list",
@@ -253,8 +280,8 @@ impl Pages {
             ("after_code", "next_after_code"),
         )
         .await
+        .ok()
         .map(|(accounts, _)| accounts)
-        .unwrap_or_default()
     }
 
     pub(super) fn call<'a>(
@@ -361,6 +388,12 @@ impl Account {
     pub(super) fn label(&self) -> String {
         format!("{} {}", self.code, self.name)
     }
+
+    /// The account name first, then its code, for a choice's text (a native
+    /// option cannot style its parts); `account_html` is the styled form.
+    pub(super) fn choice_label(&self) -> String {
+        format!("{} ({})", self.name, self.code)
+    }
 }
 
 /// An account's label from a list, or a neutral label when unreadable.
@@ -369,6 +402,28 @@ pub(super) fn account_label(accounts: &[Account], id: i64) -> String {
         .iter()
         .find(|a| a.id == id)
         .map_or_else(|| "Account unavailable".into(), Account::label)
+}
+
+#[derive(Template)]
+#[template(
+    source = r#"<span>{{ name }}</span> <span class="italic text-ink-muted">{{ code }}</span>"#,
+    ext = "html"
+)]
+struct AccountLabel<'a> {
+    name: &'a str,
+    code: &'a str,
+}
+
+/// An account as a read value: its name, then its code in muted italics
+/// (BelimbingApp/bilibi-dom-finance#63), or a neutral label when unreadable.
+pub(super) fn account_html(accounts: &[Account], id: i64) -> Result<Html> {
+    match accounts.iter().find(|a| a.id == id) {
+        Some(a) => render(AccountLabel {
+            name: &a.name,
+            code: &a.code,
+        }),
+        None => Ok(Html::text("Account unavailable")),
+    }
 }
 
 pub(super) fn render(fragment: impl Template) -> Result<Html> {

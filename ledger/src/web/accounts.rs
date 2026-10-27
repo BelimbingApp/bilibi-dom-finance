@@ -1,8 +1,8 @@
 //! The chart of accounts: every account of the company's book, and a dialog to
 //! add one. Each account's page is `account.rs`.
 use super::{
-    capability_for, dialog_actions, error_text, event_type, no_company, render, shell, unavailable,
-    view, Failure, Flash, Pages, Refusal,
+    account_name, capability_for, dialog_actions, error_text, event_type, no_company, render, shell,
+    unavailable, view, Failure, Flash, Pages, Refusal,
 };
 use crate::{AccountType, MANAGE_ACCOUNTS};
 use bilibi_database::{Error, Result};
@@ -82,6 +82,31 @@ impl Draft {
         self.parent = fields.get("parent").cloned().unwrap_or_default();
         self.retained = fields.get("retained").map(String::as_str) == Some("true");
     }
+    fn equity(&self) -> bool {
+        self.account_type == "equity"
+    }
+    /// Whether `account` can group an account of the chosen type: active and
+    /// of the same type, as the ledger requires.
+    fn can_group(&self, account: &view::Account) -> bool {
+        account.active && account.account_type == self.account_type
+    }
+    /// Drops what the chosen type no longer allows, after the person changed
+    /// it: a group of another type, and the retained-earnings designation on
+    /// anything but an equity account. The ledger's own check still decides.
+    fn reconcile(&mut self, chart: &[view::Account]) {
+        if !self.equity() {
+            self.retained = false;
+        }
+        let eligible = self
+            .parent
+            .parse::<i64>()
+            .ok()
+            .and_then(|id| chart.iter().find(|a| a.id == id))
+            .is_some_and(|parent| self.can_group(parent));
+        if !eligible {
+            self.parent.clear();
+        }
+    }
     fn input(&self) -> Value {
         let mut input = json!({
             "code": self.code.trim(),
@@ -91,7 +116,9 @@ impl Draft {
         if let Ok(parent) = self.parent.parse::<i64>() {
             input["parent_id"] = json!(parent);
         }
-        if self.retained {
+        // A designation ticked while the type was equity never travels with
+        // another type.
+        if self.retained && self.equity() {
             input["retained_earnings"] = json!(true);
         }
         input
@@ -183,6 +210,9 @@ impl Accounts {
             ..Header::default()
         })?;
         page.push(&body);
+        if let Some(draft) = &mut self.draft {
+            draft.reconcile(&chart);
+        }
         if self.draft.is_some() && can_manage {
             let form = self.form(&chart)?;
             page.push(&render(Modal {
@@ -288,10 +318,10 @@ impl Accounts {
 
         let mut rows = Vec::new();
         for account in &page {
-            let group = account
-                .parent_id
-                .and_then(|id| by_id.get(&id))
-                .map_or("—".to_owned(), |p| format!("{} {}", p.code, p.name));
+            let group = match account.parent_id.and_then(|id| by_id.get(&id)) {
+                Some(parent) => account_name(parent)?,
+                None => Html::text("—"),
+            };
             rows.push({
                 let mut row = FlexRow::new(account.id.to_string())
                     .slot(
@@ -307,7 +337,7 @@ impl Accounts {
                     )
                     .cell("name", Cell::text(&account.name))
                     .cell("type", Cell::text(view::type_label(&account.account_type)))
-                    .cell("group", Cell::text(group))
+                    .slot("group", group)
                     .slot("status", status_badge(account.active)?)
                     .cell(
                         "retained",
@@ -348,18 +378,35 @@ impl Accounts {
 
     fn form(&self, chart: &[view::Account]) -> Result<Html> {
         let draft = self.draft.as_ref().ok_or(Error::Internal)?;
+        let type_word = view::type_label(&draft.account_type).to_lowercase();
+        // Only an active account of the same type can group the new one.
+        let eligible = view::by_name(chart.iter().filter(|a| draft.can_group(a)));
         let mut parents = vec![Choice::new("No group", "")];
-        parents.extend(chart.iter().filter(|a| a.active).map(|a| {
-            Choice::new(
-                format!(
-                    "{} {} ({})",
-                    a.code,
-                    a.name,
-                    view::type_label(&a.account_type)
-                ),
-                a.id.to_string(),
+        parents.extend(
+            eligible
+                .iter()
+                .map(|a| Choice::new(view::account_label(a), a.id.to_string())),
+        );
+        let parent_hint = if eligible.is_empty() {
+            format!("Optional. This company has no active {type_word} account to group under yet.")
+        } else {
+            format!(
+                "Optional. A group is an active {type_word} account, the same type as this one."
             )
-        }));
+        };
+        // Designating a new account releases the account that holds retained
+        // earnings now, so the dialog says which one before the person ticks it.
+        let retained_hint = if !draft.equity() {
+            "Only an equity account can hold retained earnings.".to_owned()
+        } else {
+            match chart.iter().find(|a| a.retained_earnings) {
+                Some(holder) => format!(
+                    "The year-end close posts profit or loss here. This replaces {}, which holds retained earnings now.",
+                    view::account_label(holder)
+                ),
+                None => "The year-end close posts profit or loss here.".to_owned(),
+            }
+        };
         let errors = |name: &str| {
             draft
                 .refusal
@@ -418,15 +465,21 @@ impl Accounts {
                 .errors(errors("parent_id"))
                 .kind(InputKind::Select)
                 .options(parents)
-                .hint("Optional. A group must be the same type as the account."),
-            field("retained", "Use for retained earnings", "true")
-                .errors(errors("retained_earnings"))
-                .kind(InputKind::Checkbox)
-                .checked(draft.retained)
-                .hint("For an equity account only. The year-end close posts profit or loss here."),
+                .hint(parent_hint),
         ] {
             body.push(&render(f)?);
         }
+        let mut retained = field("retained", "Use for retained earnings", "true")
+            .errors(errors("retained_earnings"))
+            .kind(InputKind::Checkbox)
+            .checked(draft.retained && draft.equity())
+            .hint(retained_hint);
+        if !draft.equity() {
+            // Greyed, with the line above saying what unlocks it; a disabled
+            // box posts nothing, so no designation rides along.
+            retained = retained.disabled();
+        }
+        body.push(&render(retained)?);
         let actions = {
             let mut a = render(Button {
                 id: "ledger-account-cancel",

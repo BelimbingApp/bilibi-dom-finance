@@ -12,7 +12,7 @@ use bilibi_tenancy::Scope;
 use bilibi_ui::page::{LiveBody, LiveInput, LiveRequest, LiveState, PageRequest, PageService};
 use jiff::{Timestamp, ToSpan};
 use serde_json::{json, Value};
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 
 bilibi_walkthrough_fixture::walkthrough_vocabulary!();
 bilibi_walkthrough_fixture::walkthrough_module_roles!();
@@ -75,10 +75,7 @@ async fn main() -> Outcome<()> {
     let db = pool(&std::env::var("DATABASE_URL")?)?;
     let modules = bilibi_module_registry::discover()?;
     bilibi_database::migrate(&db, &modules).await?;
-    let mut services = Services::default();
-    services.provide("bootstrap.database", Arc::new(db.clone()))?;
-    services.install(&modules)?;
-    bilibi_finance_walkthrough_fixture::without_step_up(&services)?;
+    let services = bilibi_finance_walkthrough_fixture::services(&db, &modules)?;
     bilibi_walkthrough_fixture::install(&db).await?;
     let grants = services.get::<Grants>("base/authz.grants")?;
     grants.reconcile().await?;
@@ -396,20 +393,20 @@ async fn main() -> Outcome<()> {
     event(
         approvals.as_mut(),
         &manager,
-        json!({"type":"period_select","period_filter[period]":"custom"}),
+        json!({"type":"period_select:exceptions-period","period_filter[period]":"custom"}),
     )
     .await?;
     let backwards = event(
         approvals.as_mut(),
         &manager,
-        json!({"type":"period_apply","range[from]":"2026-10-20","range[to]":"2026-10-01"}),
+        json!({"type":"period_apply:exceptions-period","range[from]":"2026-10-20","range[to]":"2026-10-01"}),
     )
     .await?;
     contains(&backwards, "Start date must be on or before end date.");
     event(
         approvals.as_mut(),
         &manager,
-        json!({"type":"period_cancel"}),
+        json!({"type":"period_cancel:exceptions-period"}),
     )
     .await?;
     println!("NT3: period/review filtering, separation reason, require again, approver refused, independent optional-note review committed");

@@ -2,6 +2,7 @@
 //! spot; deactivating it and marking it as the retained-earnings account ask
 //! first, with the ledger's own review of what will change.
 use super::{
+    account_name,
     accounts::{status_badge, INDEX},
     event_type, no_company, render, shell, unavailable, view, Failure, Flash, Pages, Read, Review,
 };
@@ -127,19 +128,25 @@ impl Account {
         };
 
         let editable = can_manage;
-        let same_type: Vec<&view::Account> = chart
-            .iter()
-            .filter(|a| a.account_type == account.account_type && a.id != account.id)
-            .collect();
-        let parent_text = account
+        // A group is an active account of the same type; the current group
+        // stays listed even once deactivated, so the editor shows what is set.
+        let groups = view::by_name(chart.iter().filter(|a| {
+            a.id != account.id
+                && a.account_type == account.account_type
+                && (a.active || Some(a.id) == account.parent_id)
+        }));
+        let parent_display = match account
             .parent_id
             .and_then(|id| chart.iter().find(|a| a.id == id))
-            .map_or("None".to_owned(), |p| format!("{} {}", p.code, p.name));
+        {
+            Some(parent) => account_name(parent)?,
+            None => Html::text("None"),
+        };
         let mut options = vec![Choice::new("No group", "")];
         options.extend(
-            same_type
+            groups
                 .iter()
-                .map(|a| Choice::new(format!("{} {}", a.code, a.name), a.id.to_string())),
+                .map(|a| Choice::new(view::account_label(a), a.id.to_string())),
         );
         let editor = render(
             Field::named("parent")
@@ -178,7 +185,7 @@ impl Account {
                         &account.parent_id.map(|p| p.to_string()).unwrap_or_default(),
                         editable,
                     ),
-                    display: Html::text(&parent_text),
+                    display: parent_display,
                     editor,
                 })?,
             },
@@ -264,7 +271,7 @@ impl Account {
             ..BackLink::default()
         })?);
         let mut page = render(Header {
-            title: Html::text(&format!("{} {}", account.code, account.name)),
+            title: account_name(&account)?,
             actions,
             ..Header::default()
         })?;
@@ -276,14 +283,17 @@ impl Account {
         if let Some((ask, review)) = &self.asking {
             let (consequence, detail, confirm, working, event) = match ask {
                 Ask::Deactivate => (
-                    format!("Deactivate {} {}?", account.code, account.name),
+                    format!("Deactivate {} ({})?", account.name, account.code),
                     "No one can post to it until you activate it again. Its history stays. An account with a balance cannot be deactivated.".to_owned(),
                     "Deactivate",
                     "Deactivating…",
                     "deactivate",
                 ),
                 Ask::Designate => (
-                    format!("Use {} {} for retained earnings?", account.code, account.name),
+                    format!(
+                        "Use {} ({}) for retained earnings?",
+                        account.name, account.code
+                    ),
                     designate_detail(&review.facts),
                     "Use for retained earnings",
                     "Saving…",
@@ -451,7 +461,7 @@ fn designate_detail(changes: &Value) -> String {
     let released = &changes["released_retained_earnings"];
     match (released["code"].as_str(), released["name"].as_str()) {
         (Some(code), Some(name)) => format!(
-            "The year-end close will post profit or loss to this account. {code} {name} stops being the retained earnings account."
+            "The year-end close will post profit or loss to this account. {name} ({code}) stops being the retained earnings account."
         ),
         _ => "The year-end close will post profit or loss to this account.".to_owned(),
     }

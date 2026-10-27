@@ -219,7 +219,7 @@ impl Book {
                     Choice::new("Independent approval required", "someone_else"),
                     Choice::new("Self-approval permitted", "one_person"),
                 ])
-                .hint("Approving your own work records an exception for an independent reviewer."),
+                .hint("Approval is still required. An authorized person may approve their own work; this records an exception for independent review."),
         )?);
         if self.approver == "one_person" {
             body.push(&render(
@@ -268,7 +268,7 @@ impl Book {
                     self.currency.trim().to_uppercase(),
                     self.units
                 ),
-                detail: if self.approver == "one_person" { "The currency and decimal places are permanent. You may approve your own work; each approval is recorded in Approval exceptions." } else { "The currency and decimal places are permanent. Someone else must approve your work." },
+                detail: if self.approver == "one_person" { "The currency and decimal places are permanent. Approval is still required. An authorized person may approve their own work; this records an approval exception." } else { "The currency and decimal places are permanent. Someone else must approve your work." },
                 confirm: "Open the book",
                 working: "Opening…",
                 confirm_event: "open_book",

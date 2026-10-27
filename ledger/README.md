@@ -125,18 +125,20 @@ The ledger has pages so a person without an AI agent can do the same daily work.
 | Book | `/finance/ledger/book` | Reads the currency and decimal places. Opens the book once, asking who approves. Sees whether controlled bookkeeping and separation of duties are on. |
 | Chart of accounts | `/finance/ledger/accounts` | Searches and filters the chart, adds an account in a dialog. |
 | (account record) | `/finance/ledger/accounts/{id}` | Edits the name and group in place, deactivates or activates the account, marks the retained earnings account, reads today's balance. |
-| Journal entries | `/finance/ledger/entries` | Lists entries oldest first, 100 at a time, by date or account. |
+| Journal entries | `/finance/ledger/entries` | Lists entries oldest first, 100 at a time. The shared period filter narrows by entry date; with no period, every date is listed ("All dates"). |
 | (entry record) | `/finance/ledger/entries/{id}` | Reads the lines. Reverses a manual entry in a dialog. |
 | Manual journals | `/finance/ledger/journals` | Lists journals by status. Submits one with its lines in a dialog. |
 | (journal record) | `/finance/ledger/journals/{id}` | Approves it (it posts) or rejects it with a reason. The ledger refuses the person who submitted it while the company separates duties. |
-| Fiscal years | `/finance/ledger/fiscal-years` | Opens a year. Closes, reopens and locks periods. Closes, reopens and locks a year. |
-| Trial balance | `/finance/ledger/trial-balance` | Reads the balances as of a date at a pinned entry number, and follows an account to its entries. |
+| Fiscal years | `/finance/ledger/fiscal-years` | Opens a year after a review that names the company and shows the calculated last day. Closes, reopens and locks periods. Closes, reopens and locks a year. |
+| Trial balance | `/finance/ledger/trial-balance` | Reads the balances as of a date at a pinned entry number, and follows an account to its entries. The as-of day is one date, not a range, so it keeps its own date control rather than the period filter. |
 
 Every read goes through `PageContracts::read` and every write through its `submit` (a dialog the person just filled in) or `preview` then `commit` (a confirmation), so a page and an agent get the same checks, the same refusals and the same audit trail. The pages add one contract, `finance.ledger.trial_balance.get`, because the trial balance had none. A control the person may not use is not drawn. The ledger's own words explain a refusal.
 
 Two limits come from the contracts. The entry and journal lists are oldest first and show a "Later entries" link at 100 rows, because the contracts page by a cursor. The chart loads whole (up to 5,000 accounts) and the page searches and sorts it.
 
-Run the proof on a disposable PostgreSQL 18 database with `DATABASE_URL=… APP_ORIGIN=http://127.0.0.1:4361 BIND_ADDR=127.0.0.1:4361 BILIBI_SETTINGS_KEY=$(openssl rand -hex 32) cargo run -p bilibi-finance-walkthrough-fixture --bin ledger-ui`. It seeds a chart, two fiscal years with closed periods, entries, and manual journals in each state, then serves the app. Sign in as `manager@other.example.test` (submits), `reviewer@other.example.test` (approves) or `viewer@other.example.test` (reads), password `bilibi-dev`. Add `-- empty` to start with no book. [`screenshots/`](screenshots) shows the pages at desktop and phone width.
+Journal entries use the shared period filter (`bilibi_datetime::PeriodFilter`, `apps/base/datetime/README.md`) beside the account toolbar. Entry dates are civil dates, both inclusive. A preset follows the display clock, including the browser's zone when the display mode is local, and is read again on each visit: an address kept overnight with `period=today` shows the new day and starts at its first entry. Until the browser has reported its zone in local mode, the address's own days stand, so a reload or Back keeps its place in the list. The page does not turn those days into UTC instants. Applying a period writes `period`, `from` and `to`, and starts again at the first matching entry; the account filter and the trial balance pin `through` stay. A `to` with no `from` and no `period` means on or before that day, which is how the trial balance opens this list. An address with no date keys lists every entry, not the shared default of the last 30 days, because the trial balance and the account pages open this list by account alone. The control then reads "All dates" and the address and the ledger get no date; once a period is applied, the "All dates" button beside the control returns to that state, starting at the first entry and keeping the account filter and the pin. A `to` with no `from` is drawn with the date field's own earliest day for its open end, which is never written to the address or sent to the ledger. The shared control has no "All dates" preset, so both are this page's own; a Platform follow-up would replace them.
+
+Run the proof on a disposable PostgreSQL 18 database with `DATABASE_URL=… APP_ORIGIN=http://127.0.0.1:4361 BIND_ADDR=127.0.0.1:4361 BILIBI_SETTINGS_KEY=$(openssl rand -hex 32) cargo run -p bilibi-finance-walkthrough-fixture --bin ledger-ui`. It seeds a chart, two fiscal years with closed periods, entries, and manual journals in each state, then drives the Journal entries period control through its live state, printing one `Journal entries period proof` line, and serves the app. Sign in as `manager@other.example.test` (submits), `reviewer@other.example.test` (approves) or `viewer@other.example.test` (reads), password `bilibi-dev`. Add `-- empty` to start with no book. [`screenshots/`](screenshots) shows the pages at desktop and phone width.
 
 ## Capabilities
 
@@ -477,7 +479,8 @@ its poster; a posted entry is corrected only by a reversal, once, and an owned
 one only through its owner; the person who prepares a record does not
 approve it unless the company has turned separation off, and every such
 approval and every override is listed for an independent reviewer; a manual
-journal posts only once someone else approves it; any past trial balance or
+journal posts only once it is approved, by someone independent while
+separation of duties is required; any past trial balance or
 account total reproduces exactly from its `through_entry_number`; every
 table is exported to the auditor field by field; every write is attributed
 to the signed-in actor and any impersonator through the Platform's audit

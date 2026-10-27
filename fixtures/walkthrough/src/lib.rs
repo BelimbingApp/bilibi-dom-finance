@@ -92,6 +92,28 @@ pub fn without_step_up(services: &Services) -> bilibi_module_registry::Result<()
     Ok(())
 }
 
+/// The registry of a fixture binary that composes the modules itself rather
+/// than through `bilibi_web::App::new`: both bootstrap values the pinned
+/// Platform needs at install (`bootstrap.database`, and
+/// `bootstrap.composition`, which Base Software reads), the modules
+/// installed, and step-up off. Boot with this, never a bare
+/// `Services::default()` plus `provide("bootstrap.database")`, which the
+/// registry now refuses as `Service("bootstrap.composition")`.
+pub fn services(
+    db: &Db,
+    modules: &[&'static bilibi_module_registry::Module],
+) -> bilibi_module_registry::Result<Services> {
+    let mut services = Services::default();
+    services.provide("bootstrap.database", std::sync::Arc::new(db.clone()))?;
+    services.provide(
+        "bootstrap.composition",
+        std::sync::Arc::new(bilibi_web::composition()),
+    )?;
+    services.install(modules)?;
+    without_step_up(&services)?;
+    Ok(services)
+}
+
 /// Installs the Platform fixture, reconciles the contributed roles, and opens
 /// Company 001's book and chart through the ledger facade as the manager.
 pub async fn install(db: &Db, services: &Services) -> Result<Installed> {

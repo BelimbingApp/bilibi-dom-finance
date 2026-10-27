@@ -16,7 +16,7 @@ use bilibi_tenancy::Scope;
 use bilibi_ui::page::{LiveBody, LiveInput, LiveRequest, LiveState, PageRequest, PageService};
 use jiff::civil::{date, Date};
 use serde_json::json;
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, time::Duration};
 
 bilibi_walkthrough_fixture::walkthrough_vocabulary!();
 bilibi_walkthrough_fixture::walkthrough_module_roles!();
@@ -138,10 +138,7 @@ async fn main() -> Outcome<()> {
         bilibi_extensions::MODULES,
     )?;
     bilibi_database::migrate(&db, &modules).await?;
-    let mut services = Services::default();
-    services.provide("bootstrap.database", Arc::new(db.clone()))?;
-    services.install(&modules)?;
-    bilibi_finance_walkthrough_fixture::without_step_up(&services)?;
+    let services = bilibi_finance_walkthrough_fixture::services(&db, &modules)?;
     let installed = install(&db, &services).await?;
     let manager = sign_in(&db, &services, 1, 1).await?;
     let admin = sign_in(&db, &services, 1, 4).await?;
@@ -297,14 +294,16 @@ async fn main() -> Outcome<()> {
     update(
         &mut latest,
         &manager,
-        LiveInput::Event(&json!({"type":"period_select","period_filter[period]":"custom"})),
+        LiveInput::Event(
+            &json!({"type":"period_select:report-period","period_filter[period]":"custom"}),
+        ),
     )
     .await?;
     let invalid = update(
         &mut latest,
         &manager,
         LiveInput::Event(
-            &json!({"type":"period_apply","range[from]":"2026-11-01","range[to]":"2026-10-01"}),
+            &json!({"type":"period_apply:report-period","range[from]":"2026-11-01","range[to]":"2026-10-01"}),
         ),
     )
     .await?;
@@ -328,7 +327,7 @@ async fn main() -> Outcome<()> {
     update(
         &mut latest,
         &manager,
-        LiveInput::Event(&json!({"type":"period_cancel"})),
+        LiveInput::Event(&json!({"type":"period_cancel:report-period"})),
     )
     .await?;
     let unpinned = update(

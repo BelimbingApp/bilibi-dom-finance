@@ -18,7 +18,7 @@ use bilibi_module_registry::{Contribution, Provenance, Services};
 use bilibi_tenancy::Scope;
 use jiff::civil::date;
 use rust_decimal::Decimal;
-use std::{fmt::Debug, sync::Arc};
+use std::fmt::Debug;
 
 bilibi_walkthrough_fixture::walkthrough_vocabulary!();
 bilibi_walkthrough_fixture::walkthrough_module_roles!();
@@ -109,10 +109,7 @@ async fn main() -> Outcome<()> {
         bilibi_extensions::MODULES,
     )?;
     bilibi_database::migrate(&db, &modules).await?;
-    let mut services = Services::default();
-    services.provide("bootstrap.database", Arc::new(db.clone()))?;
-    services.install(&modules)?;
-    bilibi_finance_walkthrough_fixture::without_step_up(&services)?;
+    let services = bilibi_finance_walkthrough_fixture::services(&db, &modules)?;
     install(&db, &services).await?;
     run(&db, &services).await?;
     println!("NX1: all acquisition, schedule, scope, concurrency, audit and SQL proofs passed");

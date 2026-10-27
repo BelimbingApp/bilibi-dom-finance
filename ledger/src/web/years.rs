@@ -14,6 +14,7 @@ use bilibi_ui::{
     ConfirmDialog, CreateButton, EmptyState, Field, FlexRow, FlexTable, Form, Header, Html,
     InputKind, ListColumns, Modal, PageVariant, SectionHeading, StatusKind, TableEmpty,
 };
+use jiff::{civil::Date, ToSpan};
 use serde_json::json;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -87,6 +88,7 @@ struct Targets {
 /// What the person chose, and the ledger's review of it once it has one.
 struct Choice {
     kind: Kind,
+    company: Option<i64>,
     id: i64,
     label: String,
     review: Option<Review>,
@@ -99,6 +101,8 @@ struct Choice {
 struct Opening {
     start: String,
     end: String,
+    calculated_end: String,
+    review: Option<Review>,
     refusal: Refusal,
     notice: String,
 }
@@ -123,6 +127,17 @@ impl Years {
     }
 
     async fn view(&mut self, scope: &Scope) -> Result<LiveBody> {
+        let company_name = if let Some(company) = scope.actor().organisation() {
+            let client = self.pages.db.get().await?;
+            self.pages
+                .parties
+                .organisation_name(&**client, scope, company)
+                .await?
+                .map(|company| company.name)
+                .unwrap_or_else(|| "Company unavailable".into())
+        } else {
+            "Company unavailable".into()
+        };
         let mut body = Html::EMPTY;
         let mut actions = Html::EMPTY;
         let mut shown = 0;
@@ -207,6 +222,7 @@ impl Years {
                             for year in years.iter().rev() {
                                 body.push(&self.year(
                                     year,
+                                    &company_name,
                                     Targets {
                                         close,
                                         reopen,
@@ -230,6 +246,7 @@ impl Years {
         }
         let mut page = render(Header {
             title: Html::text("Fiscal years"),
+            subtitle: &company_name,
             actions,
             ..Header::default()
         })?;
@@ -238,16 +255,31 @@ impl Years {
             if can_open {
                 page.push(&render(Modal {
                     id: "ledger-year-modal",
-                    title: "Open a fiscal year",
+                    title: &format!("Open a fiscal year for {company_name}"),
                     cancel_event: "close_dialog",
                     description: "A year starts on the first of a month and ends on the last day of a month. Later years follow the one before.",
                     body: self.open_form(opening)?,
                     ..Modal::default()
                 })?);
+                if let Some(review) = &opening.review {
+                    page.push(&render(ConfirmDialog {
+                        id: "ledger-year-confirm",
+                        consequence: &format!("Open fiscal year for {company_name}?"),
+                        detail: &format!(
+                            "{} to {}",
+                            review.facts["start_date"].as_str().unwrap_or(""),
+                            review.facts["end_date"].as_str().unwrap_or("")
+                        ),
+                        confirm: "Open fiscal year",
+                        working: "Opening…",
+                        confirm_event: "confirm_open_year",
+                        cancel_event: "cancel_open_review",
+                    })?);
+                }
             }
         }
         if let Some(choice) = &self.choice {
-            page.push(&self.dialog(choice)?);
+            page.push(&self.dialog(choice, &company_name)?);
         }
         Ok(LiveBody {
             html: shell("ledger-years", PageVariant::List, &self.flash, page)?,
@@ -256,7 +288,7 @@ impl Years {
         })
     }
 
-    fn year(&mut self, year: &view::Year, targets: Targets) -> Result<Html> {
+    fn year(&mut self, year: &view::Year, company_name: &str, targets: Targets) -> Result<Html> {
         let Targets {
             close: close_id,
             reopen: reopen_id,
@@ -390,7 +422,10 @@ impl Years {
         let heading_id = format!("ledger-year-{}-heading", year.id);
         let mut heading = render(SectionHeading {
             id: &heading_id,
-            title: &format!("{} to {}", year.start_date, year.end_date),
+            title: &format!(
+                "{} · {} to {}",
+                company_name, year.start_date, year.end_date
+            ),
             title_actions: render(Badge::status(
                 if closed {
                     BadgeKind::Warning
@@ -452,7 +487,7 @@ impl Years {
                 .label("Last day")
                 .kind(InputKind::Date)
                 .value(&opening.end)
-                .hint("The last day of a month. Leave empty for twelve months.")
+                .hint(end_hint(opening))
                 .errors(errors("end_date")),
         )?);
         let mut actions = render(Button {
@@ -481,7 +516,7 @@ impl Years {
         })
     }
 
-    fn dialog(&self, choice: &Choice) -> Result<Html> {
+    fn dialog(&self, choice: &Choice, company_name: &str) -> Result<Html> {
         if choice.kind.needs_reason() {
             let errors: Vec<String> = choice
                 .refusal
@@ -540,7 +575,7 @@ impl Years {
                     }
                 ),
                 cancel_event: "cancel_choice",
-                description: &choice.label,
+                description: &format!("{} · {}", company_name, choice.label),
                 body: render(Form {
                     id: "ledger-reopen-form",
                     event: "validate",
@@ -581,7 +616,7 @@ impl Years {
         };
         render(ConfirmDialog {
             id: "ledger-choice-confirm",
-            consequence: &consequence,
+            consequence: &format!("{consequence} ({company_name})"),
             detail: &detail,
             confirm,
             working,
@@ -608,6 +643,7 @@ impl Years {
         }
         let mut choice = Choice {
             kind,
+            company: Pages::company(r.scope),
             id,
             label,
             review: None,
@@ -642,6 +678,11 @@ impl Years {
         let Some(choice) = self.choice.take() else {
             return Ok(());
         };
+        if choice.company != Pages::company(r.scope) {
+            self.flash
+                .error("The company changed. Choose the action again.");
+            return Ok(());
+        }
         let Some(review) = choice.review else {
             return Ok(());
         };
@@ -671,6 +712,10 @@ impl Years {
         let Some(choice) = &mut self.choice else {
             return Ok(());
         };
+        if choice.company != Pages::company(r.scope) {
+            choice.notice = "The company changed. Choose the action again.".into();
+            return Ok(());
+        }
         let input = json!({ choice.kind.key(): choice.id, "reason": choice.reason.trim() });
         match self
             .pages
@@ -714,7 +759,7 @@ impl Years {
         }
         match self
             .pages
-            .submit(
+            .review(
                 r.scope,
                 r.credential,
                 "open_year",
@@ -723,14 +768,41 @@ impl Years {
             )
             .await?
         {
-            Ok(done) => {
-                let record = &done["result"]["record"];
-                let text = match (record["start_date"].as_str(), record["end_date"].as_str()) {
-                    (Some(s), Some(e)) => format!("Fiscal year {s} to {e} is open."),
-                    _ => "The fiscal year is open.".into(),
-                };
+            Ok(review) => opening.review = Some(review),
+            Err(Failure::Refused(refusal)) => {
+                opening.refusal = refusal;
+                opening.notice.clear();
+            }
+            Err(failure) => opening.notice = failure.text("The fiscal year"),
+        }
+
+        Ok(())
+    }
+    async fn confirm_open_year(&mut self, r: &LiveRequest<'_, Scope>) -> Result<()> {
+        let Some(opening) = &mut self.opening else {
+            return Ok(());
+        };
+        let Some(review) = opening.review.take() else {
+            return Ok(());
+        };
+        if review.input["company_id"].as_i64() != Pages::company(r.scope) {
+            opening.notice = "The company changed. Review the fiscal year again.".into();
+            return Ok(());
+        }
+        match self
+            .pages
+            .commit(
+                r.scope,
+                r.credential,
+                "confirm_open_year",
+                "finance.ledger.fiscal_year.open",
+                review,
+            )
+            .await?
+        {
+            Ok(_) => {
                 self.opening = None;
-                self.flash.success(text);
+                self.flash.success("The fiscal year is open.");
             }
             Err(Failure::Refused(refusal)) => {
                 opening.refusal = refusal;
@@ -740,6 +812,29 @@ impl Years {
         }
         Ok(())
     }
+}
+
+fn end_hint(opening: &Opening) -> String {
+    if opening.end.trim().is_empty() && !opening.calculated_end.is_empty() {
+        format!(
+            "Left empty, the twelve-month default applies: {}. You may choose another month-end.",
+            opening.calculated_end
+        )
+    } else if opening.end == opening.calculated_end {
+        "Calculated as twelve months from the first day. You may choose another month-end.".into()
+    } else {
+        "Custom end date. Choose the last day of a month.".into()
+    }
+}
+
+fn default_end(start: &str) -> String {
+    start
+        .parse::<Date>()
+        .ok()
+        .and_then(|date| date.checked_add(12.months()).ok())
+        .and_then(|date| date.yesterday().ok())
+        .map(|date| date.to_string())
+        .unwrap_or_default()
 }
 
 fn close_year_detail(review: Option<&Review>) -> String {
@@ -768,15 +863,54 @@ impl LiveState<Scope, Error> for Years {
                 match event_type(value)? {
                     "open_dialog" => {
                         if self.pages.allowed(r.scope, MANAGE_PERIODS).await? {
-                            self.opening = Some(Opening::default());
+                            let mut opening = Opening::default();
+                            let mut after: Option<String> = None;
+                            loop {
+                                let mut input = json!({"page_size": 100});
+                                if let Some(date) = &after {
+                                    input["after_start_date"] = json!(date);
+                                }
+                                let Read::Found(value) = self
+                                    .pages
+                                    .read(r.scope, "finance.ledger.fiscal_year.list", input)
+                                    .await?
+                                else {
+                                    break;
+                                };
+                                let years: Vec<view::Year> =
+                                    view::parse(value["records"].clone()).unwrap_or_default();
+                                if let Some(start) = years
+                                    .last()
+                                    .and_then(|year| year.end_date.parse::<Date>().ok())
+                                    .and_then(|end| end.tomorrow().ok())
+                                {
+                                    opening.start = start.to_string();
+                                    opening.calculated_end = default_end(&opening.start);
+                                    opening.end = opening.calculated_end.clone();
+                                }
+                                after = value["next_after_start_date"].as_str().map(str::to_owned);
+                                if after.is_none() {
+                                    break;
+                                }
+                            }
+                            self.opening = Some(opening);
                         }
                     }
                     "close_dialog" => self.opening = None,
                     "validate" => {
                         if let Some(opening) = &mut self.opening {
                             let fields = params::form_values(value, "year");
-                            opening.start = fields.get("start_date").cloned().unwrap_or_default();
-                            opening.end = fields.get("end_date").cloned().unwrap_or_default();
+                            let start = fields.get("start_date").cloned().unwrap_or_default();
+                            let end = fields.get("end_date").cloned().unwrap_or_default();
+                            let follows_default = end == opening.calculated_end;
+                            opening.start = start;
+                            opening.calculated_end = default_end(&opening.start);
+                            opening.end = if follows_default {
+                                opening.calculated_end.clone()
+                            } else {
+                                end
+                            };
+                            opening.review = None;
                             opening.refusal = Refusal::default();
                             opening.notice.clear();
                         } else if let Some(choice) = &mut self.choice {
@@ -789,6 +923,12 @@ impl LiveState<Scope, Error> for Years {
                         }
                     }
                     "open_year" => self.open_year(&r).await?,
+                    "confirm_open_year" => self.confirm_open_year(&r).await?,
+                    "cancel_open_review" => {
+                        if let Some(opening) = &mut self.opening {
+                            opening.review = None;
+                        }
+                    }
                     "choose" => {
                         let action = value["action"].as_str().ok_or(Error::Invalid)?.to_owned();
                         self.choose(&r, &action).await?

@@ -58,6 +58,7 @@ inventory::submit! {
             contracts: services.get(bilibi_agent_api::page::SERVICE)?,
             display: services.get("base/datetime.display")?,
             locales: services.get("base/locale.locales")?,
+            parties: services.get("base/tenancy.parties")?,
         })))) }],
     }
 }
