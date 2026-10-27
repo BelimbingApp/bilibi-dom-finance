@@ -866,7 +866,6 @@ impl Document {
             id: "receivables-lines-add",
             button_type: "button",
             event: "add_line",
-            class: "mr-auto",
             body: Html::text("Add line"),
             ..Button::default()
         })?;
@@ -874,6 +873,7 @@ impl Document {
             id: "receivables-lines-cancel",
             button_type: "button",
             event: "cancel_lines",
+            class: "ml-auto",
             body: Html::text("Cancel"),
             ..Button::default()
         })?);

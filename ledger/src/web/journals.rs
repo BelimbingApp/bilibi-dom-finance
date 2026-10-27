@@ -671,7 +671,6 @@ impl Journals {
             id: "ledger-journal-add-line",
             button_type: "button",
             event: "add_line",
-            class: "mr-auto",
             disabled: draft.lines.len() >= MAX_LINES,
             body: Html::text("Add line"),
             ..Button::default()
@@ -680,6 +679,7 @@ impl Journals {
             id: "ledger-journal-cancel",
             button_type: "button",
             event: "close_modal",
+            class: "ml-auto",
             body: Html::text("Cancel"),
             ..Button::default()
         })?);

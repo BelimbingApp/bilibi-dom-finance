@@ -541,7 +541,6 @@ impl Payments {
             id: "receivables-receipt-fill",
             button_type: "button",
             event: "apply_oldest",
-            class: "mr-auto",
             body: Html::text("Apply to oldest first"),
             ..Button::default()
         })?;
@@ -549,6 +548,7 @@ impl Payments {
             id: "receivables-receipt-cancel",
             button_type: "button",
             event: "cancel_record",
+            class: "ml-auto",
             body: Html::text("Cancel"),
             ..Button::default()
         })?);
