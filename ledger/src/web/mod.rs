@@ -487,8 +487,9 @@ pub(crate) const DENIED: &str = "You do not have permission to do that.";
 
 /// One field's refusal as a sentence: "Code has already been taken."
 pub(crate) fn error_text(field: &str, message: &str) -> String {
-    // A refusal of the lines as a whole already reads as a sentence.
-    let label = if field.ends_with("lines") {
+    // A refusal of the lines as a whole, or of one line ("a line has either a
+    // debit or a credit"), already reads as a sentence.
+    let label = if field.ends_with("lines") || message.starts_with("a line ") {
         String::new()
     } else {
         field_label(field)
@@ -721,6 +722,26 @@ pub(crate) struct Figure {
 pub(crate) struct EntryLink<'a> {
     pub id: i64,
     pub label: &'a str,
+}
+
+/// An account named for a person: its name, then its code in muted italics,
+/// both escaped. The plain-text form for a select option is
+/// `view::account_label`.
+#[derive(Template)]
+#[template(
+    source = r#"{{ name }} <span class="font-normal italic text-ink-muted">{{ code }}</span>"#,
+    ext = "html"
+)]
+pub(crate) struct AccountName<'a> {
+    pub name: &'a str,
+    pub code: &'a str,
+}
+
+pub(crate) fn account_name(account: &view::Account) -> Result<Html> {
+    render(AccountName {
+        name: &account.name,
+        code: &account.code,
+    })
 }
 
 /// A plain link to an account's page.

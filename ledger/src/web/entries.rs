@@ -136,9 +136,9 @@ impl Entries {
         let form = self.list.filters_form();
         let mut options = vec![Choice::new("All accounts", "")];
         options.extend(
-            chart
+            view::by_name(chart.iter())
                 .iter()
-                .map(|a| Choice::new(format!("{} {}", a.code, a.name), a.id.to_string())),
+                .map(|a| Choice::new(view::account_label(a), a.id.to_string())),
         );
         body.push(&render(FilterToolbar::new(
             "ledger-entries-filters",

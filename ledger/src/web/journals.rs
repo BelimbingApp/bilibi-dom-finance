@@ -46,6 +46,21 @@ static SPEC: LazyLock<Arc<ListSpec>> = LazyLock::new(|| {
     .expect("manual journals list spec")
 });
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Side {
+    Debit,
+    Credit,
+}
+
+impl Side {
+    fn other(self) -> Self {
+        match self {
+            Self::Debit => Self::Credit,
+            Self::Credit => Self::Debit,
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 struct LineDraft {
     account: String,
@@ -54,29 +69,146 @@ struct LineDraft {
     description: String,
 }
 
+impl LineDraft {
+    fn amount(&self, side: Side) -> &str {
+        match side {
+            Side::Debit => self.debit.trim(),
+            Side::Credit => self.credit.trim(),
+        }
+    }
+    fn set(&mut self, side: Side, text: &str) {
+        match side {
+            Side::Debit => self.debit = text.to_owned(),
+            Side::Credit => self.credit = text.to_owned(),
+        }
+    }
+    fn no_amount(&self) -> bool {
+        self.debit.trim().is_empty() && self.credit.trim().is_empty()
+    }
+    /// The one positive amount on this line, when it carries exactly one and
+    /// the book accepts it; a line with both sides, a negative or an amount
+    /// finer than the book's minor units is nothing to balance against.
+    fn single(&self, units: crate::MinorUnits) -> Option<(Side, crate::Money)> {
+        let side = match (
+            self.amount(Side::Debit).is_empty(),
+            self.amount(Side::Credit).is_empty(),
+        ) {
+            (false, true) => Side::Debit,
+            (true, false) => Side::Credit,
+            _ => return None,
+        };
+        crate::Money::parse(self.amount(side), units)
+            .ok()
+            .filter(|money| money.is_positive())
+            .map(|money| (side, money))
+    }
+}
+
+/// The opposite amount the dialog filled in to balance a two-line journal.
+#[derive(Clone)]
+struct Fill {
+    line: usize,
+    side: Side,
+    /// The amount written in, with the book's decimal places; while the field
+    /// still holds exactly this, it is the dialog's suggestion, not the person's.
+    amount: String,
+}
+
 /// The new-journal dialog's values and what the ledger said about them.
 struct Draft {
     date: String,
     description: String,
     reference: String,
+    units: crate::MinorUnits,
     lines: Vec<LineDraft>,
     refusal: Refusal,
     /// For each line sent, which dialog line it was (blank lines are not sent).
     sent: Vec<usize>,
     notice: String,
+    /// The balancing amount the dialog filled in, if it is still showing.
+    fill: Option<Fill>,
+    /// The amount whose suggestion the person cleared: it is not offered
+    /// again until the amount it balanced changes.
+    declined: Option<String>,
 }
 
 impl Draft {
-    fn new(today: String) -> Self {
+    fn new(today: String, units: crate::MinorUnits) -> Self {
         Self {
             date: today,
             description: String::new(),
             reference: String::new(),
+            units,
             lines: vec![LineDraft::default(), LineDraft::default()],
             refusal: Refusal::default(),
             sent: Vec::new(),
             notice: String::new(),
+            fill: None,
+            declined: None,
         }
+    }
+
+    /// Fills the empty opposite amount of a two-line journal with the amount
+    /// that balances it, once the other line has its one amount and this
+    /// line has its account. `before` holds the lines as the person last saw
+    /// them. The value stays visible and editable: an amount the person typed
+    /// is never touched and a line they just emptied is left empty, an edited
+    /// suggestion becomes theirs, a cleared one stays clear until the amount
+    /// it balanced changes, and a suggestion whose basis is gone (the amount
+    /// changed, cleared, made invalid, both sides filled, the account unset, a
+    /// third line added) is withdrawn or refilled from the new amount.
+    fn suggest(&mut self, before: &[LineDraft]) {
+        if self.lines.len() != 2 {
+            self.fill = None;
+            return;
+        }
+        let mut withdrawn = None;
+        if let Some(fill) = self.fill.take() {
+            let shown = self.lines[fill.line].amount(fill.side).to_owned();
+            if shown == fill.amount {
+                // Still the dialog's own figure: withdrawn, and offered again
+                // below while it still balances.
+                self.lines[fill.line].set(fill.side, "");
+                withdrawn = Some(fill.line);
+            } else if shown.is_empty() {
+                self.declined = Some(fill.amount);
+            }
+            // Otherwise the person made the amount their own.
+        }
+        for source in 0..2 {
+            let target = 1 - source;
+            let Some((side, money)) = self.lines[source].single(self.units) else {
+                continue;
+            };
+            let amount = money.shown(self.units);
+            let was_empty = withdrawn == Some(target)
+                || match before.get(target) {
+                    Some(line) => line.no_amount(),
+                    None => true,
+                };
+            if !was_empty
+                || !self.lines[target].no_amount()
+                || self.lines[target].account.is_empty()
+                || self.declined.as_deref() == Some(amount.as_str())
+            {
+                continue;
+            }
+            self.lines[target].set(side.other(), &amount);
+            self.fill = Some(Fill {
+                line: target,
+                side: side.other(),
+                amount,
+            });
+            self.declined = None;
+            return;
+        }
+    }
+
+    /// Whether the amount at `line` and `side` is the dialog's own suggestion.
+    fn suggested(&self, line: usize, side: Side) -> bool {
+        self.fill
+            .as_ref()
+            .is_some_and(|fill| fill.line == line && fill.side == side)
     }
 
     fn read(&mut self, value: &Value) {
@@ -250,7 +382,7 @@ impl Journals {
                 title: "New manual journal",
                 cancel_event: "close_modal",
                 width: ModalWidth::Wide,
-                description: "Debits and credits must balance. The journal posts when approved.",
+                description: "Each line takes an account and one amount, a debit or a credit. Debits and credits must balance. The journal posts when approved.",
                 body: form,
                 ..Modal::default()
             })?);
@@ -389,13 +521,10 @@ impl Journals {
                 .map(|m| error_text(name, m))
                 .collect()
         };
-        let mut choices = vec![];
-        choices.extend(
-            accounts
-                .iter()
-                .filter(|a| a.active)
-                .map(|a| Choice::new(format!("{} {}", a.code, a.name), a.id.to_string())),
-        );
+        let choices: Vec<Choice> = view::by_name(accounts.iter().filter(|a| a.active))
+            .iter()
+            .map(|a| Choice::new(view::account_label(a), a.id.to_string()))
+            .collect();
         let mut body = Html::EMPTY;
         let mut messages = draft.refusal.alert(&[
             "entry_date",
@@ -460,25 +589,28 @@ impl Journals {
                     .wrapper_class("mb-0")
                     .errors(draft.line_errors(i, if key == "account" { "account_id" } else { key }))
             };
+            // Every line that is sent needs its account; the two amounts are
+            // one choice between them, so neither is marked on its own.
             let account = render(
                 cell("account", "Account")
                     .kind(InputKind::Select)
                     .prompt("Choose an account")
                     .options(choices.clone())
-                    .value(&line.account),
+                    .value(&line.account)
+                    .required(),
             )?;
-            let debit = render(
-                cell("debit", "Debit")
-                    .value(&line.debit)
+            let amount = |side: Side, key: &str, label: &str, value: &str| {
+                let mut field = cell(key, label)
+                    .value(value)
                     .attr("inputmode", "decimal")
-                    .attr("data-debounce", "300"),
-            )?;
-            let credit = render(
-                cell("credit", "Credit")
-                    .value(&line.credit)
-                    .attr("inputmode", "decimal")
-                    .attr("data-debounce", "300"),
-            )?;
+                    .attr("data-debounce", "300");
+                if draft.suggested(i, side) {
+                    field = field.hint("Filled to balance the journal. Change it if needed.");
+                }
+                field
+            };
+            let debit = render(amount(Side::Debit, "debit", "Debit", &line.debit))?;
+            let credit = render(amount(Side::Credit, "credit", "Credit", &line.credit))?;
             let note = render(
                 cell("description", "Line description")
                     .value(&line.description)
@@ -497,13 +629,19 @@ impl Journals {
         }
         let (debits, credits) = draft.totals();
         let difference = debits - credits;
+        let units = draft.units.get();
         body.push(&render(Totals {
             text: format!(
-                "Debits {debits}. Credits {credits}. {}",
+                "Debits {}. Credits {}. {}",
+                view::amount(&debits.to_string(), units),
+                view::amount(&credits.to_string(), units),
                 if difference.is_zero() {
                     "They match.".to_owned()
                 } else {
-                    format!("The difference is {}.", difference.abs())
+                    format!(
+                        "The difference is {}.",
+                        view::amount(&difference.abs().to_string(), units)
+                    )
                 }
             ),
         })?);
@@ -640,20 +778,36 @@ impl LiveState<Scope, Error> for Journals {
                     }
                     "new" => {
                         if self.pages.allowed(r.scope, SUBMIT_JOURNALS).await? {
-                            let today = self.pages.today(r.scope).await?.to_string();
-                            self.draft = Some(Draft::new(today));
+                            // The book's minor units decide which amounts the
+                            // dialog can balance against; no book, no dialog.
+                            let units = self
+                                .pages
+                                .book(r.scope)
+                                .await?
+                                .ok()
+                                .and_then(|state| state.book)
+                                .and_then(|book| {
+                                    crate::MinorUnits::new(i64::from(book.minor_units))
+                                });
+                            if let Some(units) = units {
+                                let today = self.pages.today(r.scope).await?.to_string();
+                                self.draft = Some(Draft::new(today, units));
+                            }
                         }
                     }
                     "close_modal" => self.draft = None,
                     "validate" => {
                         if let Some(draft) = &mut self.draft {
+                            let before = draft.lines.clone();
                             draft.read(value);
+                            draft.suggest(&before);
                         }
                     }
                     "add_line" => {
                         if let Some(draft) = &mut self.draft {
                             if draft.lines.len() < MAX_LINES {
                                 draft.lines.push(LineDraft::default());
+                                draft.suggest(&[]);
                             }
                         }
                     }
@@ -667,6 +821,7 @@ impl LiveState<Scope, Error> for Journals {
                             {
                                 draft.lines.remove(index);
                                 draft.refusal = Refusal::default();
+                                draft.suggest(&[]);
                             }
                         }
                     }

@@ -167,6 +167,25 @@ pub(crate) fn decimal(text: &str) -> Decimal {
     Decimal::from_str(text).unwrap_or_default()
 }
 
+/// An account as a person names it: the name first, then its code
+/// ("Bank Accounts · bank-accounts"), for a select option or a sentence.
+/// `super::account_name` is the same in HTML, with the code in muted italics.
+pub(crate) fn account_label(account: &Account) -> String {
+    format!("{} · {}", account.name, account.code)
+}
+
+/// Accounts in the order a name-first list reads: by name, then by code.
+pub(crate) fn by_name<'a>(accounts: impl Iterator<Item = &'a Account>) -> Vec<&'a Account> {
+    let mut list: Vec<&Account> = accounts.collect();
+    list.sort_by(|a, b| {
+        a.name
+            .to_lowercase()
+            .cmp(&b.name.to_lowercase())
+            .then_with(|| a.code.cmp(&b.code))
+    });
+    list
+}
+
 /// A word for the account type in the plain form people say it.
 pub(crate) fn type_label(account_type: &str) -> &'static str {
     match account_type {

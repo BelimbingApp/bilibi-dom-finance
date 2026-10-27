@@ -84,6 +84,15 @@ they govern this code and are not copied here.
   `change: true` and its buttons `type="button"` with their own `event`; the
   server keeps the draft (`ledger/src/web/journals.rs`). Show a refusal beside
   its field, and what has no field in the dialog's own alert (`Refusal::alert`).
+  Let that round trip also drop what a changed field no longer allows (a group
+  of another type once the type changes, `Draft::reconcile` in
+  `ledger/src/web/accounts.rs`) and offer only eligible choices, instead of a
+  hint beside an option the ledger will refuse.
+- Name an account for a person name-first: `view::account_label` ("Cash ·
+  1000") for a select option or a sentence, `account_name` (`ledger/src/web/mod.rs`,
+  the code in muted italics) for HTML a page controls; never `code name`. A
+  `Choice` is plain text, so a select or `Combobox` option cannot carry the
+  muted code (a Platform follow-up), and no page styles its own option.
 - Declare every page or panel service's write events in its `PageWrites`
   (Bilibi `apps/base/agent_api/README.md`): the host refuses, as
   `Error::Internal` at run time, a live-event write its service has not
