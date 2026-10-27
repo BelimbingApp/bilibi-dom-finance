@@ -305,10 +305,9 @@ impl State {
             self.browser_zone = value["timezone"].as_str().map(str::to_owned);
             self.timezone_request.clear();
         }
-        if matches!(
-            kind,
-            "period_select" | "period_apply" | "compare" | "pin" | "unpin" | "browser_timezone"
-        ) {
+        // The control's events are `period_select:<id>` and the same for apply
+        // and cancel. Refresh the clock before the filter reads "today".
+        if period_event(kind) || matches!(kind, "compare" | "pin" | "unpin" | "browser_timezone") {
             self.reclock(scope).await?;
         }
         match self.filter.event(kind, value, &self.clock) {
@@ -595,6 +594,13 @@ fn company(scope: &Scope) -> Result<i64> {
         .map(|id| id.get())
         .ok_or(Error::Forbidden)
 }
+fn period_event(kind: &str) -> bool {
+    matches!(
+        kind.split_once(':').map(|(name, _)| name).unwrap_or(kind),
+        "period_select" | "period_apply" | "period_cancel"
+    )
+}
+
 fn period(query: &HashMap<String, String>, clock: &Clock) -> Period {
     Period::parse(
         |k| {

@@ -68,7 +68,10 @@ they govern this code and are not copied here.
   (`cargo run -p bilibi-finance-walkthrough-fixture`), extending its chart and
   scenarios, not with unit tests or mocks: the gate is
   `scripts/domain-ci.sh` mounted, and the running proof is the facade's own
-  answers.
+  answers. A fixture binary that composes the modules itself boots through
+  `bilibi_finance_walkthrough_fixture::services` (or `bilibi_web::App::new`),
+  never a bare `Services::default()` with only `bootstrap.database`: the
+  pinned Platform refuses to install without `bootstrap.composition`.
 - The ledger owns no CSS or JavaScript. Bilimbi's ledger has no pages
   (`web: nil`); this port's are in `ledger/src/web/`. A Finance module with
   pages uses only `bilibi_ui` components and `FlexTable` for every list, per
@@ -106,6 +109,14 @@ they govern this code and are not copied here.
 - A settings page names the company it changes (header subtitle and each dialog's description, through `Pages::company_name`) and carries the title pin (`IconButton` with `nav_pin` = the menu item id with dots as hyphens, `nav-finance-receivables-settings`); edit a settings row's name, status or account in place with `InlineEdit`/`InlineChoice` keyed per row on a `save_event` listed in `PAGE_WRITES`, and open a dialog only for a new record whose fields are fixed once saved. `receivables/src/web/settings.rs` is the running pattern, including a setup that needs two values in one write (the first choice waits on the page, nothing half-set is persisted) and a change history folded under `Fold` (`DESIGN.md`: History is a quiet disclosure).
 - Write from a page with `Pages::write` (the contract the agent doors call, event listed in `PageWrites`), never `Payables::approve_document` and the other facade writes: the facade skips the contract's validation and review, so a person and an agent stop getting the same answer. Show `Written::Fields` (keyed by input path) on the fields, not as one flash.
 - A recorded document is immutable, so "edit a draft" is a corrected draft that replaces it, through `finance.payables.bill.replace_draft` (`Payables::replace_draft_on` voids the old draft and records the new one in one transaction, so a refusal leaves the draft as it was); never void then create in two calls, and do not add an update path. List a page of payment requests with `page_payment_requests` (newest first, the total from SQL), never by loading batches of `list_payment_requests` and cutting them, which drops the newest. A form with many fields reads its own `name[...]` keys: `params::form_values` keeps only 64.
+- Narrow a list by a date range with the shared period filter
+  (`bilibi_datetime::PeriodFilter`, `apps/base/datetime/README.md`; the
+  pattern is `ledger/src/web/entries.rs`), never bare from/to date inputs or
+  a range of the page's own: it keeps presets, the custom-range draft and the
+  calendar zone the same on every page, and its events carry its id
+  (`period_select:<id>`). An as-of date (trial balance, aging), a tax period
+  (SST return, e-invoice month) or a figure's drill-down window is not a
+  range filter; keep its single control and say so in the module README.
 - Show a money amount with the book's minor units through `Money::display` (`ledger/src/money.rs`), never `Money`/`Decimal` `to_string`: it groups thousands and keeps the book's decimal places. Keep `Money::shown` for editable, ungrouped values; a bare `Decimal` (a unit price, a report total) goes through `Money::display_decimal`, never a formatter of a page's own.
 - Agent writes join the shared plan's audited transaction through the ledger's private `*_on` methods, never the pool-owning public wrappers: nested commits would escape plan rollback. Preview on the handed `OperationClient`; retain the transaction-local review fence because the pinned engine previews every step before executing any.
 

@@ -213,21 +213,21 @@ async fn main() -> Outcome<()> {
     let opened = event(
         &mut register,
         &manager,
-        json!({"type":"period_select","period_filter[period]":"custom"}),
+        json!({"type":"period_select:assets-report-period","period_filter[period]":"custom"}),
     )
     .await?;
     has(&opened, "assets-report-period-range");
     let invalid = event(
         &mut register,
         &manager,
-        json!({"type":"period_apply","range[from]":"2026-02-01","range[to]":"2026-01-01"}),
+        json!({"type":"period_apply:assets-report-period","range[from]":"2026-02-01","range[to]":"2026-01-01"}),
     )
     .await?;
     has(&invalid, "Start date must be on or before end date.");
     let applied = event(
         &mut register,
         &manager,
-        json!({"type":"period_apply","range[from]":"2026-01-01","range[to]":"2026-12-31"}),
+        json!({"type":"period_apply:assets-report-period","range[from]":"2026-01-01","range[to]":"2026-12-31"}),
     )
     .await?;
     assert_eq!(applied.query["to"], "2026-12-31");
