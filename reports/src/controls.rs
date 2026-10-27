@@ -755,7 +755,7 @@ impl State {
                 .collect::<Result<_>>()?;
             content.push(&self.table(0, rows, "Changes to controlled bookkeeping", None)?);
         }
-        let mut parts = vec![section("controlled-bookkeeping", "Controlled bookkeeping", "A controlled company posts an entry only into a fiscal period it has opened and left open, so nothing is recorded into a period nobody set up. Opening the first fiscal year is a step of its own; entries dated before it are refused, and so are dates after the last one until the next year is opened. Old transactions are not refused: an entry dated into an open period posts, however late.", content, false)?];
+        let mut parts = vec![section("controlled-bookkeeping", "Controlled bookkeeping", "When enabled, entries can be posted only to open fiscal periods. Open a fiscal year before posting to its periods. Late entries can still be posted to an open period.", content, false)?];
         let thresholds = bilibi_finance_ledger::Ledger::late_recording_thresholds();
         let description = format!("An entry is listed once it is recorded {} or more days after its transaction date, and is late past {} days. Each late entry needs a reason from an independent reviewer, someone who did not post it. The days are whole days from the transaction date to the day it was recorded.", thresholds.approaching_days, thresholds.late_days);
         let mut filters = self.tabs(
