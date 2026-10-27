@@ -968,7 +968,7 @@ impl State {
                 .collect::<Result<_>>()?;
             content.push(&self.table(0, rows, "Changes to separation of duties", None)?);
         }
-        let mut parts = vec![section("duty-separation", "Separation of duties", "While it is required, nobody approves, posts, or finalises a record they prepared, nor one prepared by someone they impersonated. A company with one finance person turns it off: those approvals are then allowed and listed below.", content, false)?];
+        let mut parts = vec![section("duty-separation", "Separation of duties", "When required, a person cannot approve, post or finalise a record they prepared, including while impersonating another person. When turned off, same-person approvals are recorded below for independent review.", content, false)?];
         let mut filters = html(self.period.as_ref().expect("period initialized"))?;
         filters.push(&self.tabs(
             "exceptions-review",
@@ -1148,7 +1148,6 @@ impl State {
                     .id("fiscal-year-start")
                     .label("First day of the year")
                     .kind(InputKind::Date)
-                    .hint("Use the date order shown in the box. Dates are saved as YYYY-MM-DD.")
                     .value(
                         self.dates
                             .get("start_date")
@@ -1160,7 +1159,6 @@ impl State {
                     .id("fiscal-year-end")
                     .label("Last day (optional)")
                     .kind(InputKind::Date)
-                    .hint("Use the date order shown in the box. Dates are saved as YYYY-MM-DD.")
                     .value(self.dates.get("end_date").map(String::as_str).unwrap_or("")),
             ]
         } else {

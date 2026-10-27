@@ -239,7 +239,9 @@ impl Index {
         grid.zoom = self.columns.zoom;
         grid.suggestions = self.columns.flex_suggestions();
         grid.add_query = &self.columns.add_query;
-        grid.empty = Some(TableEmpty::Content(Html::text("No documents match the current filters. Documents are issued through the e-invoicing API.")));
+        grid.empty = Some(TableEmpty::Content(Html::text(
+            "No documents match the current filters.",
+        )));
         let pagination = if let Some(page) = &self.documents {
             let mut p = Pagination::new(
                 "einvoice-documents-pagination",

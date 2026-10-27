@@ -182,7 +182,9 @@ impl Aged {
         table.zoom = columns.zoom;
         table.suggestions = columns.flex_suggestions();
         table.add_query = &columns.add_query;
-        table.empty = Some(TableEmpty::Content(Html::text("Nothing is owed.")));
+        table.empty = Some(TableEmpty::Content(Html::text(
+            "No balances as of this date.",
+        )));
         render(table)
     }
 
@@ -196,7 +198,6 @@ impl Aged {
                 .id("payables-aged-as-of")
                 .kind(InputKind::Date)
                 .label("As of")
-                .hint("Use the date order shown in the box. Dates are saved as YYYY-MM-DD.")
                 .value(as_of.to_string()),
         })?;
         let Some(aged) = &self.aged else {

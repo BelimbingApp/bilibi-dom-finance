@@ -443,7 +443,7 @@ impl Years {
                 .label("First day")
                 .kind(InputKind::Date)
                 .value(&opening.start)
-                .hint("Start on the first of a month. Leave empty for the day after the previous year ends.")
+                .hint("Start on the first of a month. The first year requires a date; later years default to the day after the previous year ends.")
                 .errors(errors("start_date")),
         )?);
         body.push(&render(

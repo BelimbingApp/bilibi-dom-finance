@@ -181,7 +181,7 @@ impl Index {
             self.field("date","bank-account-date","Date column").required(),
             self.field("date_format","bank-account-date-format","Date format").kind(InputKind::Select).options(crate::DATE_FORMATS.into_iter().map(|v|Choice::new(v,v)).collect()),
             self.field("description","bank-account-description","Description column").required(),
-            self.field("reference","bank-account-reference","Reference column").hint("Optional."),
+            self.field("reference","bank-account-reference","Reference column"),
             self.field("amount","bank-account-amount","Amount column").hint("One signed column; leave blank when the file has debit and credit columns."),
             self.field("amount_sign","bank-account-amount-sign","Sign of the amount column").kind(InputKind::Select).options(vec![Choice::new("Money in is positive","deposits_positive"),Choice::new("Money out is positive","withdrawals_positive")]),
             self.field("debit","bank-account-debit","Debit column (money out)"),

@@ -413,7 +413,7 @@ impl Setup {
                     "First taxable period starts",
                 )
                 .kind(InputKind::Date)
-                .hint("It runs to the end of the month the cycle's months on, counting its own month. Use the date order shown in the box. Dates are saved as YYYY-MM-DD."),
+                .hint("The first period ends on the last day of its final month."),
                 d.field(
                     "registration",
                     "service_tax_basis",

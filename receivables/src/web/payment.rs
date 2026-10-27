@@ -313,10 +313,7 @@ impl Payment {
                 .kind(InputKind::Date)
                 .value(values.get("reversal_date").cloned().unwrap_or_default())
                 .required()
-                .hint(format!(
-                    "On or after {}, the date the money was received. Use the date order shown in the box. Dates are saved as YYYY-MM-DD.",
-                    p.payment_date
-                ))
+                .hint(format!("On or after {}, the receipt date.", p.payment_date))
                 .errors(errors.of("reversal_date")),
         )?);
         body.push(&render(

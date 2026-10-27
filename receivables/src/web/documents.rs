@@ -476,7 +476,7 @@ impl Documents {
                     .label(label)
                     .kind(InputKind::Date)
                     .value(value(key))
-                    .hint(format!("{hint} Use the date order shown in the box. Dates are saved as YYYY-MM-DD."))
+                    .hint(hint)
                     .errors(draft.errors.of(key)),
             )?);
         }

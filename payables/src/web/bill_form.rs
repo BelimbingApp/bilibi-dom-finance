@@ -613,11 +613,10 @@ impl BillForm {
             ),
             field("date", "date", "Date", &d.date)
                 .kind(InputKind::Date)
-                .hint("Use the date order shown in the box. Dates are saved as YYYY-MM-DD.")
                 .required(),
             field("due", "due", "Due date", &d.due)
                 .kind(InputKind::Date)
-                .hint("Left empty, it is the date. Use the date order shown in the box. Dates are saved as YYYY-MM-DD."),
+                .hint("Leave empty to use the document date."),
             field("description", "description", "Description", &d.description),
         ];
         if !self.note {

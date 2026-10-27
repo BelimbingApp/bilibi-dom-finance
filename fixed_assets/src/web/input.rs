@@ -61,9 +61,6 @@ impl Draft {
                     .map(|e| e.message.clone())
                     .collect(),
             );
-        if kind == InputKind::Date {
-            f = f.hint("Use the date order shown in the box. Dates are saved as YYYY-MM-DD.");
-        }
         if required {
             f = f.required();
         }
@@ -233,8 +230,8 @@ impl Draft {
 }
 pub(super) fn method(m: Method) -> &'static str {
     match m {
-        Method::StraightLine => "straight_line",
-        Method::ReducingBalance => "reducing_balance",
+        Method::StraightLine => "Straight line",
+        Method::ReducingBalance => "Reducing balance",
     }
 }
 
