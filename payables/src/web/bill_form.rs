@@ -543,7 +543,7 @@ impl BillForm {
             Some(
                 Field::in_form(PREFIX, "pick")
                     .id("payables-record-pick")
-                    .label("Supplier you billed before")
+                    .label("Supplier from a previous bill")
                     .kind(InputKind::Select)
                     .prompt("Choose a supplier to fill in the details")
                     .value(d.pick.clone())
