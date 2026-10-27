@@ -11,7 +11,7 @@ use bilibi_settings::{Settings, Target};
 use bilibi_tenancy::Scope;
 use jiff::civil::date;
 use serde_json::{json, Value};
-use std::{fs::OpenOptions, io::Write, os::unix::fs::OpenOptionsExt, sync::Arc};
+use std::{fs::OpenOptions, io::Write, os::unix::fs::OpenOptionsExt};
 
 bilibi_walkthrough_fixture::walkthrough_vocabulary!();
 bilibi_walkthrough_fixture::walkthrough_module_roles!();
@@ -71,10 +71,7 @@ async fn main() -> Outcome<()> {
         bilibi_domains::MODULES,
         bilibi_extensions::MODULES,
     )?;
-    let mut services = Services::default();
-    services.provide("bootstrap.database", Arc::new(db.clone()))?;
-    services.install(&modules)?;
-    bilibi_finance_walkthrough_fixture::without_step_up(&services)?;
+    let services = bilibi_finance_walkthrough_fixture::services(&db, &modules)?;
     let c = db.get().await?;
     if c.query_opt(
         "SELECT 1 FROM users WHERE tenant_id=1 AND id=1 AND email='manager@example.test'",

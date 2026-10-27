@@ -5,13 +5,13 @@ use bilibi_authz::grants::Grants;
 use bilibi_database::{pool, Error};
 use bilibi_finance_ledger::Ledger;
 use bilibi_finance_payroll::{MappingChange, Payroll, PayrollError, SettingsChange};
-use bilibi_finance_walkthrough_fixture::{install, sign_in, without_step_up};
+use bilibi_finance_walkthrough_fixture::{install, sign_in};
 use bilibi_module_registry::Services;
 use bilibi_queue::execution::{Config, Executor};
 use bilibi_tenancy::Scope;
 use bilibi_ui::page::{LiveInput, LiveRequest, PageRequest, PageService};
 use serde_json::{json, Value};
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, time::Duration};
 
 bilibi_walkthrough_fixture::walkthrough_vocabulary!();
 bilibi_walkthrough_fixture::walkthrough_module_roles!();
@@ -29,11 +29,7 @@ async fn main() -> Outcome<()> {
     let db = pool(&std::env::var("DATABASE_URL")?)?;
     let modules = bilibi_module_registry::discover()?;
     bilibi_database::migrate(&db, &modules).await?;
-    let mut services = Services::default();
-    services.provide("bootstrap.database", Arc::new(db.clone()))?;
-    services.provide("bootstrap.composition", Arc::new(bilibi_web::composition()))?;
-    services.install(&modules)?;
-    without_step_up(&services)?;
+    let services = bilibi_finance_walkthrough_fixture::services(&db, &modules)?;
     install(&db, &services).await?;
     let manager = sign_in(&db, &services, 1, 1).await?;
     let admin = sign_in(&db, &services, 1, 4).await?;

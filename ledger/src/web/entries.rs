@@ -5,7 +5,9 @@
 //! is not used, because an entry date is not a timestamp. With no date in the
 //! address every entry is listed, as before the filter: the shared default of
 //! the last 30 days is not applied, because the trial balance and the account
-//! pages open this list by account alone.
+//! pages open this list by account alone. That state is drawn as "All dates"
+//! and an applied period offers an "All dates" button to return to it.
+//! TODO(platform): an "All dates" preset on `PeriodFilter` would replace both.
 use super::{
     event_type, figure, no_company, render, shell, source_label, unavailable, view, who, Flash,
     Pages, Read,
@@ -17,9 +19,9 @@ use bilibi_tenancy::Scope;
 use bilibi_ui::{
     list_state::FILTERS_FORM,
     page::{LiveBody, LiveFuture, LiveInput, LiveRequest, LiveState},
-    params, Badge, BadgeKind, BuiltinColumn, Card, Cell, Choice, ColumnsOutcome, EmptyState,
-    Filter, FilterToolbar, FlexRow, FlexTable, Header, Html, ListColumns, ListSpec, ListState,
-    PageVariant, RecordLink, TableEmpty, ToolbarControl,
+    params, Badge, BadgeKind, BuiltinColumn, Button, Card, Cell, Choice, ColumnsOutcome,
+    EmptyState, Field, Filter, FilterToolbar, FlexRow, FlexTable, Header, Html, InputKind,
+    ListColumns, ListSpec, ListState, PageVariant, RecordLink, TableEmpty, ToolbarControl,
 };
 use jiff::{civil::Date, Timestamp};
 use rust_decimal::Decimal;
@@ -32,6 +34,11 @@ use std::{
 pub(super) const INDEX: &str = "/finance/ledger/entries";
 const LIMIT: usize = 100;
 const FILTER_ID: &str = "ledger-entries-period";
+const ALL_DATES: &str = "all";
+
+fn clear_event() -> String {
+    format!("period_clear:{FILTER_ID}")
+}
 
 static SPEC: LazyLock<Arc<ListSpec>> = LazyLock::new(|| {
     ListSpec {
@@ -50,7 +57,7 @@ static SPEC: LazyLock<Arc<ListSpec>> = LazyLock::new(|| {
 });
 
 /// The first and last day a shared date field can edit. An open end is drawn
-/// as this day and is not sent to the ledger.
+/// as this day; it is never written to the address or sent to the ledger.
 fn earliest() -> Date {
     jiff::civil::date(1, 1, 1)
 }
@@ -75,25 +82,19 @@ impl Window {
         let date = |key| query.get(key).and_then(|value| value.parse::<Date>().ok());
         let (from, to) = (date("from"), date("to"));
         let closed = matches!((from, to), (Some(from), Some(to)) if from <= to);
-        if query.contains_key("period") {
-            // Only the preset is read here; the fallback day never shows,
-            // because `sync` resolves a named preset on the display clock.
-            let period = Period::parse(|key| query.get(key).cloned(), earliest());
-            return if closed {
-                Self {
-                    from,
-                    to,
-                    preset: Some(period.preset),
-                }
-            } else {
-                Self {
-                    from: None,
-                    to: None,
-                    preset: Some(period.preset),
-                }
+        // Only a named preset is read here; its fallback day never shows,
+        // because `sync` resolves it on the display clock.
+        let named = query
+            .contains_key("period")
+            .then(|| Period::parse(|key| query.get(key).cloned(), earliest()).preset);
+        if let Some(preset) = named.filter(|preset| *preset != Preset::Custom) {
+            return Self {
+                from: closed.then_some(from).flatten(),
+                to: closed.then_some(to).flatten(),
+                preset: Some(preset),
             };
         }
-        // A from/to pair from an older address is the custom range it applied.
+        // A from/to pair is the custom range it applied.
         let preset = closed.then_some(Preset::Custom);
         Self { from, to, preset }
     }
@@ -107,16 +108,33 @@ impl Window {
         ))
     }
 
+    /// Takes an applied period. A date field's own limit is an open end.
     fn apply(&mut self, period: Period) {
-        self.from = Some(period.from);
-        self.to = Some(period.to);
-        self.preset = Some(period.preset);
+        self.from = (period.from != earliest()).then_some(period.from);
+        self.to = (period.to != latest()).then_some(period.to);
+        self.preset = Some(period.preset).filter(|_| self.from.is_some() && self.to.is_some());
     }
 
-    /// What the control shows. An open end uses the date field's own limit;
-    /// a named preset whose days are not resolved yet shows the day it was
-    /// applied on, if the address carried one.
-    fn widget(&self) -> Period {
+    fn clear(&mut self) {
+        *self = Self {
+            from: None,
+            to: None,
+            preset: None,
+        };
+    }
+
+    /// No date at all: every entry is listed.
+    fn is_all(&self) -> bool {
+        self.from.is_none() && self.to.is_none() && self.preset.is_none()
+    }
+
+    /// What the control shows. With every entry listed it holds the shared
+    /// default range, which only seeds the custom range dialog. A half-open
+    /// window draws its open end as the date field's own limit.
+    fn widget(&self, clock: &Clock) -> Period {
+        if self.is_all() {
+            return Period::parse(|_| None, clock.today);
+        }
         Period {
             preset: self.preset.unwrap_or(Preset::Custom),
             from: self.from.unwrap_or_else(earliest),
@@ -125,15 +143,10 @@ impl Window {
     }
 
     fn params(&self) -> HashMap<String, String> {
-        if self.preset.is_some() {
-            return self
-                .widget()
-                .params()
-                .into_iter()
-                .map(|(key, value)| (key.to_owned(), value))
-                .collect();
-        }
         let mut query = HashMap::new();
+        if let Some(preset) = self.preset {
+            query.insert("period".into(), preset.as_str().to_owned());
+        }
         if let Some(date) = self.from {
             query.insert("from".into(), date.to_string());
         }
@@ -182,7 +195,7 @@ impl Entries {
                 .map_err(|_| Error::Internal)?,
             flash: Flash::default(),
             framed,
-            filter: PeriodFilter::new(FILTER_ID, window.widget(), &clock),
+            filter: PeriodFilter::new(FILTER_ID, window.widget(&clock), &clock),
             window,
             browser_zone: None,
             timezone_request: Timestamp::now().to_string(),
@@ -214,7 +227,7 @@ impl Entries {
                 self.window.apply(period);
             }
         }
-        self.filter.set(self.window.widget(), clock);
+        self.filter.set(self.window.widget(clock), clock);
     }
 
     /// The display clock, and whether it is settled: in local mode the
@@ -308,10 +321,45 @@ impl Entries {
             )],
         );
         toolbar.class = "mb-0 min-w-0 flex-1";
+        let mut clear = Html::EMPTY;
+        let period = if self.window.is_all() && !self.filter.is_open() {
+            let mut options = vec![Choice::new("All dates", ALL_DATES)];
+            options.extend(
+                Preset::ALL
+                    .iter()
+                    .map(|(label, preset)| Choice::new(*label, preset.as_str())),
+            );
+            render(AllDates {
+                id: format!("{FILTER_ID}-all"),
+                event: self.filter.select_event(),
+                field: render(
+                    Field::in_form("period_filter", "period")
+                        .id(format!("{FILTER_ID}-period"))
+                        .kind(InputKind::Select)
+                        .label(self.filter.label.clone())
+                        .label_class("sr-only")
+                        .wrapper_class("mb-0")
+                        .value(ALL_DATES)
+                        .options(options),
+                )?,
+            })?
+        } else {
+            if !self.window.is_all() {
+                clear = render(Button {
+                    id: "ledger-entries-period-clear",
+                    button_type: "button",
+                    event: &clear_event(),
+                    body: Html::text("All dates"),
+                    ..Button::default()
+                })?;
+            }
+            render(self.filter.clone())?
+        };
         body.push(&render(FilterRegion {
             timezone_request: &self.timezone_request,
             toolbar: render(toolbar)?,
-            period: render(self.filter.clone())?,
+            period,
+            clear,
         })?);
         if !self.filter_value("through").is_empty() {
             body.push(&render(Notice {
@@ -456,13 +504,25 @@ pub(super) fn entry_status(entry: &view::Entry) -> Result<Html> {
 
 #[derive(Template)]
 #[template(
-    source = r#"<div id="ledger-entries-period-region" data-hook="BrowserTimeZone" data-timezone-request="{{ timezone_request }}" class="mb-3 flex flex-wrap items-start gap-3">{{ toolbar }}{{ period }}</div>"#,
+    source = r#"<div id="ledger-entries-period-region" data-hook="BrowserTimeZone" data-timezone-request="{{ timezone_request }}" class="mb-3 flex flex-wrap items-start gap-3">{{ toolbar }}{{ period }}{{ clear }}</div>"#,
     ext = "html"
 )]
 struct FilterRegion<'a> {
     timezone_request: &'a str,
     toolbar: Html,
     period: Html,
+    clear: Html,
+}
+
+#[derive(Template)]
+#[template(
+    source = r#"<form id="{{ id }}" data-event="{{ event }}" data-change class="ui-compact-controls w-full sm:w-fit sm:min-w-36">{{ field }}</form>"#,
+    ext = "html"
+)]
+struct AllDates {
+    id: String,
+    event: String,
+    field: Html,
 }
 
 #[derive(Template)]
@@ -496,7 +556,10 @@ impl LiveState<Scope, Error> for Entries {
                 LiveInput::Event(value) => {
                     let kind = event_type(value)?;
                     let (clock, _) = self.clock(r.scope).await?;
-                    if let Some(outcome) = self.filter.event(kind, value, &clock) {
+                    if kind == clear_event() {
+                        self.window.clear();
+                        self.list.filters.insert("after".into(), String::new());
+                    } else if let Some(outcome) = self.filter.event(kind, value, &clock) {
                         if let Outcome::Applied(period) = outcome {
                             self.window.apply(period);
                             self.filter.set(period, &clock);

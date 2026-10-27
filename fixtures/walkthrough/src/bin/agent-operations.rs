@@ -15,7 +15,6 @@ use std::{
     fs::OpenOptions,
     io::Write,
     os::unix::fs::OpenOptionsExt,
-    sync::Arc,
     time::{Duration, SystemTime},
 };
 
@@ -45,10 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         bilibi_extensions::MODULES,
     )?;
     bilibi_database::migrate(&db, &modules).await?;
-    let mut services = Services::default();
-    services.provide("bootstrap.database", Arc::new(db.clone()))?;
-    services.install(&modules)?;
-    bilibi_finance_walkthrough_fixture::without_step_up(&services)?;
+    let services = bilibi_finance_walkthrough_fixture::services(&db, &modules)?;
     if std::env::args().nth(1).as_deref() == Some("payables-control") {
         return payables_control(&db, &services).await;
     }

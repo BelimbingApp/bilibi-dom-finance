@@ -13,9 +13,9 @@ use bilibi_finance_ledger::{
 use bilibi_finance_walkthrough_fixture::{install, sign_in, COMPANY};
 
 mod einvoice;
-use bilibi_module_registry::{verify_composition, Services};
+use bilibi_module_registry::verify_composition;
 use jiff::civil::date;
-use std::{fmt::Debug, sync::Arc, time::Duration};
+use std::{fmt::Debug, time::Duration};
 
 bilibi_walkthrough_fixture::walkthrough_vocabulary!();
 bilibi_walkthrough_fixture::walkthrough_module_roles!();
@@ -104,11 +104,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let migrated = bilibi_database::migrate(&db, &modules).await?;
     println!("mounted Domain modules: {:?}", bilibi_domains::MODULES);
     println!("migrations applied: {:?}", migrated.applied);
-    let mut services = Services::default();
-    services.provide("bootstrap.database", Arc::new(db.clone()))?;
-    services.provide("bootstrap.composition", Arc::new(bilibi_web::composition()))?;
-    services.install(&modules)?;
-    bilibi_finance_walkthrough_fixture::without_step_up(&services)?;
+    let services = bilibi_finance_walkthrough_fixture::services(&db, &modules)?;
 
     bilibi_finance_walkthrough_fixture::adopter_setup::opening(&db, &services).await?;
     let installed = install(&db, &services).await?;

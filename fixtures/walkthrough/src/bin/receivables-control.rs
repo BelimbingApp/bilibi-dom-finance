@@ -3,8 +3,6 @@
 use bilibi_authz::grants::Grants;
 use bilibi_database::{pool, Error};
 use bilibi_finance_walkthrough_fixture::sign_in;
-use bilibi_module_registry::Services;
-use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -29,10 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     drop(client);
     let modules = bilibi_module_registry::discover()?;
-    let mut services = Services::default();
-    services.provide("bootstrap.database", Arc::new(db.clone()))?;
-    services.install(&modules)?;
-    bilibi_finance_walkthrough_fixture::without_step_up(&services)?;
+    let services = bilibi_finance_walkthrough_fixture::services(&db, &modules)?;
     let admin = sign_in(&db, &services, 1, 4).await?;
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.as_slice() {

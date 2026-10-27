@@ -22,7 +22,7 @@ use bilibi_tenancy::Scope;
 use jiff::civil::{date, Date};
 use rust_decimal::Decimal;
 use serde_json::json;
-use std::{fmt::Debug, sync::Arc};
+use std::fmt::Debug;
 
 // NS2: the returns section, run last on top of NS1's records.
 #[path = "../sst_returns.rs"]
@@ -180,10 +180,7 @@ async fn main() -> Outcome<()> {
         bilibi_extensions::MODULES,
     )?;
     bilibi_database::migrate(&db, &modules).await?;
-    let mut services = Services::default();
-    services.provide("bootstrap.database", Arc::new(db.clone()))?;
-    services.install(&modules)?;
-    bilibi_finance_walkthrough_fixture::without_step_up(&services)?;
+    let services = bilibi_finance_walkthrough_fixture::services(&db, &modules)?;
     install(&db, &services).await?;
     run(&db, &services).await?;
     println!("NS1 and NS2: every SST setup, figures and returns proof passed");
