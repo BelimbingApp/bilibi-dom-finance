@@ -335,7 +335,6 @@ impl Payments {
         }
         let mut body = render(Header {
             title: Html::text("Receipts"),
-            subtitle: "Money received from customers, applied to their invoices.",
             actions,
             ..Header::default()
         })?;
@@ -439,7 +438,7 @@ impl Payments {
                 .kind(InputKind::Date)
                 .value(value("payment_date"))
                 .required()
-                .hint("Invoices dated after this cannot be settled by it. Use the date order shown in the box. Dates are saved as YYYY-MM-DD.")
+                .hint("A receipt cannot settle an invoice dated after it.")
                 .errors(draft.errors.of("payment_date")),
         )?);
         body.push(&render(

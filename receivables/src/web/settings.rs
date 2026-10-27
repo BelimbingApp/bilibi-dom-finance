@@ -197,14 +197,13 @@ impl Settings {
         let display = self.pages.display(scope).await?;
         let mut body = render(Header {
             title: Html::text("Receivables settings"),
-            subtitle: "The accounts, numbering and tax codes invoices and receipts use.",
             ..Header::default()
         })?;
 
         // Default accounts.
         let mut defaults = render(SectionHeading {
             title: "Default accounts",
-            description: "New invoices post to these. An invoice already issued keeps the receivable account it was issued with.",
+            description: "Issued invoices retain their original receivable account.",
             ..SectionHeading::default()
         })?;
         match &self.setup {
@@ -234,7 +233,7 @@ impl Settings {
                         .prompt("Choose an asset account")
                         .options(self.account_choices("asset"))
                         .required()
-                        .hint("Money customers owe you is kept here."),
+                        .hint("Records amounts owed by customers."),
                 )?;
                 form.push(&render(
                     Field::in_form("setup", "income_account_id")
@@ -294,7 +293,7 @@ impl Settings {
         let mut series = render(SectionHeading {
             title: "Numbering series",
             class: "p-5 pb-0",
-            description: "A document is numbered from its series when it is issued: the prefix, then the next number padded to the digits. Code, kind, prefix and digits cannot change once made.",
+            description: "Invoices and credit notes are numbered on issue; receipts are numbered when recorded. Code, kind, prefix and digits cannot be changed.",
             actions: if self.can_manage {
                 render(Button {
                     id: "receivables-series-add",
@@ -346,7 +345,8 @@ impl Settings {
         let mut taxes = render(SectionHeading {
             title: "Tax codes",
             class: "p-5 pb-0",
-            description: "Tax collected on a line goes to the code's account. A code's rate cannot change; make a new code instead. Documents already saved keep the rate they were saved with.",
+            description:
+                "A tax code's rate cannot be changed. Saved documents retain their recorded rate.",
             actions: if self.can_manage {
                 render(Button {
                     id: "receivables-tax-add",
@@ -365,7 +365,7 @@ impl Settings {
             "tax_grid",
             "Tax codes",
             rows,
-            "No tax codes. Lines are invoiced without tax until you add one.",
+            "No tax codes configured.",
         )?);
         body.push(&render(Card {
             id: "receivables-tax-card",
@@ -528,7 +528,7 @@ impl Settings {
                         .kind(InputKind::Number)
                         .attr("min", "1")
                         .attr("max", "12")
-                        .hint("How many digits the number is padded to. Empty means 1."),
+                        .hint("For example, prefix INV- and 4 digits produce INV-0001. Empty means 1 digit."),
                 )?);
             }
         } else {
@@ -554,7 +554,7 @@ impl Settings {
                     .prompt("Choose a liability account")
                     .options(self.account_choices("liability"))
                     .required()
-                    .hint("Tax collected is owed to the tax authority, so this is a liability account."),
+                    .hint("The liability account for tax on invoice lines."),
             )?);
         }
         body.push(&render(

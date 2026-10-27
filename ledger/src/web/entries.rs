@@ -99,7 +99,6 @@ impl Entries {
         }
         let mut page = render(Header {
             title: Html::text("Journal entries"),
-            subtitle: "Every entry posted to this company's book. Entries are never edited. To correct one, reverse it.",
             ..Header::default()
         })?;
         page.push(&body);

@@ -230,7 +230,6 @@ impl Years {
         }
         let mut page = render(Header {
             title: Html::text("Fiscal years"),
-            subtitle: "Each year has monthly periods. Close a period when its month is done.",
             actions,
             ..Header::default()
         })?;
@@ -444,7 +443,7 @@ impl Years {
                 .label("First day")
                 .kind(InputKind::Date)
                 .value(&opening.start)
-                .hint("The first of a month. Leave it empty to start the day after the last year ends. The first year needs a date. Use the date order shown in the box. Dates are saved as YYYY-MM-DD.")
+                .hint("Start on the first of a month. Leave empty for the day after the previous year ends.")
                 .errors(errors("start_date")),
         )?);
         body.push(&render(
@@ -453,7 +452,7 @@ impl Years {
                 .label("Last day")
                 .kind(InputKind::Date)
                 .value(&opening.end)
-                .hint("The last day of a month. Leave it empty for twelve months. Use the date order shown in the box. Dates are saved as YYYY-MM-DD.")
+                .hint("The last day of a month. Leave empty for twelve months.")
                 .errors(errors("end_date")),
         )?);
         let mut actions = render(Button {

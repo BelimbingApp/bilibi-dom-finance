@@ -359,7 +359,6 @@ impl Documents {
         }
         let mut body = render(Header {
             title: Html::text("Invoices"),
-            subtitle: "Invoices and credit notes: drafts, issued and discarded.",
             actions,
             ..Header::default()
         })?;

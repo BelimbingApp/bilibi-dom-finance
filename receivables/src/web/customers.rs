@@ -293,7 +293,6 @@ impl Customers {
         }
         let header = render(Header {
             title: Html::text("Customers"),
-            subtitle: "Who you invoice, and on what payment terms.",
             actions,
             ..Header::default()
         })?;

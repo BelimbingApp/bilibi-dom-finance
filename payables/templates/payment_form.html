@@ -2,7 +2,7 @@
 {% import "components.html" as ui %}
 {% import "forms.html" as form %}
 {% call ui::page(id="payables-pay", variant=bilibi_ui::PageVariant::Form) %}
-{% call ui::header(subtitle="It is paid only after someone else approves it.", actions=back) %}Request a payment{% endcall %}
+{% call ui::header(subtitle="A payment request posts when approved.", actions=back) %}Request a payment{% endcall %}
 {% if let Some(summary) = summary %}{{ summary|safe }}{% endif %}
 {% if let Some(notice) = notice %}{{ notice|safe }}{% endif %}
 <form id="payables-pay-form" data-event="edit" data-change data-submit-event="save_payment" class="space-y-3">

@@ -60,7 +60,6 @@ impl Book {
         }
         let mut page = render(Header {
             title: Html::text("Book"),
-            subtitle: "The currency this company keeps its accounts in.",
             ..Header::default()
         })?;
         page.push(&body);
@@ -115,7 +114,7 @@ impl Book {
         let mut controls = render(SectionHeading {
             id: "ledger-book-controls-heading",
             title: "Controls",
-            description: "Controlled bookkeeping lets entries post only into an open period. Separation of duties asks someone else to approve. Change bookkeeping on the Bookkeeping page and approvals on Approval exceptions.",
+            description: "Controlled bookkeeping restricts posting to open periods. Separation of duties requires independent approval. Manage these on Bookkeeping and Approval exceptions.",
             ..SectionHeading::default()
         })?;
         controls.push(&render(Facts {
@@ -213,12 +212,12 @@ impl Book {
         body.push(&render(
             Field::in_form("book", "approver")
                 .id("ledger-book-approver")
-                .label("Who approves?")
+                .label("Approval policy")
                 .kind(InputKind::Select)
                 .value(&self.approver)
                 .options(vec![
-                    Choice::new("Someone else reviews my work", "someone_else"),
-                    Choice::new("I do everything (one-person company)", "one_person"),
+                    Choice::new("Independent approval required", "someone_else"),
+                    Choice::new("Self-approval permitted", "one_person"),
                 ])
                 .hint("Approving your own work records an exception for an independent reviewer."),
         )?);
@@ -226,7 +225,7 @@ impl Book {
             body.push(&render(
                 Field::in_form("book", "approval_reason")
                     .id("ledger-book-approval-reason")
-                    .label("Why one person approves")
+                    .label("Reason for allowing self-approval")
                     .value(&self.approval_reason)
                     .required()
                     .errors(errors("reason")),
@@ -243,8 +242,6 @@ impl Book {
         let mut card = render(SectionHeading {
             id: "ledger-book-open-heading",
             title: "Open the book",
-            description:
-                "A company opens its book once. Then it can add accounts and record entries.",
             ..SectionHeading::default()
         })?;
         card.push(&render(Form {

@@ -548,7 +548,7 @@ impl PaymentForm {
                 redirect: Some(to),
                 flash: Some((
                     StatusKind::Success,
-                    "Payment requested. Someone else approves it before anything is paid.".into(),
+                    "Payment requested. It will post when approved.".into(),
                 )),
                 ..LiveBody::default()
             },

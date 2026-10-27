@@ -179,7 +179,6 @@ impl Accounts {
         }
         let mut page = render(Header {
             title: Html::text("Chart of accounts"),
-            subtitle: "The accounts this company's entries are posted to.",
             actions,
             ..Header::default()
         })?;

@@ -96,7 +96,6 @@ impl Trial {
         }
         let mut page = render(Header {
             title: Html::text("Trial balance"),
-            subtitle: "Every account with a posting on or before a date, and its balance.",
             ..Header::default()
         })?;
         page.push(&body);

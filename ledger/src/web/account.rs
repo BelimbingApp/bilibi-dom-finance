@@ -265,7 +265,6 @@ impl Account {
         })?);
         let mut page = render(Header {
             title: Html::text(&format!("{} {}", account.code, account.name)),
-            subtitle: "An account of this company's chart.",
             actions,
             ..Header::default()
         })?;

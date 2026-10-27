@@ -237,7 +237,7 @@ impl Journals {
         }
         let mut page = render(Header {
             title: Html::text("Manual journals"),
-            subtitle: "Adjustments that one person submits and another approves. Nothing posts until it is approved.",
+            subtitle: "Submitted journals post when approved.",
             actions,
             ..Header::default()
         })?;
@@ -250,7 +250,7 @@ impl Journals {
                 title: "New manual journal",
                 cancel_event: "close_modal",
                 width: ModalWidth::Wide,
-                description: "Debits and credits must add up to the same amount. Someone else approves it before it posts.",
+                description: "Debits and credits must balance. The journal posts when approved.",
                 body: form,
                 ..Modal::default()
             })?);
@@ -421,7 +421,6 @@ impl Journals {
                 .id("ledger-journal-date")
                 .label("Date")
                 .kind(InputKind::Date)
-                .hint("Use the date order shown in the box. Dates are saved as YYYY-MM-DD.")
                 .value(&draft.date)
                 .required()
                 .errors(errors("entry_date")),
@@ -563,7 +562,7 @@ impl Journals {
                 self.draft = None;
                 self.flash.success(match number {
                     Some(n) => {
-                        format!("Journal {n} is submitted. Someone else can approve it now.")
+                        format!("Journal {n} is submitted and awaiting approval.")
                     }
                     None => "The journal is submitted.".into(),
                 });

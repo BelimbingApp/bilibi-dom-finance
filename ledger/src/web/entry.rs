@@ -405,7 +405,9 @@ impl Entry {
                 .kind(InputKind::Date)
                 .value(&reverse.date)
                 .required()
-                .hint("Not before the date of the entry. The period of this date must be open. Use the date order shown in the box. Dates are saved as YYYY-MM-DD.")
+                .hint(
+                    "The date must not precede the original entry and must fall in an open period.",
+                )
                 .errors(errors("entry_date")),
             Field::in_form("reverse", "description")
                 .id("ledger-reverse-description")
