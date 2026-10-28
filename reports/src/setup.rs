@@ -298,6 +298,14 @@ impl Reports {
         }
         .await;
         areas.push(match controls {
+            _ if matches!(book, Ok(None)) => area(
+                "controls",
+                "Bookkeeping and approval controls",
+                true,
+                "/finance/reports/bookkeeping",
+                SetupState::NotTracked,
+                "They start when the book is opened.",
+            ),
             (Ok(controlled), Ok(duties)) => area(
                 "controls",
                 "Bookkeeping and approval controls",
