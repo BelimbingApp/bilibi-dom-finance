@@ -226,9 +226,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let evidence = ledger
         .evidence_page(&manager, COMPANY, "opening_balances", Some(500), None)
         .await?;
-    println!(
-        "opening: reversal and independently approved correction restore the source balances; immutable source evidence: {evidence:?}"
+    assert_eq!(evidence.rows.len(), 2);
+    assert_eq!(
+        evidence.rows[1]["source_csv"].as_str(),
+        Some(source.csv.as_str())
     );
+    let client = db.get().await?;
+    let audited: i64 = client.query_one("SELECT count(*) FROM base_audit_mutations WHERE auditable_type='finance.ledger.opening_balances'", &[]).await?.get(0);
+    assert_eq!(audited, 2);
+    assert!(client.execute("UPDATE finance_ledger_opening_balances SET source_csv='overwritten' WHERE tenant_id=1 AND company_id=1", &[]).await.is_err());
+    println!("opening: reversal and independently approved correction restore source balances; two source evidence records and their audit changes retained; database refuses evidence overwrite");
     println!(
         "EXCLUDED: settleable open invoices/bills, aging and control tie-outs, bank reconciliation items, asset registers, tax return detail, historical/comparative migration; no complete conversion claim"
     );

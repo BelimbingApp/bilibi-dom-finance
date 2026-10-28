@@ -9,6 +9,7 @@ import os
 import subprocess
 import urllib.error
 import urllib.request
+import urllib.parse
 
 if os.environ.get("BILIBI_AGENT_PROOF") != "disposable":
     raise SystemExit("BILIBI_AGENT_PROOF=disposable is required")
@@ -18,8 +19,18 @@ DB = os.environ["DATABASE_URL"]
 
 
 def sql(query):
+    # Keep credentials in the subprocess environment, never its arguments or
+    # a CalledProcessError's printed command line.
+    address = urllib.parse.urlsplit(DB)
+    environment = os.environ | {
+        "PGHOST": address.hostname or "localhost",
+        "PGPORT": str(address.port or 5432),
+        "PGUSER": urllib.parse.unquote(address.username or ""),
+        "PGPASSWORD": urllib.parse.unquote(address.password or ""),
+        "PGDATABASE": urllib.parse.unquote(address.path.lstrip("/")),
+    }
     return subprocess.check_output(
-        ["psql", DB, "-XAt", "-v", "ON_ERROR_STOP=1", "-c", query], text=True
+        ["psql", "-XAt", "-v", "ON_ERROR_STOP=1", "-c", query], text=True, env=environment
     ).strip()
 
 
