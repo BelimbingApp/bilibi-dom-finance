@@ -274,7 +274,14 @@ impl LiveState<Scope, Error> for Opening {
                     "preview_opening" => {
                         self.review = None;
                         self.refusal = Refusal::default();
-                        let fields = params::form_values(value, "opening");
+                        // CSV exceeds the ordinary form parser's 1 KiB field limit.
+                        // The checked owner limit refuses the whole event instead of dropping it.
+                        let fields = params::form_values_checked(
+                            value,
+                            "opening",
+                            crate::opening_csv::MAX_BYTES,
+                        )
+                        .map_err(Error::refused)?;
                         self.values = json!(fields);
                         match self
                             .pages
