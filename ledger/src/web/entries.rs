@@ -321,7 +321,7 @@ impl Entries {
             id: "ledger-entries-filters",
             event: "filters",
             change: true,
-            class: "mb-0 min-w-0 flex-1 sm:max-w-sm",
+            class: "mb-0 min-w-0 flex-1",
             body: render(
                 Combobox::new("ledger-entries-account", format!("{FILTERS_FORM}[account]"))
                     .label("Account")
