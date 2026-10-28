@@ -4,8 +4,8 @@ use crate::{Document, APPROVE_WRITE_OFFS, SUBMIT_WRITE_OFFS};
 use bilibi_database::{Error, Result};
 use bilibi_tenancy::Scope;
 use bilibi_ui::{
-    params, Button, ButtonVariant, Card, Cell, Choice, Facts, Field, FlexRow, Fold, Form, Html,
-    InputKind, ListColumns, ModalWidth, SectionHeading, StatusKind,
+    params, Alert, Button, ButtonVariant, Card, Cell, Choice, Facts, Field, FlexRow, Fold, Form,
+    Html, InputKind, ListColumns, ModalWidth, SectionHeading, StatusKind,
 };
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -226,7 +226,30 @@ impl Journals {
                 )
             })
             .collect();
-        let mut body = render(d.errors.summary("write-off-errors", &labels))?;
+        let mut field_errors = d.errors.clone();
+        let mut general = BTreeMap::new();
+        field_errors.0.retain(|path, messages| {
+            if labels.iter().any(|(field, _, _)| field == path) {
+                return true;
+            }
+            let label = match path.as_str() {
+                "write_off_id" => "bad-debt journal",
+                "entry_date" => "journal_date",
+                "offset_account_id" => "allowance_or_expense_account",
+                _ => path.as_str(),
+            };
+            general.insert(label.to_owned(), messages.clone());
+            false
+        });
+        let mut body = render(field_errors.summary("write-off-errors", &labels))?;
+        if !general.is_empty() {
+            body.push(&render(Alert {
+                id: "write-off-refusal",
+                kind: StatusKind::Error,
+                class: "mb-3",
+                body: Html::text(&f::sentences(&general)),
+            })?);
+        }
         if let Some(journal) = &d.journal {
             body.push(&render(Facts {
                 id: "write-off-review-details",
