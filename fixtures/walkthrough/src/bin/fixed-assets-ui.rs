@@ -26,6 +26,7 @@ inventory::submit! { Contribution::new(bilibi_authz::VOCABULARY,"walkthrough.fix
 }) }
 type Outcome<T> = Result<T, Box<dyn std::error::Error>>;
 type State = Box<dyn LiveState<Scope, Error>>;
+static CREDENTIALS: std::sync::OnceLock<HashMap<i64, String>> = std::sync::OnceLock::new();
 async fn mount(
     services: &Services,
     s: &Scope,
@@ -54,7 +55,11 @@ async fn event(state: &mut State, s: &Scope, v: Value) -> Outcome<LiveBody> {
     Ok(state
         .update(LiveRequest {
             scope: s,
-            credential: "",
+            credential: CREDENTIALS
+                .get()
+                .and_then(|tokens| tokens.get(&s.user()))
+                .map(String::as_str)
+                .unwrap_or(""),
             input: LiveInput::Event(&v),
         })
         .await?)
@@ -63,7 +68,11 @@ async fn refresh(state: &mut State, s: &Scope) -> Outcome<LiveBody> {
     Ok(state
         .update(LiveRequest {
             scope: s,
-            credential: "",
+            credential: CREDENTIALS
+                .get()
+                .and_then(|tokens| tokens.get(&s.user()))
+                .map(String::as_str)
+                .unwrap_or(""),
             input: LiveInput::Refresh,
         })
         .await?)
@@ -125,6 +134,28 @@ async fn main() -> Outcome<()> {
         grants.set_direct(&admin, 7, cap, Some(true)).await?;
     }
     let staff = sign_in(&db, services, 1, 7).await?;
+    let users = services.get::<bilibi_user::UserService>("core/user.accounts")?;
+    let mut credentials = HashMap::new();
+    for user in [1, 7] {
+        let email: String = db
+            .get()
+            .await?
+            .query_one(
+                "SELECT email FROM users WHERE tenant_id=1 AND id=$1",
+                &[&user],
+            )
+            .await?
+            .get(0);
+        let login = users
+            .login(&email, bilibi_finance_walkthrough_fixture::PASSWORD)
+            .await?;
+        assert!(!login.pending);
+        credentials.insert(user, login.token);
+    }
+    CREDENTIALS
+        .set(credentials)
+        .map_err(|_| "duplicate credentials")?;
+
     let assets = services.get::<FixedAssets>(bilibi_finance_fixed_assets::SERVICE)?;
     let ledger = services.get::<Ledger>(bilibi_finance_ledger::SERVICE)?;
     let chart = ledger.list_accounts(&manager, COMPANY).await?;

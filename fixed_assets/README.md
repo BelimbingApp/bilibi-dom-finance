@@ -64,7 +64,7 @@ Void requires a reversed acquisition and no standing disposal. It requires an op
 
 Pass the same date and **all four returned pins**: `through_entry_number`, `through_asset_number`, `through_event_number` and `through_category_revision_id` (or `report.pins()`). A negative pin is refused. The register bounds acquisitions, category revisions, events and run entries independently, so a later backdated registration or entryless void cannot rewrite a reproduced figure. Lifecycle comes from bounded events, not today's ledger reversal links. Full projected schedules remain available for disposed assets.
 
-Reports read on one repeatable-read connection; write workflows use that same report implementation on their company-locked transaction. The transaction is not SQL `READ ONLY` because Platform authorization records decision logs. No report writes business data. Ledger's authorized `account_totals_on` and `list_fiscal_years_on` avoid another pool checkout while the company lock is held.
+Facade reports read on one repeatable-read connection. Operation reads use the handed connection and return the same four immutable-stream boundaries; write reviews use that report implementation while holding the company lock. The transaction is not SQL `READ ONLY` because Platform authorization records decision logs. No report writes business data. Ledger's authorized `account_totals_on` and `list_fiscal_years_on` avoid another pool checkout while the company lock is held.
 
 Reconciliation includes accounts from every bounded category revision, including unused ones. Cost and accumulated depreciation use ordinary debit-positive ledger balances; expense/gain/loss use activity totals excluding year-end closing entries and their reversals at the same entry pin. Shared accounts aggregate. Each row gives actual ledger balance, register balance and `difference = ledger − register`. Unregistered acquisitions, unrelated postings and reversed-but-not-yet-voided acquisitions remain visible differences. Disposed assets retain depreciation expense and disposal gain/loss, but no cost/accumulated balance.
 
@@ -101,9 +101,9 @@ The view capability guards `/finance/fixed-assets/register`, `/categories`, `/ru
 
 Every list, including the asset's projected schedule, posted charges and events, uses `FlexTable` with `ListColumns` for column arrangement and compact rows. Register links and the asset page's announcement support workspace following. Timestamps use the company/browser/UTC display policy.
 
-The shared Record form registers a manual-entry or posted-bill debit, creates/revises category defaults, or records a monthly run. Runs show skipped acquisitions individually and keep the reference's warning after an otherwise successful run. The asset page shows its frozen assumptions, acquisition provenance, recorded actor, projected schedule, posted charges and correction history, then disposal, void and reversal forms. Void waits for the shared `ConfirmDialog`; Cancel writes nothing. The form disappears permanently after a successful void. The facade decides all lifecycle and accounting refusals.
+The shared Record form registers a manual-entry or posted-bill debit, creates/revises category defaults, or records a monthly run. Runs show skipped acquisitions individually and keep the reference's warning after an otherwise successful run. The asset page shows its frozen assumptions, acquisition provenance, recorded actor, projected schedule, posted charges and correction history, then disposal, void and reversal forms. Void waits for the shared `ConfirmDialog`; Cancel writes nothing. The form disappears permanently after a successful void. The shared operation contracts decide all lifecycle and accounting refusals.
 
-Each write event checks its current capability and the facade checks again inside its audited write. A refusal preserves the submitted draft and presents field errors; as in the reference, a form reports every bad field at once in field-name order, and an acquisition's missing source record or line comes before any other field. Missing permissions show the reference's withheld-control sentence. `record_asset` is the submit event because the Platform reserves `save` for Company inline edits.
+Each write event calls PageContracts with the live session credential and declares its contract in PageWrites with `Pending::None`. The owner checks access again inside the plan’s audited transaction. A refusal preserves the submitted draft and presents field errors; as in the reference, a form reports every bad field at once in field-name order, and an acquisition's missing source record or line comes before any other field. Missing permissions show the reference's withheld-control sentence. `record_asset` is the submit event because the Platform reserves `save` for Company inline edits.
 
 On a third fresh disposable database, run the NX3 page proof:
 
@@ -140,3 +140,27 @@ UI and MCP use `finance.fixed_assets.opening.context` and reviewed `finance.fixe
 The existing register report includes opening cost and accumulation from conversion onward, then subsequent depreciation, disposals and corrections at its normal four report pins. Depreciation-expense reconciliation counts subsequent charges separately from source accumulated depreciation. Retained source-period expense/YTD and comparative detail is not reconstructed by this import and must be reviewed with the source reporting bridge. The asset page shows source IDs, source reference, carrying value and the prospective basis.
 
 Each company can import one complete register of 1–500 assets, at most 128 KiB. Identical source-reference/CSV retries return the retained batch; changed retries are refused. **Correction or replacement of a committed opening register is not yet supported.** Non-straight-line prospective methods, zero remaining-life records, impairment/disposal history, capital allowances, staged larger registers and source-period depreciation detail remain follow-up work. The accountant approves source figures and future estimates; conversion does not replace the source archive.
+
+
+## Agent lifecycle operations
+
+MCP and `/api/v1` expose the same category preparation, acquisitions, depreciation and corrections as the pages. Discover `finance.fixed_assets.lifecycle` for the [step-by-step guide](lifecycle-guide.md). Every operation serves every channel and declares no step-up.
+
+| Operation (`finance.fixed_assets.` prefix) | Inputs beyond `company_id` | Result |
+| --- | --- | --- |
+| `category.list` | None | Categories, current defaults and immutable revisions |
+| `category.save` | Optional `category_id` to revise; otherwise `name`; complete account IDs, `method`, `life_months`, optional `annual_rate`, `reason` | New immutable revision |
+| `register.get`, `schedule.get` | `as_of`; optional four report pins | Register, projected schedules and account reconciliation |
+| `asset.get` | `asset_id` | Frozen assumptions, source facts, schedule, posted charges and events |
+| `asset.acquire` | `source` (`entry` or `bill`), `source_id`, `line_number`, `category_revision_id`, `description`, `in_service_date`; optional residual and assumption overrides | Asset without a new acquisition posting |
+| `run.list` | None | Runs newest month first, with items, exceptions and reversals |
+| `run.post` | `period` (month’s first day) | Month-end run with exact catch-up charges and skipped reversed acquisitions |
+| `run.reverse` | `run_id`, `effective_date`, `reason` | Owned correction event |
+| `asset.dispose` | `asset_id`, `effective_date`, `reason`, decimal-string `proceeds`; `settlement_account_id` for positive proceeds | Disposal event and owned posting |
+| `disposal.reverse`, `acquisition.void` | `asset_id`, `effective_date`, `reason` | Immutable correction event |
+
+Reads return `records`, `record` or `report`; writes return `record`. Amounts are exact decimal strings and dates are ISO dates. Every write is reviewed, then committed through the shared plan. Preview validates through the handed `OperationClient`, including the ledger’s owned-posting and reversal previews. Execution uses private transaction-joining methods; public facade wrappers remain available for callers that own their transaction.
+
+An ordered transaction-local review fence compares the complete normalized posting and source facts again immediately before each write. The plan engine previews every step before executing any, so a dependent step that changes the next step’s reviewed result refuses and rolls back the whole plan. Commit prerequisites separately and obtain a fresh review. Category revisions retain account eligibility; run reviews retain the dated register and exact posting; disposals and corrections retain their source and ledger controls. No preview allocates record IDs or posts entries.
+
+For the live browser and MCP continuation proof, start the existing conversion fixture on a fresh database with `--bin conversion -- serve assets-lifecycle`, `BILIBI_AGENT_PROOF=disposable`, a private `BILIBI_AGENT_CREDENTIALS` path, and matching `APP_ORIGIN`/`BIND_ADDR`. Company 001 is available for browser category preparation, opening import, depreciation, disposal/reversal and reproduced reconciliation. Run `fixtures/walkthrough/fixed-assets-operations.py` against Company 002 using the saved OAuth credentials. Both start with approved source balances and open fiscal periods; the wire proof creates its own category through MCP.

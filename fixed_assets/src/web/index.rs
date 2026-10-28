@@ -204,7 +204,7 @@ impl Index {
             .flat_map(|p| p.period.params().map(|(k, v)| (k.into(), v)))
             .collect()
     }
-    fn fields(&self, accounts: &[(i64, String, String, bool)]) -> Vec<Field> {
+    fn fields(&self, accounts: &[(i64, String, String, bool, String)]) -> Vec<Field> {
         use InputKind::{Date, Number, Select, Text};
         let d = &self.draft;
         let mut fields = Vec::new();
@@ -275,7 +275,7 @@ impl Index {
                             accounts
                                 .iter()
                                 .filter(|a| a.3 && a.2 == expected)
-                                .map(|a| Choice::new(&a.1, a.0.to_string())),
+                                .map(|a| Choice::new(&a.1, a.0.to_string()).detail(&a.4)),
                         )
                         .collect(),
                 );
@@ -316,7 +316,7 @@ impl Index {
     async fn write_form(
         &self,
         s: &Scope,
-        accounts: &[(i64, String, String, bool)],
+        accounts: &[(i64, String, String, bool, String)],
     ) -> Result<Html> {
         if !self.pages.allowed(s, self.kind.cap()).await? {
             return withheld(
@@ -392,8 +392,18 @@ impl Index {
                 let as_of = self.period.as_ref().expect("period initialized").period.to;
                 let report = self
                     .pages
-                    .assets
-                    .register_report(s, c, as_of, &self.pins())
+                    .read::<RegisterReport>(
+                        s,
+                        "finance.fixed_assets.register.get",
+                        {
+                            let mut value =
+                                serde_json::to_value(self.pins()).map_err(|_| Error::Internal)?;
+                            value["company_id"] = c.into();
+                            value["as_of"] = serde_json::json!(as_of.to_string());
+                            value
+                        },
+                        "report",
+                    )
                     .await?;
                 for r in &report.rows {
                     let a = &r.asset;
@@ -426,7 +436,16 @@ impl Index {
                 Some(report)
             }
             Kind::Categories => {
-                for c in self.pages.assets.list_categories(s, c).await? {
+                for c in self
+                    .pages
+                    .read::<Vec<crate::Category>>(
+                        s,
+                        "finance.fixed_assets.category.list",
+                        serde_json::json!({"company_id":c}),
+                        "records",
+                    )
+                    .await?
+                {
                     let row = FlexRow::new(c.id.to_string())
                         .cell("id", Cell::text(c.id.to_string()))
                         .cell("name", Cell::text(c.name.clone()))
@@ -444,7 +463,16 @@ impl Index {
                 None
             }
             Kind::Runs => {
-                for r in self.pages.assets.list_runs(s, c).await? {
+                for r in self
+                    .pages
+                    .read::<Vec<crate::Run>>(
+                        s,
+                        "finance.fixed_assets.run.list",
+                        serde_json::json!({"company_id":c}),
+                        "records",
+                    )
+                    .await?
+                {
                     let skipped = if r.exceptions.is_empty() {
                         "None".into()
                     } else {
@@ -584,59 +612,52 @@ impl Index {
         };
         view.render().map_err(|_| Error::Internal)
     }
-    async fn record(&self, s: &Scope) -> crate::Result<Option<crate::Run>> {
+    async fn record(&self, s: &Scope, credential: &str) -> crate::Result<Option<crate::Run>> {
         let c = company(s).ok_or(FixedAssetsError::CompanyNotFound)?;
         let d = &self.draft;
-        match self.kind {
+        let (key, input) = match self.kind {
             Kind::Categories => {
-                let input = d.revision()?;
+                let mut input = serde_json::to_value(d.revision()?).map_err(|_| Error::Internal)?;
                 if let Some(id) = d.optional_id("category_id")? {
-                    self.pages.assets.revise_category(s, c, id, &input).await?;
+                    input["category_id"] = id.into();
                 } else {
-                    self.pages
-                        .assets
-                        .create_category(s, c, d.value("name"), &input)
-                        .await?;
+                    input["name"] = serde_json::json!(d.value("name"));
                 }
+                ("finance.fixed_assets.category.save", input)
             }
             Kind::Register => {
-                // Bilimbi refuses a missing source before any other field.
-                let (id, line) = if d.value("source") == "bill" {
+                let bill = d.value("source") == "bill";
+                let (id, line) = if bill {
                     d.source("bill_id", "bill_line_number")?
                 } else {
                     d.source("entry_id", "entry_line_number")?
                 };
                 let units = self.pages.ledger.get_book(s, c).await?.minor_units;
-                let input = d.acquisition(units)?;
-                if d.value("source") == "bill" {
-                    self.pages
-                        .assets
-                        .acquire_from_bill(s, c, id, line, &input)
-                        .await?;
-                } else {
-                    self.pages
-                        .assets
-                        .acquire_from_entry(s, c, id, line, &input)
-                        .await?;
-                }
+                let mut input =
+                    serde_json::to_value(d.acquisition(units)?).map_err(|_| Error::Internal)?;
+                input["source"] = serde_json::json!(if bill { "bill" } else { "entry" });
+                input["source_id"] = id.into();
+                input["line_number"] = line.into();
+                ("finance.fixed_assets.asset.acquire", input)
             }
-            Kind::Runs => {
-                return self
-                    .pages
-                    .assets
-                    .depreciate(
-                        s,
-                        c,
-                        d.date("period")
-                            .map_err(|_| FixedAssetsError::InvalidPeriod)?,
-                    )
-                    .await
-                    .map(Some)
-            }
+            Kind::Runs => (
+                "finance.fixed_assets.run.post",
+                serde_json::json!({"period":d.date("period").map_err(|_|FixedAssetsError::InvalidPeriod)?.to_string()}),
+            ),
+        };
+        let result = self
+            .pages
+            .submit(s, credential, "record_asset", key, input)
+            .await?;
+        if self.kind == Kind::Runs {
+            Ok(Some(
+                serde_json::from_value(result).map_err(|_| Error::Internal)?,
+            ))
+        } else {
+            Ok(None)
         }
-        Ok(None)
     }
-    async fn event(&mut self, s: &Scope, v: &serde_json::Value) -> Result<()> {
+    async fn event(&mut self, s: &Scope, credential: &str, v: &serde_json::Value) -> Result<()> {
         let event = v["type"].as_str().unwrap_or("");
         let clock = self.clock(s).await?;
         if let Some(outcome) = self.period.as_mut().and_then(|p| p.event(event, v, &clock)) {
@@ -669,7 +690,7 @@ impl Index {
                     self.flash = Some((StatusKind::Error, DENIED.into()));
                     return Ok(());
                 }
-                match self.record(s).await {
+                match self.record(s, credential).await {
                     Ok(run) => {
                         self.flash = Some(
                             if let Some(r) = run.filter(|r| !r.exceptions.is_empty()) {
@@ -696,13 +717,16 @@ impl Index {
                     return Ok(());
                 }
                 let result = async {
+                    let mut input =
+                        serde_json::to_value(self.reverse.event()?).map_err(|_| Error::Internal)?;
+                    input["run_id"] = self.reverse.id("run_id")?.into();
                     self.pages
-                        .assets
-                        .reverse_run(
+                        .submit(
                             s,
-                            company(s).ok_or(FixedAssetsError::CompanyNotFound)?,
-                            self.reverse.id("run_id")?,
-                            &self.reverse.event()?,
+                            credential,
+                            "reverse",
+                            "finance.fixed_assets.run.reverse",
+                            input,
                         )
                         .await
                 }
@@ -734,7 +758,7 @@ impl LiveState<Scope, Error> for Index {
                         ListState::parse(query, SPEC.clone()).map_err(|_| Error::Internal)?;
                     self.period(r.scope).await?;
                 }
-                LiveInput::Event(v) => self.event(r.scope, v).await?,
+                LiveInput::Event(v) => self.event(r.scope, r.credential, v).await?,
             }
             let html = self.body(r.scope).await?;
             Ok(LiveBody {

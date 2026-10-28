@@ -488,3 +488,6 @@ pub mod external_accountant;
 pub mod chart_templates;
 
 pub mod vendors;
+
+// #111: real OAuth provisioning for the prospective asset continuation proof.
+pub mod assets_lifecycle;

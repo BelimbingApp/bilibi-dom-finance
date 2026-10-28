@@ -3,7 +3,7 @@ mod detail;
 mod index;
 mod input;
 
-use crate::{FixedAssets, FixedAssetsError, MODULE};
+use crate::{FixedAssetsError, MODULE};
 use askama::Template;
 use bilibi_database::{Db, Error, Result};
 use bilibi_datetime::{DisplayContext, DisplayPolicy};
@@ -26,7 +26,6 @@ const DENIED: &str = "You do not have permission for that action.";
 pub(crate) struct Pages {
     pub db: Db,
     pub contracts: Arc<bilibi_agent_api::page::PageContracts>,
-    pub assets: Arc<FixedAssets>,
     pub ledger: Arc<Ledger>,
     pub display: Arc<DisplayPolicy>,
     pub locales: Arc<Locales>,
@@ -290,13 +289,126 @@ fn flash_map(flash: &Option<(StatusKind, String)>) -> bilibi_ui::FlashMap<'_> {
     messages
 }
 
-// ADR 01 gap, listed so it stays visible: these pages still write through
-// the facade rather than an operation contract (`base/agent_api` page).
 inventory::submit! { bilibi_module_registry::Contribution::new(bilibi_module_registry::contributions::PAGE_WRITES, PAGES, bilibi_module_registry::Provenance { module: MODULE, source: file!(), line: line!() }, &bilibi_module_registry::contributions::PageWrites {
     service: PAGES,
-    contracts: &[],
-    pending: bilibi_module_registry::contributions::Pending::Every { reason: "Registering, disposing, reversing and voiding assets write through the Fixed Assets facade; no contract yet." },
+    contracts: &[
+        ("record_asset","finance.fixed_assets.category.save"),
+        ("record_asset","finance.fixed_assets.asset.acquire"),
+        ("record_asset","finance.fixed_assets.run.post"),
+        ("reverse","finance.fixed_assets.run.reverse"),
+        ("dispose","finance.fixed_assets.asset.dispose"),
+        ("reverse","finance.fixed_assets.disposal.reverse"),
+        ("void","finance.fixed_assets.acquisition.void"),
+        ("confirm_void","finance.fixed_assets.acquisition.void"),
+    ],
+    pending: bilibi_module_registry::contributions::Pending::None,
 }) }
+
+fn contract_error(error: bilibi_agent_api::Error) -> FixedAssetsError {
+    use bilibi_agent_api::Error as E;
+    match error {
+        E::Forbidden => FixedAssetsError::Unauthorized,
+        E::InvalidInput(fields) => FixedAssetsError::Invalid(
+            fields
+                .into_iter()
+                .flat_map(|(key, messages)| {
+                    let field = FIELD_NAMES
+                        .iter()
+                        .find(|name| **name == key)
+                        .copied()
+                        .unwrap_or("base");
+                    messages
+                        .into_iter()
+                        .map(move |message| bilibi_finance_ledger::FieldError::new(field, message))
+                })
+                .collect(),
+        ),
+        E::StalePlan => crate::invalid(
+            "base",
+            "The reviewed facts changed. Refresh and review this action again.",
+        ),
+        E::Backend(e) => FixedAssetsError::Failed(e),
+        e => crate::invalid("base", e.to_string()),
+    }
+}
+const FIELD_NAMES: &[&str] = &[
+    "base",
+    "name",
+    "category_id",
+    "cost_account_id",
+    "accumulated_account_id",
+    "expense_account_id",
+    "gain_account_id",
+    "loss_account_id",
+    "method",
+    "life_months",
+    "annual_rate",
+    "reason",
+    "source_id",
+    "line_number",
+    "entry_id",
+    "entry_line_number",
+    "bill_id",
+    "bill_line_number",
+    "category_revision_id",
+    "description",
+    "in_service_date",
+    "residual_value",
+    "period",
+    "run_id",
+    "asset_id",
+    "effective_date",
+    "proceeds",
+    "settlement_account_id",
+];
+impl Pages {
+    fn call<'a>(
+        &self,
+        s: &'a Scope,
+        credential: &'a str,
+        event: &'a str,
+        contract: &'static str,
+    ) -> bilibi_agent_api::page::Call<'a> {
+        bilibi_agent_api::page::Call {
+            scope: s,
+            credential,
+            service: PAGES,
+            event,
+            contract,
+        }
+    }
+    async fn read<T: serde::de::DeserializeOwned>(
+        &self,
+        s: &Scope,
+        key: &str,
+        input: serde_json::Value,
+        field: &str,
+    ) -> crate::Result<T> {
+        let result = self
+            .contracts
+            .read(s, key, &input)
+            .await
+            .map_err(contract_error)?;
+        serde_json::from_value(result["result"][field].clone())
+            .map_err(|_| FixedAssetsError::Failed(Error::Internal))
+    }
+    async fn submit(
+        &self,
+        s: &Scope,
+        credential: &str,
+        event: &str,
+        contract: &'static str,
+        mut input: serde_json::Value,
+    ) -> crate::Result<serde_json::Value> {
+        input["company_id"] = company(s).ok_or(FixedAssetsError::CompanyNotFound)?.into();
+        let result = self
+            .contracts
+            .submit(&self.call(s, credential, event, contract), input)
+            .await
+            .map_err(contract_error)?;
+        Ok(result["result"]["record"].clone())
+    }
+}
 
 impl Pages {
     async fn account_context(
@@ -304,7 +416,7 @@ impl Pages {
         scope: &Scope,
     ) -> Result<(
         Option<bilibi_finance_ledger::MinorUnits>,
-        Vec<(i64, String, String, bool)>,
+        Vec<(i64, String, String, bool, String)>,
     )> {
         let Some(company) = scope.current_company().map(|c| c.get()) else {
             return Ok((None, Vec::new()));
@@ -344,7 +456,13 @@ impl Pages {
                         .as_bool()
                         .map(|active| active && a["is_group"].as_bool() != Some(true)),
                 ) {
-                    accounts.push((id, format!("{code} {name}"), kind.to_owned(), active));
+                    accounts.push((
+                        id,
+                        name.to_owned(),
+                        kind.to_owned(),
+                        active,
+                        code.to_owned(),
+                    ));
                 }
             }
             if let Some(code) = page["result"]["next_after_code"].as_str() {
@@ -354,5 +472,59 @@ impl Pages {
             }
         }
         Ok((units, accounts))
+    }
+}
+
+impl Operation<'_> {
+    fn form(&self) -> Result<Html> {
+        let mut body = Html::EMPTY;
+        for field in &self.fields {
+            if field.name.ends_with("account_id]") {
+                let label = if field.attrs.required {
+                    format!("{} *", field.label)
+                } else {
+                    field.label.clone()
+                };
+                let control = bilibi_ui::Combobox::new(&field.id, &field.name)
+                    .label(label)
+                    .aria_label(&field.label)
+                    .value(&field.value)
+                    .options(
+                        field
+                            .options
+                            .iter()
+                            .filter(|c| !c.value.is_empty())
+                            .cloned()
+                            .collect(),
+                    )
+                    .errors(field.errors.clone())
+                    .attrs(field.attrs.clone());
+                body.push(&render(control)?);
+            } else {
+                body.push(&render(field.clone())?);
+            }
+        }
+        if !self.help.is_empty() {
+            body.push(&render(bilibi_ui::Alert {
+                id: "assets-operation-help",
+                kind: StatusKind::Info,
+                body: Html::text(self.help),
+                ..Default::default()
+            })?);
+        }
+        let actions = render(bilibi_ui::Button {
+            id: self.button_dom,
+            button_type: "submit",
+            working: "Recording…",
+            body: Html::text(self.verb),
+            ..Default::default()
+        })?;
+        render(bilibi_ui::Form {
+            id: self.form_dom,
+            event: self.event_name,
+            body,
+            actions,
+            ..Default::default()
+        })
     }
 }

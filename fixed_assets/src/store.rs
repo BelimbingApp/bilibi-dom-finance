@@ -206,7 +206,7 @@ pub(crate) async fn reserve(c: &impl GenericClient, t: Table) -> DbResult<i64> {
     .get(0))
 }
 pub(crate) async fn all(
-    c: &impl GenericClient,
+    c: &dyn OperationClient,
     t: Table,
     tenant: i64,
     company: i64,
@@ -224,7 +224,7 @@ pub(crate) async fn all(
     .collect())
 }
 pub(crate) async fn raw(
-    c: &impl GenericClient,
+    c: &dyn OperationClient,
     t: Table,
     tenant: i64,
     company: i64,
@@ -313,7 +313,7 @@ pub(crate) fn asset(v: &Value, units: MinorUnits) -> DbResult<Asset> {
     })
 }
 pub(crate) async fn revision(
-    c: &impl GenericClient,
+    c: &dyn OperationClient,
     tenant: i64,
     company: i64,
     id: i64,

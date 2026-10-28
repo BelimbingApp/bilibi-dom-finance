@@ -20,9 +20,11 @@ fn owner() -> Result<&'static FixedAssets> {
         .map(Arc::as_ref)
         .ok_or_else(|| Error::Internal.into())
 }
-fn failure(e: FixedAssetsError) -> bilibi_agent_api::Error {
+pub(super) fn failure(e: FixedAssetsError) -> bilibi_agent_api::Error {
     match e {
-        FixedAssetsError::Unauthorized | FixedAssetsError::Ledger(LedgerError::Unauthorized) => {
+        FixedAssetsError::Unauthorized
+        | FixedAssetsError::Ledger(LedgerError::Unauthorized)
+        | FixedAssetsError::Payables(PayablesError::Unauthorized) => {
             bilibi_agent_api::Error::Forbidden
         }
         FixedAssetsError::Invalid(fields)
@@ -41,7 +43,7 @@ fn failure(e: FixedAssetsError) -> bilibi_agent_api::Error {
         )])),
     }
 }
-fn company(input: &Value) -> Result<i64> {
+pub(super) fn company(input: &Value) -> Result<i64> {
     input["company_id"]
         .as_i64()
         .filter(|id| *id > 0)
@@ -56,7 +58,7 @@ fn schema() -> Value {
 fn output() -> Value {
     json!({"type":"object"})
 }
-async fn fence(
+pub(super) async fn fence(
     c: &dyn OperationClient,
     facts: &Value,
     consume: bool,

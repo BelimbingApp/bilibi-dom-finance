@@ -9,12 +9,14 @@ mod opening;
 mod opening_csv;
 mod opening_operations;
 mod opening_web;
+mod operations;
 mod reports;
 mod schedule;
 mod store;
 mod web;
 
 pub use activity::{DisposalInput, Event, EventAction, EventInput, Run, RunException, RunItem};
+use bilibi_agent_api::OperationClient;
 use bilibi_database::{Db, Error, MutationTransaction};
 use bilibi_finance_ledger::{FieldError, Ledger, LedgerError, Money};
 use bilibi_finance_payables::{Payables, PayablesError};
@@ -26,7 +28,7 @@ pub use contributions::{
 use jiff::civil::Date;
 pub use reports::{Reconciliation, ReconciliationKind, RegisterReport, RegisterRow, ReportPins};
 use rust_decimal::Decimal;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 pub use store::EvidencePage;
 use tokio_postgres::GenericClient;
@@ -46,10 +48,9 @@ inventory::submit! { Module {
         ledger: s.get(bilibi_finance_ledger::SERVICE)?,
         payables: s.get(bilibi_finance_payables::SERVICE)?,
         parties: s.get("base/tenancy.parties")?,
-    }); opening_operations::bind(assets.clone())?; Ok(assets) } }, Service { id: web::PAGES, factory: |s| Ok(Arc::new(bilibi_ui::page::PageService::<Scope, Error>(Arc::new(web::Pages {
+    }); opening_operations::bind(assets.clone())?; operations::bind(assets.clone())?; Ok(assets) } }, Service { id: web::PAGES, factory: |s| Ok(Arc::new(bilibi_ui::page::PageService::<Scope, Error>(Arc::new(web::Pages {
         contracts: s.get(bilibi_agent_api::page::SERVICE)?,
         db: s.get::<Db>("base/database.pool")?.as_ref().clone(),
-        assets: s.get(SERVICE)?,
         ledger: s.get(bilibi_finance_ledger::SERVICE)?,
         display: s.get("base/datetime.display")?,
         locales: s.get("base/locale.locales")?,
@@ -128,7 +129,7 @@ impl From<tokio_postgres::Error> for FixedAssetsError {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Method {
     StraightLine,
@@ -137,13 +138,13 @@ pub enum Method {
 
 /// Full assumptions, required on each category revision. The annual percentage
 /// is required only for reducing balance; straight line always clears it.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Assumptions {
     pub method: Method,
     pub life_months: i32,
     pub annual_rate: Option<Decimal>,
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RevisionInput {
     pub cost_account_id: i64,
     pub accumulated_account_id: i64,
@@ -154,7 +155,7 @@ pub struct RevisionInput {
     pub assumptions: Assumptions,
     pub reason: String,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CategoryRevision {
     pub id: i64,
     pub category_id: i64,
@@ -164,7 +165,7 @@ pub struct CategoryRevision {
     pub recorded_by_impersonator_id: Option<i64>,
     pub recorded_at: String,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Category {
     pub id: i64,
     pub name: String,
@@ -173,31 +174,39 @@ pub struct Category {
 }
 /// Only registration-time overrides. Cost, acquisition date and source numbers
 /// are never caller input. None inherits a revision's assumption (or zero residual).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AcquisitionInput {
     pub category_revision_id: i64,
     pub description: String,
+    #[serde(with = "date_serde")]
     pub in_service_date: Date,
+    #[serde(default, deserialize_with = "money_serde::optional")]
     pub residual_value: Option<Money>,
     pub method: Option<Method>,
     pub life_months: Option<i32>,
     pub annual_rate: Option<Decimal>,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Asset {
     pub id: i64,
     pub asset_number: i64,
     pub category_revision_id: i64,
     pub description: String,
+    #[serde(with = "date_serde")]
     pub acquisition_date: Date,
+    #[serde(with = "date_serde")]
     pub in_service_date: Date,
+    #[serde(deserialize_with = "money_serde::deserialize")]
     pub cost: Money,
+    #[serde(deserialize_with = "money_serde::deserialize")]
     pub residual_value: Money,
     pub assumptions: Assumptions,
     pub entry_id: i64,
     pub entry_number: i64,
     pub entry_line_number: Option<i32>,
+    #[serde(with = "optional_date_serde")]
     pub opening_date: Option<Date>,
+    #[serde(deserialize_with = "money_serde::deserialize")]
     pub opening_accumulated: Money,
     pub bill_id: Option<i64>,
     pub bill_line_number: Option<i32>,
@@ -205,18 +214,24 @@ pub struct Asset {
     pub recorded_by_impersonator_id: Option<i64>,
     pub recorded_at: String,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ScheduleRow {
+    #[serde(with = "date_serde")]
     pub period: Date,
+    #[serde(deserialize_with = "money_serde::deserialize")]
     pub amount: Money,
+    #[serde(deserialize_with = "money_serde::deserialize")]
     pub accumulated: Money,
+    #[serde(deserialize_with = "money_serde::deserialize")]
     pub carrying_value: Money,
 }
 /// Posted charge with the earliest correction that reversed it.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AssetCharge {
     pub run_id: i64,
+    #[serde(with = "date_serde")]
     pub period: Date,
+    #[serde(deserialize_with = "money_serde::deserialize")]
     pub amount: Money,
     pub entry_number: Option<i64>,
     pub recorded_by_user_id: i64,
@@ -224,7 +239,7 @@ pub struct AssetCharge {
     pub recorded_at: String,
     pub reversal: Option<Event>,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AssetDetail {
     pub opening: Option<serde_json::Value>,
     pub asset: Asset,
@@ -331,4 +346,67 @@ fn text(input: &str, field: &'static str, max: usize) -> Result<String> {
         ));
     }
     Ok(input.into())
+}
+
+mod date_serde {
+    use super::*;
+    pub fn serialize<S: serde::Serializer>(
+        date: &Date,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        serializer.collect_str(date)
+    }
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Date, D::Error> {
+        String::deserialize(deserializer)?
+            .parse()
+            .map_err(serde::de::Error::custom)
+    }
+}
+mod optional_date_serde {
+    use super::*;
+    pub fn serialize<S: serde::Serializer>(
+        date: &Option<Date>,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        date.map(|d| d.to_string()).serialize(serializer)
+    }
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Option<Date>, D::Error> {
+        Option::<String>::deserialize(deserializer)?
+            .map(|d| d.parse().map_err(serde::de::Error::custom))
+            .transpose()
+    }
+}
+
+// Only trusted contract output is decoded at the column precision. Input money
+// is parsed with the book's units before construction in the operation handler.
+mod money_serde {
+    use super::*;
+    use bilibi_finance_ledger::MinorUnits;
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(
+        d: D,
+    ) -> std::result::Result<Money, D::Error> {
+        let amount = <Decimal as Deserialize>::deserialize(d)?;
+        Money::new(amount, MinorUnits::new(4).expect("column precision"))
+            .map_err(serde::de::Error::custom)
+    }
+    pub fn optional<'de, D: serde::Deserializer<'de>>(
+        d: D,
+    ) -> std::result::Result<Option<Money>, D::Error> {
+        Option::<Decimal>::deserialize(d)?
+            .map(|a| {
+                Money::new(a, MinorUnits::new(4).expect("column precision"))
+                    .map_err(serde::de::Error::custom)
+            })
+            .transpose()
+    }
+    pub fn units<'de, D: serde::Deserializer<'de>>(
+        d: D,
+    ) -> std::result::Result<MinorUnits, D::Error> {
+        MinorUnits::new(i64::deserialize(d)?)
+            .ok_or_else(|| serde::de::Error::custom("invalid minor units"))
+    }
 }

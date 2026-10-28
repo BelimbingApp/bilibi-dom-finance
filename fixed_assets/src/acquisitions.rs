@@ -44,6 +44,24 @@ impl FixedAssets {
         let mut tx = self
             .write(&mut c, s, company, ACQUIRE, "finance.fixed-assets.acquire")
             .await?;
+        let asset = self
+            .acquire_on(&mut tx, s, company, source_id, line_number, bill, input)
+            .await?;
+        tx.commit().await?;
+        Ok(asset)
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn prepare_acquisition(
+        &self,
+        c: &dyn OperationClient,
+        s: &Scope,
+        company: i64,
+        source_id: i64,
+        line_number: i32,
+        bill: bool,
+        input: &AcquisitionInput,
+    ) -> Result<serde_json::Value> {
+        self.opening_authorize(c, s, company, ACQUIRE).await?;
         if source_id <= 0 {
             return Err(invalid(
                 if bill { "bill_id" } else { "entry_id" },
@@ -63,7 +81,7 @@ impl FixedAssets {
         let entry_id = if bill {
             let doc = self
                 .payables
-                .get_document_on(tx.sql(), s, company, source_id)
+                .get_document_on(c, s, company, source_id)
                 .await?;
             if doc.document_type != "bill" || doc.status != "posted" {
                 return Err(FixedAssetsError::BillNotPosted);
@@ -75,11 +93,8 @@ impl FixedAssets {
         } else {
             source_id
         };
-        let entry = self
-            .ledger
-            .get_entry_on(tx.sql(), s, company, entry_id)
-            .await?;
-        if let Ok(opening) = self.ledger.opening_context_on(tx.sql(), s, company).await {
+        let entry = self.ledger.get_entry_on(c, s, company, entry_id).await?;
+        if let Ok(opening) = self.ledger.opening_context_on(c, s, company).await {
             if entry.id == opening.entry.id {
                 return Err(invalid(
                     "entry_id",
@@ -87,11 +102,10 @@ impl FixedAssets {
                 ));
             }
         }
-        let revision =
-            store::revision(tx.sql(), s.tenant(), company, input.category_revision_id).await?;
-        let book = self.ledger.get_book_on(tx.sql(), s, company).await?;
+        let revision = store::revision(c, s.tenant(), company, input.category_revision_id).await?;
+        let book = self.ledger.get_book_on(c, s, company).await?;
         let cost = acquisition_debit(&entry, line_number, revision.defaults.cost_account_id)?;
-        if tx.sql().query_opt("SELECT id FROM finance_fixed_assets_assets WHERE tenant_id=$1 AND company_id=$2 AND entry_id=$3 AND entry_line_number=$4",&[&s.tenant(),&company,&entry_id,&line_number]).await?.is_some() {return Err(invalid("entry_id","has already been taken"));}
+        if c.query_opt("SELECT id FROM finance_fixed_assets_assets WHERE tenant_id=$1 AND company_id=$2 AND entry_id=$3 AND entry_line_number=$4",&[&s.tenant(),&company,&entry_id,&line_number]).await?.is_some() {return Err(invalid("entry_id","has already been taken"));}
         let description = text(&input.description, "description", 500)?;
         if input.in_service_date < entry.entry_date {
             return Err(invalid("in_service_date", "cannot precede acquisition"));
@@ -127,8 +141,27 @@ impl FixedAssets {
             .first_of_month()
             .checked_add((a.life_months - 1).months())
             .map_err(|_| invalid("in_service_date", "is invalid"))?;
-        let mut row = store::identity(s, company);
+
         let values = json!({"category_revision_id":revision.id,"description":description,"acquisition_date":entry.entry_date.to_string(),"in_service_date":input.in_service_date.to_string(),"cost":cost,"residual_value":residual,"method":a.method,"life_months":a.life_months,"annual_rate":a.annual_rate,"entry_id":entry.id,"entry_number":entry.entry_number,"entry_line_number":line_number,"bill_id":bill.then_some(source_id),"bill_line_number":bill.then_some(line_number)});
+        Ok(values)
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn acquire_on(
+        &self,
+        tx: &mut MutationTransaction<'_>,
+        s: &Scope,
+        company: i64,
+        source_id: i64,
+        line_number: i32,
+        bill: bool,
+        input: &AcquisitionInput,
+    ) -> Result<Asset> {
+        self.lifecycle_writable(tx, s, company, ACQUIRE).await?;
+        let values = self
+            .prepare_acquisition(tx.sql(), s, company, source_id, line_number, bill, input)
+            .await?;
+        let book = self.ledger.get_book_on(tx.sql(), s, company).await?;
+        let mut row = store::identity(s, company);
         row.as_object_mut()
             .ok_or(Error::Invalid)?
             .extend(values.as_object().ok_or(Error::Invalid)?.clone());
@@ -141,7 +174,6 @@ impl FixedAssets {
             })
             .await?;
         let asset = store::asset(&value, book.minor_units)?;
-        tx.commit().await?;
         Ok(asset)
     }
     pub async fn get_asset(&self, s: &Scope, company: i64, id: i64) -> Result<AssetDetail> {
@@ -151,16 +183,26 @@ impl FixedAssets {
             .isolation_level(tokio_postgres::IsolationLevel::RepeatableRead)
             .start()
             .await?;
-        authorize(&*tx, s, company, VIEW).await?;
-        let v = store::raw(&*tx, Table::Asset, s.tenant(), company, id)
+        let detail = self.asset_on(&*tx, s, company, id).await?;
+        tx.commit().await?;
+        Ok(detail)
+    }
+    pub(super) async fn asset_on(
+        &self,
+        c: &dyn OperationClient,
+        s: &Scope,
+        company: i64,
+        id: i64,
+    ) -> Result<AssetDetail> {
+        self.opening_authorize(c, s, company, VIEW).await?;
+        let v = store::raw(c, Table::Asset, s.tenant(), company, id)
             .await?
             .ok_or(FixedAssetsError::NotFound)?;
-        let book = self.ledger.get_book_on(&*tx, s, company).await?;
+        let book = self.ledger.get_book_on(c, s, company).await?;
         let asset = store::asset(&v, book.minor_units)?;
-        let revision =
-            store::revision(&*tx, s.tenant(), company, asset.category_revision_id).await?;
+        let revision = store::revision(c, s.tenant(), company, asset.category_revision_id).await?;
         let schedule = schedule::rows(&asset, book.minor_units)?;
-        let activity = activity::Activity::load(&*tx, s, company, book.minor_units).await?;
+        let activity = activity::Activity::load(c, s, company, book.minor_units).await?;
         let voided = activity.voided(id);
         let events = activity
             .events
@@ -193,8 +235,7 @@ impl FixedAssets {
                 });
             }
         }
-        let opening=tx.query_opt("SELECT i.source_facts || jsonb_build_object('source_reference',b.source_reference) FROM finance_fixed_assets_opening_items i JOIN finance_fixed_assets_opening_batches b ON b.id=i.batch_id AND b.tenant_id=$1 AND b.company_id=$2 WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.asset_id=$3",&[&s.tenant(),&company,&id]).await?.map(|r|r.get(0));
-        tx.commit().await?;
+        let opening=c.query_opt("SELECT i.source_facts || jsonb_build_object('source_reference',b.source_reference) FROM finance_fixed_assets_opening_items i JOIN finance_fixed_assets_opening_batches b ON b.id=i.batch_id AND b.tenant_id=$1 AND b.company_id=$2 WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.asset_id=$3",&[&s.tenant(),&company,&id]).await?.map(|r|r.get(0));
         Ok(AssetDetail {
             opening,
             asset,

@@ -1,6 +1,6 @@
 //! Form decoding only; accounting validation remains in the facade.
 use super::*;
-use crate::{AcquisitionInput, Assumptions, DisposalInput, EventInput, Method, RevisionInput};
+use crate::{AcquisitionInput, Assumptions, EventInput, Method, RevisionInput};
 use bilibi_finance_ledger::{FieldError, MinorUnits, Money};
 use bilibi_ui::{Choice, InputKind};
 use jiff::civil::Date;
@@ -206,18 +206,6 @@ impl Draft {
         Ok(EventInput {
             effective_date: got(date)?,
             reason: self.value("reason").into(),
-        })
-    }
-    pub fn disposal(&self, units: MinorUnits) -> crate::Result<DisposalInput> {
-        let mut c = Collect::default();
-        let event = c.take(self.event())?;
-        let proceeds = c.take(self.money("proceeds", units))?;
-        let settlement = c.take(self.optional_id("settlement_account_id"))?;
-        c.finish()?;
-        Ok(DisposalInput {
-            event: got(event)?,
-            proceeds: got(proceeds)?,
-            settlement_account_id: got(settlement)?,
         })
     }
     pub fn refused(&mut self, e: &FixedAssetsError) {

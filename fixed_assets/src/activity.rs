@@ -8,18 +8,20 @@ use bilibi_finance_ledger::{
 use serde_json::{json, Value};
 use store::{int, string, Table};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EventInput {
+    #[serde(with = "date_serde")]
     pub effective_date: Date,
     pub reason: String,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DisposalInput {
     pub event: EventInput,
+    #[serde(deserialize_with = "money_serde::deserialize")]
     pub proceeds: Money,
     pub settlement_account_id: Option<i64>,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventAction {
     RunReversed,
@@ -27,47 +29,53 @@ pub enum EventAction {
     DisposalReversed,
     AcquisitionVoided,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Event {
     pub id: i64,
     pub event_number: i64,
     pub asset_id: Option<i64>,
     pub run_id: Option<i64>,
     pub action: EventAction,
+    #[serde(with = "date_serde")]
     pub effective_date: Date,
     pub entry_id: Option<i64>,
     pub entry_number: Option<i64>,
     pub reverses_event_id: Option<i64>,
+    #[serde(default, deserialize_with = "money_serde::optional")]
     pub proceeds: Option<Money>,
+    #[serde(default, deserialize_with = "money_serde::optional")]
     pub accumulated: Option<Money>,
     pub reason: String,
     pub recorded_by_user_id: i64,
     pub recorded_by_impersonator_id: Option<i64>,
     pub recorded_at: String,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RunItem {
     pub id: i64,
     pub run_id: i64,
     pub asset_id: i64,
     pub asset_number: i64,
     pub description: String,
+    #[serde(deserialize_with = "money_serde::deserialize")]
     pub amount: Money,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RunException {
     pub id: i64,
     pub asset_id: i64,
     pub asset_number: i64,
     pub description: String,
-    pub reason: &'static str,
+    pub reason: String,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Run {
     pub id: i64,
+    #[serde(with = "date_serde")]
     pub period: Date,
     pub entry_id: Option<i64>,
     pub entry_number: Option<i64>,
+    #[serde(deserialize_with = "money_serde::deserialize")]
     pub total: Money,
     pub reversed: bool,
     pub items: Vec<RunItem>,
@@ -117,7 +125,7 @@ pub(crate) struct Activity {
 }
 impl Activity {
     pub async fn load(
-        c: &impl GenericClient,
+        c: &dyn OperationClient,
         s: &Scope,
         company: i64,
         units: MinorUnits,
@@ -164,7 +172,7 @@ impl Activity {
                     asset_id,
                     asset_number: int(a, "asset_number")?,
                     description: string(a, "description")?,
-                    reason: "acquisition_reversed",
+                    reason: "acquisition_reversed".into(),
                 });
             }
             run_items.sort_by_key(|i| i.asset_number);
@@ -219,11 +227,20 @@ impl FixedAssets {
             .isolation_level(tokio_postgres::IsolationLevel::RepeatableRead)
             .start()
             .await?;
-        authorize(&*tx, s, company, VIEW).await?;
-        let units = self.ledger.get_book_on(&*tx, s, company).await?.minor_units;
-        let mut runs = Activity::load(&*tx, s, company, units).await?.runs;
-        runs.reverse();
+        let runs = self.runs_on(&*tx, s, company).await?;
         tx.commit().await?;
+        Ok(runs)
+    }
+    pub(super) async fn runs_on(
+        &self,
+        c: &dyn OperationClient,
+        s: &Scope,
+        company: i64,
+    ) -> Result<Vec<Run>> {
+        self.opening_authorize(c, s, company, VIEW).await?;
+        let units = self.ledger.get_book_on(c, s, company).await?.minor_units;
+        let mut runs = Activity::load(c, s, company, units).await?.runs;
+        runs.reverse();
         Ok(runs)
     }
     pub async fn list_events(&self, s: &Scope, company: i64, asset_id: i64) -> Result<Vec<Event>> {
@@ -245,8 +262,7 @@ impl FixedAssets {
         events.sort_by_key(|e| e.event_number);
         Ok(events)
     }
-    /// A successful month is consumed forever, including empty, skipped-only
-    /// and subsequently reversed runs. The company lock serializes retries.
+    /// A successful month is consumed forever, even after reversal.
     pub async fn depreciate(&self, s: &Scope, company: i64, period: Date) -> Result<Run> {
         let mut c = self.db.get().await.map_err(Error::from)?;
         let mut tx = self
@@ -258,23 +274,37 @@ impl FixedAssets {
                 "finance.fixed-assets.depreciate",
             )
             .await?;
+        let run = self.depreciate_on(&mut tx, s, company, period).await?;
+        tx.commit().await?;
+        Ok(run)
+    }
+    pub(super) async fn prepare_run(
+        &self,
+        c: &dyn OperationClient,
+        s: &Scope,
+        company: i64,
+        period: Date,
+    ) -> Result<PreparedRun> {
+        self.opening_authorize(c, s, company, DEPRECIATE).await?;
         if period.day() != 1 {
             return Err(FixedAssetsError::InvalidPeriod);
         }
-        let units = self
-            .ledger
-            .get_book_on(tx.sql(), s, company)
-            .await?
-            .minor_units;
-        let activity = Activity::load(tx.sql(), s, company, units).await?;
+        let units = self.ledger.get_book_on(c, s, company).await?.minor_units;
+        let activity = Activity::load(c, s, company, units).await?;
         if let Some(run) = activity.runs.iter().find(|r| r.period == period) {
-            return Ok(run.clone());
+            return Ok(PreparedRun {
+                units,
+                existing: Some(run.clone()),
+                charges: vec![],
+                skipped: vec![],
+                review: json!({"existing":run}),
+            });
         }
-        self.open_period(tx.sql(), s, company, period).await?;
+        self.open_period(c, s, company, period).await?;
         let end = period.last_of_month();
         activity.chronological(end)?;
         let report = self
-            .report_on(tx.sql(), s, company, end, &ReportPins::default())
+            .report_on(c, s, company, end, &ReportPins::default())
             .await?;
         let mut charges = Vec::new();
         let mut skipped = Vec::new();
@@ -284,7 +314,7 @@ impl FixedAssets {
             }
             let entry = self
                 .ledger
-                .get_entry_on(tx.sql(), s, company, row.asset.entry_id)
+                .get_entry_on(c, s, company, row.asset.entry_id)
                 .await?;
             if entry.reversed_by_entry_id.is_some() || entry.reverses_entry_id.is_some() {
                 skipped.push(row.asset.id);
@@ -296,18 +326,56 @@ impl FixedAssets {
                 ));
             }
         }
-        let id = store::reserve(tx.sql(), Table::Run).await?;
+
         let lines = charge_lines(&charges, false);
+        let posting = self
+            .preview_post(
+                c,
+                s,
+                company,
+                end,
+                format!("Asset depreciation {period}"),
+                lines,
+            )
+            .await?;
+        let review = json!({"period":period.to_string(),"register":report,"charges":charges,"skipped_asset_ids":skipped,"posting":posting});
+        Ok(PreparedRun {
+            units,
+            existing: None,
+            charges,
+            skipped,
+            review,
+        })
+    }
+    pub(super) async fn depreciate_on(
+        &self,
+        tx: &mut MutationTransaction<'_>,
+        s: &Scope,
+        company: i64,
+        period: Date,
+    ) -> Result<Run> {
+        self.lifecycle_writable(tx, s, company, DEPRECIATE).await?;
+        let p = self.prepare_run(tx.sql(), s, company, period).await?;
+        if let Some(run) = p.existing {
+            return Ok(run);
+        }
+        let PreparedRun {
+            units,
+            charges,
+            skipped,
+            ..
+        } = p;
+        let id = store::reserve(tx.sql(), Table::Run).await?;
         let posted = self
             .post(
-                &mut tx,
+                tx,
                 s,
                 company,
                 id,
                 "run",
-                end,
+                period.last_of_month(),
                 format!("Asset depreciation {period}"),
-                lines,
+                charge_lines(&charges, false),
             )
             .await?;
         let mut row = store::identity(s, company);
@@ -334,14 +402,12 @@ impl FixedAssets {
             })
         })
         .await?;
-        let run = Activity::load(tx.sql(), s, company, units)
+        Activity::load(tx.sql(), s, company, units)
             .await?
             .runs
             .into_iter()
             .find(|r| r.id == id)
-            .ok_or(Error::Invalid)?;
-        tx.commit().await?;
-        Ok(run)
+            .ok_or_else(|| Error::Invalid.into())
     }
     pub async fn reverse_run(
         &self,
@@ -357,15 +423,38 @@ impl FixedAssets {
                 s,
                 company,
                 REVERSE,
-                "finance.fixed-assets.reverse-run",
+                "finance.fixed-assets.reverse_run",
             )
             .await?;
-        let units = self
-            .ledger
-            .get_book_on(tx.sql(), s, company)
-            .await?
-            .minor_units;
-        let activity = Activity::load(tx.sql(), s, company, units).await?;
+        let event = self.reverse_run_on(&mut tx, s, company, id, input).await?;
+        tx.commit().await?;
+        Ok(event)
+    }
+    pub(super) async fn reverse_run_on(
+        &self,
+        tx: &mut MutationTransaction<'_>,
+        s: &Scope,
+        company: i64,
+        id: i64,
+        input: &EventInput,
+    ) -> Result<Event> {
+        self.lifecycle_writable(tx, s, company, REVERSE).await?;
+        let p = self
+            .prepare_reverse_run(tx.sql(), s, company, id, input)
+            .await?;
+        self.apply_event(tx, s, company, p).await
+    }
+    pub(super) async fn prepare_reverse_run(
+        &self,
+        c: &dyn OperationClient,
+        s: &Scope,
+        company: i64,
+        id: i64,
+        input: &EventInput,
+    ) -> Result<PreparedEvent> {
+        self.opening_authorize(c, s, company, REVERSE).await?;
+        let units = self.ledger.get_book_on(c, s, company).await?.minor_units;
+        let activity = Activity::load(c, s, company, units).await?;
         let run = activity
             .runs
             .iter()
@@ -399,57 +488,40 @@ impl FixedAssets {
             return Err(FixedAssetsError::BeforeOriginal);
         }
         activity.chronological(input.effective_date)?;
-        let event_id = store::reserve(tx.sql(), Table::Event).await?;
-        let posted = if live.len() == run.items.len() {
-            Some(
-                self.ledger
-                    .reverse_owned_entry(
-                        &mut tx,
-                        s,
-                        company,
-                        entry_id,
-                        &owner("run", id),
-                        &Reversal {
-                            entry_date: input.effective_date,
-                            description: reason.clone(),
-                            reference: None,
-                        },
-                    )
-                    .await?,
-            )
+
+        let mut charges = Vec::new();
+        for i in &live {
+            let a = store::raw(c, Table::Asset, s.tenant(), company, i.asset_id)
+                .await?
+                .ok_or(Error::Invalid)?;
+            charges.push((
+                i.asset_id,
+                store::revision(c, s.tenant(), company, int(&a, "category_revision_id")?).await?,
+                i.amount,
+            ));
+        }
+        let reversal = if live.len() == run.items.len() {
+            Some((entry_id, owner("run", id)))
         } else {
-            let mut charges = Vec::new();
-            for i in live {
-                let a = store::raw(tx.sql(), Table::Asset, s.tenant(), company, i.asset_id)
-                    .await?
-                    .ok_or(Error::Invalid)?;
-                charges.push((
-                    i.asset_id,
-                    store::revision(
-                        tx.sql(),
-                        s.tenant(),
-                        company,
-                        int(&a, "category_revision_id")?,
-                    )
-                    .await?,
-                    i.amount,
-                ));
-            }
-            self.post(
-                &mut tx,
-                s,
-                company,
-                event_id,
-                "event",
-                input.effective_date,
-                reason.clone(),
-                charge_lines(&charges, true),
-            )
-            .await?
+            None
         };
-        let event=self.record_event(&mut tx,s,company,units,json!({"id":event_id,"run_id":id,"action":"run_reversed","effective_date":input.effective_date.to_string(),"reason":reason}),posted.as_ref()).await?;
-        tx.commit().await?;
-        Ok(event)
+        let lines = if reversal.is_none() {
+            charge_lines(&charges, true)
+        } else {
+            vec![]
+        };
+        let values = json!({"run_id":id,"action":"run_reversed","effective_date":input.effective_date.to_string(),"reason":reason});
+        self.prepare_event(
+            c,
+            s,
+            company,
+            units,
+            values,
+            lines,
+            reversal,
+            json!({"run":run,"charges":charges}),
+        )
+        .await
     }
     pub async fn dispose(
         &self,
@@ -462,16 +534,39 @@ impl FixedAssets {
         let mut tx = self
             .write(&mut c, s, company, DISPOSE, "finance.fixed-assets.dispose")
             .await?;
-        let units = self
-            .ledger
-            .get_book_on(tx.sql(), s, company)
-            .await?
-            .minor_units;
-        let a = store::raw(tx.sql(), Table::Asset, s.tenant(), company, id)
+        let event = self.dispose_on(&mut tx, s, company, id, input).await?;
+        tx.commit().await?;
+        Ok(event)
+    }
+    pub(super) async fn dispose_on(
+        &self,
+        tx: &mut MutationTransaction<'_>,
+        s: &Scope,
+        company: i64,
+        id: i64,
+        input: &DisposalInput,
+    ) -> Result<Event> {
+        self.lifecycle_writable(tx, s, company, DISPOSE).await?;
+        let p = self
+            .prepare_dispose(tx.sql(), s, company, id, input)
+            .await?;
+        self.apply_event(tx, s, company, p).await
+    }
+    pub(super) async fn prepare_dispose(
+        &self,
+        c: &dyn OperationClient,
+        s: &Scope,
+        company: i64,
+        id: i64,
+        input: &DisposalInput,
+    ) -> Result<PreparedEvent> {
+        self.opening_authorize(c, s, company, DISPOSE).await?;
+        let units = self.ledger.get_book_on(c, s, company).await?.minor_units;
+        let a = store::raw(c, Table::Asset, s.tenant(), company, id)
             .await?
             .ok_or(FixedAssetsError::NotFound)?;
         let a = store::asset(&a, units)?;
-        let activity = Activity::load(tx.sql(), s, company, units).await?;
+        let activity = Activity::load(c, s, company, units).await?;
         if activity.voided(id) {
             return Err(FixedAssetsError::AssetVoided);
         }
@@ -492,17 +587,14 @@ impl FixedAssets {
             return Err(FixedAssetsError::BeforeAcquisition);
         }
         activity.chronological(date)?;
-        if !self
-            .acquisition_live(tx.sql(), s, company, a.entry_id)
-            .await?
-        {
+        if !self.acquisition_live(c, s, company, a.entry_id).await? {
             return Err(FixedAssetsError::AcquisitionReversed);
         }
         if activity.disposal(id).is_some() {
             return Err(FixedAssetsError::AlreadyDisposed);
         }
         let report = self
-            .report_on(tx.sql(), s, company, date, &ReportPins::default())
+            .report_on(c, s, company, date, &ReportPins::default())
             .await?;
         let row = report
             .rows
@@ -518,7 +610,7 @@ impl FixedAssets {
                 .ok_or_else(|| invalid("settlement_account_id", "can't be blank"))?;
             if !self
                 .ledger
-                .list_accounts_on(tx.sql(), s, company)
+                .list_accounts_on(c, s, company)
                 .await?
                 .iter()
                 .any(|a| a.id == account && a.postable() && a.account_type == AccountType::Asset)
@@ -544,22 +636,19 @@ impl FixedAssets {
             lines.push(NewLine::debit(revision.loss_account_id, Money::ZERO - gain));
         }
         lines.retain(|l| l.debit.is_positive() || l.credit.is_positive());
-        let event_id = store::reserve(tx.sql(), Table::Event).await?;
-        let posted = self
-            .post(
-                &mut tx,
-                s,
-                company,
-                event_id,
-                "event",
-                date,
-                reason.clone(),
-                lines,
-            )
-            .await?;
-        let event=self.record_event(&mut tx,s,company,units,json!({"id":event_id,"asset_id":id,"action":"disposed","effective_date":date.to_string(),"reason":reason,"proceeds":proceeds,"accumulated":row.accumulated}),posted.as_ref()).await?;
-        tx.commit().await?;
-        Ok(event)
+
+        let values = json!({"asset_id":id,"action":"disposed","effective_date":date.to_string(),"reason":reason,"proceeds":proceeds,"accumulated":row.accumulated});
+        self.prepare_event(
+            c,
+            s,
+            company,
+            units,
+            values,
+            lines,
+            None,
+            json!({"asset":row,"settlement_account_id":settlement}),
+        )
+        .await
     }
     pub async fn reverse_disposal(
         &self,
@@ -575,43 +664,65 @@ impl FixedAssets {
                 s,
                 company,
                 REVERSE,
-                "finance.fixed-assets.reverse-disposal",
+                "finance.fixed-assets.reverse_disposal",
             )
             .await?;
-        if store::raw(tx.sql(), Table::Asset, s.tenant(), company, id)
+        let event = self
+            .reverse_disposal_on(&mut tx, s, company, id, input)
+            .await?;
+        tx.commit().await?;
+        Ok(event)
+    }
+    pub(super) async fn reverse_disposal_on(
+        &self,
+        tx: &mut MutationTransaction<'_>,
+        s: &Scope,
+        company: i64,
+        id: i64,
+        input: &EventInput,
+    ) -> Result<Event> {
+        self.lifecycle_writable(tx, s, company, REVERSE).await?;
+        let p = self
+            .prepare_reverse_disposal(tx.sql(), s, company, id, input)
+            .await?;
+        self.apply_event(tx, s, company, p).await
+    }
+    pub(super) async fn prepare_reverse_disposal(
+        &self,
+        c: &dyn OperationClient,
+        s: &Scope,
+        company: i64,
+        id: i64,
+        input: &EventInput,
+    ) -> Result<PreparedEvent> {
+        self.opening_authorize(c, s, company, REVERSE).await?;
+        if store::raw(c, Table::Asset, s.tenant(), company, id)
             .await?
             .is_none()
         {
             return Err(FixedAssetsError::NotFound);
         }
-        let units = self
-            .ledger
-            .get_book_on(tx.sql(), s, company)
-            .await?
-            .minor_units;
-        let activity = Activity::load(tx.sql(), s, company, units).await?;
+        let units = self.ledger.get_book_on(c, s, company).await?.minor_units;
+        let activity = Activity::load(c, s, company, units).await?;
         let disposed = activity.disposal(id).ok_or(FixedAssetsError::NotDisposed)?;
         let reason = text(&input.reason, "reason", 500)?;
         activity.chronological(input.effective_date)?;
-        let posted = self
-            .ledger
-            .reverse_owned_entry(
-                &mut tx,
-                s,
-                company,
+
+        let values = json!({"asset_id":id,"action":"disposal_reversed","effective_date":input.effective_date.to_string(),"reason":reason,"reverses_event_id":disposed.id});
+        self.prepare_event(
+            c,
+            s,
+            company,
+            units,
+            values,
+            vec![],
+            Some((
                 disposed.entry_id.ok_or(Error::Invalid)?,
-                &owner("event", disposed.id),
-                &Reversal {
-                    entry_date: input.effective_date,
-                    description: reason.clone(),
-                    reference: None,
-                },
-            )
-            .await?;
-        let event_id = store::reserve(tx.sql(), Table::Event).await?;
-        let event=self.record_event(&mut tx,s,company,units,json!({"id":event_id,"asset_id":id,"action":"disposal_reversed","effective_date":input.effective_date.to_string(),"reason":reason,"reverses_event_id":disposed.id}),Some(&posted)).await?;
-        tx.commit().await?;
-        Ok(event)
+                owner("event", disposed.id),
+            )),
+            json!({"disposal":disposed}),
+        )
+        .await
     }
     pub async fn void_acquisition(
         &self,
@@ -627,37 +738,58 @@ impl FixedAssets {
                 s,
                 company,
                 VOID,
-                "finance.fixed-assets.void-acquisition",
+                "finance.fixed-assets.void_acquisition",
             )
             .await?;
-        let units = self
-            .ledger
-            .get_book_on(tx.sql(), s, company)
-            .await?
-            .minor_units;
-        let a = store::raw(tx.sql(), Table::Asset, s.tenant(), company, id)
+        let event = self
+            .void_acquisition_on(&mut tx, s, company, id, input)
+            .await?;
+        tx.commit().await?;
+        Ok(event)
+    }
+    pub(super) async fn void_acquisition_on(
+        &self,
+        tx: &mut MutationTransaction<'_>,
+        s: &Scope,
+        company: i64,
+        id: i64,
+        input: &EventInput,
+    ) -> Result<Event> {
+        self.lifecycle_writable(tx, s, company, VOID).await?;
+        let p = self
+            .prepare_void_acquisition(tx.sql(), s, company, id, input)
+            .await?;
+        self.apply_event(tx, s, company, p).await
+    }
+    pub(super) async fn prepare_void_acquisition(
+        &self,
+        c: &dyn OperationClient,
+        s: &Scope,
+        company: i64,
+        id: i64,
+        input: &EventInput,
+    ) -> Result<PreparedEvent> {
+        self.opening_authorize(c, s, company, VOID).await?;
+        let units = self.ledger.get_book_on(c, s, company).await?.minor_units;
+        let a = store::raw(c, Table::Asset, s.tenant(), company, id)
             .await?
             .ok_or(FixedAssetsError::NotFound)?;
         let a = store::asset(&a, units)?;
-        let activity = Activity::load(tx.sql(), s, company, units).await?;
+        let activity = Activity::load(c, s, company, units).await?;
         if activity.voided(id) {
             return Err(FixedAssetsError::AlreadyVoided);
         }
         if activity.disposal(id).is_some() {
             return Err(FixedAssetsError::DisposalStanding);
         }
-        if self
-            .acquisition_live(tx.sql(), s, company, a.entry_id)
-            .await?
-        {
+        if self.acquisition_live(c, s, company, a.entry_id).await? {
             return Err(FixedAssetsError::AcquisitionNotReversed);
         }
         let reason = text(&input.reason, "reason", 500)?;
-        self.open_period(tx.sql(), s, company, input.effective_date.first_of_month())
+        self.open_period(c, s, company, input.effective_date.first_of_month())
             .await?;
         activity.chronological(input.effective_date)?;
-        let revision =
-            store::revision(tx.sql(), s.tenant(), company, a.category_revision_id).await?;
+        let revision = store::revision(c, s.tenant(), company, a.category_revision_id).await?;
         let charges: Vec<_> = activity
             .runs
             .iter()
@@ -668,26 +800,128 @@ impl FixedAssets {
             .collect();
         let accumulated = charges.iter().map(|(_, _, amount)| *amount).sum::<Money>();
         let lines = charge_lines(&charges, true);
-        let event_id = store::reserve(tx.sql(), Table::Event).await?;
-        let posted = self
-            .post(
-                &mut tx,
+
+        let values = json!({"asset_id":id,"action":"acquisition_voided","effective_date":input.effective_date.to_string(),"reason":reason,"accumulated":accumulated});
+        self.prepare_event(
+            c,
+            s,
+            company,
+            units,
+            values,
+            lines,
+            None,
+            json!({"asset":a,"revision":revision,"charges":charges}),
+        )
+        .await
+    }
+    async fn preview_post(
+        &self,
+        c: &dyn OperationClient,
+        s: &Scope,
+        company: i64,
+        date: Date,
+        description: String,
+        lines: Vec<NewLine>,
+    ) -> Result<Value> {
+        if lines.is_empty() {
+            return Ok(Value::Null);
+        }
+        Ok(self
+            .ledger
+            .preview_post_entry_on(
+                c,
                 s,
                 company,
-                event_id,
-                "event",
-                input.effective_date,
-                reason.clone(),
-                lines,
+                &NewEntry {
+                    entry_date: date,
+                    description,
+                    reference: None,
+                    lines,
+                },
+                &PostOptions::default(),
             )
-            .await?;
-        let event=self.record_event(&mut tx,s,company,units,json!({"id":event_id,"asset_id":id,"action":"acquisition_voided","effective_date":input.effective_date.to_string(),"reason":reason,"accumulated":accumulated}),posted.as_ref()).await?;
-        tx.commit().await?;
-        Ok(event)
+            .await?)
+    }
+    #[allow(clippy::too_many_arguments)]
+    async fn prepare_event(
+        &self,
+        c: &dyn OperationClient,
+        s: &Scope,
+        company: i64,
+        units: MinorUnits,
+        values: Value,
+        lines: Vec<NewLine>,
+        reversal: Option<(i64, EntryOwner)>,
+        basis: Value,
+    ) -> Result<PreparedEvent> {
+        let date = date(&values, "effective_date")?;
+        let reason = string(&values, "reason")?;
+        let posting = if let Some((entry, owner)) = &reversal {
+            self.ledger
+                .preview_reverse_owned_entry_on(
+                    c,
+                    s,
+                    company,
+                    *entry,
+                    owner,
+                    &Reversal {
+                        entry_date: date,
+                        description: reason,
+                        reference: None,
+                    },
+                )
+                .await?
+        } else {
+            self.preview_post(c, s, company, date, reason, lines.clone())
+                .await?
+        };
+        let review = json!({"event":values,"basis":basis,"posting":posting});
+        Ok(PreparedEvent {
+            units,
+            values,
+            lines,
+            reversal,
+            review,
+        })
+    }
+    async fn apply_event(
+        &self,
+        tx: &mut MutationTransaction<'_>,
+        s: &Scope,
+        company: i64,
+        mut p: PreparedEvent,
+    ) -> Result<Event> {
+        let id = store::reserve(tx.sql(), Table::Event).await?;
+        let date = date(&p.values, "effective_date")?;
+        let reason = string(&p.values, "reason")?;
+        let posted = if let Some((entry, owner)) = p.reversal {
+            Some(
+                self.ledger
+                    .reverse_owned_entry(
+                        tx,
+                        s,
+                        company,
+                        entry,
+                        &owner,
+                        &Reversal {
+                            entry_date: date,
+                            description: reason,
+                            reference: None,
+                        },
+                    )
+                    .await?,
+            )
+        } else {
+            self.post(tx, s, company, id, "event", date, reason, p.lines)
+                .await?
+        };
+        p.values["id"] = id.into();
+        self.record_event(tx, s, company, p.units, p.values, posted.as_ref())
+            .await
     }
     async fn open_period(
         &self,
-        c: &(impl GenericClient + Sync),
+        c: &dyn OperationClient,
         s: &Scope,
         company: i64,
         month: Date,
@@ -705,7 +939,7 @@ impl FixedAssets {
     }
     async fn acquisition_live(
         &self,
-        c: &(impl GenericClient + Sync),
+        c: &dyn OperationClient,
         s: &Scope,
         company: i64,
         id: i64,
@@ -800,4 +1034,19 @@ fn charge_lines(charges: &[(i64, CategoryRevision, Money)], reverse: bool) -> Ve
             [NewLine::debit(debit, *m), NewLine::credit(credit, *m)]
         })
         .collect()
+}
+
+pub(super) struct PreparedRun {
+    units: MinorUnits,
+    existing: Option<Run>,
+    charges: Vec<(i64, CategoryRevision, Money)>,
+    skipped: Vec<i64>,
+    pub review: Value,
+}
+pub(super) struct PreparedEvent {
+    units: MinorUnits,
+    values: Value,
+    lines: Vec<NewLine>,
+    reversal: Option<(i64, EntryOwner)>,
+    pub review: Value,
 }

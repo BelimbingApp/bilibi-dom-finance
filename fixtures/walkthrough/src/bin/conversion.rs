@@ -645,6 +645,10 @@ async fn main() -> Outcome<()> {
                 setup(&db, &app.services, company).await?
             );
         }
+        if std::env::args().any(|s| s == "assets-lifecycle") {
+            bilibi_finance_walkthrough_fixture::assets_lifecycle::credentials(&db, &app.services)
+                .await?;
+        }
         println!(
             "Conversion browser fixture at {origin}; independent reviewer admin@example.test; walkthrough password. Company 001 UI first, Company 002 MCP second."
         );

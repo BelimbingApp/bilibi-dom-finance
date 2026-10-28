@@ -43,17 +43,33 @@ impl FixedAssets {
                 "finance.fixed-assets.category",
             )
             .await?;
+        let revision = self
+            .save_category_on(&mut tx, s, company, category_id, name, input)
+            .await?;
+        tx.commit().await?;
+        Ok(revision)
+    }
+    pub(super) async fn prepare_category(
+        &self,
+        c: &dyn OperationClient,
+        s: &Scope,
+        company: i64,
+        category_id: Option<i64>,
+        name: Option<&str>,
+        input: &RevisionInput,
+    ) -> Result<(String, RevisionInput)> {
+        self.opening_authorize(c, s, company, CONFIGURE).await?;
         let name = if let Some(id) = category_id {
-            let v = store::raw(tx.sql(), Table::Category, s.tenant(), company, id)
+            let v = store::raw(c, Table::Category, s.tenant(), company, id)
                 .await?
                 .ok_or(FixedAssetsError::NotFound)?;
             store::string(&v, "name")?
         } else {
             let name = text(name.unwrap_or_default(), "name", 200)?;
-            if tx.sql().query_opt("SELECT id FROM finance_fixed_assets_categories WHERE tenant_id=$1 AND company_id=$2 AND name=$3",&[&s.tenant(),&company,&name]).await?.is_some() {return Err(invalid("name","has already been taken"));}
+            if c.query_opt("SELECT id FROM finance_fixed_assets_categories WHERE tenant_id=$1 AND company_id=$2 AND name=$3",&[&s.tenant(),&company,&name]).await?.is_some() {return Err(invalid("name","has already been taken"));}
             name
         };
-        let accounts = self.ledger.list_accounts_on(tx.sql(), s, company).await?;
+        let accounts = self.ledger.list_accounts_on(c, s, company).await?;
         for (id, field, kind) in [
             (input.cost_account_id, "cost_account_id", AccountType::Asset),
             (
@@ -96,6 +112,21 @@ impl FixedAssets {
         let mut input = input.clone();
         input.reason = text(&input.reason, "reason", 500)?;
         input.assumptions = schedule::assumptions(input.assumptions)?;
+        Ok((name, input))
+    }
+    pub(super) async fn save_category_on(
+        &self,
+        tx: &mut MutationTransaction<'_>,
+        s: &Scope,
+        company: i64,
+        category_id: Option<i64>,
+        name: Option<&str>,
+        input: &RevisionInput,
+    ) -> Result<CategoryRevision> {
+        self.lifecycle_writable(tx, s, company, CONFIGURE).await?;
+        let (name, input) = self
+            .prepare_category(tx.sql(), s, company, category_id, name, input)
+            .await?;
         let identity = store::identity(s, company);
         let result = tx
             .mutate(move |sql| {
@@ -125,19 +156,26 @@ impl FixedAssets {
             })
             .await?;
         let revision = store::revision(tx.sql(), s.tenant(), company, result).await?;
-        tx.commit().await?;
         Ok(revision)
     }
     pub async fn list_categories(&self, s: &Scope, company: i64) -> Result<Vec<Category>> {
         let c = self.db.get().await.map_err(Error::from)?;
-        authorize(&**c, s, company, VIEW).await?;
+        self.categories_on(&**c, s, company).await
+    }
+    pub(super) async fn categories_on(
+        &self,
+        c: &dyn OperationClient,
+        s: &Scope,
+        company: i64,
+    ) -> Result<Vec<Category>> {
+        self.opening_authorize(c, s, company, VIEW).await?;
         let categories=c.query("SELECT id,name FROM finance_fixed_assets_categories WHERE tenant_id=$1 AND company_id=$2 ORDER BY name",&[&s.tenant(),&company]).await?;
         let mut result = Vec::new();
         for row in categories {
             let id = row.get::<_, i64>(0);
             let mut revisions = Vec::new();
             for r in c.query("SELECT id FROM finance_fixed_assets_category_revisions WHERE tenant_id=$1 AND company_id=$2 AND category_id=$3 ORDER BY id",&[&s.tenant(),&company,&id]).await? {
-                revisions.push(store::revision(&**c,s.tenant(),company,r.get(0)).await?);
+                revisions.push(store::revision(c,s.tenant(),company,r.get(0)).await?);
             }
             let revision = revisions.last().cloned().ok_or(Error::Invalid)?;
             result.push(Category {

@@ -6,43 +6,52 @@ use bilibi_finance_ledger::{AccountTotal, MinorUnits, TotalsQuery};
 use std::collections::{BTreeMap, BTreeSet};
 use store::{int, Table};
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReportPins {
     pub through_entry_number: Option<i64>,
     pub through_asset_number: Option<i64>,
     pub through_event_number: Option<i64>,
     pub through_category_revision_id: Option<i64>,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ReconciliationKind {
     Balance,
     Activity,
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Reconciliation {
     pub account_id: i64,
     pub kind: ReconciliationKind,
+    #[serde(deserialize_with = "money_serde::deserialize")]
     pub ledger_balance: Money,
+    #[serde(deserialize_with = "money_serde::deserialize")]
     pub register_balance: Money,
+    #[serde(deserialize_with = "money_serde::deserialize")]
     pub difference: Money,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RegisterRow {
     pub asset: Asset,
     pub revision: CategoryRevision,
+    #[serde(deserialize_with = "money_serde::deserialize")]
     pub accumulated: Money,
+    #[serde(deserialize_with = "money_serde::deserialize")]
     pub scheduled_depreciation: Money,
+    #[serde(deserialize_with = "money_serde::deserialize")]
     pub carrying_value: Money,
     pub disposed: bool,
     pub voided: bool,
+    #[serde(deserialize_with = "money_serde::deserialize")]
     pub disposal_gain: Money,
     pub schedule: Vec<ScheduleRow>,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RegisterReport {
     pub company_id: i64,
+    #[serde(with = "date_serde")]
     pub as_of: Date,
     pub currency_code: String,
+    #[serde(deserialize_with = "money_serde::units")]
     pub minor_units: MinorUnits,
     pub through_entry_number: i64,
     pub through_asset_number: i64,
@@ -91,13 +100,13 @@ impl FixedAssets {
     }
     pub(crate) async fn report_on(
         &self,
-        c: &(impl GenericClient + Sync),
+        c: &dyn OperationClient,
         s: &Scope,
         company: i64,
         date: Date,
         pins: &ReportPins,
     ) -> Result<RegisterReport> {
-        authorize(c, s, company, VIEW).await?;
+        self.opening_authorize(c, s, company, VIEW).await?;
         if [
             pins.through_entry_number,
             pins.through_asset_number,

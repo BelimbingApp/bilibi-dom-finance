@@ -1,7 +1,1 @@
-{% import "components.html" as ui %}
-{% import "forms.html" as form %}
-<form id="{{ form_dom }}" data-event="{{ event_name }}">
-{% for field in fields %}{% call form::input(field=field) %}{% endcall %}{% endfor %}
-{% if !help.is_empty() %}<p>{{ help }}</p>{% endif %}
-{% call ui::button(id=button_dom, button_type="submit", working="Recording…") %}{{ verb }}{% endcall %}
-</form>
+{{ self.form()?|safe }}

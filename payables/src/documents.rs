@@ -896,12 +896,12 @@ impl Payables {
     /// pool connection while the caller holds the company write lock.
     pub async fn get_document_on(
         &self,
-        c: &(impl GenericClient + Sync),
+        c: &dyn bilibi_agent_api::OperationClient,
         s: &Scope,
         company: i64,
         id: i64,
     ) -> Result<Document> {
-        authorize(c, s, company, VIEW).await?;
+        crate::agent_operations::authorize_on(c, s, company, VIEW).await?;
         store::document(c, s.tenant(), company, id)
             .await?
             .ok_or(PayablesError::DocumentNotFound)

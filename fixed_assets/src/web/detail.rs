@@ -15,7 +15,7 @@ pub(super) struct Detail {
     dispose: Draft,
     reverse: Draft,
     void: Draft,
-    pending_void: Option<Draft>,
+    pending_void: Option<(Draft, String, serde_json::Value)>,
     flash: Option<(StatusKind, String)>,
 }
 #[derive(Template)]
@@ -107,7 +107,7 @@ impl Detail {
         &self,
         s: &Scope,
         op: &str,
-        accounts: &[(i64, String, String, bool)],
+        accounts: &[(i64, String, String, bool, String)],
     ) -> Result<Html> {
         let (d, cap, title, reason) = match op {
             "dispose" => (
@@ -179,10 +179,9 @@ impl Detail {
                 .options(
                     std::iter::once(bilibi_ui::Choice::new("Choose an account", ""))
                         .chain(
-                            accounts
-                                .iter()
-                                .filter(|a| a.3 && a.2 == "asset")
-                                .map(|a| bilibi_ui::Choice::new(&a.1, a.0.to_string())),
+                            accounts.iter().filter(|a| a.3 && a.2 == "asset").map(|a| {
+                                bilibi_ui::Choice::new(&a.1, a.0.to_string()).detail(&a.4)
+                            }),
                         )
                         .collect(),
                 ),
@@ -205,7 +204,16 @@ impl Detail {
         let (units, accounts) = self.pages.account_context(s).await?;
         let display = self.pages.display(s).await?;
         let read = match company(s) {
-            Some(c) => self.pages.assets.get_asset(s, c, self.asset_id).await,
+            Some(c) => {
+                self.pages
+                    .read::<AssetDetail>(
+                        s,
+                        "finance.fixed_assets.asset.get",
+                        serde_json::json!({"company_id":c,"asset_id":self.asset_id}),
+                        "record",
+                    )
+                    .await
+            }
             None => Err(FixedAssetsError::CompanyNotFound),
         };
         let (detail, unavailable) = match read {
@@ -351,32 +359,26 @@ impl Detail {
         };
         View {title_actions,register_link:render(RegisterLink)?,detail:detail.as_ref(),unavailable,flash:flash_map(&self.flash),assumptions,schedule,charges,events,dispose:if visible {self.form(s,"dispose",&accounts).await?}else{Html::EMPTY},void:if detail.as_ref().is_some_and(|d|!d.voided){self.form(s,"void",&accounts).await?}else{Html::EMPTY},reverse:if visible{self.form(s,"reverse",&accounts).await?}else{Html::EMPTY},confirm:if self.pending_void.is_some(){render(ConfirmDialog {id:"asset-void-confirm",consequence:"Void acquisition",detail:"Depreciation already posted for this asset is reversed; other assets keep theirs. This cannot be undone.",confirm:"Void acquisition",working:"Recording…",confirm_event:"confirm_void",cancel_event:"cancel_void"})?}else{Html::EMPTY}}.render().map_err(|_|Error::Internal)
     }
-    async fn perform(&self, s: &Scope, op: &str, d: &Draft) -> crate::Result<()> {
-        let c = company(s).ok_or(FixedAssetsError::CompanyNotFound)?;
-        match op {
-            "dispose" => {
-                let units = self.pages.ledger.get_book(s, c).await?.minor_units;
-                self.pages
-                    .assets
-                    .dispose(s, c, self.asset_id, &d.disposal(units)?)
-                    .await?;
-            }
-            "reverse" => {
-                self.pages
-                    .assets
-                    .reverse_disposal(s, c, self.asset_id, &d.event()?)
-                    .await?;
-            }
-            _ => {
-                self.pages
-                    .assets
-                    .void_acquisition(s, c, self.asset_id, &d.event()?)
-                    .await?;
-            }
-        }
+    fn input(&self, s: &Scope, d: &Draft) -> crate::Result<serde_json::Value> {
+        let mut input = serde_json::to_value(d.event()?).map_err(|_| Error::Internal)?;
+        input["company_id"] = company(s).ok_or(FixedAssetsError::CompanyNotFound)?.into();
+        input["asset_id"] = self.asset_id.into();
+        Ok(input)
+    }
+    async fn perform(&self, s: &Scope, credential: &str, op: &str, d: &Draft) -> crate::Result<()> {
+        let mut input = self.input(s, d)?;
+        let key = if op == "dispose" {
+            input["proceeds"] = serde_json::json!(d.value("proceeds"));
+            input["settlement_account_id"] =
+                serde_json::json!(d.optional_id("settlement_account_id")?);
+            "finance.fixed_assets.asset.dispose"
+        } else {
+            "finance.fixed_assets.disposal.reverse"
+        };
+        self.pages.submit(s, credential, op, key, input).await?;
         Ok(())
     }
-    async fn event(&mut self, s: &Scope, v: &serde_json::Value) -> Result<()> {
+    async fn event(&mut self, s: &Scope, credential: &str, v: &serde_json::Value) -> Result<()> {
         let event = v["type"].as_str().unwrap_or("");
         match event {
             "clear-flash" => {
@@ -412,37 +414,65 @@ impl Detail {
             self.flash = Some((StatusKind::Error, DENIED.into()));
             return Ok(());
         }
-        let mut draft = if event == "confirm_void" {
-            let Some(d) = self.pending_void.take() else {
+        if event == "confirm_void" {
+            let Some((mut draft, code, input)) = self.pending_void.take() else {
                 return Ok(());
             };
-            d
-        } else {
-            Draft::posted(v)
-        };
-        if event == "void" {
-            // The irreversible operation waits for the shared server-owned dialog.
-            match draft.event() {
-                Ok(_) => {
-                    self.void = draft.clone();
-                    self.pending_void = Some(draft);
-                    return Ok(());
-                }
+            match self
+                .pages
+                .contracts
+                .commit(
+                    &self.pages.call(
+                        s,
+                        credential,
+                        event,
+                        "finance.fixed_assets.acquisition.void",
+                    ),
+                    &code,
+                    input,
+                )
+                .await
+                .map_err(contract_error)
+            {
+                Ok(_) => self.flash = Some((StatusKind::Success, "Acquisition voided.".into())),
                 Err(e) => {
                     draft.refused(&e);
                     self.flash = Some((StatusKind::Error, refusal(e)));
-                    self.void = draft;
-                    return Ok(());
                 }
             }
+            self.void = draft;
+            return Ok(());
         }
-        match self.perform(s, event, &draft).await {
+        let mut draft = Draft::posted(v);
+        if event == "void" {
+            let review=async{
+                let input=self.input(s,&draft)?;
+                let result=self.pages.contracts.preview(&self.pages.call(s,credential,"void","finance.fixed_assets.acquisition.void"),input.clone()).await.map_err(contract_error)?;
+                if result["results"][0]["valid"]!=true{
+                    let fields=result["results"][0]["error"]["fields"].clone();
+                    return Err(contract_error(bilibi_agent_api::Error::InvalidInput(serde_json::from_value(fields).unwrap_or_else(|_|std::collections::BTreeMap::from([("base".into(),vec!["The acquisition could not be reviewed. Check its source and permissions.".into()])])))));
+                }
+                let code=result["plan_code"].as_str().ok_or(Error::Internal)?.to_owned();
+                Ok((code,input))
+            }.await;
+            match review {
+                Ok((code, input)) => self.pending_void = Some((draft.clone(), code, input)),
+                Err(e) => {
+                    draft.refused(&e);
+                    self.flash = Some((StatusKind::Error, refusal(e)));
+                }
+            }
+            self.void = draft;
+            return Ok(());
+        }
+        match self.perform(s, credential, event, &draft).await {
             Ok(()) => self.flash = Some((StatusKind::Success, "Recorded in the ledger.".into())),
             Err(e) => {
                 draft.refused(&e);
                 self.flash = Some((StatusKind::Error, refusal(e)));
             }
         }
+
         match event {
             "dispose" => self.dispose = draft,
             "reverse" => self.reverse = draft,
@@ -463,7 +493,7 @@ impl LiveState<Scope, Error> for Detail {
     fn update<'a>(&'a mut self, r: LiveRequest<'a, Scope>) -> LiveFuture<'a, Error> {
         Box::pin(async move {
             match r.input {
-                LiveInput::Event(v) => self.event(r.scope, v).await?,
+                LiveInput::Event(v) => self.event(r.scope, r.credential, v).await?,
                 LiveInput::Params(p) => {
                     if let Some(id) = p.get("id") {
                         let id = params::positive_integer(Some(id))

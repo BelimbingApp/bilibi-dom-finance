@@ -2021,13 +2021,13 @@ impl Ledger {
     /// Authorized aggregate read on the caller's snapshot or write transaction.
     pub async fn account_totals_on(
         &self,
-        client: &(impl GenericClient + Sync),
+        client: &dyn bilibi_agent_api::OperationClient,
         scope: &Scope,
         company_id: i64,
         query: &TotalsQuery,
     ) -> Result<AccountTotals> {
         let window = totals::Window::new(query)?;
-        authorize(client, scope, company_id, VIEW).await?;
+        agent_operations::authorize_on(client, scope, company_id, VIEW).await?;
         let tenant = scope.tenant();
         let book = books::find(client, tenant, company_id)
             .await?
@@ -3072,11 +3072,11 @@ impl Ledger {
     /// Authorized period states on the caller's connection, including its writes.
     pub async fn list_fiscal_years_on(
         &self,
-        client: &(impl GenericClient + Sync),
+        client: &dyn bilibi_agent_api::OperationClient,
         scope: &Scope,
         company_id: i64,
     ) -> Result<Vec<FiscalYear>> {
-        authorize(client, scope, company_id, VIEW).await?;
+        agent_operations::authorize_on(client, scope, company_id, VIEW).await?;
         Ok(periods::state(client, scope.tenant(), company_id)
             .await?
             .years)
