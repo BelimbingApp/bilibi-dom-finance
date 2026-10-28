@@ -359,23 +359,29 @@ impl Vendors {
                             .detail(a["code"].as_str().unwrap_or(""))
                     })
                     .collect();
-                let display =
-                    accounts
-                        .iter()
-                        .find(|a| a["id"].as_i64() == current)
-                        .map(|a| {
-                            Html::text(&format!(
-                                "{} · {}",
-                                a["name"].as_str().unwrap_or(""),
-                                a["code"].as_str().unwrap_or("")
-                            ))
-                        })
-                        .unwrap_or_else(|| {
-                            Html::text(&current.map_or_else(
-                                || "Company default".into(),
-                                |id| format!("Account {id}"),
-                            ))
-                        });
+                let display = accounts
+                    .iter()
+                    .find(|a| a["id"].as_i64() == current)
+                    .map(|a| {
+                        Html::text(&format!(
+                            "{} · {}",
+                            a["name"].as_str().unwrap_or(""),
+                            a["code"].as_str().unwrap_or("")
+                        ))
+                    })
+                    .unwrap_or_else(|| {
+                        Html::text(&current.map_or_else(
+                            || {
+                                if kind == "liability" {
+                                    "Company default"
+                                } else {
+                                    "No default"
+                                }
+                                .into()
+                            },
+                            |id| format!("Account {id}"),
+                        ))
+                    });
                 let editor = render(
                     Combobox::new(format!("vendor-{}-{key}-input", v.id), key)
                         .aria_label(label)
