@@ -58,9 +58,9 @@ def invoke(channel, tool, args, who="manager"):
 
 
 def op(key, company, **values):
-    if not key.startswith(("finance.", "core.")):
+    if not key.startswith("finance."):
         key = "finance.payables." + key
-    return {"key": key, "input": values if key.startswith("core.") else {"company_id": company, **values}}
+    return {"key": key, "input": {"company_id": company, **values}}
 
 
 def read(channel, key, company, who="manager", **values):
@@ -148,8 +148,8 @@ for channel, company in [("api", 1), ("mcp", 2)]:
     require(Decimal(same["rate"]) == Decimal(tax["rate"]) == 5 and {k: v for k, v in same.items() if k != "rate"} == {k: v for k, v in tax.items() if k != "rate"} and sql(f"SELECT count(*) FROM finance_payables_tax_code_changes WHERE company_id={company}") == before, "tax no-op lost values or made history")
     print("settings omissions, explicit clears, conflicting clear refusal; tax create/update no-op and immutable code", flush=True)
 
-    core = write(channel, "core.company.create", company, name=f"Payables {channel} vendor", status="active")
-    vendor = write(channel, "vendor.create", company, code="PARTY-A", core_company_id=core["id"], payment_terms_days=0, active=True)
+    # Company 025 is an active Core company in the disposable Platform fixture.
+    vendor = write(channel, "vendor.create", company, code="PARTY-A", core_company_id=25, payment_terms_days=0, active=True)
     draft = {"vendor_id": vendor["id"], "party_document_number": "SOURCE-1", "document_date": "2026-01-10", "lines": [
         {"description": "Net", "account_id": accounts["X"], "amount": "100.05", "tax_code_id": tax["id"]},
         {"description": "Fraction", "account_id": accounts["X"], "amount": "0.05", "tax_code_id": tax["id"]},
