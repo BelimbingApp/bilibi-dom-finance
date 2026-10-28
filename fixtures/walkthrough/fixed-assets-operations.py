@@ -194,6 +194,8 @@ for who in ["viewer", "other"]:
     require(body.get("valid") is not True, "unauthorized asset write")
 refused(channel, prefix + "asset.dispose", company, "proceeds", who="approver", asset_id=asset["id"], effective_date="2026-08-01", proceeds="1.001", reason="Invalid precision")
 refused(channel, prefix + "asset.dispose", company, "settlement_account_id", who="approver", asset_id=asset["id"], effective_date="2026-08-01", proceeds="500", reason="Missing account")
+blank = json.dumps(plan(channel, [operation(prefix + "asset.dispose", company, asset_id=asset["id"], effective_date="2026-07-31", proceeds="", reason="")], "approver"))
+require("\"proceeds\": [\"can't be blank\"]" in blank and "\"reason\": [\"can't be blank\"]" in blank, "blank reason and proceeds must be refused together as can't be blank")
 refused(channel, prefix + "asset.dispose", company, "depreciation", who="approver", asset_id=asset["id"], effective_date="2026-08-31", proceeds="0", reason="Unposted August")
 disposal = write(channel, prefix + "asset.dispose", company, asset_id=asset["id"], effective_date="2026-07-31", proceeds="9000", settlement_account_id=accounts["1000"], reason="Reviewed sale")
 after = report()

@@ -95,7 +95,7 @@ fn run_schema() -> Value {
 fn event_schema() -> Value {
     schema(
         &["asset_id", "effective_date", "reason"],
-        json!({"asset_id":{"type":"integer","minimum":1},"effective_date":{"type":"string","format":"date"},"reason":{"type":"string","maxLength":500}}),
+        json!({"asset_id":{"type":"integer","minimum":1},"effective_date":{"type":"string","description":"ISO date, YYYY-MM-DD."},"reason":{"type":"string","maxLength":500}}),
     )
 }
 fn reverse_run_schema() -> Value {
@@ -251,7 +251,7 @@ impl Write {
                 .await?
                 .review),
             Self::ReverseRun => Ok(owner
-                .prepare_reverse_run(c, s, company, id(input, "run_id")?, &decode(input)?)
+                .prepare_reverse_run(c, s, company, id(input, "run_id")?, &event(input)?)
                 .await?
                 .review),
             Self::Dispose => Ok(owner
@@ -265,11 +265,11 @@ impl Write {
                 .await?
                 .review),
             Self::ReverseDisposal => Ok(owner
-                .prepare_reverse_disposal(c, s, company, id(input, "asset_id")?, &decode(input)?)
+                .prepare_reverse_disposal(c, s, company, id(input, "asset_id")?, &event(input)?)
                 .await?
                 .review),
             Self::Void => Ok(owner
-                .prepare_void_acquisition(c, s, company, id(input, "asset_id")?, &decode(input)?)
+                .prepare_void_acquisition(c, s, company, id(input, "asset_id")?, &event(input)?)
                 .await?
                 .review),
         }
@@ -293,6 +293,41 @@ async fn acquisition(
     }
     decode(&v)
 }
+fn event_errors(input: &Value, errors: &mut Vec<FieldError>) -> Option<EventInput> {
+    let reason = input["reason"].as_str().unwrap_or("");
+    if reason.trim().is_empty() {
+        errors.push(FieldError::new("reason", "can't be blank"));
+    }
+    let date = input["effective_date"].as_str().unwrap_or("");
+    let effective_date = date.parse::<Date>().ok();
+    if effective_date.is_none() {
+        errors.push(FieldError::new(
+            "effective_date",
+            if date.is_empty() {
+                "can't be blank"
+            } else {
+                "is invalid"
+            },
+        ));
+    }
+    Some(EventInput {
+        effective_date: effective_date?,
+        reason: reason.into(),
+    })
+}
+fn finish(mut errors: Vec<FieldError>) -> Result<()> {
+    if errors.is_empty() {
+        return Ok(());
+    }
+    errors.sort_by_key(|e| e.field);
+    Err(FixedAssetsError::Invalid(errors))
+}
+fn event(input: &Value) -> Result<EventInput> {
+    let mut errors = Vec::new();
+    let event = event_errors(input, &mut errors);
+    finish(errors)?;
+    event.ok_or_else(|| invalid("base", "contains an invalid field value"))
+}
 async fn disposal(
     owner: &FixedAssets,
     c: &dyn OperationClient,
@@ -301,12 +336,30 @@ async fn disposal(
     input: &Value,
 ) -> Result<DisposalInput> {
     let units = owner.ledger.get_book_on(c, s, company).await?.minor_units;
-    Ok(DisposalInput {
-        event: decode(input)?,
-        proceeds: Money::parse(input["proceeds"].as_str().unwrap_or(""), units)
-            .map_err(|e| invalid("proceeds", e.to_string()))?,
-        settlement_account_id: input["settlement_account_id"].as_i64(),
-    })
+    let mut errors = Vec::new();
+    let event = event_errors(input, &mut errors);
+    let text = input["proceeds"].as_str().unwrap_or("");
+    let proceeds = if text.trim().is_empty() {
+        errors.push(FieldError::new("proceeds", "can't be blank"));
+        None
+    } else {
+        match Money::parse(text, units) {
+            Ok(m) => Some(m),
+            Err(e) => {
+                errors.push(FieldError::new("proceeds", e.to_string()));
+                None
+            }
+        }
+    };
+    finish(errors)?;
+    match (event, proceeds) {
+        (Some(event), Some(proceeds)) => Ok(DisposalInput {
+            event,
+            proceeds,
+            settlement_account_id: input["settlement_account_id"].as_i64(),
+        }),
+        _ => Err(invalid("base", "contains an invalid field value")),
+    }
 }
 impl WriteHandler for Write {
     fn owner(&self) -> &'static str {
@@ -393,7 +446,7 @@ impl WriteHandler for Write {
                             .await?
                     ),
                     Self::ReverseRun => json!(
-                        o.reverse_run_on(tx, s, company, id(input, "run_id")?, &decode(input)?)
+                        o.reverse_run_on(tx, s, company, id(input, "run_id")?, &event(input)?)
                             .await?
                     ),
                     Self::Dispose => {
@@ -409,7 +462,7 @@ impl WriteHandler for Write {
                             s,
                             company,
                             id(input, "asset_id")?,
-                            &decode(input)?
+                            &event(input)?
                         )
                         .await?
                     ),
@@ -419,7 +472,7 @@ impl WriteHandler for Write {
                             s,
                             company,
                             id(input, "asset_id")?,
-                            &decode(input)?
+                            &event(input)?
                         )
                         .await?
                     ),

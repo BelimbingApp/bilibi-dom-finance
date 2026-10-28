@@ -360,7 +360,7 @@ impl Detail {
         View {title_actions,register_link:render(RegisterLink)?,detail:detail.as_ref(),unavailable,flash:flash_map(&self.flash),assumptions,schedule,charges,events,dispose:if visible {self.form(s,"dispose",&accounts).await?}else{Html::EMPTY},void:if detail.as_ref().is_some_and(|d|!d.voided){self.form(s,"void",&accounts).await?}else{Html::EMPTY},reverse:if visible{self.form(s,"reverse",&accounts).await?}else{Html::EMPTY},confirm:if self.pending_void.is_some(){render(ConfirmDialog {id:"asset-void-confirm",consequence:"Void acquisition",detail:"Depreciation already posted for this asset is reversed; other assets keep theirs. This cannot be undone.",confirm:"Void acquisition",working:"Recording…",confirm_event:"confirm_void",cancel_event:"cancel_void"})?}else{Html::EMPTY}}.render().map_err(|_|Error::Internal)
     }
     fn input(&self, s: &Scope, d: &Draft) -> crate::Result<serde_json::Value> {
-        let mut input = serde_json::to_value(d.event()?).map_err(|_| Error::Internal)?;
+        let mut input = d.event_values();
         input["company_id"] = company(s).ok_or(FixedAssetsError::CompanyNotFound)?.into();
         input["asset_id"] = self.asset_id.into();
         Ok(input)
@@ -369,8 +369,12 @@ impl Detail {
         let mut input = self.input(s, d)?;
         let key = if op == "dispose" {
             input["proceeds"] = serde_json::json!(d.value("proceeds"));
-            input["settlement_account_id"] =
-                serde_json::json!(d.optional_id("settlement_account_id")?);
+            let account = d.value("settlement_account_id").trim();
+            if !account.is_empty() {
+                input["settlement_account_id"] = account
+                    .parse::<i64>()
+                    .map_or_else(|_| serde_json::json!(account), |id| serde_json::json!(id));
+            }
             "finance.fixed_assets.asset.dispose"
         } else {
             "finance.fixed_assets.disposal.reverse"

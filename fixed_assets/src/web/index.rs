@@ -717,8 +717,7 @@ impl Index {
                     return Ok(());
                 }
                 let result = async {
-                    let mut input =
-                        serde_json::to_value(self.reverse.event()?).map_err(|_| Error::Internal)?;
+                    let mut input = self.reverse.event_values();
                     input["run_id"] = self.reverse.id("run_id")?.into();
                     self.pages
                         .submit(
