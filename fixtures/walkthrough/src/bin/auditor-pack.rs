@@ -283,7 +283,7 @@ async fn main() -> Outcome<()> {
         .lines()
         .next()
         .unwrap()
-        .ends_with("\"record_kind\",\"record_id\""));
+        .ends_with("record_kind,record_id"));
     assert!(before_csv
         .lines()
         .any(|row| row.contains("PACK-LEGACY") && row.ends_with(",\"\",\"\"")));
