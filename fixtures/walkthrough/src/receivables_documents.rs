@@ -1147,7 +1147,7 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         "boundaries: due-today bucket zero; tax entry pins; competing settlements/reversals serialize; received-tax fractions stay unrounded"
     );
     let datasets = Receivables::evidence_datasets();
-    assert_eq!(datasets.len(), 15);
+    assert_eq!(datasets.len(), 17);
     for dataset in datasets {
         let mut after = None;
         let mut count = 0;
@@ -1180,7 +1180,12 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
             count > 0
                 || matches!(
                     dataset,
-                    "write_off" | "write_off_event" | "opening_batch" | "opening_item"
+                    "write_off"
+                        | "write_off_event"
+                        | "opening_stage"
+                        | "opening_decision"
+                        | "opening_batch"
+                        | "opening_item"
                 ),
             "empty evidence {dataset}"
         );
