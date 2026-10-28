@@ -101,7 +101,8 @@ impl Opening {
                 "conversion-rows",
                 vec![
                     BuiltinColumn::new("source", "Source ID"),
-                    BuiltinColumn::new("record", "Record"),
+                    BuiltinColumn::new("record", "Source record"),
+                    BuiltinColumn::new("vendor", "Linked vendor"),
                     BuiltinColumn::new("date", "Original date"),
                     BuiltinColumn::new("original", "Original total").right(),
                     BuiltinColumn::new("balance", "Outstanding").right(),
@@ -367,6 +368,14 @@ impl Opening {
                                 "{} · {}",
                                 text("vendor_name"),
                                 text("document_reference")
+                            )),
+                        )
+                        .cell(
+                            "vendor",
+                            Cell::text(format!(
+                                "{} · {}",
+                                r["vendor"]["company"]["name"].as_str().unwrap_or(""),
+                                text("vendor_code")
                             )),
                         )
                         .cell("date", Cell::text(text("document_date")))
