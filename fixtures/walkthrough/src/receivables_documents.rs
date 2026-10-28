@@ -33,6 +33,8 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
     let ar = services.get::<Receivables>(bilibi_finance_receivables::SERVICE)?;
     let ledger = services.get::<Ledger>(bilibi_finance_ledger::SERVICE)?;
     let attachments = services.get::<Attachments>(bilibi_finance_attachments::SERVICE)?;
+    let einvoice =
+        services.get::<bilibi_finance_einvoice::Einvoice>(bilibi_finance_einvoice::SERVICE)?;
     let grants = services.get::<bilibi_authz::grants::Grants>("base/authz.grants")?;
     let client = db.get().await?;
     let admin = sign_in(db, services, 1, 4).await?;
@@ -85,6 +87,13 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         )
         .await?;
     let party = customer.company.clone().expect("linked to Company 020");
+    let prefill = einvoice.prefill_party(&admin, 1, party.id).await?;
+    assert_eq!(prefill.name.as_deref(), Some(party.name.as_str()));
+    assert_eq!(prefill.tax_id, party.tax_id);
+    assert_eq!(prefill.registration_number, party.registration_number);
+    assert_eq!(prefill.email, party.email);
+    assert_eq!(prefill.phone, party.phone);
+    assert!(prefill.address.is_none() && prefill.registration_type.is_none());
     let tax = ar
         .create_tax_code(
             &admin,
@@ -171,6 +180,8 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         .set_direct(&admin, admin.user(), bilibi_company::VIEW, None)
         .await?;
     client.execute("INSERT INTO field_restrictions(tenant_id,role_id,table_id,field_id) VALUES(1,4,'companies','tax_id') ON CONFLICT DO NOTHING", &[]).await?;
+    assert!(matches!(einvoice.prefill_party(&admin, 1, party.id).await,
+        Err(bilibi_finance_einvoice::EinvoiceError::Invalid(fields)) if fields.iter().any(|f| f.field == "buyer" && f.message.contains("tax ID is restricted"))));
     field(
         ar.issue_document(&admin, 1, draft.id).await,
         "customer_id",

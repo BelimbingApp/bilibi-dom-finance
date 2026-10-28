@@ -59,7 +59,7 @@ pub struct DraftSource {
     pub ledger_entry_id: Option<i64>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DraftParty {
     pub name: Option<String>,
     pub tax_id: Option<String>,
@@ -74,7 +74,7 @@ pub struct DraftParty {
     pub address: Option<DraftAddress>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DraftAddress {
     /// One to three lines; blank ones are dropped.
     pub lines: Vec<String>,
@@ -82,6 +82,53 @@ pub struct DraftAddress {
     pub postcode: Option<String>,
     pub state_code: Option<String>,
     pub country_code: Option<String>,
+}
+
+impl crate::Einvoice {
+    /// Prefill a counterparty from a Core company selected by the caller.
+    /// Restricted facts refuse the read, as they do when Receivables issues.
+    /// The caller must supply authority-specific fields and validate the draft.
+    pub async fn prefill_party(
+        &self,
+        scope: &bilibi_tenancy::Scope,
+        company_id: i64,
+        counterparty_id: i64,
+    ) -> crate::Result<DraftParty> {
+        // Core's detail read needs a full connection, including when the
+        // operation handler was handed an object-safe proof connection.
+        let client = tokio::time::timeout(std::time::Duration::from_secs(2), self.db.get())
+            .await
+            .map_err(|_| bilibi_database::Error::Internal)?
+            .map_err(bilibi_database::Error::from)?;
+        crate::authorize(&**client, scope, company_id, crate::ISSUE).await?;
+        let party = bilibi_finance_ledger::CompanyLinks::new(&self.parties)
+            .frozen_party(&**client, scope, counterparty_id, "buyer", true)
+            .await
+            .map_err(|error| match error {
+                bilibi_finance_ledger::LedgerError::Invalid(fields) => {
+                    crate::EinvoiceError::Invalid(
+                        fields
+                            .into_iter()
+                            .map(|field| crate::FieldError::new(field.field, field.message))
+                            .collect(),
+                    )
+                }
+                bilibi_finance_ledger::LedgerError::Failed(error) => {
+                    crate::EinvoiceError::Failed(error)
+                }
+                _ => crate::EinvoiceError::Failed(bilibi_database::Error::Internal),
+            })?;
+        let fact = |name: &str| party[name].as_str().map(str::to_owned);
+        Ok(DraftParty {
+            name: fact("party_name"),
+            tax_id: fact("party_tax_identifier"),
+            registration_number: fact("party_registration_identifier"),
+            email: fact("party_email"),
+            phone: fact("party_phone"),
+            // TODO(platform): Core does not expose billing addresses on this connection.
+            ..DraftParty::default()
+        })
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]

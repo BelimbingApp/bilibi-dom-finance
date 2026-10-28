@@ -335,6 +335,7 @@ impl WriteHandler for Issue {
 enum Read {
     Get,
     List,
+    PrefillParty,
 }
 impl ReadHandler for Read {
     fn owner(&self) -> &'static str {
@@ -350,6 +351,20 @@ impl ReadHandler for Read {
             let service = owner()?;
             let company = id(input, "company_id").map_err(failure)?;
             let result = match self {
+                Self::PrefillParty => {
+                    service
+                        .operation_company(client, scope, company, ISSUE)
+                        .await
+                        .map_err(failure)?;
+                    json!(service
+                        .prefill_party(
+                            scope,
+                            company,
+                            id(input, "counterparty_id").map_err(failure)?
+                        )
+                        .await
+                        .map_err(failure)?)
+                }
                 Self::Get => json!(service
                     .operation_document(
                         client,
@@ -437,6 +452,12 @@ fn list() -> Value {
         json!({"company_id":identifier(),"before":identifier(),"page_size":{"type":"integer","minimum":1,"maximum":100}}),
     )
 }
+fn prefill_party() -> Value {
+    object(
+        &["company_id", "counterparty_id"],
+        json!({"company_id":identifier(),"counterparty_id":identifier()}),
+    )
+}
 fn output() -> Value {
     json!({"type":"object","description":"Immutable fiscal document with exact decimal strings and ISO instants, a newest-first summary cursor page, or reviewed immutable issue snapshots. No credentials. Issuance returns a null navigation path."})
 }
@@ -446,6 +467,7 @@ inventory::submit! { Contribution::new(DEFINITIONS,"finance/einvoice.operations"
         Operation {key:"finance.einvoice.document.issue",title:"Issue an e-invoice document",summary:"Record an immutable fiscal document linked to a Receivables or Payables entry. Requires ledger view too. Does not submit or post a second entry.",keywords:&["invoice","self-billed","tax document"],capability:ISSUE,input:issue,output,handler:Handler::SafeWrite(&Issue),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.einvoice.document.get",title:"Read an e-invoice document",summary:"Read immutable parties, lines and totals, status events, authority identifiers, source links and ledger follow-up flags.",keywords:&[],capability:VIEW,input:get,output,handler:Handler::Read(&Read::Get),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.einvoice.document.list",title:"List e-invoice documents",summary:"Read document summaries newest first with an exclusive before cursor; at most 100 per page, default 50.",keywords:&[],capability:VIEW,input:list,output,handler:Handler::Read(&Read::List),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.einvoice.party.prefill",title:"Prefill an e-invoice party",summary:"Read visible Core company facts for a fiscal draft; restricted facts refuse the prefill.",keywords:&[],capability:ISSUE,input:prefill_party,output,handler:Handler::Read(&Read::PrefillParty),channels:Channels::Every,step_up:&[]},
     ],
     guides:&[Guide {key:"finance.einvoice",title:"Source-linked fiscal documents",summary:"Review and issue fiscal documents without duplicating source accounting; inspect documents and their clearance status.",keywords:&[],capability:VIEW,body:include_str!("../guide.md")}],
 }) }
