@@ -130,8 +130,18 @@ fn acquisition_schema() -> Value {
     )
 }
 fn output() -> Value {
-    json!({"type":"object","description":"Authorized lifecycle facts. Register and schedule reports return all four reproduction pins and account reconciliation differences."})
+    json!({"type":"object","properties":{
+        "record":{"type":"object","description":"The saved revision, asset, run or event. Amounts are exact decimal strings; dates are ISO dates."},
+        "records":{"type":"array","items":{"type":"object"},"description":"Categories with revision history, or runs newest month first with items, exceptions and reversal state."},
+        "report":{"type":"object","required":["company_id","as_of","minor_units","through_entry_number","through_asset_number","through_event_number","through_category_revision_id","rows","reconciliation"],"properties":{
+            "company_id":{"type":"integer"},"as_of":{"type":"string","format":"date"},"currency_code":{"type":"string"},"minor_units":{"type":"integer"},
+            "through_entry_number":{"type":"integer"},"through_asset_number":{"type":"integer"},"through_event_number":{"type":"integer"},"through_category_revision_id":{"type":"integer"},
+            "rows":{"type":"array","items":{"type":"object"},"description":"Frozen asset and category revision, posted accumulation, carrying value, disposal state and full projected schedule."},
+            "reconciliation":{"type":"array","items":{"type":"object","properties":{"account_id":{"type":"integer"},"kind":{"type":"string","enum":["Balance","Activity"]},"ledger_balance":{"type":"string"},"register_balance":{"type":"string"},"difference":{"type":"string"}}}}
+        }}
+    }})
 }
+
 #[derive(Clone, Copy)]
 enum Read {
     Categories,

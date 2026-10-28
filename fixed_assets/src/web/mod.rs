@@ -477,8 +477,20 @@ impl Pages {
 
 impl Operation<'_> {
     fn form(&self) -> Result<Html> {
-        let mut body = Html::EMPTY;
+        let mut summary = bilibi_ui::ErrorSummary::new(format!("{}-errors", self.form_dom));
         for field in &self.fields {
+            for error in &field.errors {
+                summary.push(&field.id, bilibi_ui::error_sentence(&field.label, error));
+            }
+        }
+        let mut body = render(summary)?;
+        for original in &self.fields {
+            let mut field = original.clone();
+            field.errors = field
+                .errors
+                .iter()
+                .map(|e| bilibi_ui::error_sentence(&field.label, e))
+                .collect();
             if field.name.ends_with("account_id]") {
                 let label = if field.attrs.required {
                     format!("{} *", field.label)
@@ -487,7 +499,6 @@ impl Operation<'_> {
                 };
                 let control = bilibi_ui::Combobox::new(&field.id, &field.name)
                     .label(label)
-                    .aria_label(&field.label)
                     .value(&field.value)
                     .options(
                         field
@@ -498,7 +509,8 @@ impl Operation<'_> {
                             .collect(),
                     )
                     .errors(field.errors.clone())
-                    .attrs(field.attrs.clone());
+                    .attrs(field.attrs.clone())
+                    .aria_label(&field.label);
                 body.push(&render(control)?);
             } else {
                 body.push(&render(field.clone())?);

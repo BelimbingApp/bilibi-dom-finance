@@ -423,7 +423,7 @@ impl FixedAssets {
                 s,
                 company,
                 REVERSE,
-                "finance.fixed-assets.reverse_run",
+                "finance.fixed-assets.reverse-run",
             )
             .await?;
         let event = self.reverse_run_on(&mut tx, s, company, id, input).await?;
@@ -664,7 +664,7 @@ impl FixedAssets {
                 s,
                 company,
                 REVERSE,
-                "finance.fixed-assets.reverse_disposal",
+                "finance.fixed-assets.reverse-disposal",
             )
             .await?;
         let event = self
@@ -738,7 +738,7 @@ impl FixedAssets {
                 s,
                 company,
                 VOID,
-                "finance.fixed-assets.void_acquisition",
+                "finance.fixed-assets.void-acquisition",
             )
             .await?;
         let event = self
