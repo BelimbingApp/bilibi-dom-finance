@@ -251,7 +251,7 @@ impl Opening {
                 ..Alert::default()
             })?);
             if !context["batch"].is_null() {
-                page.push(&render(Alert{id:"conversion-recorded",kind:StatusKind::Info,body:Html::text(&format!("Imported source {}. The source evidence is retained. Use the asset register and depreciation pages for these opening assets.",context["batch"]["id"].to_string())),..Alert::default()})?);
+                page.push(&render(Alert{id:"conversion-recorded",kind:StatusKind::Info,body:Html::text(&format!("Reconciled register {}. The source evidence is retained. To correct it, stage a new source export naming this register ID and request independent approval.",context["batch"]["id"])),..Alert::default()})?);
             }
             let stage_rows = context["stages"]
                 .as_array()
@@ -475,7 +475,7 @@ impl Opening {
                 .await?
                 .banner("conversion-instance", "")
                 .map_err(|_| Error::Internal)?;
-            body.push(&render(Alert{id:"conversion-review-context",body:Html::text(&format!("Conversion date {}. Source {}. {} records. Review every source identifier, date, amount and account mapping before approval.",facts["conversion_date"].as_str().unwrap_or(""),facts["source_reference"].as_str().unwrap_or(""),facts["rows"].as_array().map_or_else(||facts["rows"].as_u64().unwrap_or(0) as usize,Vec::len))),..Alert::default()})?);
+            body.push(&render(Alert{id:"conversion-review-context",body:Html::text(&format!("Conversion date {}. Source {}. {} records. Review every source identifier, date, amount and account mapping before approval.",facts["conversion_date"].as_str().or_else(||context["opening"]["entry"]["entry_date"].as_str()).unwrap_or(""),facts["source_reference"].as_str().unwrap_or(""),facts["rows"].as_array().map_or_else(||facts["rows"].as_u64().unwrap_or(0) as usize,Vec::len))),..Alert::default()})?);
             if !facts["replaces_batch_id"].is_null() {
                 body.push(&render(Alert{id:"conversion-correction-review",kind:StatusKind::Warning,body:Html::text(&format!("Replace register {} from {}. Reason: {}. Prior records and approvals remain available at their original report boundaries.",facts["replaces_batch_id"],facts["effective_date"].as_str().unwrap_or(""),facts["reason"].as_str().unwrap_or(""))),..Alert::default()})?);
             }
@@ -526,7 +526,9 @@ impl Opening {
                     ],
                 })?);
             }
-            body.push(&render(table)?);
+            if review.contract != STAGE {
+                body.push(&render(table)?);
+            }
             if review.contract != STAGE {
                 body.push(&render(Alert{id:"conversion-review-reconciliation",kind:StatusKind::Info,body:Html::text("The complete register reconciles exactly to the approved opening account balances. This import records opening state and retains source evidence; it creates no new ledger entry."),..Alert::default()})?);
             } else {
@@ -562,8 +564,16 @@ impl Opening {
             body.push(&render(Actions { buttons })?);
             page.push(&render(Modal {
                 id: "conversion-review-modal",
-                title: "Review opening import",
-                description: "Approve the reconciled opening register for the current company.",
+                title: if review.contract == STAGE {
+                    "Review source batch"
+                } else {
+                    "Review opening import"
+                },
+                description: if review.contract == STAGE {
+                    "Commit this source batch for later reconciliation."
+                } else {
+                    "Approve the reconciled opening register for the current company."
+                },
                 cancel_event: "cancel_opening",
                 width: ModalWidth::Wide,
                 body,
