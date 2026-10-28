@@ -160,18 +160,16 @@ pub(crate) async fn prepare(
         Some(journal)
     } else {
         // A new source reference must never silently double a live opening. A
-        // rejected opening, or one withdrawn and not replaced, is dead; a
-        // waiting one is corrected by naming it in `replaces_journal_id`.
+        // rejected or withdrawn opening is dead, and a correction is its own
+        // opening; a waiting one is corrected by naming it in `replaces_journal_id`.
         if let Some(replaced) = source.replaces_journal_id {
             let waiting = crate::withdrawable_journal(client, scope, company, replaced).await?;
             replaced_number = Some(waiting.journal_number);
-            if client.query_opt(
-                "SELECT id FROM finance_ledger_opening_balances WHERE tenant_id=$1 AND company_id=$2 AND journal_id=$3",
-                &[&tenant, &company, &replaced]).await?.is_none() {
+            if !is_opening(client, tenant, company, replaced).await? {
                 return Err(refused("replaces_journal_id", "is not an opening balances journal"));
             }
         } else if client.query_opt(
-            "SELECT o.id FROM finance_ledger_opening_balances o WHERE o.tenant_id=$1 AND o.company_id=$2 AND NOT EXISTS (SELECT 1 FROM finance_ledger_journal_events e WHERE e.journal_id=o.journal_id AND e.company_id=o.company_id AND (e.event='rejected' OR (e.event='withdrawn' AND NOT EXISTS (SELECT 1 FROM finance_ledger_journal_replacements r WHERE r.replaced_journal_id=o.journal_id AND r.company_id=o.company_id)))) LIMIT 1",
+            "SELECT o.id FROM finance_ledger_opening_balances o WHERE o.tenant_id=$1 AND o.company_id=$2 AND NOT EXISTS (SELECT 1 FROM finance_ledger_journal_events e WHERE e.journal_id=o.journal_id AND e.company_id=o.company_id AND e.event IN ('rejected','withdrawn')) LIMIT 1",
             &[&tenant, &company]).await?.is_some() {
             return Err(refused("source_reference", "the book already has an opening journal; approve it, withdraw or reject it and submit again, or correct it by submitting with the journal it replaces"));
         }
@@ -291,15 +289,24 @@ impl Ledger {
 /// with `replaces_journal_id`, so its replacement keeps the opening's source
 /// reference and CSV; a manual replacement would leave the book with no
 /// opening record and let a second opening be submitted beside it.
+pub(crate) async fn is_opening(
+    client: &dyn OperationClient,
+    tenant: i64,
+    company: i64,
+    journal_id: i64,
+) -> Result<bool> {
+    Ok(client.query_opt(
+        "SELECT id FROM finance_ledger_opening_balances WHERE tenant_id=$1 AND company_id=$2 AND journal_id=$3",
+        &[&tenant, &company, &journal_id]).await?.is_some())
+}
+
 pub(crate) async fn refuse_manual_replacement(
     client: &dyn OperationClient,
     scope: &Scope,
     company: i64,
     journal_id: i64,
 ) -> Result<()> {
-    if client.query_opt(
-        "SELECT id FROM finance_ledger_opening_balances WHERE tenant_id=$1 AND company_id=$2 AND journal_id=$3",
-        &[&scope.tenant(), &company, &journal_id]).await?.is_some() {
+    if is_opening(client, scope.tenant(), company, journal_id).await? {
         return Err(refused(
             "journal_id",
             format!("is an opening balances journal; correct it from Opening balances (/finance/ledger/opening-balances?correct={journal_id}) or by submitting opening balances again with replaces_journal_id"),

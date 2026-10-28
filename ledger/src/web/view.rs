@@ -94,6 +94,8 @@ pub(crate) struct Journal {
     pub replaced_by_journal_id: Option<i64>,
     pub replaces_journal_number: Option<i64>,
     pub replaced_by_journal_number: Option<i64>,
+    #[serde(default)]
+    pub opening: bool,
     pub lines: Vec<Line>,
 }
 

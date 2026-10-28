@@ -933,14 +933,18 @@ impl ReadHandler for Read {
                         .flatten();
                     json!({"records":rows,"next_after_code":next})
                 }
-                Self::Journal => json!(journals::find(
-                    client,
-                    tenant,
-                    company,
-                    id(input, "journal_id").map_err(invalid)?
-                )
-                .await?
-                .ok_or(bilibi_agent_api::Error::NotFound)?),
+                Self::Journal => {
+                    let journal_id = id(input, "journal_id").map_err(invalid)?;
+                    let journal = journals::find(client, tenant, company, journal_id)
+                        .await?
+                        .ok_or(bilibi_agent_api::Error::NotFound)?;
+                    let mut record = json!(journal);
+                    record["opening"] =
+                        json!(opening::is_opening(client, tenant, company, journal_id)
+                            .await
+                            .map_err(invalid)?);
+                    record
+                }
                 Self::Journals => {
                     let rows = journals::list(
                         client,
@@ -1202,7 +1206,7 @@ inventory::submit! { Contribution::new(DEFINITIONS,"finance/ledger.operations",P
     operations:&[
         Operation {key:"finance.ledger.book.get",title:"Read the book",summary:"Read currency, minor units and bookkeeping controls; book is null before opening.",keywords:&[],capability:VIEW,input:target_schema,output,handler:Handler::Read(&Read::Book),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.account.list",title:"List accounts",summary:"Read the chart by code with a bounded cursor page.",keywords:&[],capability:VIEW,input:accounts_schema,output,handler:Handler::Read(&Read::Accounts),channels:Channels::Every,step_up:&[]},
-        Operation {key:"finance.ledger.journal.get",title:"Read a journal",summary:"Read lines, submission, decision and the approved entry identifier.",keywords:&[],capability:VIEW,input:journal_schema,output,handler:Handler::Read(&Read::Journal),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.ledger.journal.get",title:"Read a journal",summary:"Read lines, submission, decision, the approved entry identifier and whether it is the book's opening balances journal.",keywords:&[],capability:VIEW,input:journal_schema,output,handler:Handler::Read(&Read::Journal),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.journal.list",title:"List journals",summary:"Read journals by number, optionally by status, after a journal number.",keywords:&[],capability:VIEW,input:journals_schema,output,handler:Handler::Read(&Read::Journals),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.entry.get",title:"Read an entry",summary:"Read immutable lines, ownership and reversal identifiers.",keywords:&[],capability:VIEW,input:entry_schema,output,handler:Handler::Read(&Read::Entry),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.entry.list",title:"List entries",summary:"Read entries by date and identifier with date, account and pinned-entry bounds.",keywords:&[],capability:VIEW,input:entries_schema,output,handler:Handler::Read(&Read::Entries),channels:Channels::Every,step_up:&[]},

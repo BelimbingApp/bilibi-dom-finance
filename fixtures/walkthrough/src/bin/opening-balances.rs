@@ -143,9 +143,51 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .replace(",8000\n", ",8001\n");
     source.csv = wrong;
     source.source_reference.push_str("-RESUBMITTED");
+    let first = ledger
+        .submit_opening_balances(&manager, COMPANY, &source)
+        .await?;
+
+    // Only the end of a replacement chain decides whether an opening is live:
+    // a rejected successor frees the book, as does a withdrawn one.
+    let base_reference = source.source_reference.clone();
+    source.source_reference = format!("{base_reference}-CHAIN-1");
+    source.replaces_journal_id = Some(first.id);
+    let successor = ledger
+        .submit_opening_balances(&manager, COMPANY, &source)
+        .await?;
+    assert_eq!(successor.replaces_journal_id, Some(first.id));
+    ledger
+        .reject_journal(
+            &reviewer,
+            COMPANY,
+            successor.id,
+            "Successor export also wrong",
+        )
+        .await?;
+    source.replaces_journal_id = None;
+    source.source_reference = format!("{base_reference}-CHAIN-2");
+    let second = ledger
+        .submit_opening_balances(&manager, COMPANY, &source)
+        .await?;
+    source.source_reference = format!("{base_reference}-CHAIN-3");
+    source.replaces_journal_id = Some(second.id);
+    let successor = ledger
+        .submit_opening_balances(&manager, COMPANY, &source)
+        .await?;
+    ledger
+        .withdraw_journal(&manager, COMPANY, successor.id, Some("Withdrawn again"))
+        .await?;
+    source.replaces_journal_id = None;
+    source.source_reference = format!("{base_reference}-CHAIN-4");
     let resubmitted = ledger
         .submit_opening_balances(&manager, COMPANY, &source)
         .await?;
+    for decided in [first.id, second.id, successor.id] {
+        assert!(matches!(
+            ledger.approve_journal(&reviewer, COMPANY, decided).await,
+            Err(LedgerError::JournalDecided)
+        ));
+    }
 
     // One live opening: another source cannot sit beside it, and the generic
     // manual correction would drop its source evidence, so both are refused.
@@ -420,16 +462,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let evidence = ledger
         .evidence_page(&manager, COMPANY, "opening_balances", Some(500), None)
         .await?;
-    assert_eq!(evidence.rows.len(), 4);
+    assert_eq!(evidence.rows.len(), 8);
     assert_eq!(
-        evidence.rows[3]["source_csv"].as_str(),
+        evidence.rows[7]["source_csv"].as_str(),
         Some(source.csv.as_str())
     );
     let client = db.get().await?;
     let audited: i64 = client.query_one("SELECT count(*) FROM base_audit_mutations WHERE auditable_type='finance.ledger.opening_balances'", &[]).await?.get(0);
-    assert_eq!(audited, 4);
+    assert_eq!(audited, 8);
     assert!(client.execute("UPDATE finance_ledger_opening_balances SET source_csv='overwritten' WHERE tenant_id=1 AND company_id=1", &[]).await.is_err());
-    println!("opening: reversal and independently approved correction reconcile revised balances to 15100.00; original pin reproduces 15000.00; four source evidence records (rejected, withdrawn, replaced and approved) and their audit changes retained; database refuses evidence overwrite");
+    println!("opening: reversal and independently approved correction reconcile revised balances to 15100.00; original pin reproduces 15000.00; eight source evidence records (rejected, withdrawn, replaced in chains and approved) and their audit changes retained; database refuses evidence overwrite");
     println!(
         "EXCLUDED: settleable open invoices/bills, aging and control tie-outs, bank reconciliation items, asset registers, tax return detail, historical/comparative migration; no complete conversion claim"
     );

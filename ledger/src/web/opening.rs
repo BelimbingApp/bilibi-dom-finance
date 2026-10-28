@@ -15,6 +15,7 @@ use bilibi_ui::{
 use serde_json::{json, Value};
 use std::collections::HashMap;
 
+pub(super) const INDEX: &str = "/finance/ledger/opening-balances";
 const CONTRACT: &str = "finance.ledger.opening_balances.submit";
 const FIELDS: [&str; 4] = [
     "conversion_date",
