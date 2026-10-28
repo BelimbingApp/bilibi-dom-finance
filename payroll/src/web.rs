@@ -571,8 +571,7 @@ impl State {
                     "Entry date (company's today unless given)",
                     &self.reversal,
                 )
-                .kind(InputKind::Date)
-                .hint("Use the date order shown in the box. Dates are saved as YYYY-MM-DD.");
+                .kind(InputKind::Date);
             let form = render(FormView {
                 id: "payroll-reversal-form",
                 change: "change_reversal",

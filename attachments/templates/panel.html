@@ -14,7 +14,7 @@
 {% for item in items %}
 <li id="{{ panel }}-{{ item.id }}" class="flex flex-wrap items-center justify-between gap-2 py-3 text-sm">
 <div class="min-w-0"><a id="{{ panel }}-{{ item.id }}-download" href="/finance/attachments/{{ item.id }}/download" download="{{ item.file_name }}" class="font-medium">{{ item.file_name }}</a>
-<p class="text-ink-muted">{{ item.size }} · SHA-256 <span title="{{ item.sha256 }}" class="font-mono">{{ item.short_hash }}</span> · kept until {{ item.retain_until }}{% if item.on_hold %} (on legal hold){% endif %} · captured {{ item.captured|safe }}</p></div>
+<p class="text-ink-muted">{{ item.size }} · SHA-256 <span title="{{ item.sha256 }}" class="font-mono">{{ item.short_hash }}</span> · kept at least until {{ item.retain_until }}{% if item.on_hold %} (on legal hold){% endif %} · captured {{ item.captured|safe }}</p></div>
 {% if item.show_actions %}<div class="flex gap-2">
 {% if item.can_replace %}{% call ui::button(id=item.replace_id, button_type="button", event="open_replace", name="id", value=item.id_text) %}Replace{% endcall %}{% endif %}
 {% if item.can_remove %}{% call ui::button(id=item.remove_id, button_type="button", event="open_remove", name="id", value=item.id_text, variant=bilibi_ui::ButtonVariant::Danger) %}Remove{% endcall %}{% endif %}

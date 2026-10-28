@@ -343,7 +343,7 @@ impl Panel {
                 self.notice(
                     false,
                     format!(
-                        "{} is kept until {}.",
+                        "{} is kept at least until {}.",
                         attachment.file_name,
                         format::retain_until(attachment.retain_until)
                     ),

@@ -23,7 +23,7 @@ pub(crate) fn refusal(error: AttachmentError) -> Result<String, Error> {
         E::ReasonRequired => "Give a reason.".into(),
         E::RetentionNotLengthened => "Retention is only ever lengthened.".into(),
         E::RetentionNotExtended => {
-            "The new retain-until must be later than the current one.".into()
+            "The new retention date must be later than the current one.".into()
         }
         E::SourceUnavailable => "The module that owns this record is not mounted.".into(),
         E::InvalidSource => "That kind of record cannot take attachments.".into(),
