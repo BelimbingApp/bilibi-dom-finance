@@ -9,9 +9,9 @@ use bilibi_module_registry::{Contribution, Provenance};
 
 /// The capability every ledger read asks for.
 pub const VIEW: &str = "finance.ledger.view";
-/// Opens a book and maintains the chart of accounts.
+/// Publishes reusable charts and sets the starter-chart proposal.
 pub const MANAGE_TEMPLATES: &str = "finance.ledger.templates.manage";
-/// Opens a book and maintains its chart.
+/// Opens a book and maintains the chart of accounts.
 pub const MANAGE_ACCOUNTS: &str = "finance.ledger.accounts.manage";
 /// Posts and reverses journal entries.
 pub const POST_ENTRIES: &str = "finance.ledger.entries.post";
