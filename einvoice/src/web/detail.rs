@@ -349,11 +349,19 @@ impl Detail {
             "cancel" => facade
                 .cancel_document(scope, company, self.document_id, &self.reason)
                 .await
-                .map(|_| {
-                    (
-                        StatusKind::Success,
-                        "The authority cancelled the document.".into(),
-                    )
+                .map(|d| {
+                    let already = d
+                        .events
+                        .iter()
+                        .rev()
+                        .find(|e| e.event == "cancelled")
+                        .is_some_and(|e| e.reason.is_none());
+                    let message = if already {
+                        "The tax authority had already cancelled this document. Its status is now updated."
+                    } else {
+                        "The authority cancelled the document."
+                    };
+                    (StatusKind::Success, message.into())
                 }),
             _ => facade
                 .generate_pdf(scope, company, self.document_id)

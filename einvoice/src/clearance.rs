@@ -492,6 +492,13 @@ impl Einvoice {
     /// characters), inside the authority's cancellation window after
     /// validation and only while no note the authority holds references it
     /// (`finance.einvoice.documents.cancel`); then records `cancelled`.
+    /// Before asking, it reads the document's status at the authority (an
+    /// earlier request's answer may have been lost): when the authority
+    /// already holds it as cancelled, that is recorded, the ledger reversal
+    /// runs, and the updated document is answered as a success without a
+    /// request; when the read cannot confirm a cancellable status, nothing is
+    /// sent and the read's own refusal is answered (`RateLimited`,
+    /// `AuthorityUnavailable` or `Authority(code)`).
     /// Refusals: `NotCancellable`, `CancellationPeriodOver`,
     /// `ActiveReferencingDocuments`, `InvalidReason`, `CancellationRefused`
     /// from the authority (recorded as `cancellation_refused`), `RateLimited`
@@ -556,7 +563,14 @@ impl Einvoice {
                 Writer::Session(CANCEL),
             )
             .await
-            .map_err(|_| EinvoiceError::AuthorityUnavailable)?;
+            .map_err(|outcome| match outcome {
+                Outcome::Retry("rate_limited") => EinvoiceError::RateLimited,
+                Outcome::Cancel(code) => EinvoiceError::Authority(code),
+                _ => EinvoiceError::AuthorityUnavailable,
+            })?;
+        if status == "cancelled" {
+            return self.view(scope, company_id, document_id).await;
+        }
         if !CANCELLABLE.contains(&status.as_str()) {
             return Err(EinvoiceError::NotCancellable);
         }

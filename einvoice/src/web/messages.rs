@@ -16,6 +16,7 @@ pub(super) fn refusal(action: &str, error: E) -> String {
         ("cancel", E::AuthorityUnavailable) => "The authority did not confirm cancellation. Refresh the status before trying again.",
         ("refresh", E::Authority("authority_unavailable")) | (_, E::AuthorityUnavailable) => "The authority could not be reached. Try again later.",
         ("refresh", E::Authority(_)) => "The authority did not answer with a status; the answer is recorded on the document.",
+        ("cancel", E::Authority(_)) => "The authority did not answer with a status, so no cancellation was sent. The answer is recorded on the document.",
         ("cancel", E::NotCancellable) => "Only a valid document or one with a rejection request can be cancelled.",
         ("cancel", E::CancellationPeriodOver) => "The cancellation window has closed. Issue the appropriate credit, debit or refund note e-Invoice linked to the original.",
         ("cancel", E::ActiveReferencingDocuments) => "A note the authority holds references this document; cancel the note first.",

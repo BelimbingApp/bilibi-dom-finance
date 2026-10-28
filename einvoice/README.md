@@ -61,7 +61,7 @@ and call it with a sealed `Scope` and an explicit company id.
 | `list_documents` | `.view` | `DocumentQuery` to `DocumentPage`: literal case-insensitive number or counterparty search, status/type/environment filters, newest first, clamped pages of 25, 50, 100 or 300; count and returned statuses share one snapshot |
 | `submit_document` | `.documents.submit` | Queues the submit job as the caller (answers its ID); `NotSubmittable`, `SourceTaken`, `MissingCredentials`, `SigningKeyRequired`, `AlreadyQueued`; audit action `finance.einvoice.submission.queued` |
 | `refresh_status` | `.documents.submit` | Reads the status at the authority and records what changed; `NotSubmitted`, `Authority(code)` |
-| `cancel_document` | `.documents.cancel` | Cancels a valid or rejected document at the authority with a reason; `NotCancellable`, `CancellationPeriodOver`, `ActiveReferencingDocuments`, `InvalidReason`, `CancellationRefused`, `RateLimited`, `AuthorityUnavailable` |
+| `cancel_document` | `.documents.cancel` | Cancels a valid or rejected document at the authority with a reason; `NotCancellable`, `CancellationPeriodOver`, `ActiveReferencingDocuments`, `InvalidReason`, `CancellationRefused`, `RateLimited`, `AuthorityUnavailable`, `Authority(code)` (the pre-cancel status read could not answer); an authority already holding it cancelled answers the updated document |
 | `test_connection` | `.settings.manage` | Logs in afresh with the company's current credentials; audit action `finance.einvoice.connection.tested` |
 | `run_submission`, `run_poll` | `.documents.submit` | The submit and poll jobs' bodies (see Clearance), callable directly for one attempt |
 | `retry_posting`, `retry_reversal` | `.documents.submit` and `finance.ledger.entries.post` | Posts a valid document's entry, or reverses a cancelled one's, after a failure (see Ledger bridge); `NotPostable`, `NotReversible`, `LedgerFollowUpFailed(reason)`; audit action `finance.einvoice.posting.retried` |
@@ -175,8 +175,13 @@ call to the authority.
   authority holds (submitted, valid or rejected) referencing it, and a reason
   of 1 to 300 characters. Before each request, the authority's status is read
   using the cancellation permission; if that read cannot confirm a cancellable
-  status, no cancellation request is sent. This also checks an earlier request
-  whose response was lost. The authority's refusal is recorded as
+  status, no cancellation request is sent and the read's own refusal is answered
+  (`RateLimited`, `AuthorityUnavailable` or `Authority(code)`). This also checks
+  an earlier request whose response was lost: when the authority already holds
+  the document as cancelled, the status is recorded, the ledger reversal runs
+  and `cancel_document` answers the updated document as a success (before, it
+  refused with `NotCancellable`); the page says "The tax authority had already
+  cancelled this document. Its status is now updated." The authority's refusal is recorded as
   `cancellation_refused`. Each outcome is recorded only while the document,
   read again under the company lock, is still cancellable.
 
