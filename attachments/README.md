@@ -143,7 +143,7 @@ replace or remove for a record that has just become final. Controls show by
 the live capability, an absent control is not explained away by a silent
 `if` (a reader who cannot attach and finds nothing sees "No source
 documents"), and every action asks the facade again. The company is the
-signed-in account's own, as in Bilimbi.
+session's current company (Bilibi ADR 09), which grants nothing; the facade proves the reach.
 
 ## Tables
 
