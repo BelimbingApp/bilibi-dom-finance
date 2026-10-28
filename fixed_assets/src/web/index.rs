@@ -632,7 +632,7 @@ impl Index {
                 } else {
                     d.source("entry_id", "entry_line_number")?
                 };
-                let units = self.pages.ledger.get_book(s, c).await?.minor_units;
+                let units = self.pages.minor_units(s, c).await?;
                 let mut input =
                     serde_json::to_value(d.acquisition(units)?).map_err(|_| Error::Internal)?;
                 input["source"] = serde_json::json!(if bill { "bill" } else { "entry" });

@@ -7,7 +7,6 @@ use crate::{FixedAssetsError, MODULE};
 use askama::Template;
 use bilibi_database::{Db, Error, Result};
 use bilibi_datetime::{DisplayContext, DisplayPolicy};
-use bilibi_finance_ledger::Ledger;
 use bilibi_locale::Locales;
 use bilibi_module_registry::{
     contributions::{Access, Method, Route, ROUTES},
@@ -26,7 +25,6 @@ const DENIED: &str = "You do not have permission for that action.";
 pub(crate) struct Pages {
     pub db: Db,
     pub contracts: Arc<bilibi_agent_api::page::PageContracts>,
-    pub ledger: Arc<Ledger>,
     pub display: Arc<DisplayPolicy>,
     pub locales: Arc<Locales>,
 }
@@ -362,6 +360,25 @@ const FIELD_NAMES: &[&str] = &[
     "settlement_account_id",
 ];
 impl Pages {
+    async fn minor_units(
+        &self,
+        s: &Scope,
+        company: i64,
+    ) -> crate::Result<bilibi_finance_ledger::MinorUnits> {
+        let book: Option<serde_json::Value> = self
+            .read(
+                s,
+                "finance.ledger.book.get",
+                serde_json::json!({"company_id":company}),
+                "book",
+            )
+            .await?;
+        book.and_then(|b| b["minor_units"].as_i64())
+            .and_then(bilibi_finance_ledger::MinorUnits::new)
+            .ok_or(FixedAssetsError::Ledger(
+                bilibi_finance_ledger::LedgerError::BookNotOpen,
+            ))
+    }
     fn call<'a>(
         &self,
         s: &'a Scope,
