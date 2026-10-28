@@ -5,7 +5,7 @@ use bilibi_authz::{RoleDefinition, VocabularyContribution, VOCABULARY};
 use bilibi_database::{pool, Error};
 use bilibi_finance_attachments::{Attachments, NewFile};
 use bilibi_finance_ledger::{
-    AccountType, Ledger, Money, NewAccount, NewEntry, NewLine, PostOptions,
+    AccountType, EntryOwner, Ledger, Money, NewAccount, NewEntry, NewLine, PostOptions,
 };
 use bilibi_finance_payables::{
     DocumentLineInput, NewDocument, Party, Payables, Settings, SettingsInput, DOCUMENT_SOURCE,
@@ -461,8 +461,8 @@ async fn main() -> Outcome<()> {
         if n == 3 {
             payables.post_document(&manager, COMPANY, bill.id).await?;
         }
-        services
-            .get::<Attachments>(bilibi_finance_attachments::SERVICE)?
+        let attachments = services.get::<Attachments>(bilibi_finance_attachments::SERVICE)?;
+        let attachment = attachments
             .attach(
                 &manager,
                 COMPANY,
@@ -475,6 +475,11 @@ async fn main() -> Outcome<()> {
                 },
             )
             .await?;
+        if n == 1 {
+            attachments
+                .place_hold(&manager, COMPANY, attachment.id, "Browser review")
+                .await?;
+        }
         println!("Bill {n}: /finance/payables/bills/{}", bill.id);
     }
     let ledger = services.get::<Ledger>(bilibi_finance_ledger::SERVICE)?;
@@ -562,6 +567,53 @@ async fn main() -> Outcome<()> {
         import_mapping:json!({"date":"Date","description":"Details","reference":"Ref","amount":"Amount","balance":"Balance"}),
     }).await?;
     println!("Bank account: /finance/reconciliation/accounts/{}", bank.id);
+    // A historical posting gives the browser a reversal to inspect while
+    // People is unmounted, as in the payroll walkthrough's historical proof.
+    let mut client = db.get().await?;
+    let mut tx = ledger
+        .write(
+            &mut client,
+            &manager,
+            COMPANY,
+            &[bilibi_finance_payroll::POST_POSTINGS],
+            "fixture.payroll.browser",
+        )
+        .await?;
+    let posting = ledger
+        .post_entry_in(
+            &mut tx,
+            &manager,
+            COMPANY,
+            &NewEntry {
+                entry_date: date(2026, 10, 15),
+                description: "Historical payroll fixture".into(),
+                reference: None,
+                lines: vec![
+                    NewLine::debit(
+                        account("5000")?,
+                        Money::parse("137.29", installed.book.minor_units)?,
+                    ),
+                    NewLine::credit(
+                        account("2000")?,
+                        Money::parse("137.29", installed.book.minor_units)?,
+                    ),
+                ],
+            },
+            &PostOptions {
+                owner: Some(EntryOwner {
+                    module: "finance/payroll".into(),
+                    record: "payroll_run:9004".into(),
+                }),
+                ..Default::default()
+            },
+        )
+        .await?;
+    tx.mutate(move |sql| Box::pin(async move {
+        let value: serde_json::Value = sql.query_one("INSERT INTO finance_payroll_posting_events AS e(tenant_id,company_id,source_kind,source_id,source_reference,event,entry_id,entry_number,entry_date,total,currency_code,actor_user_id,occurred_at) VALUES(2,100,'payroll_run',9004,'Historical fixture','posted',$1,$2,'2026-10-15',137.29,'MYR',5,now()) RETURNING to_jsonb(e)", &[&posting.id, &posting.entry_number]).await?.get(0);
+        let id = value["id"].as_i64().ok_or(Error::Internal)?;
+        Ok(((), vec![bilibi_database::Change { kind: "finance.payroll.posting_event".into(), id, old: serde_json::Value::Null, new: value }]))
+    })).await?;
+    tx.commit().await?;
     // Existing authority stand-in creates documents and serves submit/poll locally.
     let _authority = bilibi_finance_walkthrough_fixture::browser::prepare_einvoice(
         &db, services, &manager, &operator, COMPANY,

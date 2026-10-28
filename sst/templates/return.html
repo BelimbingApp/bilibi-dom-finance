@@ -13,7 +13,7 @@
 {% call workspace::announce(kind="finance/sst", record_id=r.record) %}{% endcall %}
 {% call ui::header(subtitle_html=r.subtitle, title_actions=r.title_actions, actions=r.actions) %}{{ r.title }}{% endcall %}
 {% call ui::card(id="sst-return-facts", inner_class="p-5 sm:p-6", role="region", labelledby="sst-return-facts-heading") %}
-{% call ui::section_heading(id="sst-return-facts-heading", title="Part A") %}{% endcall %}
+{% call ui::section_heading(id="sst-return-facts-heading", title="Part A", description="Finalising fixes these figures. It does not submit the return or pay the tax.") %}{% endcall %}
 {{ r.particulars|safe }}
 {{ r.controls|safe }}
 {% endcall %}

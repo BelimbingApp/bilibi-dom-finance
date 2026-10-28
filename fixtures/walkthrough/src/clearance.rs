@@ -161,7 +161,7 @@ impl StandIn {
                 "Valid"
             },
             received: Timestamp::now().strftime("%Y-%m-%dT%H:%M:%SZ").to_string(),
-            rejection_requested: false,
+            rejection_requested: code == "BROWSER-E-REJECTION",
         };
         self.held.lock().expect("held").push(held.clone());
         held
@@ -388,7 +388,13 @@ async fn details(State(standin): Shared, headers: HeaderMap, Path(uuid): Path<St
         "documentStatusReason": Value::Null});
     if held.status != "Invalid" {
         body["longId"] = json!(held.long_id);
-        body["dateTimeValidated"] = json!(held.received);
+        body["dateTimeValidated"] = if held.code == "BROWSER-E-EXPIRED" {
+            json!((Timestamp::now() - SignedDuration::from_hours(73))
+                .strftime("%Y-%m-%dT%H:%M:%SZ")
+                .to_string())
+        } else {
+            json!(held.received)
+        };
     } else {
         body["validationResults"] = json!({"status": "Invalid", "validationSteps": [
             {"status": "Valid", "name": "Step01-Structure Validator"},
@@ -447,6 +453,13 @@ async fn cancel(
         "cancel {uuid} ({}) because {:?}",
         held.code, body["reason"]
     ));
+    if held.code == "BROWSER-E-TIMEOUT" {
+        standin.set(&held.code, |held| held.status = "Cancelled");
+        // The authority accepted the request, but its response arrives after
+        // Integration's 30-second timeout. A refresh must resolve the outcome.
+        tokio::time::sleep(Duration::from_secs(35)).await;
+        return Json(json!({"uuid": uuid, "status": "Cancelled"})).into_response();
+    }
     if held.code.contains("LATE") {
         return (
             StatusCode::BAD_REQUEST,

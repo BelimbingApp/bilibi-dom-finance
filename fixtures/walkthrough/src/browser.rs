@@ -71,16 +71,20 @@ pub async fn prepare_einvoice(
         return Ok(stop);
     }
     let mut last_document = None;
-    for n in 1..=3 {
+    for n in 1..=6 {
+        let code = match n {
+            4 => "BROWSER-E-EXPIRED".to_owned(),
+            5 => "BROWSER-E-TIMEOUT".to_owned(),
+            6 => "BROWSER-E-REJECTION".to_owned(),
+            _ => format!("BROWSER-E-{n}"),
+        };
         let document = facade
-            .issue_document(
-                manager,
-                company,
-                &clearance::draft(&format!("BROWSER-E-{n}"), None),
-            )
+            .issue_document(manager, company, &clearance::draft(&code, None))
             .await?;
-        last_document = Some(document.document.id);
-        if n == 1 {
+        if n == 3 {
+            last_document = Some(document.document.id);
+        }
+        if matches!(n, 1 | 4 | 5 | 6) {
             facade
                 .submit_document(manager, company, document.document.id)
                 .await?;

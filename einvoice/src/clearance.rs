@@ -545,6 +545,21 @@ impl Einvoice {
         let credentials = self
             .credentials(scope, company_id, &document.environment)
             .await?;
+        // An earlier cancellation request may have reached the authority even
+        // when its answer was lost. Check its status before sending another.
+        let status = self
+            .read_status(
+                scope,
+                company_id,
+                &recorded,
+                &credentials,
+                Writer::Session(CANCEL),
+            )
+            .await
+            .map_err(|_| EinvoiceError::AuthorityUnavailable)?;
+        if !CANCELLABLE.contains(&status.as_str()) {
+            return Err(EinvoiceError::NotCancellable);
+        }
         let api_url = self.api_url(&document.environment).await?;
         let connection = self.connection(scope, company_id, &credentials, &api_url);
         let base = json!({

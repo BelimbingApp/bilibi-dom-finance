@@ -173,7 +173,10 @@ call to the authority.
 - **Cancelling** is guarded before the authority is asked: a valid or
   rejected document, inside the 72 hours after validation, with no note the
   authority holds (submitted, valid or rejected) referencing it, and a reason
-  of 1 to 300 characters. The authority's refusal is recorded as
+  of 1 to 300 characters. Before each request, the authority's status is read
+  using the cancellation permission; if that read cannot confirm a cancellable
+  status, no cancellation request is sent. This also checks an earlier request
+  whose response was lost. The authority's refusal is recorded as
   `cancellation_refused`. Each outcome is recorded only while the document,
   read again under the company lock, is still cancellable.
 
