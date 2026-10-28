@@ -3,11 +3,12 @@
 use bilibi_authz::grants::Grants;
 use bilibi_database::{pool, Error};
 use bilibi_finance_ledger::{
-    AccountType, Ledger, LedgerError, Money, NewAccount, NewEntry, NewFiscalYear, NewLine, Reversal,
+    AccountType, Ledger, LedgerError, Money, NewAccount, NewBook, NewEntry, NewFiscalYear, NewLine,
+    Reversal,
 };
 use bilibi_finance_receivables::{AgingOptions, ReceivableError, Receivables, ReceivedTaxOptions};
 use bilibi_finance_sst::{AdjustmentInput, MappingInput, Pins, RegistrationInput, Sst, TaxType};
-use bilibi_finance_walkthrough_fixture::{install, sign_in};
+use bilibi_finance_walkthrough_fixture::{sign_in, Installed, CHART, CURRENCY, MINOR_UNITS};
 use jiff::civil::date;
 use rust_decimal::Decimal;
 use serde_json::json;
@@ -31,7 +32,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = bilibi_web::App::new(db.clone(), &origin)?;
     let services = &app.services;
     bilibi_finance_walkthrough_fixture::without_step_up(services)?;
-    let installed = install(&db, services).await?;
+    bilibi_walkthrough_fixture::install(&db).await?;
+    services
+        .get::<Grants>("base/authz.grants")?
+        .reconcile()
+        .await?;
     // Fixture identity only: give the browser reviewer and reader Company 001.
     db.get().await?.batch_execute("INSERT INTO persons(id,tenant_id,name,kind,email) VALUES(4,1,'Alex Admin','human','admin@example.test'),(5,1,'Lee Viewer','human','viewer@example.test') ON CONFLICT DO NOTHING;
     INSERT INTO person_affiliations(id,tenant_id,person_id,organisation_id,title) VALUES(3,1,4,1,'Reviewer'),(4,1,5,1,'Reader') ON CONFLICT DO NOTHING;
@@ -56,6 +61,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let viewer = sign_in(&db, services, 1, 2).await?;
     let other = sign_in(&db, services, 2, 5).await?;
     let ledger = services.get::<Ledger>(bilibi_finance_ledger::SERVICE)?;
+    let book = ledger
+        .open_book(
+            &manager,
+            1,
+            &NewBook {
+                currency_code: CURRENCY.into(),
+                minor_units: MINOR_UNITS,
+            },
+        )
+        .await?;
+    for (code, name, kind, retained) in CHART {
+        let mut new = NewAccount::new(code, name, kind);
+        new.retained_earnings = retained;
+        ledger.create_account(&manager, 1, &new).await?;
+    }
+    let installed = Installed {
+        book,
+        accounts: ledger.list_accounts(&manager, 1).await?,
+    };
     let ar = services.get::<Receivables>(bilibi_finance_receivables::SERVICE)?;
     let sst = services.get::<Sst>(bilibi_finance_sst::SERVICE)?;
     let account = |code: &str| {
@@ -76,6 +100,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             &NewFiscalYear {
                 start_date: Some(date(2025, 1, 1)),
                 end_date: Some(date(2025, 12, 31)),
+            },
+        )
+        .await?;
+    ledger
+        .open_fiscal_year(
+            &manager,
+            1,
+            &NewFiscalYear {
+                start_date: Some(date(2026, 1, 1)),
+                end_date: Some(date(2026, 12, 31)),
             },
         )
         .await?;
