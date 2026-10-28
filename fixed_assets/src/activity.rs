@@ -66,7 +66,8 @@ pub struct RunException {
     pub asset_id: i64,
     pub asset_number: i64,
     pub description: String,
-    pub reason: String,
+    #[serde(deserialize_with = "exception_reason")]
+    pub reason: &'static str,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Run {
@@ -172,7 +173,7 @@ impl Activity {
                     asset_id,
                     asset_number: int(a, "asset_number")?,
                     description: string(a, "description")?,
-                    reason: "acquisition_reversed".into(),
+                    reason: "acquisition_reversed",
                 });
             }
             run_items.sort_by_key(|i| i.asset_number);
@@ -1049,4 +1050,17 @@ pub(super) struct PreparedEvent {
     lines: Vec<NewLine>,
     reversal: Option<(i64, EntryOwner)>,
     pub review: Value,
+}
+
+// Preserve the facade's closed reason vocabulary when decoding trusted contract
+// results for the page. Never borrow arbitrary response text as a static value.
+fn exception_reason<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<&'static str, D::Error> {
+    match String::deserialize(deserializer)?.as_str() {
+        "acquisition_reversed" => Ok("acquisition_reversed"),
+        _ => Err(serde::de::Error::custom(
+            "unknown depreciation exception reason",
+        )),
+    }
 }
