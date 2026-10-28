@@ -35,6 +35,8 @@ The manifest records `coverage`, the omitted modules, the company, person, time,
 
 The artifact's immutable reference stores its coverage. Publication and every subsequent download recheck that coverage's permissions and company. Losing any source permission blocks an old full pack; it cannot be relabelled as restricted. Losing ledger view or export blocks both pack kinds, including existing links. Base Artifacts records publication and reads; Authz records role changes, direct denies and authorization decisions. There is no new export-purpose prompt or scheduled engagement expiry in this change.
 
+The current Platform dashboard shows tenant-wide company counts to signed-in users, even without Company view. It does not grant access to those companies or books. Withholding those counts, if required for an engagement, is a Platform follow-up; Finance does not change the shared dashboard.
+
 ## Every door uses the same authority
 
 UI routes, retained live events, operation reads, MCP and journal preview/commit call the existing owner facades with a sealed scope and explicit company target. The facade rechecks writes inside the audited mutation transaction and company lock. An MCP plan cannot grant approval or change its company after review. Revocation before commit must refuse the reviewed write and leave no journal behind.
