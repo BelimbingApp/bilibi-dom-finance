@@ -121,10 +121,11 @@ series=read(channel,"finance.receivables.series.list",company,"approver")["recor
 invoice_series=next(r["id"] for r in series if r["code"]=="OPENING")
 payment_series=next(r["id"] for r in series if r["code"]=="RECEIPT")
 customer=next(r for r in read(channel,"finance.receivables.customer.list",company,"approver")["records"] if r["code"]=="CONVERSION-CUSTOMER")
+vendor=next(r for r in read(channel,"finance.payables.vendor.list",company,"approver")["records"] if r["code"]=="CONVERSION-VENDOR")
 asset_context=read(channel,"finance.fixed_assets.opening.context",company,"approver")
 revision=next(r["id"] for r in asset_context["category_revisions"] if r["category_name"]=="Conversion assets")
 ar_csv="source_id,customer_code,document_reference,document_date,due_date,original_total,outstanding,control_account_code\ninvoice-17,CONVERSION-CUSTOMER,OLD-INV-17,2026-05-15,2026-06-30,5000,3000,1100\n"
-ap_csv="source_id,vendor_key,vendor_name,document_reference,document_date,due_date,original_total,outstanding,control_account_code\nbill-29,conversion-vendor,Conversion vendor,OLD-BILL-29,2026-05-01,2026-06-15,2500,1500,2000\n"
+ap_csv="source_id,vendor_code,vendor_name,document_reference,document_date,due_date,original_total,outstanding,control_account_code\nbill-29,CONVERSION-VENDOR,Conversion vendor,OLD-BILL-29,2026-05-01,2026-06-15,2500,1500,2000\n"
 asset_csv=f"source_id,description,category_revision_id,acquisition_date,in_service_date,cost,accumulated_depreciation,remaining_life_months,residual_value\nasset-3,Source register asset,{revision},2024-06-01,2024-07-01,12000,1800,96,0\n"
 before_import={module:read(channel,f"finance.{module}.aging.get",company,"approver",as_of="2026-07-01",through_entry_number=trial["through_entry_number"]) for module in ["receivables","payables"]}
 inputs={"receivables":{"source_reference":"AR-SOURCE","currency_code":"MYR","series_id":invoice_series,"csv":ar_csv},"payables":{"source_reference":"AP-SOURCE","currency_code":"MYR","csv":ap_csv},"fixed_assets":{"source_reference":"ASSET-SOURCE","currency_code":"MYR","csv":asset_csv}}
@@ -162,7 +163,7 @@ require(Decimal(source_asset["cost"])==12000 and Decimal(source_asset["accumulat
 receipt={"series_id":payment_series,"customer_id":customer["id"],"payment_date":"2026-07-15","amount":"1000","deposit_account_id":accounts["1000"],"allocations":[{"document_id":invoice,"amount":"1000"}]}
 refused(channel,"finance.receivables.payment.record",company,"conversion",who="approver",**(receipt|{"payment_date":"2026-06-30"}))
 write(channel,"finance.receivables.payment.record",company,**receipt)
-payment_request=write(channel,"finance.payables.payment.submit",company,"manager",payment_date="2026-07-15",party_key="conversion-vendor",paid_from_account_id=accounts["1000"],allocations=[{"document_id":bill,"amount":"500"}])
+payment_request=write(channel,"finance.payables.payment.submit",company,"manager",payment_date="2026-07-15",party_key=f"vendor:{vendor['id']}",paid_from_account_id=accounts["1000"],allocations=[{"document_id":bill,"amount":"500"}])
 write(channel,"finance.payables.payment.approve",company,request_id=payment_request["id"])
 final=read(channel,"finance.ledger.trial_balance.get",company,"approver",as_of="2026-07-31")
 actual={r["code"]:(Decimal(r["debit_balance"]),Decimal(r["credit_balance"])) for r in final["rows"]}

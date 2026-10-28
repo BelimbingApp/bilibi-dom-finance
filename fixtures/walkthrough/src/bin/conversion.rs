@@ -290,6 +290,27 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         .import_opening_bills(&s, company, &unknown_vendor)
         .await
         .is_err());
+    let vendor = ap
+        .get_vendor(&s, company, config["vendor_id"].as_i64().unwrap())
+        .await?;
+    let mut vendor_input = VendorInput {
+        code: vendor.code.clone(),
+        core_company_id: vendor.company.id,
+        payment_terms_days: vendor.payment_terms_days,
+        payable_account_id: vendor.payable_account_id,
+        expense_account_id: vendor.expense_account_id,
+        tax_code_id: vendor.tax_code_id,
+        active: false,
+    };
+    ap.update_vendor(&s, company, vendor.id, &vendor_input)
+        .await?;
+    assert!(ap
+        .import_opening_bills(&s, company, &ap_input)
+        .await
+        .is_err());
+    vendor_input.active = true;
+    ap.update_vendor(&s, company, vendor.id, &vendor_input)
+        .await?;
     let b = ap.import_opening_bills(&s, company, &ap_input).await?;
     assert_eq!(b, ap.import_opening_bills(&s, company, &ap_input).await?);
     let c = assets
