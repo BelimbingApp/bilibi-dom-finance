@@ -225,7 +225,7 @@ impl Years {
                 Combobox::new("ledger-years-company", format!("{FILTER_FORM}[company]"))
                     .label("Company")
                     .wrapper_class("mb-0")
-                    .value(&value)
+                    .value(value)
                     .options(options),
             )?,
             actions: Html::EMPTY,
@@ -388,7 +388,7 @@ impl Years {
                         "The book is not open yet",
                         "Open the company's book first. Then open its first fiscal year.",
                     )
-                    .id(&id("no-book")),
+                    .id(id("no-book")),
                 )?);
                 // Among many companies a book that is not open is one line at
                 // the end, not a section of its own.
@@ -419,7 +419,7 @@ impl Years {
                     "No fiscal year yet",
                     "A company posts only into a period of an open fiscal year. Open the first one.",
                 )
-                .id(&id("empty")),
+                .id(id("empty")),
             )?);
         }
         // The ledger reopens the latest closed period and locks the earliest
@@ -657,7 +657,7 @@ impl Years {
             Combobox::new("ledger-year-company", "year[company]")
                 .label("Company *")
                 .aria_label("Company")
-                .value(&opening.company.to_string())
+                .value(opening.company.to_string())
                 .options(options),
         )?);
         body.push(&render(

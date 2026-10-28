@@ -434,7 +434,7 @@ impl Pages {
                 name: company.name,
             })
             .collect();
-        list.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        list.sort_by_key(|company| company.name.to_lowercase());
         Ok(list)
     }
 
