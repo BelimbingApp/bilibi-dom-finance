@@ -92,6 +92,8 @@ pub(crate) struct Journal {
     pub decision: Option<Decision>,
     pub replaces_journal_id: Option<i64>,
     pub replaced_by_journal_id: Option<i64>,
+    pub replaces_journal_number: Option<i64>,
+    pub replaced_by_journal_number: Option<i64>,
     pub lines: Vec<Line>,
 }
 

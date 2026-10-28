@@ -320,23 +320,29 @@ impl Journal {
                 });
             }
         }
-        if let Some(old) = journal.replaces_journal_id {
+        if let (Some(old), Some(number)) = (
+            journal.replaces_journal_id,
+            journal.replaces_journal_number,
+        ) {
             facts.push(Fact {
                 title: "Replaces",
                 id: "ledger-journal-replaces",
                 value: render(JournalLink {
                     id: old,
-                    label: &format!("Journal {old}, withdrawn"),
+                    label: &format!("Journal {number}, withdrawn"),
                 })?,
             });
         }
-        if let Some(new) = journal.replaced_by_journal_id {
+        if let (Some(new), Some(number)) = (
+            journal.replaced_by_journal_id,
+            journal.replaced_by_journal_number,
+        ) {
             facts.push(Fact {
                 title: "Replaced by",
                 id: "ledger-journal-replaced-by",
                 value: render(JournalLink {
                     id: new,
-                    label: &format!("Journal {new}"),
+                    label: &format!("Journal {number}"),
                 })?,
             });
         }

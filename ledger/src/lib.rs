@@ -851,6 +851,10 @@ pub struct Journal {
     pub replaces_journal_id: Option<i64>,
     /// The journal that corrects this one once it is withdrawn and replaced.
     pub replaced_by_journal_id: Option<i64>,
+    /// The number of the journal `replaces_journal_id` names.
+    pub replaces_journal_number: Option<i64>,
+    /// The number of the journal `replaced_by_journal_id` names.
+    pub replaced_by_journal_number: Option<i64>,
     pub lines: Vec<EntryLine>,
 }
 /// Bounds of [`Ledger::list_journals`]; `Default` lists the first 100 of

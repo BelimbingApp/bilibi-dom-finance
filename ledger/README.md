@@ -288,7 +288,8 @@ with an optional reason, who and when, and posts nothing; the submission stays
 on record and can no longer be approved. `replace_journal(.., &NewEntry,
 reason)` withdraws it and submits the corrected journal in the same
 transaction, checked and numbered as a submission, and names it in
-`replaces_journal_id` (and the old one in `replaced_by_journal_id`). Either
+`replaces_journal_id` and `replaces_journal_number` (and the old one in
+`replaced_by_journal_id` and `replaced_by_journal_number`). Either
 refusal rolls both back, so a refused correction leaves the journal waiting.
 The correction is a new journal that needs its own approval, by the same
 separation of duties. An approval racing a withdrawal or replacement is

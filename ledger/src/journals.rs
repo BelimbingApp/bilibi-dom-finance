@@ -29,13 +29,15 @@ fn columns() -> String {
         "j.id,j.journal_number,j.entry_date::text,j.description,j.reference,j.currency_code,\
          j.submitted_by_user_id,j.submitted_by_impersonator_id,to_char(j.submitted_at,{STAMP}),\
          e.event,e.reason,e.entry_id,e.actor_user_id,e.actor_impersonator_id,to_char(e.occurred_at,{STAMP}),\
-         r.replaced_journal_id,b.journal_id"
+         r.replaced_journal_id,b.journal_id,rj.journal_number,bj.journal_number"
     )
 }
 const FROM: &str = "FROM finance_ledger_journals j \
      LEFT JOIN finance_ledger_journal_events e ON e.journal_id = j.id AND e.company_id = j.company_id \
      LEFT JOIN finance_ledger_journal_replacements r ON r.journal_id = j.id AND r.company_id = j.company_id \
-     LEFT JOIN finance_ledger_journal_replacements b ON b.replaced_journal_id = j.id AND b.company_id = j.company_id";
+     LEFT JOIN finance_ledger_journal_replacements b ON b.replaced_journal_id = j.id AND b.company_id = j.company_id \
+     LEFT JOIN finance_ledger_journals rj ON rj.id = r.replaced_journal_id AND rj.company_id = j.company_id \
+     LEFT JOIN finance_ledger_journals bj ON bj.id = b.journal_id AND bj.company_id = j.company_id";
 
 /// Inserts the journal and its lines; the database numbers and stamps it.
 pub(crate) async fn insert(
@@ -354,6 +356,8 @@ async fn hydrate(
                 decision,
                 replaces_journal_id: row.get(15),
                 replaced_by_journal_id: row.get(16),
+                replaces_journal_number: row.get(17),
+                replaced_by_journal_number: row.get(18),
                 lines: lines.remove(&id).unwrap_or_default(),
             })
         })
