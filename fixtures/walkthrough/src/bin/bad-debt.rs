@@ -402,14 +402,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .preview_return(
             &manager,
             1,
-            TaxType::Service,
+            TaxType::ServiceTax,
             date(2026, 9, 1),
             Pins::default(),
         )
         .await?;
     assert_eq!(figures.tax_payable, Decimal::from(28));
     let tax_return = sst
-        .open_return(&manager, 1, TaxType::Service, date(2026, 10, 1))
+        .open_return(&manager, 1, TaxType::ServiceTax, date(2026, 10, 1))
         .await?;
     sst.add_adjustment(
         &manager,

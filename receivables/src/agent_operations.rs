@@ -74,7 +74,7 @@ enum Write {
     Issue,
     Payment,
     Reverse,
-    WriteOff(&'static str),
+    BadDebt(&'static str),
 }
 impl Write {
     fn capability(self) -> &'static str {
@@ -90,16 +90,16 @@ impl Write {
             Self::Draft(_) | Self::Discard => MANAGE_DOCUMENTS,
             Self::Issue => ISSUE,
             Self::Payment | Self::Reverse => POST_PAYMENTS,
-            Self::WriteOff("submit") => SUBMIT_WRITE_OFFS,
-            Self::WriteOff(_) => APPROVE_WRITE_OFFS,
+            Self::BadDebt("submit") => SUBMIT_WRITE_OFFS,
+            Self::BadDebt(_) => APPROVE_WRITE_OFFS,
         }
     }
     fn summary(self) -> &'static str {
         match self {
-            Self::WriteOff("submit") => "Propose an invoice-linked bad-debt journal; nothing posts until approval. No tax relief is inferred.",
-            Self::WriteOff("approve") => "Approve and post the bad-debt journal atomically with the invoice write-off. Revenue and tax remain unchanged.",
-            Self::WriteOff("reverse") => "Reverse the owned write-off journal and restore the invoice balance before recording any recovery receipt.",
-            Self::WriteOff(_) => "Reject the proposed bad-debt journal without posting; retain its evidence and decision.",
+            Self::BadDebt("submit") => "Propose an invoice-linked bad-debt journal; nothing posts until approval. No tax relief is inferred.",
+            Self::BadDebt("approve") => "Approve and post the bad-debt journal atomically with the invoice write-off. Revenue and tax remain unchanged.",
+            Self::BadDebt("reverse") => "Reverse the owned write-off journal and restore the invoice balance before recording any recovery receipt.",
+            Self::BadDebt(_) => "Reject the proposed bad-debt journal without posting; retain its evidence and decision.",
             Self::Configure => "Change future document defaults; issued invoices keep their original control account.",
             Self::Code(t,None) if t.name==SERIES.name => "Create a numbering series; code, kind, prefix and width are permanent.",
             Self::Code(t,Some(_)) if t.name==SERIES.name => "Change the series name or active flag; preserve its numbering definition.",
@@ -137,7 +137,7 @@ impl Write {
             .join(client, scope, company, self.capability())
             .await?;
         let changes = match self {
-            Self::WriteOff(action) => {
+            Self::BadDebt(action) => {
                 service
                     .review_write_off(client, scope, company, action, input)
                     .await?
@@ -290,7 +290,7 @@ impl Write {
         use crate::web::{CUSTOMERS as CUSTOMER_PAGES, INVOICES, RECEIPTS, SETTINGS};
         let record_page = |base: &str| json!(format!("{base}/{}", record["id"]));
         match self {
-            Self::WriteOff(_) => json!(format!("{INVOICES}/{}", record["document_id"])),
+            Self::BadDebt(_) => json!(format!("{INVOICES}/{}", record["document_id"])),
             Self::Configure => json!(SETTINGS),
             Self::Code(table, _) if table.name == CUSTOMERS.name => record_page(CUSTOMER_PAGES),
             Self::Code(..) => json!(SETTINGS),
@@ -344,7 +344,7 @@ impl WriteHandler for Write {
             .await?;
             let record: Result<Value> = async {
                 Ok(match *self {
-                    Self::WriteOff(action) => json!(
+                    Self::BadDebt(action) => json!(
                         service
                             .write_off_on(tx, scope, company, action, input)
                             .await?
@@ -675,10 +675,10 @@ fn payments() -> Value {
 inventory::submit! { Contribution::new(DEFINITIONS,"finance/receivables.operations",Provenance {module:MODULE,source:file!(),line:line!()},&Definitions {
     operations:&[
         Operation {key:"finance.receivables.write_off.accounts",title:"Read bad-debt journal accounts",summary:"Active allowance assets and expense accounts excluding every current or historical receivables control.",keywords:&[],capability:VIEW,input:target,output,handler:Handler::Read(&Read::WriteOffAccounts),channels:Channels::Every,step_up:&[]},
-        Operation {key:"finance.receivables.write_off.submit",title:"Propose a bad-debt journal",summary:"Propose a dated invoice write-off against the book's allowance or expense account, with reason and evidence. No posting until approval.",keywords:&[],capability:SUBMIT_WRITE_OFFS,input:write_off_submit,output,handler:Handler::SafeWrite(&Write::WriteOff("submit")),channels:Channels::Every,step_up:&[]},
-        Operation {key:"finance.receivables.write_off.approve",title:"Approve a bad-debt journal",summary:"Require a different reviewer, then post the owned journal and reduce the invoice balance atomically. No tax relief or filing.",keywords:&[],capability:APPROVE_WRITE_OFFS,input:write_off_decide,output,handler:Handler::SafeWrite(&Write::WriteOff("approve")),channels:Channels::Every,step_up:&[]},
-        Operation {key:"finance.receivables.write_off.reject",title:"Reject a bad-debt journal",summary:"Keep the proposed journal and rejection reason without posting.",keywords:&[],capability:APPROVE_WRITE_OFFS,input:write_off_decide,output,handler:Handler::SafeWrite(&Write::WriteOff("reject")),channels:Channels::Every,step_up:&[]},
-        Operation {key:"finance.receivables.write_off.reverse",title:"Reverse a bad-debt journal",summary:"Restore the invoice balance with an owned mirror journal before recording any recovery receipt. Also requires a different reviewer.",keywords:&[],capability:APPROVE_WRITE_OFFS,input:write_off_reverse,output,handler:Handler::SafeWrite(&Write::WriteOff("reverse")),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.receivables.write_off.submit",title:"Propose a bad-debt journal",summary:"Propose a dated invoice write-off against the book's allowance or expense account, with reason and evidence. No posting until approval.",keywords:&[],capability:SUBMIT_WRITE_OFFS,input:write_off_submit,output,handler:Handler::SafeWrite(&Write::BadDebt("submit")),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.receivables.write_off.approve",title:"Approve a bad-debt journal",summary:"Require a different reviewer, then post the owned journal and reduce the invoice balance atomically. No tax relief or filing.",keywords:&[],capability:APPROVE_WRITE_OFFS,input:write_off_decide,output,handler:Handler::SafeWrite(&Write::BadDebt("approve")),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.receivables.write_off.reject",title:"Reject a bad-debt journal",summary:"Keep the proposed journal and rejection reason without posting.",keywords:&[],capability:APPROVE_WRITE_OFFS,input:write_off_decide,output,handler:Handler::SafeWrite(&Write::BadDebt("reject")),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.receivables.write_off.reverse",title:"Reverse a bad-debt journal",summary:"Restore the invoice balance with an owned mirror journal before recording any recovery receipt. Also requires a different reviewer.",keywords:&[],capability:APPROVE_WRITE_OFFS,input:write_off_reverse,output,handler:Handler::SafeWrite(&Write::BadDebt("reverse")),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.setup.get",title:"Read receivables setup",summary:"Read default control and income accounts; setup is null until configured.",keywords:&[],capability:VIEW,input:target,output,handler:Handler::Read(&Read::Setup),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.setup.changes",title:"Read setup history",summary:"Read account-default changes in ascending identifier order.",keywords:&[],capability:VIEW,input:history,output,handler:Handler::Read(&Read::History),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.series.list",title:"List numbering series",summary:"Read active and inactive series in code order with a bounded cursor.",keywords:&[],capability:VIEW,input:codes,output,handler:Handler::Read(&Read::Codes(SERIES)),channels:Channels::Every,step_up:&[]},
