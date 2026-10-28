@@ -9,8 +9,9 @@ use bilibi_database::{Error, Result};
 use bilibi_tenancy::Scope;
 use bilibi_ui::{
     page::{LiveBody, LiveFuture, LiveInput, LiveRequest, LiveState},
-    params, Alert, Badge, BadgeKind, Button, ButtonVariant, Card, Choice, Combobox, ConfirmDialog,
-    Fact, Facts, Field, Form, Header, Html, InputKind, PageVariant, SectionHeading, StatusKind,
+    params, Alert, Attrs, Badge, BadgeKind, Button, ButtonVariant, Card, Choice, Combobox,
+    ConfirmDialog, Fact, Facts, Field, Form, Header, Html, InputKind, PageVariant, SectionHeading,
+    StatusKind,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -261,6 +262,15 @@ impl Book {
             }
             return render(empty);
         }
+        if self.options.reference.is_empty() {
+            return render(
+                bilibi_ui::EmptyState::missing(
+                    "The currency list could not be read",
+                    "Reload the page to try again.",
+                )
+                .id("ledger-book-currencies-unread"),
+            );
+        }
         let errors = |name: &str| -> Vec<String> {
             self.refusal
                 .field(name)
@@ -293,7 +303,8 @@ impl Book {
             };
             body.push(&render(
                 Combobox::new("ledger-book-currency-code", "book[currency_code]")
-                    .label("Currency")
+                    .label("Currency *")
+                    .aria_label("Currency")
                     .value(self.currency.trim().to_uppercase())
                     .options(
                         self.options
@@ -306,7 +317,11 @@ impl Book {
                     )
                     .placeholder("Search currencies")
                     .hint(hint)
-                    .errors(errors("currency_code")),
+                    .errors(errors("currency_code"))
+                    .attrs(Attrs {
+                        required: true,
+                        ..Attrs::default()
+                    }),
             )?);
         } else {
             body.push(&render(
