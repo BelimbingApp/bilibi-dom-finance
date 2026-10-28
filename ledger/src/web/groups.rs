@@ -103,6 +103,7 @@ impl Draft {
 
 pub(super) struct Groups {
     company: Option<i64>,
+    pinned: bool,
     pages: Pages,
     list: ListState,
     columns: ListColumns,
@@ -128,6 +129,7 @@ impl Groups {
         ];
         Ok(Self {
             company,
+            pinned: query.contains_key("company"),
             pages,
             list: ListState::parse(query, SPEC.clone()).map_err(|_| Error::Internal)?,
             columns: ListColumns::mount("ledger-groups-table", columns)
@@ -211,7 +213,7 @@ impl Groups {
             })?);
         }
         let mut query = self.list.to_params();
-        if let Some(company) = self.company {
+        if let Some(company) = self.company.filter(|_| self.pinned) {
             query.insert("company".into(), company.to_string());
         }
         if self.draft.is_some() {
@@ -534,6 +536,7 @@ impl LiveState<Scope, Error> for Groups {
                 LiveInput::Refresh => {}
                 LiveInput::Params(values) => {
                     let company = super::target_company(values, Some(r.scope))?;
+                    self.pinned = values.contains_key("company");
                     if company != self.company {
                         self.company = company;
                         self.draft = None;

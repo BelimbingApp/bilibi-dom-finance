@@ -388,7 +388,7 @@ impl Accounts {
                 body.push(&render(
                     EmptyState::missing(
                         format!("{}: no accounts yet", company.name),
-                        "Select this company to set up its chart.",
+                        "You do not have permission to set up this chart.",
                     )
                     .id(format!("ledger-chart-empty-{}", company.id)),
                 )?);
@@ -444,11 +444,6 @@ impl Accounts {
         }
         page.push(&self.publication_dialog()?);
         let mut query = self.list.to_params();
-        if !all {
-            if let Some(company) = selected {
-                query.insert("company".into(), company.to_string());
-            }
-        }
         if self.draft.is_some() {
             query.insert("new".into(), "1".into());
         }
