@@ -423,8 +423,20 @@ pub struct ChartTemplate {
     /// What a person should know before applying it, such as what needs
     /// advice specific to the business.
     pub notes: Vec<String>,
-    /// Groups and accounts, each after the group it sits in.
+    /// Optional parts of the chart a person ticks, such as the accounts only a
+    /// business registered for a tax or with employees needs.
+    pub sections: Vec<ChartTemplateSection>,
+    /// Groups and accounts, each after the group it sits in. In a preview,
+    /// exactly the rows the chosen sections create.
     pub rows: Vec<ChartTemplateRow>,
+}
+/// An optional part of a starter chart. Its rows are created only when a
+/// request chooses its `key`; none is chosen by default.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ChartTemplateSection {
+    pub key: String,
+    pub name: String,
+    pub description: String,
 }
 /// One group or account a starter chart creates.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -435,14 +447,17 @@ pub struct ChartTemplateRow {
     pub is_group: bool,
     pub parent_code: Option<String>,
     pub retained_earnings: bool,
+    /// The optional section this row belongs to; none for a core row.
+    pub section: Option<String>,
 }
-/// What applying a starter chart to a company would do now: the template's
-/// exact rows, how many rows the company's chart already has, and which of
+/// What applying a starter chart to a company would do now: the exact rows
+/// the chosen sections and the core create, how many rows the company's chart already has, and which of
 /// the template's codes those use. A chart that has any row is never changed:
 /// `applicable` is true only for an empty one.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ChartTemplatePreview {
     pub template: ChartTemplate,
+    pub chosen_sections: Vec<String>,
     pub existing_rows: usize,
     pub conflicting_codes: Vec<String>,
     pub applicable: bool,
@@ -451,6 +466,7 @@ pub struct ChartTemplatePreview {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ChartTemplateApplied {
     pub key: String,
+    pub sections: Vec<String>,
     pub groups: usize,
     pub accounts: usize,
 }
@@ -1155,18 +1171,30 @@ pub(crate) async fn chart_balances_of(
     })
 }
 
-/// The starter chart `key` against the company's chart as it is now.
+/// The starter chart `key` with the optional `sections` chosen, against the
+/// company's chart as it is now.
 pub(crate) async fn chart_template_preview(
     client: &dyn bilibi_agent_api::OperationClient,
     tenant: i64,
     company_id: i64,
     key: &str,
+    sections: &[String],
 ) -> Result<ChartTemplatePreview> {
     let template = templates::require(key)?;
+    let rows = templates::select(template, sections)?;
     let (existing_rows, conflicting_codes) =
-        templates::existing(client, tenant, company_id, template).await?;
+        templates::existing(client, tenant, company_id, &rows).await?;
     Ok(ChartTemplatePreview {
-        template: template.clone(),
+        chosen_sections: template
+            .sections
+            .iter()
+            .filter(|s| sections.contains(&s.key))
+            .map(|s| s.key.clone())
+            .collect(),
+        template: ChartTemplate {
+            rows: rows.into_iter().cloned().collect(),
+            ..template.clone()
+        },
         existing_rows,
         conflicting_codes,
         applicable: existing_rows == 0,
@@ -1538,21 +1566,23 @@ impl Ledger {
         templates::all()
     }
 
-    /// What applying the starter chart `key` to the company would do now
-    /// (`finance.ledger.view`); `Invalid` for a key that names none.
+    /// What applying the starter chart `key` with the optional `sections`
+    /// chosen to the company would do now (`finance.ledger.view`); `Invalid`
+    /// for a key or section that names none.
     pub async fn preview_chart_template(
         &self,
         scope: &Scope,
         company_id: i64,
         key: &str,
+        sections: &[String],
     ) -> Result<ChartTemplatePreview> {
         let client = self.db.get().await.map_err(Error::from)?;
         authorize(&**client, scope, company_id, VIEW).await?;
-        chart_template_preview(&**client, scope.tenant(), company_id, key).await
+        chart_template_preview(&**client, scope.tenant(), company_id, key, sections).await
     }
 
-    /// Creates the starter chart `key`'s groups and accounts in one
-    /// transaction (`finance.ledger.accounts.manage`), for a company whose
+    /// Creates the starter chart `key`'s core groups and accounts, and those
+    /// of the optional `sections` chosen, in one transaction (`finance.ledger.accounts.manage`), for a company whose
     /// chart is empty. A chart with any account or group is never changed: it
     /// is refused, and so is a second application. The rows are the
     /// company's own afterwards; the template is not linked to them.
@@ -1561,6 +1591,7 @@ impl Ledger {
         scope: &Scope,
         company_id: i64,
         key: &str,
+        sections: &[String],
     ) -> Result<ChartTemplateApplied> {
         let mut client = self.db.get().await.map_err(Error::from)?;
         let mut tx = self
@@ -1572,7 +1603,8 @@ impl Ledger {
                 "finance.ledger.apply_chart_template",
             )
             .await?;
-        let applied = Self::apply_chart_template_on(&mut tx, scope, company_id, key).await?;
+        let applied =
+            Self::apply_chart_template_on(&mut tx, scope, company_id, key, sections).await?;
         tx.commit().await?;
         Ok(applied)
     }
@@ -1582,10 +1614,11 @@ impl Ledger {
         scope: &Scope,
         company_id: i64,
         key: &str,
+        sections: &[String],
     ) -> Result<ChartTemplateApplied> {
         join(tx, scope, company_id, MANAGE_ACCOUNTS).await?;
         let tenant = scope.tenant();
-        let preview = chart_template_preview(tx.sql(), tenant, company_id, key).await?;
+        let preview = chart_template_preview(tx.sql(), tenant, company_id, key, sections).await?;
         if !preview.applicable {
             return Err(LedgerError::Invalid(vec![FieldError::new(
                 "base",
@@ -1596,13 +1629,15 @@ impl Ledger {
             )]));
         }
         let template = templates::require(key)?;
+        let rows = templates::select(template, sections)?;
+        let chosen = preview.chosen_sections;
         let applied = tx
             .mutate(move |sql| {
                 Box::pin(async move {
                     let mut ids: std::collections::BTreeMap<&str, i64> = Default::default();
                     let mut changes = Vec::new();
                     let (mut groups, mut accounts_made) = (0, 0);
-                    for row in &template.rows {
+                    for row in rows {
                         let valid = accounts::ValidAccount {
                             code: row.code.clone(),
                             name: row.name.clone(),
@@ -1628,6 +1663,7 @@ impl Ledger {
                     Ok((
                         ChartTemplateApplied {
                             key: template.key.clone(),
+                            sections: chosen,
                             groups,
                             accounts: accounts_made,
                         },

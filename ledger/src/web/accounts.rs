@@ -137,6 +137,8 @@ impl Draft {
 /// contract's own review of exactly what would be created.
 struct Preview {
     review: Review,
+    key: String,
+    sections: Vec<view::TemplateSection>,
     name: String,
     status: String,
     notes: Vec<String>,
@@ -658,7 +660,21 @@ impl LiveState<Scope, Error> for Accounts {
                         }
                     }
                     "close_modal" => self.draft = None,
-                    "ask_template" => self.ask_template(&r, value).await?,
+                    "ask_template" => {
+                        let key = value["template"].as_str().ok_or(Error::Invalid)?;
+                        self.ask_template(&r, "ask_template", key, &[]).await?;
+                    }
+                    "choose_sections" => {
+                        if let Some(key) = self.preview.as_ref().map(|p| p.key.clone()) {
+                            let chosen: Vec<String> = params::form_values(value, "sections")
+                                .into_iter()
+                                .filter(|(_, ticked)| ticked == "true")
+                                .map(|(section, _)| section)
+                                .collect();
+                            self.ask_template(&r, "choose_sections", &key, &chosen)
+                                .await?;
+                        }
+                    }
                     "apply_template" => self.apply_template(&r).await?,
                     "cancel_template" => self.preview = None,
                     "validate" => {
@@ -731,8 +747,22 @@ impl Accounts {
             card.push(&render(Note {
                 id: "ledger-starter-counts",
                 text: &format!(
-                    "Creates {} account groups and {} accounts. You can rename them afterwards.",
-                    template.groups, template.accounts
+                    "Creates {} account groups and {} accounts.{} You can rename them afterwards.",
+                    template.groups,
+                    template.accounts,
+                    if template.sections.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            " Optional, chosen in the preview: {}.",
+                            template
+                                .sections
+                                .iter()
+                                .map(|s| s.name.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    }
                 ),
             })?);
             card.push(&render(Button {
@@ -810,8 +840,30 @@ impl Accounts {
         body.push(&render(Badge::status(BadgeKind::Warning, &preview.status))?);
         body.push(&render(Note {
             id: "ledger-preview-note",
-            text: "Review every group and account below. Applying creates them as this company's own chart, with the retained earnings account marked. The chart is never changed once it has accounts.",
+            text: "Review every group and account below. The core chart is always created; tick the optional sections that apply to this business and the list shows exactly what would be created. Nothing is ticked to start. Applying creates them as this company's own chart, with the retained earnings account marked. The chart is never changed once it has accounts.",
         })?);
+        if !preview.sections.is_empty() {
+            let mut choices = Html::EMPTY;
+            for section in &preview.sections {
+                choices.push(&render(
+                    Field::in_form("sections", &section.key)
+                        .id(format!("ledger-section-{}", section.key))
+                        .label(&section.name)
+                        .value("true")
+                        .kind(InputKind::Checkbox)
+                        .checked(section.chosen)
+                        .hint(section.description.clone()),
+                )?);
+            }
+            body.push(&render(Form {
+                id: "ledger-sections-form",
+                event: "choose_sections",
+                change: true,
+                class: "mt-4",
+                body: choices,
+                actions: Html::EMPTY,
+            })?);
+        }
         for (index, note) in preview.notes.iter().enumerate() {
             body.push(&render(Note {
                 id: &format!("ledger-preview-note-{index}"),
@@ -852,16 +904,21 @@ impl Accounts {
         Ok(html)
     }
 
-    async fn ask_template(&mut self, r: &LiveRequest<'_, Scope>, value: &Value) -> Result<()> {
-        let key = value["template"].as_str().ok_or(Error::Invalid)?;
+    async fn ask_template(
+        &mut self,
+        r: &LiveRequest<'_, Scope>,
+        event: &str,
+        key: &str,
+        sections: &[String],
+    ) -> Result<()> {
         match self
             .pages
             .review(
                 r.scope,
                 r.credential,
-                "ask_template",
+                event,
                 TEMPLATE_CONTRACT,
-                json!({"template": key}),
+                json!({"template": key, "sections": sections}),
             )
             .await?
         {
@@ -869,6 +926,8 @@ impl Accounts {
                 let rows = view::parse::<Vec<view::TemplateRow>>(review.facts["rows"].clone())
                     .unwrap_or_default();
                 self.preview = Some(Preview {
+                    key: key.to_owned(),
+                    sections: view::parse(review.facts["sections"].clone()).unwrap_or_default(),
                     name: review.facts["template"]["name"]
                         .as_str()
                         .unwrap_or_default()

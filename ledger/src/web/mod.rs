@@ -193,6 +193,7 @@ inventory::submit! { Contribution::new(PAGE_WRITES, PAGES, Provenance { module: 
         ("designate", "finance.ledger.account.update"),
         ("activate", "finance.ledger.account.update"),
         ("ask_template", "finance.ledger.chart_template.apply"),
+        ("choose_sections", "finance.ledger.chart_template.apply"),
         ("apply_template", "finance.ledger.chart_template.apply"),
         ("create_group", "finance.ledger.account_group.create"),
         ("save_group_field", "finance.ledger.account_group.update"),

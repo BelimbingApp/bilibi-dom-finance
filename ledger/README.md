@@ -27,7 +27,7 @@ records (`Book`, `Account`, `Entry`, `FiscalYear`, `Period`, `ClosingEvent`,
 | `update_account` | `finance.ledger.accounts.manage` | Changes `name`, `parent_id`, `active` or `retained_earnings`; `AccountNotFound` for an id of another company; refuses an account group (use `update_account_group`) |
 | `create_account_group`, `update_account_group` | `finance.ledger.accounts.manage` | An account group takes no postings and stands for the total of what is under it: `code`, `name`, `account_type`, optional `parent_id` (another group of the same type). Update changes `name` or the group it sits in; code and type never change |
 | `chart_balances` | `finance.ledger.view` | Each account's own `balance` and each group's `total` as of a date, at a pinned `through_entry_number` (see Account groups) |
-| `chart_templates`, `preview_chart_template`, `apply_chart_template` | none, `.view`, `.accounts.manage` | Starter charts: list them, preview the exact rows against a company's chart, and create them in one transaction in a chart with no accounts or groups (see Starter charts) |
+| `chart_templates`, `preview_chart_template`, `apply_chart_template` | none, `.view`, `.accounts.manage` | Starter charts: list them, preview the exact rows (with the optional `sections` chosen) against a company's chart, and create them in one transaction in a chart with no accounts or groups (see Starter charts) |
 | `post_entry` | `finance.ledger.entries.post` | Posts a balanced entry of at least two lines (see Entries); `BookNotOpen` before the book is opened |
 | `post_entry_in` | `finance.ledger.entries.post` | Same posting inside the owner's `MutationTransaction`; leaves commit/rollback to the owner |
 | `preview_post_entry_on`, `preview_reverse_owned_entry_on` | `finance.ledger.entries.post` | Validate an owned posting/correction on the handed `OperationClient`, without identities or writes; deterministic entry, referenced accounts and applicable posting controls for the owner's review fence |
@@ -90,14 +90,14 @@ H1 makes the facade-only writes reachable through the Platform's shared `/api/v1
 | `book.get` | Book or null, controlled-bookkeeping and duty-separation changes |
 | `account.list` | Database-code-ordered chart of accounts and account groups (`is_group`); `after_code`, `next_after_code` |
 | `chart_balance.get` | Every account's own balance and every group's total as of `as_of`, counted through a pinned `through_entry_number` |
-| `chart_template.list`, `chart_template.get` | The starter charts, their review state and whether each can be applied now; the exact rows one would create and any code the chart already uses |
+| `chart_template.list`, `chart_template.get` | The starter charts, their optional sections, review state and whether each can be applied now; the exact rows one would create for the chosen `sections` and any code the chart already uses |
 | `journal.get`, `journal.list` | Lines and decision; list by number with optional `status`, `after`, `next_after` |
 | `entry.get`, `entry.list` | Immutable lines and ownership/reversal identifiers; list filters `from`, `to`, `account_id`, `through_entry_number`, `exclude_closing`; cursor pair `after_date`, `after_id` in `next_after` |
 | `fiscal_year.list` | Years with periods/statuses; `after_start_date`, `next_after_start_date` |
 | `trial_balance.get` | Every account with a posting on or before `as_of`, with debit and credit balances, counted through a pinned `through_entry_number` |
 | `book.open`, `account.create`, `account.update` | Reviewed book/chart changes; account update preserves omitted fields and uses `clear_parent` to remove a grouping |
 | `account_group.create`, `account_group.update` | Reviewed changes to account groups; update takes the group's id as `account_id` |
-| `chart_template.apply` | The review lists every group and account to be created; a chart that already has any is refused and never changed |
+| `chart_template.apply` | `sections` names the optional parts to include (none by default). The review lists every group and account to be created; a chart that already has any is refused and never changed |
 | `journal.submit`, `journal.approve`, `journal.reject` | Submission does not post; approval posts once with separation of duties; rejection records a reason without posting |
 | `journal.withdraw`, `journal.replace` | Only the journal's submitter, while it waits: withdrawal records an optional `reason` and posts nothing; replacement takes the `journal.submit` fields plus `journal_id`, withdraws it and submits the correction, which needs its own approval |
 | `opening_balances.submit` | Reviewed CSV mapping to one opening journal; source reference and exact CSV are retained; optional `replaces_journal_id` withdraws the submitter's waiting opening journal and takes its place; approval is separate |
@@ -134,7 +134,7 @@ The ledger has pages so a person without an AI agent can do the same daily work.
 | Menu (Finance, under Bookkeeping) | Route | What a person does there |
 | --- | --- | --- |
 | Book | `/finance/ledger/book` | Reads the currency and decimal places. Opens the book once, asking who approves. Sees whether controlled bookkeeping and separation of duties are on. |
-| Chart of accounts | `/finance/ledger/accounts` | Searches and filters the chart (accounts and groups) with each account's balance and each group's total, adds an account in a dialog. With an empty chart it offers the starter charts: preview, then apply, or start empty. |
+| Chart of accounts | `/finance/ledger/accounts` | Searches and filters the chart (accounts and groups) with each account's balance and each group's total, adds an account in a dialog. With an empty chart it offers the starter charts: preview, tick the optional sections that apply, then apply, or start empty. |
 | Account groups | `/finance/ledger/account-groups` | Lists the groups with what each holds and its total, adds a group in a dialog. |
 | (account record) | `/finance/ledger/accounts/{id}` | Edits the name and group in place, deactivates or activates the account, marks the retained earnings account, reads today's balance. |
 | (group record) | `/finance/ledger/account-groups/{id}` | Edits the name and the group it sits in, reads its total and what it holds. |
@@ -490,13 +490,24 @@ is never a report row, and the section's total is the sum of its accounts.
 
 ## Starter charts
 
-A starter chart is data (`templates/*.json`: key, name, review state, notes and
-rows of code, name, type, group, retained-earnings mark), never a code
-identifier. One ships: `my-small-business`, a Malaysian small business chart
+A starter chart is data (`templates/*.json`: key, name, review state, notes,
+optional sections and rows of code, name, type, group, retained-earnings mark,
+section), never a code identifier. One ships: `my-small-business`, a Malaysian small business chart
 marked **draft, awaiting accountant review**. A person previews it on the Chart
 of accounts page (or an agent reads `chart_template.get`) and applies it with a
 reviewed write; nothing is created at install, on boot or when a book opens.
-Applying creates its groups and accounts in one transaction under the company
+Rows that only some businesses need belong to an optional **section** (`Registered for
+SST`: the sales and service tax payable group and its accounts; `Has employees`:
+net salaries payable, payroll deductions and employer contributions payable, and
+the employer EPF, SOCSO and EIS expenses). No section is chosen by default: the
+preview shows a tickbox for each, the page and `chart_template.get` / `.apply`
+take the chosen keys as `sections` (the same input for a person and an agent),
+and the review lists exactly the rows that will be created. Rows of a section
+that was not chosen are never created; a section's rows sit only under a group
+of the same section or a core group (the file is refused otherwise). A group
+cannot be deactivated once created, so omitting happens when applying. Which
+tax basis applies to a business needs client-specific advice and is a separate
+note on the chart. Applying creates its core groups and the chosen sections' accounts in one transaction under the company
 lock, each audited, and refuses any chart that already has an account or a
 group: a book that has accounts is never changed, and applying twice is refused
 the second time. The created rows are the company's own with no link back, so

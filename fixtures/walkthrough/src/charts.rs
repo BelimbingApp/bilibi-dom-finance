@@ -50,19 +50,36 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
     let first_tenant_viewer = sign_in(db, services, 1, 2).await?;
 
     for template in Ledger::chart_templates() {
-        let groups = template.rows.iter().filter(|r| r.is_group).count();
+        let core: Vec<_> = template
+            .rows
+            .iter()
+            .filter(|r| r.section.is_none())
+            .collect();
+        let groups = core.iter().filter(|r| r.is_group).count();
         println!(
-            "starter chart {} ({}): {:?}, {groups} groups and {} accounts",
+            "starter chart {} ({}): {:?}, core {groups} groups and {} accounts",
             template.key,
             template.name,
             template.review,
-            template.rows.len() - groups
+            core.len() - groups
         );
+        for section in &template.sections {
+            println!(
+                "  optional section {} ({}): {} rows, unticked by default",
+                section.key,
+                section.name,
+                template
+                    .rows
+                    .iter()
+                    .filter(|r| r.section.as_deref() == Some(section.key.as_str()))
+                    .count()
+            );
+        }
     }
     show(
         "manager previews the starter chart before opening the book",
         ledger
-            .preview_chart_template(&manager, COMPANY, TEMPLATE)
+            .preview_chart_template(&manager, COMPANY, TEMPLATE, &[])
             .await
             .map(|p| {
                 (
@@ -70,34 +87,52 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
                     p.existing_rows,
                     p.conflicting_codes,
                     p.template.rows.len(),
+                    p.chosen_sections,
                 )
             }),
+    );
+    for chosen in [vec!["sst"], vec!["payroll"], vec!["sst", "payroll"]] {
+        let chosen: Vec<String> = chosen.into_iter().map(String::from).collect();
+        show(
+            &format!("manager previews with sections {chosen:?} ticked"),
+            ledger
+                .preview_chart_template(&manager, COMPANY, TEMPLATE, &chosen)
+                .await
+                .map(|p| (p.template.rows.len(), p.chosen_sections)),
+        );
+    }
+    show(
+        "manager previews with a section the chart does not have",
+        ledger
+            .preview_chart_template(&manager, COMPANY, TEMPLATE, &["nope".into()])
+            .await
+            .map(|p| p.template.rows.len()),
     );
     show(
         "manager previews a starter chart that does not exist",
         ledger
-            .preview_chart_template(&manager, COMPANY, "nope")
+            .preview_chart_template(&manager, COMPANY, "nope", &[])
             .await
             .map(|p| p.applicable),
     );
     show(
         "tenant 1's manager previews tenant 2's company 100",
         ledger
-            .preview_chart_template(&first_tenant_manager, COMPANY, TEMPLATE)
+            .preview_chart_template(&first_tenant_manager, COMPANY, TEMPLATE, &[])
             .await
             .map(|p| p.applicable),
     );
     show(
         "tenant 1's viewer applies the starter chart to company 1",
         ledger
-            .apply_chart_template(&first_tenant_viewer, 1, TEMPLATE)
+            .apply_chart_template(&first_tenant_viewer, 1, TEMPLATE, &[])
             .await,
     );
     let before = ledger.list_accounts(&first_tenant_manager, 1).await?.len();
     show(
         "tenant 1's manager applies the starter chart to company 1, which has accounts",
         ledger
-            .apply_chart_template(&first_tenant_manager, 1, TEMPLATE)
+            .apply_chart_template(&first_tenant_manager, 1, TEMPLATE, &[])
             .await,
     );
     let after = ledger.list_accounts(&first_tenant_manager, 1).await?.len();
@@ -130,30 +165,60 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         .await?;
     println!("contract chart_template.list: {}", listed["result"]);
     let handler = write(&registry, "finance.ledger.chart_template.apply")?;
-    let input = json!({"company_id": COMPANY, "template": TEMPLATE});
     let mut client = db.get().await?;
-    let mut tx = boundary
+    for sections in [
+        json!([]),
+        json!(["sst"]),
+        json!(["payroll"]),
+        json!(["sst", "payroll"]),
+    ] {
+        let input = json!({"company_id": COMPANY, "template": TEMPLATE, "sections": sections});
+        let mut tx = boundary
+            .begin(
+                &mut client,
+                manager.mutation_context("finance.walkthrough.chart.dry-run"),
+            )
+            .await?;
+        let review = handler.preview(tx.sql(), &manager, &input).await?;
+        let envelope = review.envelope("finance.ledger.chart_template.apply");
+        let listed: Vec<&str> = envelope["result"]["changes"]["rows"]
+            .as_array()
+            .map_or(&[][..], Vec::as_slice)
+            .iter()
+            .filter_map(|r| r["code"].as_str())
+            .collect();
+        println!(
+            "contract chart_template.apply review with sections {sections}: {} groups, {} accounts, {} rows listed; SST group 2140 listed: {}, payroll group 2150 listed: {}",
+            envelope["result"]["changes"]["groups"],
+            envelope["result"]["changes"]["accounts"],
+            listed.len(),
+            listed.contains(&"2140"),
+            listed.contains(&"2150"),
+        );
+        handler.commit(&mut tx, &manager, &input).await?;
+        tx.rollback().await?;
+        println!(
+            "contract apply rolled back: {} rows in the chart",
+            ledger.list_accounts(&manager, COMPANY).await?.len()
+        );
+    }
+    let unknown = json!({"company_id": COMPANY, "template": TEMPLATE, "sections": ["nope"]});
+    let tx = boundary
         .begin(
             &mut client,
-            manager.mutation_context("finance.walkthrough.chart.dry-run"),
+            manager.mutation_context("finance.walkthrough.chart.unknown-section"),
         )
         .await?;
-    let review = handler.preview(tx.sql(), &manager, &input).await?;
-    let envelope = review.envelope("finance.ledger.chart_template.apply");
     println!(
-        "contract chart_template.apply review: {} groups, {} accounts, {} rows listed",
-        envelope["result"]["changes"]["groups"],
-        envelope["result"]["changes"]["accounts"],
-        envelope["result"]["changes"]["rows"]
-            .as_array()
-            .map_or(0, Vec::len)
+        "contract apply with an unknown section: refused = {}",
+        handler.preview(tx.sql(), &manager, &unknown).await.is_err()
     );
-    handler.commit(&mut tx, &manager, &input).await?;
     tx.rollback().await?;
-    println!(
-        "contract apply rolled back: {} rows in the chart",
-        ledger.list_accounts(&manager, COMPANY).await?.len()
-    );
+
+    // The committed application ticks only the SST section; the payroll
+    // section was not chosen, so none of its rows are created.
+    let sections = vec!["sst".to_owned()];
+    let input = json!({"company_id": COMPANY, "template": TEMPLATE, "sections": sections});
 
     let mut tx = boundary
         .begin(
@@ -171,10 +236,11 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
 
     // What exists is exactly what the preview listed.
     let chart = ledger.list_accounts(&manager, COMPANY).await?;
-    let template = Ledger::chart_templates()
-        .iter()
-        .find(|t| t.key == TEMPLATE)
-        .ok_or(Error::NotFound)?;
+    let expected = ledger
+        .preview_chart_template(&manager, COMPANY, TEMPLATE, &sections)
+        .await?
+        .template;
+    let template = &expected;
     let by_id: std::collections::HashMap<i64, &str> =
         chart.iter().map(|a| (a.id, a.code.as_str())).collect();
     let same = chart.len() == template.rows.len()
@@ -189,6 +255,12 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
                         == row.parent_code.as_deref()
             })
         });
+    let has = |code: &str| chart.iter().any(|a| a.code == code);
+    println!(
+        "SST section created (2140, 2141, 2142): {}; payroll section omitted (2125, 2150, 2160, 6120, 6130, 6135): {}",
+        ["2140", "2141", "2142"].iter().all(|c| has(c)),
+        ["2125", "2150", "2160", "6120", "6130", "6135"].iter().all(|c| !has(c)),
+    );
     println!(
         "created {} rows ({} groups, {} retained-earnings accounts); equal to the preview: {same}",
         chart.len(),
@@ -198,13 +270,13 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
     show(
         "manager applies the starter chart again",
         ledger
-            .apply_chart_template(&manager, COMPANY, TEMPLATE)
+            .apply_chart_template(&manager, COMPANY, TEMPLATE, &sections)
             .await,
     );
     show(
         "manager previews it again",
         ledger
-            .preview_chart_template(&manager, COMPANY, TEMPLATE)
+            .preview_chart_template(&manager, COMPANY, TEMPLATE, &sections)
             .await
             .map(|p| (p.applicable, p.existing_rows, p.conflicting_codes.len())),
     );

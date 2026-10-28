@@ -69,12 +69,24 @@ pub(crate) struct TemplateRow {
     pub retained_earnings: bool,
 }
 
+/// An optional part of a starter chart; `chosen` is whether the review being
+/// shown includes its rows.
+#[derive(Clone, Debug, Deserialize)]
+pub(crate) struct TemplateSection {
+    pub key: String,
+    pub name: String,
+    pub description: String,
+    #[serde(default)]
+    pub chosen: bool,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub(crate) struct TemplateSummary {
     pub key: String,
     pub name: String,
     pub review: String,
     pub description: String,
+    pub sections: Vec<TemplateSection>,
     pub groups: usize,
     pub accounts: usize,
     pub applicable: bool,

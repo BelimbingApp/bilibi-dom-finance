@@ -81,6 +81,20 @@ fn date(input: &Value, field: &str) -> Result<Date> {
 fn optional_date(input: &Value, field: &str) -> Result<Option<Date>> {
     input.get(field).map(|_| date(input, field)).transpose()
 }
+fn sections(input: &Value) -> Result<Vec<String>> {
+    match &input["sections"] {
+        Value::Null => Ok(Vec::new()),
+        Value::Array(keys) => keys
+            .iter()
+            .map(|key| {
+                key.as_str()
+                    .map(str::to_owned)
+                    .ok_or(LedgerError::InvalidOption)
+            })
+            .collect(),
+        _ => Err(LedgerError::InvalidOption),
+    }
+}
 fn opt_text(input: &Value, field: &str) -> Option<String> {
     input[field].as_str().map(str::to_owned)
 }
@@ -241,7 +255,7 @@ impl Write {
             Self::Opening => "Submit opening balances for approval; no entry posts yet. With replaces_journal_id, withdraw your waiting opening journal and submit this correction in its place. Open operational items and historical transactions are excluded.",
             Self::CreateGroup => "Create an account group; it takes no postings and shows the total of what is under it. Its code and account type are permanent.",
             Self::UpdateGroup => "Change the account group's name or the group it sits in; its code and account type are permanent.",
-            Self::ApplyTemplate => "Create this starter chart's groups and accounts in an empty chart. They become the company's own, with no link to the template. A chart that already has accounts is never changed.",
+            Self::ApplyTemplate => "Create this starter chart's core groups and accounts, and those of the optional sections chosen, in an empty chart. Sections not chosen are not created. They become the company's own, with no link to the template. A chart that already has accounts is never changed.",
             Self::Submit => "Submit a manual journal for approval; no entry posts yet.",
             Self::Approve => "Approve the journal and post its immutable entry; separation of duties still applies.",
             Self::Reject => "Reject the journal permanently with this reason; no entry posts.",
@@ -369,9 +383,14 @@ impl Write {
                 json!({"before":before,"after":after,"accounts":all})
             }
             Self::ApplyTemplate => {
-                let preview =
-                    chart_template_preview(client, tenant, company, text(input, "template")?)
-                        .await?;
+                let preview = chart_template_preview(
+                    client,
+                    tenant,
+                    company,
+                    text(input, "template")?,
+                    &sections(input)?,
+                )
+                .await?;
                 if !preview.applicable {
                     return Err(LedgerError::Invalid(vec![FieldError::new(
                         "base",
@@ -382,7 +401,8 @@ impl Write {
                     )]));
                 }
                 let groups = preview.template.rows.iter().filter(|r| r.is_group).count();
-                json!({"template":{"key":preview.template.key,"name":preview.template.name,"review":preview.template.review,"notes":preview.template.notes},"groups":groups,"accounts":preview.template.rows.len() - groups,"rows":preview.template.rows})
+                let offered: Vec<Value> = preview.template.sections.iter().map(|s| json!({"key":s.key,"name":s.name,"description":s.description,"chosen":preview.chosen_sections.contains(&s.key)})).collect();
+                json!({"template":{"key":preview.template.key,"name":preview.template.name,"review":preview.template.review,"notes":preview.template.notes},"sections":offered,"groups":groups,"accounts":preview.template.rows.len() - groups,"rows":preview.template.rows})
             }
             Self::Submit | Self::Approve | Self::Reject | Self::Withdraw | Self::Replace => {
                 let current = if matches!(self, Self::Submit) {
@@ -840,7 +860,8 @@ impl WriteHandler for Write {
                     tx,
                     scope,
                     company,
-                    text(input, "template").map_err(invalid)?
+                    text(input, "template").map_err(invalid)?,
+                    &sections(input).map_err(invalid)?
                 )
                 .await
                 .map_err(invalid)?),
@@ -1120,11 +1141,12 @@ impl ReadHandler for Read {
                     let mut records = Vec::new();
                     for template in templates::all() {
                         let preview =
-                            chart_template_preview(client, tenant, company, &template.key)
+                            chart_template_preview(client, tenant, company, &template.key, &[])
                                 .await
                                 .map_err(invalid)?;
-                        let groups = template.rows.iter().filter(|r| r.is_group).count();
-                        records.push(json!({"key":template.key,"name":template.name,"review":template.review,"description":template.description,"groups":groups,"accounts":template.rows.len() - groups,"applicable":preview.applicable}));
+                        let core = &preview.template.rows;
+                        let groups = core.iter().filter(|r| r.is_group).count();
+                        records.push(json!({"key":template.key,"name":template.name,"review":template.review,"description":template.description,"sections":template.sections,"groups":groups,"accounts":core.len() - groups,"applicable":preview.applicable}));
                     }
                     json!({"records":records})
                 }
@@ -1132,7 +1154,8 @@ impl ReadHandler for Read {
                     client,
                     tenant,
                     company,
-                    text(input, "template").map_err(invalid)?
+                    text(input, "template").map_err(invalid)?,
+                    &sections(input).map_err(invalid)?
                 )
                 .await
                 .map_err(invalid)?),
@@ -1202,7 +1225,10 @@ fn group_change_schema() -> Value {
     )
 }
 fn template_schema() -> Value {
-    schema(&["template"], json!({"template":string(100)}))
+    schema(
+        &["template"],
+        json!({"template":string(100),"sections":{"type":"array","items":string(100),"maxItems":20}}),
+    )
 }
 fn change_schema() -> Value {
     schema(
@@ -1354,8 +1380,8 @@ inventory::submit! { Contribution::new(DEFINITIONS,"finance/ledger.operations",P
         Operation {key:"finance.ledger.journal.get",title:"Read a journal",summary:"Read lines, submission, decision, the approved entry identifier and whether it is the book's opening balances journal.",keywords:&[],capability:VIEW,input:journal_schema,output,handler:Handler::Read(&Read::Journal),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.account.list",title:"List accounts",summary:"Read the chart by code with a bounded cursor page: accounts, and account groups marked is_group.",keywords:&[],capability:VIEW,input:accounts_schema,output,handler:Handler::Read(&Read::Accounts),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.chart_balance.get",title:"Read the chart with balances",summary:"Read every account with its own balance and every account group with the total of the accounts under it, as of a date and counted through a pinned entry number. A group never has a balance of its own.",keywords:&[],capability:VIEW,input:trial_balance_schema,output,handler:Handler::Read(&Read::ChartBalances),channels:Channels::Every,step_up:&[]},
-        Operation {key:"finance.ledger.chart_template.list",title:"List starter charts",summary:"Read the starter charts a company can start from, how many groups and accounts each creates, how far an accountant has reviewed it, and whether it can be applied to this company now.",keywords:&[],capability:VIEW,input:target_schema,output,handler:Handler::Read(&Read::ChartTemplates),channels:Channels::Every,step_up:&[]},
-        Operation {key:"finance.ledger.chart_template.get",title:"Preview a starter chart",summary:"Read the exact groups and accounts a starter chart would create, and any code the company's chart already uses.",keywords:&[],capability:VIEW,input:template_schema,output,handler:Handler::Read(&Read::ChartTemplate),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.ledger.chart_template.list",title:"List starter charts",summary:"Read the starter charts a company can start from, its optional sections, how many core groups and accounts each creates, how far an accountant has reviewed it, and whether it can be applied to this company now.",keywords:&[],capability:VIEW,input:target_schema,output,handler:Handler::Read(&Read::ChartTemplates),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.ledger.chart_template.get",title:"Preview a starter chart",summary:"Read the exact groups and accounts a starter chart would create with the optional `sections` chosen, and any code the company's chart already uses.",keywords:&[],capability:VIEW,input:template_schema,output,handler:Handler::Read(&Read::ChartTemplate),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.journal.list",title:"List journals",summary:"Read journals by number, optionally by status, after a journal number.",keywords:&[],capability:VIEW,input:journals_schema,output,handler:Handler::Read(&Read::Journals),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.entry.get",title:"Read an entry",summary:"Read immutable lines, ownership and reversal identifiers.",keywords:&[],capability:VIEW,input:entry_schema,output,handler:Handler::Read(&Read::Entry),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.entry.list",title:"List entries",summary:"Read entries by date and identifier with date, account and pinned-entry bounds.",keywords:&[],capability:VIEW,input:entries_schema,output,handler:Handler::Read(&Read::Entries),channels:Channels::Every,step_up:&[]},
@@ -1366,7 +1392,7 @@ inventory::submit! { Contribution::new(DEFINITIONS,"finance/ledger.operations",P
         Operation {key:"finance.ledger.account.update",title:"Change an account",summary:"Change an account's name, group, active flag or retained-earnings designation; preserve code and type. Not for an account group.",keywords:&[],capability:MANAGE_ACCOUNTS,input:change_schema,output,handler:Handler::SafeWrite(&Write::UpdateAccount),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.account_group.create",title:"Create an account group",summary:"Create a group that takes no postings and shows the total of the accounts and groups under it; optionally inside another group of the same type.",keywords:&[],capability:MANAGE_ACCOUNTS,input:group_schema,output,handler:Handler::SafeWrite(&Write::CreateGroup),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.account_group.update",title:"Change an account group",summary:"Change a group's name or the group it sits in; preserve code and type. The account_id is the group's id.",keywords:&[],capability:MANAGE_ACCOUNTS,input:group_change_schema,output,handler:Handler::SafeWrite(&Write::UpdateGroup),channels:Channels::Every,step_up:&[]},
-        Operation {key:"finance.ledger.chart_template.apply",title:"Apply a starter chart",summary:"Create a starter chart's groups and accounts in a company whose chart is empty. The review lists every row; a chart that already has accounts or groups is refused and never changed.",keywords:&[],capability:MANAGE_ACCOUNTS,input:template_schema,output,handler:Handler::SafeWrite(&Write::ApplyTemplate),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.ledger.chart_template.apply",title:"Apply a starter chart",summary:"Create a starter chart's core groups and accounts, and those of the optional `sections` chosen, in a company whose chart is empty. Optional `sections` choose the conditional parts, none by default; sections not chosen are not created. The review lists every row; a chart that already has accounts or groups is refused and never changed.",keywords:&[],capability:MANAGE_ACCOUNTS,input:template_schema,output,handler:Handler::SafeWrite(&Write::ApplyTemplate),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.opening_balances.submit",title:"Submit opening balances",summary:"Map a source closing trial balance CSV to existing accounts, preview balanced opening amounts and retain source evidence in one approval journal. Identical source retries return the recorded journal; replaces_journal_id corrects your waiting opening journal; open items and history are excluded.",keywords:&["conversion", "opening balances", "CSV"],capability:SUBMIT_JOURNALS,input:opening_schema,output,handler:Handler::SafeWrite(&Write::Opening),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.journal.submit",title:"Submit a journal",summary:"Keep balanced manual lines for approval without posting an entry.",keywords:&[],capability:SUBMIT_JOURNALS,input:submit_schema,output,handler:Handler::SafeWrite(&Write::Submit),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.journal.approve",title:"Approve a journal",summary:"Approve and post atomically; recheck accounts, period and separation of duties.",keywords:&[],capability:APPROVE_JOURNALS,input:journal_schema,output,handler:Handler::SafeWrite(&Write::Approve),channels:Channels::Every,step_up:&[]},
