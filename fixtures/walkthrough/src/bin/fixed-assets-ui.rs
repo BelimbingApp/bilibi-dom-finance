@@ -319,6 +319,14 @@ async fn main() -> Outcome<()> {
         )
         .await?;
     let mut runs = mount(services, &manager, "runs", None, &empty).await?;
+    let off_month = event(
+        &mut runs,
+        &manager,
+        json!({"type":"record_asset","asset[period]":"2026-01-15"}),
+    )
+    .await?;
+    has(&off_month, "Invalid period");
+    no(&off_month, "base:");
     let run_body = event(
         &mut runs,
         &manager,

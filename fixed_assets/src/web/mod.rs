@@ -115,7 +115,10 @@ fn refusal(e: FixedAssetsError) -> String {
         FixedAssetsError::Invalid(fields)
         | FixedAssetsError::Ledger(LedgerError::Invalid(fields)) => fields
             .iter()
-            .map(|f| format!("{}: {}", f.field, f.message))
+            .map(|f| match f.field {
+                "base" => f.message.clone(),
+                field => format!("{field}: {}", f.message),
+            })
             .collect::<Vec<_>>()
             .join("; "),
         FixedAssetsError::Failed(_) | FixedAssetsError::Ledger(LedgerError::Failed(_)) => {
