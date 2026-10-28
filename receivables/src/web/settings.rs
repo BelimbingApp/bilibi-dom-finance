@@ -20,10 +20,10 @@ use bilibi_database::{Error, Result};
 use bilibi_tenancy::Scope;
 use bilibi_ui::{
     page::{LiveBody, LiveFuture, LiveInput, LiveRequest, LiveState},
-    params, Alert, Badge, BadgeKind, Button, ButtonVariant, Card, Cell, Choice, CommitStates,
-    CommitStatus, ConfirmDialog, Facts, Field, FlexRow, Fold, Form, Header, Html, IconButton,
-    IconContext, InlineChoice, InlineEdit, InlineField, InputKind, ListColumns, ModalWidth,
-    PageVariant, SectionHeading, StatusKind,
+    params, Alert, Attrs, Badge, BadgeKind, Button, ButtonVariant, Card, Cell, Choice, Combobox,
+    CommitStates, CommitStatus, ConfirmDialog, Facts, Field, FlexRow, Fold, Form, Header, Html,
+    IconButton, IconContext, InlineChoice, InlineEdit, InlineField, InputKind, ListColumns,
+    ModalWidth, PageVariant, SectionHeading, StatusKind,
 };
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -212,12 +212,12 @@ impl Settings {
         Ok(())
     }
 
-    /// The active accounts of one type, name first, as a select's options.
+    /// The active accounts of one type, name first, as a combobox's options.
     fn account_choices(&self, kind: &str) -> Vec<Choice> {
         self.accounts
             .iter()
             .filter(|a| a.active && a.account_type == kind)
-            .map(|a| Choice::new(a.choice_label(), a.id.to_string()))
+            .map(Account::choice)
             .collect()
     }
 
@@ -234,7 +234,7 @@ impl Settings {
                     && (!self.receipts_into.contains(&a.id)
                         || self.setup.as_ref().map(|s| s.receivable_account_id) == Some(a.id))
             })
-            .map(|a| Choice::new(a.choice_label(), a.id.to_string()))
+            .map(Account::choice)
             .collect()
     }
 
@@ -292,12 +292,10 @@ impl Settings {
             None if self.can_manage => Html::text("Choose an account"),
             None => Html::text("Not set"),
         };
-        let editor = Field::named(key)
-            .id(format!("receivables-{key}-editor"))
-            .label_class("sr-only")
-            .label(label)
-            .kind(InputKind::Select)
-            .prompt("Choose an account")
+        let editor = Combobox::new(format!("receivables-{key}-input"), key)
+            .aria_label(label)
+            .placeholder("Choose an account")
+            .wrapper_class("mb-0")
             .value(current.map(|id| id.to_string()).unwrap_or_default())
             .options(if key == "receivable_account_id" {
                 self.receivable_choices()
@@ -411,7 +409,23 @@ impl Settings {
         })
     }
 
-    /// A row's choice edited in place: Active or Inactive, or an account.
+    /// A row's account, edited in place with the combobox so the code stays
+    /// muted and italic after the name.
+    fn row_account(&self, row: &Row, display: Html, options: Vec<Choice>) -> Result<Html> {
+        let editor = Combobox::new(format!("receivables-{}-input", row.key()), row.field)
+            .aria_label(row.label)
+            .placeholder("Choose an account")
+            .wrapper_class("mb-0")
+            .value(row.value.clone())
+            .options(options);
+        render(InlineChoice {
+            field: self.row_field(row),
+            display,
+            editor: render(editor)?,
+        })
+    }
+
+    /// A row's choice edited in place: Active or Inactive.
     fn row_choice(&self, row: &Row, display: Html, options: Vec<Choice>) -> Result<Html> {
         let editor = Field::named(row.field)
             .id(format!("receivables-{}-editor", row.key()))
@@ -598,7 +612,7 @@ impl Settings {
                 .slot("rate", f::tabular(&format!("{}%", f::decimal(t.rate)))?)
                 .slot(
                     "account",
-                    self.row_choice(
+                    self.row_account(
                         &field("account_id", "Tax account", &t.account_id.to_string()),
                         super::account_html(&self.accounts, t.account_id)?,
                         self.account_choices("liability"),
@@ -830,12 +844,16 @@ impl Settings {
                     .required()
                     .hint("6 means 6%."),
             )?);
+            let account = field("account_id", "Tax account");
             body.push(&render(
-                field("account_id", "Tax account")
-                    .kind(InputKind::Select)
-                    .prompt("Choose a liability account")
+                Combobox::new(account.id.clone(), account.name.clone())
+                    .label("Tax account *")
+                    .aria_label("Tax account")
+                    .value(account.value.clone())
+                    .placeholder("Search liability accounts")
                     .options(self.account_choices("liability"))
-                    .required()
+                    .errors(account.errors.clone())
+                    .attrs(Attrs { required: true, ..Attrs::default() })
                     .hint("The liability account tax on a document is posted to when it is issued. It records tax on the document, not that the customer has paid, that tax is due or that it was remitted: timing depends on the tax regime. Review the tax code and return before filing."),
             )?);
         }

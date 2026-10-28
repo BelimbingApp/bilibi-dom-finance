@@ -11,10 +11,10 @@ use bilibi_tenancy::Scope;
 use bilibi_ui::{
     list_state::FILTERS_FORM,
     page::{LiveBody, LiveFuture, LiveInput, LiveRequest, LiveState},
-    params, Alert, Badge, BadgeKind, BuiltinColumn, Button, ButtonVariant, Card, Cell, Choice,
-    ColumnsOutcome, CreateButton, EmptyState, Field, Filter, FilterToolbar, FlexRow, FlexTable,
-    Form, Header, Html, InputKind, ListColumns, ListSpec, ListState, Modal, ModalWidth,
-    PageVariant, RecordLink, StatusKind, TableEmpty, ToolbarControl,
+    params, Alert, Attrs, Badge, BadgeKind, BuiltinColumn, Button, ButtonVariant, Card, Cell,
+    Choice, ColumnsOutcome, Combobox, CreateButton, EmptyState, Field, Filter, FilterToolbar,
+    FlexRow, FlexTable, Form, Header, Html, InputKind, ListColumns, ListSpec, ListState, Modal,
+    ModalWidth, PageVariant, RecordLink, StatusKind, TableEmpty, ToolbarControl,
 };
 use rust_decimal::Decimal;
 use serde_json::{json, Value};
@@ -38,7 +38,10 @@ static SPEC: LazyLock<Arc<ListSpec>> = LazyLock::new(|| {
         filters: BTreeMap::from([
             (
                 "status".into(),
-                Filter::one_of(&["all", "submitted", "approved", "rejected"], "all"),
+                Filter::one_of(
+                    &["all", "submitted", "approved", "rejected", "withdrawn"],
+                    "all",
+                ),
             ),
             ("after".into(), Filter::string("")),
         ]),
@@ -117,11 +120,22 @@ struct Fill {
     amount: String,
 }
 
+/// The journal a correction dialog withdraws when it is submitted.
+struct Replaces {
+    id: i64,
+    number: i64,
+}
+
 /// The new-journal dialog's values and what the ledger said about them.
 struct Draft {
     date: String,
     description: String,
     reference: String,
+    /// Why the journal is being replaced (optional), when the dialog corrects one.
+    reason: String,
+    replaces: Option<Replaces>,
+    /// What the dialog filled in from an earlier journal that the person should check.
+    note: String,
     units: crate::MinorUnits,
     lines: Vec<LineDraft>,
     refusal: Refusal,
@@ -141,6 +155,9 @@ impl Draft {
             date: today,
             description: String::new(),
             reference: String::new(),
+            reason: String::new(),
+            replaces: None,
+            note: String::new(),
             units,
             lines: vec![LineDraft::default(), LineDraft::default()],
             refusal: Refusal::default(),
@@ -149,6 +166,74 @@ impl Draft {
             fill: None,
             declined: None,
         }
+    }
+
+    /// A dialog holding an earlier journal's date, description, reference and
+    /// lines: its correction (`replaces` set, so submitting withdraws it) or a
+    /// fresh journal prefilled from a rejected one. An account the chart no
+    /// longer offers is left to choose again.
+    fn from_journal(
+        journal: &view::Journal,
+        units: crate::MinorUnits,
+        accounts: &[view::Account],
+        replaces: bool,
+    ) -> Self {
+        let places = usize::from(units.get());
+        let shown = |text: &str| {
+            let amount = view::decimal(text);
+            if amount.is_zero() {
+                String::new()
+            } else {
+                format!("{amount:.places$}")
+            }
+        };
+        let mut gone = false;
+        let mut lines: Vec<LineDraft> = journal
+            .lines
+            .iter()
+            .map(|line| {
+                let active = accounts.iter().any(|a| a.id == line.account_id && a.active);
+                gone |= !active;
+                LineDraft {
+                    account: if active {
+                        line.account_id.to_string()
+                    } else {
+                        String::new()
+                    },
+                    debit: shown(&line.debit),
+                    credit: shown(&line.credit),
+                    description: line.description.clone().unwrap_or_default(),
+                }
+            })
+            .collect();
+        while lines.len() < 2 {
+            lines.push(LineDraft::default());
+        }
+        let mut draft = Self::new(journal.entry_date.clone(), units);
+        draft.description = journal.description.clone();
+        draft.reference = journal.reference.clone().unwrap_or_default();
+        draft.lines = lines;
+        if replaces {
+            draft.replaces = Some(Replaces {
+                id: journal.id,
+                number: journal.journal_number,
+            });
+        }
+        if !replaces {
+            draft.note = format!(
+                "Started from journal {}, which is {}. It needs its own approval.",
+                journal.journal_number, journal.status
+            );
+        }
+        if gone {
+            if !draft.note.is_empty() {
+                draft.note.push(' ');
+            }
+            draft.note.push_str(
+                "A line uses an account that is no longer active. Choose another account for it.",
+            );
+        }
+        draft
     }
 
     /// Fills the empty opposite amount of a two-line journal with the amount
@@ -222,6 +307,7 @@ impl Draft {
         self.date = get("entry_date");
         self.description = get("description");
         self.reference = get("reference");
+        self.reason = get("reason");
         for (i, line) in self.lines.iter_mut().enumerate() {
             line.account = get(&format!("line{i}_account"));
             line.debit = get(&format!("line{i}_debit"));
@@ -270,6 +356,12 @@ impl Draft {
         if !self.reference.trim().is_empty() {
             input["reference"] = json!(self.reference.trim());
         }
+        if let Some(replaces) = &self.replaces {
+            input["journal_id"] = json!(replaces.id);
+            if !self.reason.trim().is_empty() {
+                input["reason"] = json!(self.reason.trim());
+            }
+        }
         input
     }
 
@@ -304,7 +396,32 @@ pub(super) struct Journals {
     columns: ListColumns,
     flash: Flash,
     draft: Option<Draft>,
+    /// A journal named in the address (`correct` or `copy`) whose dialog is
+    /// still to open: it is read through the contract on the first update.
+    opening: Option<Opening>,
     framed: bool,
+}
+
+/// How an address names an earlier journal to prefill the dialog from.
+#[derive(Clone, Copy)]
+struct Opening {
+    id: i64,
+    /// Whether submitting withdraws it (a correction) or it only prefills.
+    replaces: bool,
+}
+
+impl Opening {
+    fn parse(query: &HashMap<String, String>) -> Option<Self> {
+        let find = |key: &str| query.get(key).and_then(|v| v.parse::<i64>().ok());
+        find("correct")
+            .map(|id| Self { id, replaces: true })
+            .or_else(|| {
+                find("copy").map(|id| Self {
+                    id,
+                    replaces: false,
+                })
+            })
+    }
 }
 
 impl Journals {
@@ -326,6 +443,7 @@ impl Journals {
                 .map_err(|_| Error::Internal)?,
             flash: Flash::default(),
             draft: None,
+            opening: Opening::parse(query),
             framed,
         })
     }
@@ -400,12 +518,20 @@ impl Journals {
             let accounts = self.pages.chart(scope).await?.unwrap_or_default();
             let form = self.form(&accounts)?;
             // The line rule, then the approval guidance the page header shows.
-            let description = format!(
-                "Each line takes an account and one amount, a debit or a credit. Debits and credits must balance. {guidance}"
-            );
+            let lines = "Each line takes an account and one amount, a debit or a credit. Debits and credits must balance.";
+            let (title, description) = match self.draft.as_ref().and_then(|d| d.replaces.as_ref()) {
+                Some(replaces) => (
+                    format!("Correct journal {}", replaces.number),
+                    format!(
+                        "Submitting withdraws journal {} and submits this journal in its place. Nothing posts until the corrected journal is approved. {lines}",
+                        replaces.number
+                    ),
+                ),
+                None => ("New manual journal".into(), format!("{lines} {guidance}")),
+            };
             page.push(&render(Modal {
                 id: "ledger-journal-modal",
-                title: "New manual journal",
+                title: &title,
                 cancel_event: "close_modal",
                 width: ModalWidth::Wide,
                 description: &description,
@@ -414,8 +540,11 @@ impl Journals {
             })?);
         }
         let mut query = self.list.to_params();
-        if self.draft.is_some() {
-            query.insert("new".into(), "1".into());
+        if let Some(draft) = &self.draft {
+            match &draft.replaces {
+                Some(replaces) => query.insert("correct".into(), replaces.id.to_string()),
+                None => query.insert("new".into(), "1".into()),
+            };
         }
         Ok(LiveBody {
             html: shell("ledger-journals", PageVariant::List, &self.flash, page)?,
@@ -446,6 +575,7 @@ impl Journals {
                     Choice::new("Waiting for approval", "submitted"),
                     Choice::new("Posted", "approved"),
                     Choice::new("Rejected", "rejected"),
+                    Choice::new("Withdrawn", "withdrawn"),
                 ],
             )],
         ))?);
@@ -549,7 +679,7 @@ impl Journals {
         };
         let choices: Vec<Choice> = view::by_name(accounts.iter().filter(|a| a.active))
             .iter()
-            .map(|a| Choice::new(view::account_label(a), a.id.to_string()))
+            .map(|a| view::account_choice(a))
             .collect();
         let mut body = Html::EMPTY;
         let mut messages = draft.refusal.alert(&[
@@ -569,6 +699,14 @@ impl Journals {
                 kind: StatusKind::Error,
                 class: "mb-3",
                 body: Html::text(&messages.join(" ")),
+            })?);
+        }
+        if !draft.note.is_empty() {
+            body.push(&render(Alert {
+                id: "ledger-journal-prefill-note",
+                kind: StatusKind::Info,
+                class: "mb-3",
+                body: Html::text(&draft.note),
             })?);
         }
         for field in [
@@ -595,6 +733,17 @@ impl Journals {
         ] {
             body.push(&render(field)?);
         }
+        if draft.replaces.is_some() {
+            body.push(&render(
+                Field::in_form("journal", "reason")
+                    .id("ledger-journal-reason")
+                    .label("Reason for the correction")
+                    .hint("Optional. Kept with the withdrawn journal. Up to 500 characters.")
+                    .value(&draft.reason)
+                    .errors(errors("reason"))
+                    .attr("data-debounce", "300"),
+            )?);
+        }
         for (i, line) in draft.lines.iter().enumerate() {
             let mut remove = Html::EMPTY;
             if draft.lines.len() > 2 {
@@ -617,13 +766,20 @@ impl Journals {
             };
             // Every line that is sent needs its account; the two amounts are
             // one choice between them, so neither is marked on its own.
+            let account_field = cell("account", "Account");
             let account = render(
-                cell("account", "Account")
-                    .kind(InputKind::Select)
-                    .prompt("Choose an account")
+                Combobox::new(account_field.id.clone(), account_field.name.clone())
+                    .label("Account *")
+                    .aria_label("Account")
+                    .placeholder("Choose an account")
+                    .wrapper_class("mb-0")
                     .options(choices.clone())
                     .value(&line.account)
-                    .required(),
+                    .errors(account_field.errors.clone())
+                    .attrs(Attrs {
+                        required: true,
+                        ..Attrs::default()
+                    }),
             )?;
             let amount = |side: Side, key: &str, label: &str, value: &str| {
                 let mut field = cell(key, label)
@@ -690,10 +846,18 @@ impl Journals {
         actions.push(&render(Button {
             id: "ledger-journal-submit",
             button_type: "button",
-            event: "submit_journal",
+            event: if draft.replaces.is_some() {
+                "replace_journal"
+            } else {
+                "submit_journal"
+            },
             variant: ButtonVariant::Primary,
             working: "Submitting…",
-            body: Html::text("Submit for approval"),
+            body: Html::text(if draft.replaces.is_some() {
+                "Submit correction"
+            } else {
+                "Submit for approval"
+            }),
             ..Button::default()
         })?);
         render(Form {
@@ -711,25 +875,28 @@ impl Journals {
             return Ok(());
         };
         let input = draft.input();
+        let (event, contract) = if draft.replaces.is_some() {
+            ("replace_journal", "finance.ledger.journal.replace")
+        } else {
+            ("submit_journal", "finance.ledger.journal.submit")
+        };
         match self
             .pages
-            .submit(
-                r.scope,
-                r.credential,
-                "submit_journal",
-                "finance.ledger.journal.submit",
-                input,
-            )
+            .submit(r.scope, r.credential, event, contract, input)
             .await?
         {
             Ok(done) => {
                 let number = done["result"]["record"]["journal_number"].as_i64();
+                let replaced = draft.replaces.as_ref().map(|replaces| replaces.number);
                 self.draft = None;
-                self.flash.success(match number {
-                    Some(n) => {
+                self.flash.success(match (number, replaced) {
+                    (Some(n), Some(old)) => format!(
+                        "Journal {old} is withdrawn. Journal {n} is submitted in its place and awaiting approval."
+                    ),
+                    (Some(n), None) => {
                         format!("Journal {n} is submitted and awaiting approval.")
                     }
-                    None => "The journal is submitted.".into(),
+                    (None, _) => "The journal is submitted.".into(),
                 });
             }
             Err(Failure::Refused(refusal)) => {
@@ -740,12 +907,112 @@ impl Journals {
         }
         Ok(())
     }
+
+    /// Opens the dialog for a new journal.
+    async fn open_new(&mut self, scope: &Scope) -> Result<()> {
+        if !self.pages.allowed(scope, SUBMIT_JOURNALS).await? {
+            return Ok(());
+        }
+        match self.units(scope).await? {
+            Ok(units) => {
+                let today = self.pages.today(scope).await?.to_string();
+                self.draft = Some(Draft::new(today, units));
+            }
+            Err(text) => self.flash.error(text),
+        }
+        Ok(())
+    }
+
+    /// Opens the dialog prefilled from an earlier journal the address names:
+    /// a correction of the person's own waiting journal, or a new journal
+    /// started from a rejected one. The journal is read through its contract,
+    /// so only what the person may see is copied.
+    async fn open_from(&mut self, scope: &Scope, opening: Opening) -> Result<()> {
+        if !self.pages.allowed(scope, SUBMIT_JOURNALS).await? {
+            return Ok(());
+        }
+        let units = match self.units(scope).await? {
+            Ok(units) => units,
+            Err(text) => {
+                self.flash.error(text);
+                return Ok(());
+            }
+        };
+        let journal: view::Journal = match self
+            .pages
+            .read(
+                scope,
+                "finance.ledger.journal.get",
+                json!({"journal_id": opening.id}),
+            )
+            .await?
+        {
+            Read::Found(value) => match view::parse(value) {
+                Some(journal) => journal,
+                None => {
+                    self.flash.error("The journal could not be read.");
+                    return Ok(());
+                }
+            },
+            Read::Denied => {
+                self.flash.error(super::DENIED);
+                return Ok(());
+            }
+            _ => {
+                self.flash.error("That journal does not exist.");
+                return Ok(());
+            }
+        };
+        let allowed = if opening.replaces {
+            journal.status == "submitted" && journal.submitted_by_user_id == scope.user()
+        } else {
+            journal.status == "rejected" || journal.status == "withdrawn"
+        };
+        if !allowed {
+            self.flash.error(if opening.replaces {
+                "Only the person who submitted a journal can correct it, and only while it waits for approval."
+            } else {
+                "Only a rejected or withdrawn journal can be started again."
+            });
+            return Ok(());
+        }
+        if journal.lines.len() > MAX_LINES {
+            self.flash.error(format!(
+                "Journal {} has more than {MAX_LINES} lines, more than the dialog holds.",
+                journal.journal_number
+            ));
+            return Ok(());
+        }
+        let accounts = self.pages.chart(scope).await?.unwrap_or_default();
+        self.draft = Some(Draft::from_journal(
+            &journal,
+            units,
+            &accounts,
+            opening.replaces,
+        ));
+        Ok(())
+    }
+
+    /// The book's minor units, which decide the amounts the dialog can
+    /// balance against; no book, no dialog.
+    async fn units(&self, scope: &Scope) -> Result<std::result::Result<crate::MinorUnits, String>> {
+        Ok(match self.pages.book(scope).await? {
+            Ok(state) => state
+                .book
+                .and_then(|book| crate::MinorUnits::new(i64::from(book.minor_units)))
+                .ok_or_else(|| BOOK_UNREADABLE.to_owned()),
+            Err(Read::Denied) => Err(super::DENIED.to_owned()),
+            Err(Read::Refused(text)) => Err(text),
+            Err(_) => Err(BOOK_UNREADABLE.to_owned()),
+        })
+    }
 }
 
 pub(super) fn status_badge(status: &str) -> Result<Html> {
     render(match status {
         "approved" => Badge::status(BadgeKind::Success, "Posted"),
         "rejected" => Badge::status(BadgeKind::Danger, "Rejected"),
+        "withdrawn" => Badge::status(BadgeKind::Neutral, "Withdrawn"),
         _ => Badge::status(BadgeKind::Warning, "Submitted"),
     })
 }
@@ -785,6 +1052,9 @@ struct LaterLink {
 impl LiveState<Scope, Error> for Journals {
     fn update<'a>(&'a mut self, r: LiveRequest<'a, Scope>) -> LiveFuture<'a, Error> {
         Box::pin(async move {
+            if let Some(opening) = self.opening.take() {
+                self.open_from(r.scope, opening).await?;
+            }
             match r.input {
                 LiveInput::Refresh => {}
                 LiveInput::Params(values) => {
@@ -803,30 +1073,7 @@ impl LiveState<Scope, Error> for Journals {
                         {
                         }
                     }
-                    "new" => {
-                        if self.pages.allowed(r.scope, SUBMIT_JOURNALS).await? {
-                            // The book's minor units decide which amounts the
-                            // dialog can balance against; no book, no dialog.
-                            let units = match self.pages.book(r.scope).await? {
-                                Ok(state) => state
-                                    .book
-                                    .and_then(|book| {
-                                        crate::MinorUnits::new(i64::from(book.minor_units))
-                                    })
-                                    .ok_or_else(|| BOOK_UNREADABLE.to_owned()),
-                                Err(Read::Denied) => Err(super::DENIED.to_owned()),
-                                Err(Read::Refused(text)) => Err(text),
-                                Err(_) => Err(BOOK_UNREADABLE.to_owned()),
-                            };
-                            match units {
-                                Ok(units) => {
-                                    let today = self.pages.today(r.scope).await?.to_string();
-                                    self.draft = Some(Draft::new(today, units));
-                                }
-                                Err(text) => self.flash.error(text),
-                            }
-                        }
-                    }
+                    "new" => self.open_new(r.scope).await?,
                     "close_modal" => self.draft = None,
                     "validate" => {
                         if let Some(draft) = &mut self.draft {
@@ -857,7 +1104,7 @@ impl LiveState<Scope, Error> for Journals {
                             }
                         }
                     }
-                    "submit_journal" => self.submit(&r).await?,
+                    "submit_journal" | "replace_journal" => self.submit(&r).await?,
                     "clear-flash" => self.flash.dismiss(value),
                     _ => return Err(Error::Invalid),
                 },

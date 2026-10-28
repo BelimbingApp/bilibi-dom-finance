@@ -94,6 +94,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .put(&mut tx, &admin, Target::Global, key, json!(10000))
             .await?;
     }
+    // The standalone host checks the stored instance role, not BILIBI_ENV,
+    // before allowing loopback HTTP. This explicitly disposable fixture is Dev.
+    settings
+        .put(
+            &mut tx,
+            &admin,
+            Target::Global,
+            "instance.role",
+            json!("development"),
+        )
+        .await?;
     tx.commit().await?;
     drop(client);
     let access = services.get::<AgentAccess>("core/agent_access.grants")?;

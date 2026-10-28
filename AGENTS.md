@@ -102,11 +102,21 @@ they govern this code and are not copied here.
   of another type once the type changes, `Draft::reconcile` in
   `ledger/src/web/accounts.rs`) and offer only eligible choices, instead of a
   hint beside an option the ledger will refuse.
-- Name an account for a person name-first: `view::account_label` ("Cash ·
-  1000") for a select option or a sentence, `account_name` (`ledger/src/web/mod.rs`,
-  the code in muted italics) for HTML a page controls; never `code name`. A
-  `Choice` is plain text, so a select or `Combobox` option cannot carry the
-  muted code (a Platform follow-up), and no page styles its own option.
+- Offer an account as a choice with `bilibi_ui::Combobox` over
+  `view::account_choice` (`ledger/src/web/view.rs`; `Account::choice` in
+  Receivables, `Choice::new(name, id).detail(code)` elsewhere), never a native
+  select over `view::account_label` text: the box and list draw the name first
+  and the code muted and italic, and typing searches both. Keep
+  `view::account_label` ("Cash · 1000") for a sentence and `account_name`
+  (`ledger/src/web/mod.rs`) for HTML a page controls; never `code name`. An
+  inline editor passes the combobox as `InlineChoice`'s editor with an id of
+  `...-input` (the wrapper owns `...-editor`). Platform gaps: the combobox draws
+  no required mark (it sets `required` on its input only), so a required one
+  carries a trailing `*` in its `label` with the plain name as `aria_label`
+  (a stopgap until the Platform's Combobox draws the shared required marker),
+  and the filter
+  toolbar has no combobox, so the Journal entries account filter is a shared
+  `Form` on the `filters` event around one.
 - Declare every page or panel service's write events in its `PageWrites`
   (Bilibi `apps/base/agent_api/README.md`): the host refuses, as
   `Error::Internal` at run time, a live-event write its service has not
@@ -131,6 +141,7 @@ they govern this code and are not copied here.
 - Show a money amount with the book's minor units through `Money::display` (`ledger/src/money.rs`), never `Money`/`Decimal` `to_string`: it groups thousands and keeps the book's decimal places. Keep `Money::shown` for editable, ungrouped values; a bare `Decimal` (a unit price, a report total) goes through `Money::display_decimal`, never a formatter of a page's own.
 - Agent writes join the shared plan's audited transaction through the ledger's private `*_on` methods, never the pool-owning public wrappers: nested commits would escape plan rollback. Preview on the handed `OperationClient`; retain the transaction-local review fence because the pinned engine previews every step before executing any.
 
+- Correct a submitted manual journal with `Ledger::replace_journal` (or `withdraw_journal` to only take it back), never `reject_journal` then `submit_journal` or an edit: only its submitter can, and it withdraws the journal and submits the correction in one transaction, so a refusal leaves it waiting and an approval racing it can never post the old content. The link is in `finance_ledger_journal_replacements`, not a column, because the journal and event evidence field lists are frozen. A page prefills its dialog from the journal's contract read (`?correct={id}`, `ledger/src/web/journals.rs`).
 - Post an entry only through `Ledger::post_entry` and read it through
   `get_entry`/`list_entries`; never insert into or select from
   `finance_ledger_entries`/`_entry_lines` from a sibling. Pass `owner` for an

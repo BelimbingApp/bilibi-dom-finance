@@ -110,9 +110,53 @@ async fn main() -> Outcome<()> {
     bilibi_extensions::link();
     let db = pool(&std::env::var("DATABASE_URL")?)?;
     bilibi_database::migrate(&db, &bilibi_module_registry::discover()?).await?;
-    let app = bilibi_web::App::new(db.clone(), "http://127.0.0.1:4324")?;
+    let origin = std::env::var("APP_ORIGIN").unwrap_or_else(|_| "http://127.0.0.1:4324".into());
+    let app = bilibi_web::App::new(db.clone(), &origin)?;
     bilibi_finance_walkthrough_fixture::without_step_up(&app.services)?;
     let services = &app.services;
+    // Steering must not reinstall fixtures: install also restores their
+    // original roles, which would contaminate the restricted-role proof.
+    let grants = services.get::<Grants>("base/authz.grants")?;
+    if let Some(mode) = std::env::args().nth(1).filter(|s| {
+        [
+            "deny-source",
+            "restore-source",
+            "deny-journals",
+            "restore-journals",
+            "deny-ledger",
+            "restore-ledger",
+        ]
+        .contains(&s.as_str())
+    }) {
+        let admin = sign_in(&db, services, 1, 4).await?;
+        let c = db.get().await?;
+        if c.query_opt(
+            "SELECT id FROM users WHERE tenant_id=1 AND id=2 AND email='viewer@example.test'",
+            &[],
+        )
+        .await?
+        .is_none()
+        {
+            return Err(Error::Invalid.into());
+        }
+        drop(c);
+        grants
+            .set_direct(
+                &admin,
+                if mode.ends_with("source") { 1 } else { 2 },
+                if mode.ends_with("journals") {
+                    bilibi_finance_ledger::SUBMIT_JOURNALS
+                } else if mode.ends_with("ledger") {
+                    bilibi_finance_ledger::VIEW
+                } else {
+                    bilibi_finance_einvoice::VIEW
+                },
+                mode.starts_with("deny-").then_some(false),
+            )
+            .await?;
+        println!("Browser source-grant steering applied: {mode}");
+        return Ok(());
+    }
     let installed = install(&db, services).await?;
     let manager = sign_in(&db, services, 1, 1).await?;
     let admin = sign_in(&db, services, 1, 4).await?;
@@ -121,21 +165,6 @@ async fn main() -> Outcome<()> {
     let ledger = services.get::<Ledger>(bilibi_finance_ledger::SERVICE)?;
     let reports = services.get::<Reports>(bilibi_finance_reports::SERVICE)?;
     let grants = services.get::<Grants>("base/authz.grants")?;
-    if let Some(mode) = std::env::args()
-        .nth(1)
-        .filter(|s| s == "deny-source" || s == "restore-source")
-    {
-        grants
-            .set_direct(
-                &admin,
-                1,
-                bilibi_finance_einvoice::VIEW,
-                (mode == "deny-source").then_some(false),
-            )
-            .await?;
-        println!("Browser source-grant steering applied: {mode}");
-        return Ok(());
-    }
     let root = std::env::var("AUDITOR_PACK_PROOF_DIR")?;
     std::fs::create_dir_all(&root)?;
     std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))?;
@@ -146,10 +175,10 @@ async fn main() -> Outcome<()> {
         .export_auditor_pack(&manager, COMPANY, date(2026, 3, 31))
         .await
     {
-        Err(ReportsError::Artifact("policy")) => {
-            println!("Unconfigured artifact retention refused")
+        Err(ReportsError::Artifact("policy" | "unsafe_root")) => {
+            println!("Unconfigured private artifact storage refused")
         }
-        other => panic!("Expected unconfigured retention, received {other:?}"),
+        other => panic!("Expected unconfigured private storage, received {other:?}"),
     }
     configure_storage(&db, services, &admin, &storage).await?;
     let debit = installed
@@ -435,10 +464,23 @@ async fn main() -> Outcome<()> {
                 .await,
             Err(Error::Forbidden)
         ));
-        assert!(reports
+        let mandatory =
+            [bilibi_finance_reports::EXPORT, bilibi_finance_ledger::VIEW].contains(&cap);
+        let generated = reports
             .export_auditor_pack(&manager, COMPANY, date(2026, 3, 31))
-            .await
-            .is_err());
+            .await;
+        if mandatory {
+            assert!(generated.is_err());
+        } else {
+            let scoped = generated?;
+            assert_eq!(scoped.reference.kind, "ledger-pack");
+            let pack = reports
+                .read_auditor_pack(&manager, COMPANY, &scoped.id)
+                .await?;
+            let (manifest, files) = inspect(&pack.bytes)?;
+            assert_eq!(manifest["coverage"], "ledger-and-reports");
+            assert!(!files.contains_key("payroll-posting_event.csv"));
+        }
         let body = state
             .update(LiveRequest {
                 scope: &manager,
@@ -446,18 +488,22 @@ async fn main() -> Outcome<()> {
                 input: LiveInput::Event(&event),
             })
             .await?;
-        // Bilimbi's page asks for the export grant first and answers its own
-        // denial; a missing source grant gets the auditor-access sentence.
+        // The mandatory export/ledger grants still refuse; a source denial
+        // produces a clearly labelled ledger pack, never a partial ledger.
         assert!(body
             .html
             .contains(if cap == bilibi_finance_reports::EXPORT {
                 "You do not have permission for that action."
+            } else if mandatory {
+                "You do not have permission to export this company’s ledger."
             } else {
-                "Auditor packs require read access to every Finance module."
+                "Payroll and other source records are excluded"
             }));
         grants.set_direct(&admin, 1, cap, None).await?;
     }
-    println!("Every revoked source grant/export blocks facade, download and already-mounted page");
+    println!(
+        "Revocation blocks stored full packs; a new ledger-only pack omits all source evidence"
+    );
     setting(&db, services, &admin, "artifacts.max_bytes", json!(1)).await?;
     assert!(matches!(
         reports
@@ -473,11 +519,19 @@ async fn main() -> Outcome<()> {
         json!(10_485_760),
     )
     .await?;
+    bilibi_finance_walkthrough_fixture::external_accountant::run(
+        &db,
+        services,
+        &root,
+        &artifact.id,
+    )
+    .await?;
     if std::env::args().any(|v| v == "serve") {
-        println!(
-            "Serving http://127.0.0.1:4324; manager@example.test with the walkthrough password"
-        );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:4324").await?;
+        println!("Serving {origin}; manager@example.test reviews; viewer@example.test and staff@example.test prepare journals with the walkthrough password");
+        let listener = tokio::net::TcpListener::bind(
+            std::env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:4324".into()),
+        )
+        .await?;
         axum::serve(listener, bilibi_web::router(app)).await?;
     }
     Ok(())

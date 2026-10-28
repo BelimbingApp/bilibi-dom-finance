@@ -77,7 +77,7 @@ pub enum PayrollError {
     InvalidOption,
     #[error("Invalid input")]
     Invalid(Vec<FieldError>),
-    #[error("It failed: {0}.")]
+    #[error("The action could not be completed: {0}.")]
     AttemptFailed(String),
     #[error(transparent)]
     Ledger(#[from] LedgerError),

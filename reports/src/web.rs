@@ -291,8 +291,13 @@ impl State {
             };
             self.flash = Some(match result {
                 Ok(artifact) => {
+                    let message = if artifact.reference.kind == "ledger-pack" {
+                        "Ledger pack generated. Payroll and other source records are excluded. Posted payroll journals are included."
+                    } else {
+                        "Auditor pack generated."
+                    };
                     self.auditor_pack = Some(artifact.id);
-                    (StatusKind::Success, "Auditor pack generated.".into())
+                    (StatusKind::Success, message.into())
                 }
                 Err(error) => (
                     StatusKind::Error,

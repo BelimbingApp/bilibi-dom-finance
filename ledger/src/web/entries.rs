@@ -19,9 +19,9 @@ use bilibi_tenancy::Scope;
 use bilibi_ui::{
     list_state::FILTERS_FORM,
     page::{LiveBody, LiveFuture, LiveInput, LiveRequest, LiveState},
-    params, Badge, BadgeKind, BuiltinColumn, Button, Card, Cell, Choice, ColumnsOutcome,
-    EmptyState, Field, Filter, FilterToolbar, FlexRow, FlexTable, Header, Html, InputKind,
-    ListColumns, ListSpec, ListState, PageVariant, RecordLink, TableEmpty, ToolbarControl,
+    params, Badge, BadgeKind, BuiltinColumn, Button, Card, Cell, Choice, ColumnsOutcome, Combobox,
+    EmptyState, Field, Filter, FlexRow, FlexTable, Form, Header, Html, InputKind, ListColumns,
+    ListSpec, ListState, PageVariant, RecordLink, TableEmpty,
 };
 use jiff::{civil::Date, Timestamp};
 use rust_decimal::Decimal;
@@ -313,19 +313,25 @@ impl Entries {
         options.extend(
             view::by_name(chart.iter())
                 .iter()
-                .map(|a| Choice::new(view::account_label(a), a.id.to_string())),
+                .map(|a| view::account_choice(a)),
         );
-        let mut toolbar = FilterToolbar::new(
-            "ledger-entries-filters",
-            vec![ToolbarControl::select(
-                "ledger-entries-account",
-                "account",
-                "Account",
-                &form["account"],
-                options,
-            )],
-        );
-        toolbar.class = "mb-0 min-w-0 flex-1";
+        // The shared filter toolbar has no combobox, so the account filter is
+        // the same `filters` form around one (Platform follow-up).
+        let toolbar = Form {
+            id: "ledger-entries-filters",
+            event: "filters",
+            change: true,
+            class: "mb-0 min-w-0 flex-1",
+            body: render(
+                Combobox::new("ledger-entries-account", format!("{FILTERS_FORM}[account]"))
+                    .label("Account")
+                    .placeholder("All accounts")
+                    .wrapper_class("mb-0")
+                    .value(&form["account"])
+                    .options(options),
+            )?,
+            actions: Html::EMPTY,
+        };
         let mut clear = Html::EMPTY;
         let period = if self.window.is_all() && !self.filter.is_open() {
             let mut options = vec![Choice::new("All dates", ALL_DATES)];

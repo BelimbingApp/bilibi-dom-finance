@@ -1105,6 +1105,281 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
             .map(|list| list.iter().map(|x| x.exception_number).collect::<Vec<_>>()),
     );
 
+    println!("\n== Withdrawing and replacing a submitted journal");
+    let typo = ledger
+        .submit_journal(
+            &manager,
+            COMPANY,
+            &pair(date(2026, 6, 10), "Ofice rent", rent, bank, "21.00"),
+        )
+        .await?;
+    println!("manager submits {}", journal(&typo));
+    show(
+        "admin withdraws the manager's journal (not its submitter)",
+        ledger
+            .withdraw_journal(&admin, COMPANY, typo.id, None)
+            .await
+            .map(|j| journal(&j)),
+    );
+    show(
+        "contractor (staff: no journals.submit) withdraws it",
+        ledger
+            .withdraw_journal(&contractor, COMPANY, typo.id, None)
+            .await
+            .map(|j| journal(&j)),
+    );
+    show(
+        "viewer replaces it (no journals.submit)",
+        ledger
+            .replace_journal(
+                &viewer,
+                COMPANY,
+                typo.id,
+                &pair(date(2026, 6, 10), "Office rent", rent, bank, "21.00"),
+                None,
+            )
+            .await
+            .map(|j| journal(&j)),
+    );
+    show(
+        "manager replaces it with an unbalanced journal: refused, the journal keeps waiting",
+        ledger
+            .replace_journal(
+                &manager,
+                COMPANY,
+                typo.id,
+                &NewEntry {
+                    lines: vec![
+                        NewLine::debit(rent, money("21.00")),
+                        NewLine::credit(bank, money("20.00")),
+                    ],
+                    ..pair(date(2026, 6, 10), "Office rent", rent, bank, "21.00")
+                },
+                None,
+            )
+            .await
+            .map(|j| journal(&j)),
+    );
+    show(
+        "manager replaces it onto deactivated account 7600: refused, the journal keeps waiting",
+        ledger
+            .replace_journal(
+                &manager,
+                COMPANY,
+                typo.id,
+                &pair(date(2026, 6, 10), "Office rent", retired, bank, "21.00"),
+                None,
+            )
+            .await
+            .map(|j| journal(&j)),
+    );
+    show(
+        "manager replaces it with a too-long reason: refused",
+        ledger
+            .replace_journal(
+                &manager,
+                COMPANY,
+                typo.id,
+                &pair(date(2026, 6, 10), "Office rent", rent, bank, "21.00"),
+                Some(&"x".repeat(501)),
+            )
+            .await
+            .map(|j| journal(&j)),
+    );
+    show(
+        "the journal after the refusals",
+        ledger
+            .get_journal(&manager, COMPANY, typo.id)
+            .await
+            .map(|j| journal(&j)),
+    );
+    let corrected = ledger
+        .replace_journal(
+            &manager,
+            COMPANY,
+            typo.id,
+            &pair(date(2026, 6, 10), "Office rent", rent, bank, "21.00"),
+            Some("Misspelled description"),
+        )
+        .await?;
+    println!(
+        "manager replaces it with a corrected journal: {} replaces={:?}",
+        journal(&corrected),
+        corrected.replaces_journal_id
+    );
+    show(
+        "the withdrawn journal, still on record with its lines and who withdrew it",
+        ledger
+            .get_journal(&viewer, COMPANY, typo.id)
+            .await
+            .map(|j| (journal(&j), j.replaced_by_journal_id, j.replaces_journal_id)),
+    );
+    show(
+        "admin approves the withdrawn journal",
+        ledger
+            .approve_journal(&admin, COMPANY, typo.id)
+            .await
+            .map(|j| journal(&j)),
+    );
+    show(
+        "manager withdraws it again",
+        ledger
+            .withdraw_journal(&manager, COMPANY, typo.id, None)
+            .await
+            .map(|j| journal(&j)),
+    );
+    let posted: i64 = client
+        .query_one(
+            "SELECT count(*) FROM finance_ledger_entries WHERE company_id = $1 AND description = 'Ofice rent'",
+            &[&COMPANY],
+        )
+        .await?
+        .get(0);
+    println!("entries posted from the withdrawn journal's description: {posted}");
+    show(
+        "the withdrawn journals",
+        ledger
+            .list_journals(
+                &viewer,
+                COMPANY,
+                &JournalQuery {
+                    status: Some(JournalStatus::Withdrawn),
+                    ..JournalQuery::default()
+                },
+            )
+            .await
+            .map(|list| list.iter().map(journal).collect::<Vec<_>>()),
+    );
+    show(
+        "admin approves the corrected journal: it needs its own approval and posts now",
+        ledger
+            .approve_journal(&admin, COMPANY, corrected.id)
+            .await
+            .map(|j| journal(&j)),
+    );
+    show(
+        "manager withdraws the approved journal",
+        ledger
+            .withdraw_journal(&manager, COMPANY, corrected.id, None)
+            .await
+            .map(|j| journal(&j)),
+    );
+    // Approval against withdrawal, and against replacement, at the same instant:
+    // the company lock lets exactly one decide, and the loser sees the journal
+    // is no longer waiting, so a withdrawn journal can never post stale content.
+    for (label, replace, approve_first) in [
+        ("withdrawal", false, true),
+        ("withdrawal", false, false),
+        ("replacement", true, true),
+        ("replacement", true, false),
+    ] {
+        let name = format!("Raced {label} {}", if approve_first { "a" } else { "b" });
+        let racing = ledger
+            .submit_journal(
+                &manager,
+                COMPANY,
+                &pair(date(2026, 6, 11), &name, rent, bank, "2.00"),
+            )
+            .await?;
+        let fixed = pair(
+            date(2026, 6, 11),
+            &format!("{name} fixed"),
+            rent,
+            bank,
+            "2.00",
+        );
+        let approve = ledger.approve_journal(&admin, COMPANY, racing.id);
+        let correct = async {
+            if replace {
+                ledger
+                    .replace_journal(&manager, COMPANY, racing.id, &fixed, None)
+                    .await
+            } else {
+                ledger
+                    .withdraw_journal(&manager, COMPANY, racing.id, None)
+                    .await
+            }
+        };
+        let (approval, correction) = if approve_first {
+            tokio::join!(approve, correct)
+        } else {
+            let (correction, approval) = tokio::join!(correct, approve);
+            (approval, correction)
+        };
+        let settled = ledger.get_journal(&manager, COMPANY, racing.id).await?;
+        println!(
+            "approval against {label} (approval asked {}): approval {}, {label} {}; the journal is {} with entry {:?}",
+            if approve_first { "first" } else { "second" },
+            approval.as_ref().map_or_else(|e| format!("refused ({e})"), |_| "won".into()),
+            correction.as_ref().map_or_else(|e| format!("refused ({e})"), |_| "won".into()),
+            settled.status.as_str(),
+            settled.decision.as_ref().and_then(|d| d.entry_id),
+        );
+        assert!(
+            approval.is_ok() != correction.is_ok(),
+            "exactly one decides"
+        );
+        let stale: i64 = client
+            .query_one(
+                "SELECT count(*) FROM finance_ledger_entries WHERE company_id = $1 AND description = $2",
+                &[&COMPANY, &name],
+            )
+            .await?
+            .get(0);
+        println!(
+            "entries posted from the raced journal: {stale} ({})",
+            if (settled.status == JournalStatus::Approved) == (stale == 1) {
+                "consistent"
+            } else {
+                "INCONSISTENT"
+            }
+        );
+    }
+    let loose = ledger
+        .submit_journal(
+            &manager,
+            COMPANY,
+            &pair(date(2026, 6, 12), "Never withdrawn", rent, bank, "3.00"),
+        )
+        .await?;
+    let later = ledger
+        .submit_journal(
+            &manager,
+            COMPANY,
+            &pair(date(2026, 6, 12), "Not a correction", rent, bank, "3.00"),
+        )
+        .await?;
+    let (loose_id, later_id) = (loose.id, later.id);
+    raw(
+        &client,
+        "a withdrawal recorded by someone other than the submitter",
+        "INSERT INTO finance_ledger_journal_events(tenant_id,company_id,journal_id,event,actor_user_id,occurred_at) \
+         SELECT 1,1,id,'withdrawn',4,now() FROM finance_ledger_journals \
+         WHERE company_id = 1 AND submitted_by_user_id = 1 AND id NOT IN (SELECT journal_id FROM finance_ledger_journal_events) LIMIT 1",
+    )
+    .await;
+    raw(
+        &client,
+        "a replacement link for a journal that was not withdrawn",
+        &format!(
+            "INSERT INTO finance_ledger_journal_replacements(tenant_id,company_id,journal_id,replaced_journal_id) \
+             VALUES(1,1,{later_id},{loose_id})"
+        ),
+    )
+    .await;
+    raw(
+        &client,
+        "UPDATE a replacement link",
+        "UPDATE finance_ledger_journal_replacements SET company_id = company_id",
+    )
+    .await;
+    raw(
+        &client,
+        "DELETE a replacement link",
+        "DELETE FROM finance_ledger_journal_replacements",
+    )
+    .await;
+
     println!("\n== Two sessions and an archived company");
     let raced = ledger
         .submit_journal(
@@ -1301,7 +1576,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
     let audited: Vec<(String, i64)> = client
         .query(
             "SELECT auditable_type, count(*) FROM base_audit_mutations WHERE auditable_type IN \
-             ('finance.ledger.journal','finance.ledger.journal_line','finance.ledger.journal_event',\
+             ('finance.ledger.journal','finance.ledger.journal_line','finance.ledger.journal_event','finance.ledger.journal_replacement',\
               'finance.ledger.duty_separation_change','finance.ledger.approval_exception',\
               'finance.ledger.approval_exception_review') GROUP BY 1 ORDER BY 1",
             &[],

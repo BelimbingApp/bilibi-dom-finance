@@ -1,13 +1,15 @@
 //! One manual journal, read-only. While it waits, someone with the approval
-//! permission approves it (and it posts) or rejects it with a reason. The
-//! ledger refuses the person who submitted it when the company separates duties.
+//! permission approves it (and it posts) or rejects it with a reason, and the
+//! person who submitted it corrects it (the list page's dialog, prefilled) or
+//! withdraws it. The ledger refuses the person who submitted it when the
+//! company separates duties.
 use super::{
     dialog_actions, error_text, event_type, figure, instant,
     journals::{status_badge, INDEX},
-    no_company, render, shell, unavailable, view, who, Announce, EntryLink, Failure, Flash, Pages,
-    Read, Refusal, Review,
+    no_company, opening, render, shell, unavailable, view, who, Announce, EntryLink, Failure,
+    Flash, JournalLink, Pages, Read, Refusal, Review,
 };
-use crate::APPROVE_JOURNALS;
+use crate::{APPROVE_JOURNALS, SUBMIT_JOURNALS};
 use bilibi_database::{Error, Result};
 use bilibi_tenancy::Scope;
 use bilibi_ui::{
@@ -19,12 +21,53 @@ use bilibi_ui::{
 use rust_decimal::Decimal;
 use serde_json::json;
 
+/// A dialog that takes one reason: to reject a journal (required) or to
+/// withdraw one (optional).
 #[derive(Default)]
-struct Rejecting {
+struct Reasoning {
     reason: String,
     refusal: Refusal,
     notice: String,
 }
+
+/// What differs between the two reason dialogs.
+struct ReasonDialog {
+    /// The form's name, which prefixes its fields' ids.
+    form: &'static str,
+    required: bool,
+    hint: &'static str,
+    /// The events the buttons raise.
+    cancel: &'static str,
+    confirm: &'static str,
+    validate: &'static str,
+    variant: ButtonVariant,
+    label: &'static str,
+    working: &'static str,
+}
+
+const REJECT: ReasonDialog = ReasonDialog {
+    form: "reject",
+    required: true,
+    hint: "Up to 500 characters. The submitter sees it and can submit a corrected journal.",
+    cancel: "close_reject",
+    confirm: "reject",
+    validate: "validate",
+    variant: ButtonVariant::Danger,
+    label: "Reject journal",
+    working: "Rejecting…",
+};
+
+const WITHDRAW: ReasonDialog = ReasonDialog {
+    form: "withdraw",
+    required: false,
+    hint: "Optional. Up to 500 characters. Kept with the withdrawn journal.",
+    cancel: "close_withdraw",
+    confirm: "withdraw",
+    validate: "validate_withdraw",
+    variant: ButtonVariant::Primary,
+    label: "Withdraw journal",
+    working: "Withdrawing…",
+};
 
 pub(super) struct Journal {
     pages: Pages,
@@ -32,7 +75,8 @@ pub(super) struct Journal {
     flash: Flash,
     lines: Option<ListColumns>,
     approving: Option<Review>,
-    rejecting: Option<Rejecting>,
+    rejecting: Option<Reasoning>,
+    withdrawing: Option<Reasoning>,
 }
 
 impl Journal {
@@ -44,6 +88,7 @@ impl Journal {
             lines: None,
             approving: None,
             rejecting: None,
+            withdrawing: None,
         }
     }
 
@@ -118,22 +163,65 @@ impl Journal {
         let chart = self.pages.chart(scope).await?.unwrap_or_default();
         let display = self.pages.display(scope).await?;
         let can_decide = self.pages.allowed(scope, APPROVE_JOURNALS).await?;
+        let can_submit = self.pages.allowed(scope, SUBMIT_JOURNALS).await?;
         let waiting = journal.status == "submitted";
         let mine = scope.user() == journal.submitted_by_user_id;
+        let can_correct = waiting && mine && can_submit;
+        let can_restart = mine
+            && can_submit
+            && matches!(journal.status.as_str(), "rejected" | "withdrawn")
+            && journal.replaced_by_journal_id.is_none();
 
         let mut content = Html::EMPTY;
         if waiting && mine {
+            let approval = if required {
+                "Someone else must approve it before it posts."
+            } else if can_decide {
+                "Approval is required before it posts. Self-approval is permitted under the company policy and records an approval exception."
+            } else {
+                "Approval is required before it posts. An authorized person may approve their own work; this records an approval exception."
+            };
             content.push(&render(Alert {
                 id: "ledger-journal-own",
                 kind: StatusKind::Info,
                 class: "mb-3",
-                body: Html::text(if required {
-                    "You submitted this journal. Someone else must approve it before it posts."
-                } else if can_decide {
-                    "You submitted this journal. Approval is required before it posts. Self-approval is permitted under the company policy and records an approval exception."
+                body: Html::text(&if can_correct {
+                    format!("You submitted this journal. {approval} To change it, use Correct: this journal is withdrawn and stays on record, and the corrected journal needs its own approval.")
                 } else {
-                    "You submitted this journal. Approval is required before it posts. An authorized person may approve their own work; this records an approval exception."
+                    format!("You submitted this journal. {approval}")
                 }),
+            })?);
+        } else if waiting && can_decide {
+            content.push(&render(Alert {
+                id: "ledger-journal-review-note",
+                kind: StatusKind::Info,
+                class: "mb-3",
+                body: Html::text("Nothing posts until the journal is approved. To ask for a change, reject it with a reason: the submitter can then start a corrected journal from it, which needs its own approval."),
+            })?);
+        } else if journal.replaced_by_journal_id.is_some() {
+            content.push(&render(Alert {
+                id: "ledger-journal-replaced-note",
+                kind: StatusKind::Info,
+                class: "mb-3",
+                body: Html::text("This journal was withdrawn and nothing posted from it. The corrected journal is linked under Replaced by."),
+            })?);
+        } else if journal.status == "withdrawn" {
+            content.push(&render(Alert {
+                id: "ledger-journal-withdrawn-note",
+                kind: StatusKind::Info,
+                class: "mb-3",
+                body: Html::text(if can_restart {
+                    "This journal was withdrawn and nothing posted from it. Start again from it to submit a corrected journal."
+                } else {
+                    "This journal was withdrawn and nothing posted from it."
+                }),
+            })?);
+        } else if journal.status == "rejected" && can_restart {
+            content.push(&render(Alert {
+                id: "ledger-journal-rejected-note",
+                kind: StatusKind::Info,
+                class: "mb-3",
+                body: Html::text("This journal was rejected and nothing posted from it. Start again from it to submit a corrected journal; it needs its own approval."),
             })?);
         }
         let total: Decimal = journal.lines.iter().map(|l| view::decimal(&l.debit)).sum();
@@ -193,19 +281,19 @@ impl Journal {
         ];
         if let Some(decision) = &journal.decision {
             facts.push(Fact {
-                title: if decision.event == "approved" {
-                    "Approved by"
-                } else {
-                    "Rejected by"
+                title: match decision.event.as_str() {
+                    "approved" => "Approved by",
+                    "withdrawn" => "Withdrawn by",
+                    _ => "Rejected by",
                 },
                 id: "ledger-journal-decided-by",
                 value: Html::text(&who(decision.actor_user_id, decision.actor_impersonator_id)),
             });
             facts.push(Fact {
-                title: if decision.event == "approved" {
-                    "Approved"
-                } else {
-                    "Rejected"
+                title: match decision.event.as_str() {
+                    "approved" => "Approved",
+                    "withdrawn" => "Withdrawn",
+                    _ => "Rejected",
                 },
                 id: "ledger-journal-decided-at",
                 value: instant(
@@ -231,6 +319,31 @@ impl Journal {
                     })?,
                 });
             }
+        }
+        if let (Some(old), Some(number)) =
+            (journal.replaces_journal_id, journal.replaces_journal_number)
+        {
+            facts.push(Fact {
+                title: "Replaces",
+                id: "ledger-journal-replaces",
+                value: render(JournalLink {
+                    id: old,
+                    label: &format!("Journal {number}, withdrawn"),
+                })?,
+            });
+        }
+        if let (Some(new), Some(number)) = (
+            journal.replaced_by_journal_id,
+            journal.replaced_by_journal_number,
+        ) {
+            facts.push(Fact {
+                title: "Replaced by",
+                id: "ledger-journal-replaced-by",
+                value: render(JournalLink {
+                    id: new,
+                    label: &format!("Journal {number}"),
+                })?,
+            });
         }
         let mut head = render(SectionHeading {
             id: "ledger-journal-heading",
@@ -348,6 +461,37 @@ impl Journal {
                 ..Button::default()
             })?);
         }
+        if can_correct {
+            actions.push(&render(Button {
+                id: "ledger-journal-correct",
+                href: &if journal.opening {
+                    format!("{}?correct={}", opening::INDEX, journal.id)
+                } else {
+                    format!("{INDEX}?correct={}", journal.id)
+                },
+                body: Html::text("Correct"),
+                ..Button::default()
+            })?);
+            actions.push(&render(Button {
+                id: "ledger-journal-withdraw",
+                button_type: "button",
+                event: "open_withdraw",
+                body: Html::text("Withdraw"),
+                ..Button::default()
+            })?);
+        }
+        if can_restart {
+            actions.push(&render(Button {
+                id: "ledger-journal-restart",
+                href: &if journal.opening {
+                    opening::INDEX.to_owned()
+                } else {
+                    format!("{INDEX}?copy={}", journal.id)
+                },
+                body: Html::text("Start again from this journal"),
+                ..Button::default()
+            })?);
+        }
         actions.push(&render(BackLink {
             href: INDEX,
             id: "ledger-journal-back",
@@ -389,7 +533,17 @@ impl Journal {
                 title: "Reject journal",
                 cancel_event: "close_reject",
                 description: "Nothing posts. The journal stays on record with your reason.",
-                body: self.reject_form(rejecting)?,
+                body: self.reason_form(&REJECT, rejecting)?,
+                ..Modal::default()
+            })?);
+        }
+        if let Some(withdrawing) = &self.withdrawing {
+            page.push(&render(Modal {
+                id: "ledger-journal-withdraw-modal",
+                title: "Withdraw journal",
+                cancel_event: "close_withdraw",
+                description: "Nothing posts and the journal can no longer be approved. It stays on record with your name and the time. To change it, correct it instead.",
+                body: self.reason_form(&WITHDRAW, withdrawing)?,
                 ..Modal::default()
             })?);
         }
@@ -405,56 +559,58 @@ impl Journal {
         })
     }
 
-    fn reject_form(&self, rejecting: &Rejecting) -> Result<Html> {
-        let errors: Vec<String> = rejecting
+    fn reason_form(&self, dialog: &ReasonDialog, state: &Reasoning) -> Result<Html> {
+        let form = dialog.form;
+        let errors: Vec<String> = state
             .refusal
             .field("reason")
             .iter()
             .map(|m| error_text("reason", m))
             .collect();
         let mut body = Html::EMPTY;
-        let mut messages = rejecting.refusal.alert(&["reason"]);
-        if !rejecting.notice.is_empty() {
-            messages.push(rejecting.notice.clone());
+        let mut messages = state.refusal.alert(&["reason"]);
+        if !state.notice.is_empty() {
+            messages.push(state.notice.clone());
         }
         if !messages.is_empty() {
             body.push(&render(Alert {
-                id: "ledger-journal-reject-notice",
+                id: &format!("ledger-journal-{form}-notice"),
                 kind: StatusKind::Error,
                 class: "mb-3",
                 body: Html::text(&messages.join(" ")),
             })?);
         }
-        body.push(&render(
-            Field::in_form("reject", "reason")
-                .id("ledger-reject-reason")
-                .label("Reason")
-                .kind(InputKind::Textarea)
-                .value(&rejecting.reason)
-                .required()
-                .hint("Up to 500 characters.")
-                .errors(errors)
-                .attr("data-debounce", "300"),
-        )?);
+        let mut field = Field::in_form(form, "reason")
+            .id(format!("ledger-{form}-reason"))
+            .label("Reason")
+            .kind(InputKind::Textarea)
+            .value(&state.reason)
+            .hint(dialog.hint)
+            .errors(errors)
+            .attr("data-debounce", "300");
+        if dialog.required {
+            field = field.required();
+        }
+        body.push(&render(field)?);
         let mut actions = render(Button {
-            id: "ledger-reject-cancel",
+            id: &format!("ledger-{form}-cancel"),
             button_type: "button",
-            event: "close_reject",
+            event: dialog.cancel,
             body: Html::text("Cancel"),
             ..Button::default()
         })?;
         actions.push(&render(Button {
-            id: "ledger-reject-submit",
+            id: &format!("ledger-{form}-submit"),
             button_type: "button",
-            event: "reject",
-            variant: ButtonVariant::Danger,
-            working: "Rejecting…",
-            body: Html::text("Reject journal"),
+            event: dialog.confirm,
+            variant: dialog.variant,
+            working: dialog.working,
+            body: Html::text(dialog.label),
             ..Button::default()
         })?);
         render(Form {
-            id: "ledger-reject-form",
-            event: "validate",
+            id: &format!("ledger-{form}-form"),
+            event: dialog.validate,
             change: true,
             class: "mt-4",
             body,
@@ -501,6 +657,39 @@ impl Journal {
         Ok(())
     }
 
+    async fn withdraw(&mut self, r: &LiveRequest<'_, Scope>) -> Result<()> {
+        let Some(withdrawing) = &mut self.withdrawing else {
+            return Ok(());
+        };
+        let mut input = json!({"journal_id": self.id});
+        if !withdrawing.reason.trim().is_empty() {
+            input["reason"] = json!(withdrawing.reason.trim());
+        }
+        match self
+            .pages
+            .submit(
+                r.scope,
+                r.credential,
+                "withdraw",
+                "finance.ledger.journal.withdraw",
+                input,
+            )
+            .await?
+        {
+            Ok(_) => {
+                self.withdrawing = None;
+                self.flash
+                    .success("The journal is withdrawn. Nothing was posted.");
+            }
+            Err(Failure::Refused(refusal)) => {
+                withdrawing.refusal = refusal;
+                withdrawing.notice.clear();
+            }
+            Err(failure) => withdrawing.notice = failure.text("The withdrawal"),
+        }
+        Ok(())
+    }
+
     async fn reject(&mut self, r: &LiveRequest<'_, Scope>) -> Result<()> {
         let Some(rejecting) = &mut self.rejecting else {
             return Ok(());
@@ -539,8 +728,21 @@ impl LiveState<Scope, Error> for Journal {
                     "ask_approve" => self.ask_approve(&r).await?,
                     "cancel_approve" => self.approving = None,
                     "approve" => self.approve(&r).await?,
-                    "open_reject" => self.rejecting = Some(Rejecting::default()),
+                    "open_reject" => self.rejecting = Some(Reasoning::default()),
                     "close_reject" => self.rejecting = None,
+                    "open_withdraw" => self.withdrawing = Some(Reasoning::default()),
+                    "close_withdraw" => self.withdrawing = None,
+                    "validate_withdraw" => {
+                        if let Some(withdrawing) = &mut self.withdrawing {
+                            withdrawing.reason = params::form_values(value, "withdraw")
+                                .get("reason")
+                                .cloned()
+                                .unwrap_or_default();
+                            withdrawing.refusal = Refusal::default();
+                            withdrawing.notice.clear();
+                        }
+                    }
+                    "withdraw" => self.withdraw(&r).await?,
                     "validate" => {
                         if let Some(rejecting) = &mut self.rejecting {
                             rejecting.reason = params::form_values(value, "reject")

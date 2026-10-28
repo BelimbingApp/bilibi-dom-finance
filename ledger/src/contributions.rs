@@ -73,6 +73,10 @@ inventory::submit! { Contribution::new(VOCABULARY, "finance/ledger", provenance!
     roles: &[RoleDefinition {
         code: "tenant_owner", name: "Tenant Owner", description: "Contributed system role; reconciled explicitly",
         grant_all: false, capabilities: &CAPABILITIES,
+    }, RoleDefinition {
+        code: "external_accountant", name: "External accountant",
+        description: "Read the company ledger and reports, export accounting records and submit adjusting journals for approval.",
+        grant_all: false, capabilities: &[VIEW, SUBMIT_JOURNALS],
     }],
     system_principals: &[],
 }) }

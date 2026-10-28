@@ -23,7 +23,10 @@ pub(crate) fn refusal(error: AttachmentError) -> Result<String, Error> {
         E::ReasonRequired => "Give a reason.".into(),
         E::RetentionNotLengthened => "Retention is only ever lengthened.".into(),
         E::RetentionNotExtended => {
-            "The new retain-until must be later than the current one.".into()
+            "The new retention date must be later than the current one.".into()
+        }
+        E::RetentionOutOfRange => {
+            "The retention date must be in the future, and no more than 200 years away.".into()
         }
         E::SourceUnavailable => "The module that owns this record is not mounted.".into(),
         E::InvalidSource => "That kind of record cannot take attachments.".into(),
@@ -39,7 +42,6 @@ pub(crate) fn refusal(error: AttachmentError) -> Result<String, Error> {
         // Bilimbi `"The action was refused: #{inspect(other)}."`: the atom.
         E::CaptureMismatch => "The action was refused: :capture_mismatch.".into(),
         E::DocumentNotFinal => "The action was refused: :document_not_final.".into(),
-        E::RetentionOutOfRange => "The action was refused: :invalid_retention.".into(),
         E::AlreadyOnHold => "The action was refused: :already_on_hold.".into(),
         E::NotOnHold => "The action was refused: :not_on_hold.".into(),
         E::InvalidOption => "The action was refused: :invalid_option.".into(),

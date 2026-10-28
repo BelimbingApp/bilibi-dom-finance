@@ -476,8 +476,8 @@ fn message(error: &PayrollError) -> String {
             errors
                 .iter()
                 .map(|e| match e.line {
-                    Some(n) => format!("lines[{n}].{} {}", e.field, e.message),
-                    None => format!("{} {}", e.field, e.message),
+                    Some(n) => format!("lines[{n}].{} {}", e.field.replace('_', " "), e.message),
+                    None => format!("{} {}", e.field.replace('_', " "), e.message),
                 })
                 .collect::<Vec<_>>()
                 .join("; ")

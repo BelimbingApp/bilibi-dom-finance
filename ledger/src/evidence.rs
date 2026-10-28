@@ -216,6 +216,17 @@ const DATASETS: &[(&str, &str, &[&str])] = &[
         ],
     ),
     (
+        "journal_replacement",
+        "finance_ledger_journal_replacements",
+        &[
+            "id",
+            "tenant_id",
+            "company_id",
+            "journal_id",
+            "replaced_journal_id",
+        ],
+    ),
+    (
         "late_recording_review",
         "finance_ledger_late_recording_reviews",
         &[
@@ -242,6 +253,18 @@ const DATASETS: &[(&str, &str, &[&str])] = &[
             "debit",
             "credit",
             "description",
+        ],
+    ),
+    (
+        "opening_balances",
+        "finance_ledger_opening_balances",
+        &[
+            "id",
+            "tenant_id",
+            "company_id",
+            "source_reference",
+            "source_csv",
+            "journal_id",
         ],
     ),
     (

@@ -194,10 +194,10 @@ pub enum AttachmentError {
     AttachmentNotStanding,
     #[error("Retention can only be lengthened")]
     RetentionNotLengthened,
-    #[error("The retain-until date must be later than the current one")]
+    #[error("The retention date must be later than the current one")]
     RetentionNotExtended,
     /// Base Artifacts refuses a retain-until in the past or over 200 years away.
-    #[error("The retain-until date is out of range")]
+    #[error("The retention date is out of range")]
     RetentionOutOfRange,
     #[error("The attachment is already on legal hold")]
     AlreadyOnHold,

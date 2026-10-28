@@ -31,6 +31,50 @@ pub(crate) async fn authorize_sources(
     Ok(())
 }
 
+/// Coverage is persisted in the artifact reference, so losing a source grant
+/// can never turn an existing full pack into a downloadable ledger-only pack.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Coverage {
+    Ledger,
+    All,
+}
+impl Coverage {
+    pub(crate) fn kind(self) -> &'static str {
+        match self {
+            Self::Ledger => "ledger-pack",
+            Self::All => "auditor-pack",
+        }
+    }
+
+    pub(crate) async fn select(
+        client: &dyn ProofClient,
+        scope: &Scope,
+        company: OrganisationId,
+    ) -> Result<Self, Error> {
+        Directory.target(client, scope, company, VIEW).await?;
+        match authorize_sources(client, scope, company).await {
+            Ok(()) => Ok(Self::All),
+            Err(Error::Forbidden) => Ok(Self::Ledger),
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn authorize(
+        self,
+        client: &dyn ProofClient,
+        scope: &Scope,
+        company: OrganisationId,
+    ) -> Result<(), Error> {
+        match self {
+            Self::Ledger => Directory
+                .target(client, scope, company, VIEW)
+                .await
+                .map(|_| ()),
+            Self::All => authorize_sources(client, scope, company).await,
+        }
+    }
+}
+
 impl Owner for ArtifactOwner {
     fn owner_id(&self) -> &'static str {
         MODULE
@@ -46,7 +90,8 @@ impl Owner for ArtifactOwner {
         Box::pin(async move {
             if operation != Operation::Purge
                 && !reference.is_some_and(|r| {
-                    r.kind == "auditor-pack" && uuid::Uuid::parse_str(&r.subject).is_ok()
+                    matches!(r.kind.as_str(), "auditor-pack" | "ledger-pack")
+                        && uuid::Uuid::parse_str(&r.subject).is_ok()
                 })
             {
                 return Err(Error::Forbidden);
@@ -64,7 +109,12 @@ impl Owner for ArtifactOwner {
                 return Err(Error::Forbidden);
             }
             if exporting {
-                authorize_sources(client, scope, company).await?;
+                let coverage = match reference.map(|r| r.kind.as_str()) {
+                    Some("ledger-pack") => Coverage::Ledger,
+                    Some("auditor-pack") => Coverage::All,
+                    _ => return Err(Error::Forbidden),
+                };
+                coverage.authorize(client, scope, company).await?;
             }
             Ok(())
         })
