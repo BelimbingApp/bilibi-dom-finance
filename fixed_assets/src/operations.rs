@@ -52,7 +52,7 @@ fn schema(required: &[&str], properties: Value) -> Value {
         .extend(properties.as_object().expect("object").clone());
     let mut fields = vec!["company_id"];
     fields.extend(required);
-    json!({"type":"object","required":fields,"properties":props,"additionalProperties":false})
+    json!({"type":"object","required":fields,"properties":props})
 }
 fn category_schema() -> Value {
     schema(
@@ -67,10 +67,10 @@ fn category_schema() -> Value {
             "reason",
         ],
         json!({
-            "name":{"type":"string","minLength":1,"maxLength":200,"description":"Required for a new category; omitted when revising."},
+            "name":{"type":"string","maxLength":200,"description":"Required for a new category; omitted when revising."},
             "category_id":{"type":"integer","minimum":1,"description":"Omit to create; provide to append a revision. Existing asset assumptions remain frozen."},
             "cost_account_id":{"type":"integer","minimum":1},"accumulated_account_id":{"type":"integer","minimum":1},"expense_account_id":{"type":"integer","minimum":1},"gain_account_id":{"type":"integer","minimum":1},"loss_account_id":{"type":"integer","minimum":1},
-            "method":{"type":"string","enum":["straight_line","reducing_balance"]},"life_months":{"type":"integer","minimum":1,"maximum":1200},"annual_rate":{"type":["string","null"],"description":"Annual percentage for reducing balance; cleared for straight line."},"reason":{"type":"string","minLength":1,"maxLength":500}
+            "method":{"type":"string","enum":["straight_line","reducing_balance"]},"life_months":{"type":"integer","minimum":1,"maximum":1200},"annual_rate":{"type":"string","description":"Annual percentage for reducing balance; cleared for straight line."},"reason":{"type":"string","maxLength":500}
         }),
     )
 }
@@ -95,7 +95,7 @@ fn run_schema() -> Value {
 fn event_schema() -> Value {
     schema(
         &["asset_id", "effective_date", "reason"],
-        json!({"asset_id":{"type":"integer","minimum":1},"effective_date":{"type":"string","format":"date"},"reason":{"type":"string","minLength":1,"maxLength":500}}),
+        json!({"asset_id":{"type":"integer","minimum":1},"effective_date":{"type":"string","format":"date"},"reason":{"type":"string","maxLength":500}}),
     )
 }
 fn reverse_run_schema() -> Value {
@@ -109,7 +109,7 @@ fn reverse_run_schema() -> Value {
 fn disposal_schema() -> Value {
     let mut s = event_schema();
     s["properties"]["proceeds"] = json!({"type":"string","description":"Nonnegative amount in the book's minor units; zero for a write-off."});
-    s["properties"]["settlement_account_id"] = json!({"type":["integer","null"],"minimum":1,"description":"Active postable asset account, required for positive proceeds."});
+    s["properties"]["settlement_account_id"] = json!({"type":"integer","minimum":1,"description":"Active postable asset account, required for positive proceeds."});
     s["required"]
         .as_array_mut()
         .expect("array")
@@ -126,7 +126,7 @@ fn acquisition_schema() -> Value {
             "description",
             "in_service_date",
         ],
-        json!({"source":{"type":"string","enum":["entry","bill"]},"source_id":{"type":"integer","minimum":1},"line_number":{"type":"integer","minimum":1,"maximum":2147483647},"category_revision_id":{"type":"integer","minimum":1},"description":{"type":"string","minLength":1,"maxLength":500},"in_service_date":{"type":"string","format":"date"},"residual_value":{"type":["string","null"]},"method":{"type":["string","null"],"enum":["straight_line","reducing_balance",null]},"life_months":{"type":["integer","null"],"minimum":1,"maximum":1200},"annual_rate":{"type":["string","null"]}}),
+        json!({"source":{"type":"string","enum":["entry","bill"]},"source_id":{"type":"integer","minimum":1},"line_number":{"type":"integer","minimum":1,"maximum":2147483647},"category_revision_id":{"type":"integer","minimum":1},"description":{"type":"string","maxLength":500},"in_service_date":{"type":"string","format":"date"},"residual_value":{"type":"string"},"method":{"type":"string","enum":["straight_line","reducing_balance"]},"life_months":{"type":"integer","minimum":1,"maximum":1200},"annual_rate":{"type":"string"}}),
     )
 }
 fn output() -> Value {

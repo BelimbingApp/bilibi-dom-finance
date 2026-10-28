@@ -381,9 +381,10 @@ impl Pages {
         &self,
         s: &Scope,
         key: &str,
-        input: serde_json::Value,
+        mut input: serde_json::Value,
         field: &str,
     ) -> crate::Result<T> {
+        omit_empty(&mut input);
         let result = self
             .contracts
             .read(s, key, &input)
@@ -401,6 +402,7 @@ impl Pages {
         mut input: serde_json::Value,
     ) -> crate::Result<serde_json::Value> {
         input["company_id"] = company(s).ok_or(FixedAssetsError::CompanyNotFound)?.into();
+        omit_empty(&mut input);
         let result = self
             .contracts
             .submit(&self.call(s, credential, event, contract), input)
@@ -538,5 +540,11 @@ impl Operation<'_> {
             actions,
             ..Default::default()
         })
+    }
+}
+
+fn omit_empty(input: &mut serde_json::Value) {
+    if let Some(fields) = input.as_object_mut() {
+        fields.retain(|_, value| !value.is_null());
     }
 }

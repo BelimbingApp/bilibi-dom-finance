@@ -123,8 +123,8 @@ they govern this code and are not copied here.
   `Error::Internal` at run time, a live-event write its service has not
   declared, and the build does not catch it. Payables' pages write
   through contracts (`Pages::write`, `payables/src/web/mod.rs`), except approving
-  match exceptions, a listed `Pending` allowance; the other
-  existing pages keep a `Pending::Every` allowance with its reason beside
+  match exceptions, a listed `Pending` allowance; pages still using
+  facade writes keep a `Pending::Every` allowance with its reason beside
   their routes, and a new write event calls its operation contract through
   `PageContracts` where one exists.
 - Build a page on contracts, not the facade: use `Pages::read`, `read_all` and `write` in `receivables/src/web/mod.rs` (they go through `PageContracts` and unwrap the envelope), and name each write event's contract in `PAGE_WRITES` with `Pending::None`. A read with no contract gets a contract in the owning module (`aging.get`), not a facade call from the page.
