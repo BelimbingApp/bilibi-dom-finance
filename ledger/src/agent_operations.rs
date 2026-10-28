@@ -1227,7 +1227,7 @@ fn group_change_schema() -> Value {
 fn template_schema() -> Value {
     schema(
         &["template"],
-        json!({"template":string(100),"sections":{"type":"array","items":string(100),"maxItems":20}}),
+        json!({"template":string(100),"sections":{"type":"array","items":string(100)}}),
     )
 }
 fn change_schema() -> Value {
