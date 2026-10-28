@@ -229,6 +229,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     wrong = input.clone();
     wrong["offset_account_id"] = json!(control);
     assert!(ar.submit_write_off(&manager, 1, &wrong).await.is_err());
+    wrong["offset_account_id"] = json!(bank);
+    assert!(matches!(
+        ar.submit_write_off(&manager, 1, &wrong).await,
+        Err(ReceivableError::Invalid(_))
+    ));
     wrong = input.clone();
     wrong["entry_date"] = json!("2025-10-01");
     assert!(ar.submit_write_off(&manager, 1, &wrong).await.is_err());

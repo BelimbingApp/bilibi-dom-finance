@@ -155,13 +155,15 @@ pub(super) async fn eligible_offsets(
         .list_accounts_on(client, scope, company)
         .await?;
     let rows=client.query("SELECT receivable_account_id FROM finance_receivables_documents WHERE tenant_id=$1 AND company_id=$2 AND receivable_account_id IS NOT NULL UNION SELECT receivable_account_id FROM finance_receivables_setups WHERE tenant_id=$1 AND company_id=$2",&[&scope.tenant(),&company]).await?;
-    let controls: Vec<i64> = rows.iter().map(|r| r.get(0)).collect();
+    let mut barred: Vec<i64> = rows.iter().map(|r| r.get(0)).collect();
+    let deposits = client.query("SELECT DISTINCT deposit_account_id FROM finance_receivables_payments WHERE tenant_id=$1 AND company_id=$2",&[&scope.tenant(),&company]).await?;
+    barred.extend(deposits.iter().map(|r| r.get::<_, i64>(0)));
     Ok(chart
         .into_iter()
         .filter(|a| {
             a.active
                 && matches!(a.account_type.as_str(), "asset" | "expense")
-                && !controls.contains(&a.id)
+                && !barred.contains(&a.id)
         })
         .collect())
 }
@@ -216,7 +218,7 @@ async fn validate(
         .iter()
         .any(|a| a.id == offset)
     {
-        return Err(invalid("offset_account_id","must be an active allowance asset or bad-debt expense account distinct from every receivables control"));
+        return Err(invalid("offset_account_id","must be an active allowance asset or bad-debt expense account, not a receivables control or an account receipts are paid into (a bank or cash account)"));
     }
     let mut data = v::merge(
         None,

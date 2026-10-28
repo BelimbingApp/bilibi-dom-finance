@@ -4,7 +4,7 @@ use crate::{Document, APPROVE_WRITE_OFFS, SUBMIT_WRITE_OFFS};
 use bilibi_database::{Error, Result};
 use bilibi_tenancy::Scope;
 use bilibi_ui::{
-    params, Alert, Button, ButtonVariant, Card, Cell, Choice, Facts, Field, FlexRow, Fold, Form,
+    params, Alert, Attrs, Button, ButtonVariant, Card, Cell, Combobox, Facts, Field, FlexRow, Fold, Form,
     Html, InputKind, ListColumns, ModalWidth, SectionHeading, StatusKind,
 };
 use serde_json::{json, Value};
@@ -272,18 +272,30 @@ impl Journals {
                 .value(d.values.get(*key).cloned().unwrap_or_default())
                 .required()
                 .errors(d.errors.under(key, label));
+            if *key == "offset_account_id" {
+                body.push(&render(
+                    Combobox::new(field.id.clone(), field.name.clone())
+                        .label(format!("{label} *"))
+                        .aria_label(*label)
+                        .value(field.value.clone())
+                        .placeholder("Search accounts")
+                        .options(
+                            accounts
+                                .iter()
+                                .filter(|a| self.eligible.contains(&a.id))
+                                .map(Account::choice)
+                                .collect(),
+                        )
+                        .errors(field.errors.clone())
+                        .attrs(Attrs {
+                            required: true,
+                            ..Attrs::default()
+                        }),
+                )?);
+                continue;
+            }
             field = match *key {
                 "entry_date" | "reversal_date" => field.kind(InputKind::Date),
-                "offset_account_id" => field
-                    .kind(InputKind::Select)
-                    .prompt("Choose an account")
-                    .options(
-                        accounts
-                            .iter()
-                            .filter(|a| self.eligible.contains(&a.id))
-                            .map(|a| Choice::new(a.choice_label(), a.id.to_string()))
-                            .collect(),
-                    ),
                 "reason" | "evidence" => field.kind(InputKind::Textarea).attr("maxlength", "500"),
                 _ => field.attr("inputmode", "decimal"),
             };

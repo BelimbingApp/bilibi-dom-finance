@@ -65,6 +65,7 @@ expense = next(a["id"] for a in accounts if a["code"] == "BD-expense")
 documents = read("document.list", kind="invoice", status="issued")["records"]
 invoice = next(d for d in documents if d["description"] == "Browser and MCP proposal")
 require(all(a["id"] != invoice["receivable_account_id"] for a in accounts), "control offered as an offset")
+require(all(a["code"] != "1000" for a in accounts), "receipt deposit account offered as an offset")
 initial = invoice["outstanding"]
 proposal = dict(document_id=invoice["id"], entry_date="2026-10-28", amount="10",
                 offset_account_id=expense, reason="MCP specimen collection assessment",
