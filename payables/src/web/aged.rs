@@ -121,7 +121,7 @@ impl Aged {
             .await;
         let aged = answer.and_then(|v| {
             serde_json::from_value::<AgedPayables>(v["result"].clone())
-                .map_err(|_| bilibi_agent_api::Error::Internal)
+                .map_err(|_| bilibi_agent_api::Error::from(Error::Internal))
         });
         match aged {
             Ok(aged) => {
