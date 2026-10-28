@@ -169,6 +169,10 @@ impl Opening {
         }
         if let Some(review) = &self.review {
             let facts = &review.facts;
+            let units = facts["minor_units"]
+                .as_u64()
+                .and_then(|v| u8::try_from(v).ok())
+                .ok_or(Error::Internal)?;
             let records = facts["rows"].as_array().ok_or(Error::Internal)?;
             let mut rows = Vec::new();
             for (i, row) in records.iter().enumerate() {
@@ -183,8 +187,14 @@ impl Opening {
                                 code: text("account_code"),
                             })?,
                         )
-                        .cell("debit", Cell::text(text("debit")))
-                        .cell("credit", Cell::text(text("credit"))),
+                        .cell(
+                            "debit",
+                            Cell::text(super::view::amount(text("debit"), units)),
+                        )
+                        .cell(
+                            "credit",
+                            Cell::text(super::view::amount(text("credit"), units)),
+                        ),
                 );
             }
             let mut table = FlexTable::new("opening-rows", self.columns.flex_columns(), rows);
@@ -200,8 +210,8 @@ impl Opening {
                     facts["conversion_date"].as_str().unwrap_or(""),
                     facts["currency_code"].as_str().unwrap_or(""),
                     facts["source_reference"].as_str().unwrap_or(""),
-                    facts["debit"].as_str().unwrap_or(""),
-                    facts["credit"].as_str().unwrap_or(""),
+                    super::view::amount(facts["debit"].as_str().unwrap_or(""), units),
+                    super::view::amount(facts["credit"].as_str().unwrap_or(""), units),
                     if facts["existing_journal"].is_null() {
                         "Submission posts nothing. Separate journal approval is required."
                     } else {

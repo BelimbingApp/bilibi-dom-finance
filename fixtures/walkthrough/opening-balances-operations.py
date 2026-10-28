@@ -5,6 +5,7 @@ Every mutation goes through the real wire edge; SQL observes its effects.
 Tokens and plan codes never appear in output. See the ledger README.
 """
 import json
+from decimal import Decimal
 import os
 import subprocess
 import urllib.error
@@ -124,7 +125,7 @@ require(preview.get("valid") is True, "opening preview failed")
 require(sql("SELECT count(*) FROM finance_ledger_opening_balances") == "0", "preview wrote source evidence")
 require(read(channel, "trial_balance.get", company, as_of="2026-07-01")["through_entry_number"] == 0, "preview posted")
 facts = preview["results"][0]["preview"]["result"]["changes"]
-require(len(facts["rows"]) == 6 and facts["debit"] == "15,000.00" and facts["credit"] == "15,000.00", "review omitted mapped source totals")
+require(len(facts["rows"]) == 6 and Decimal(facts["debit"]) == Decimal("15000") == Decimal(facts["credit"]), "review omitted mapped source totals")
 
 # All steps are previewed before any execute. Two opening submissions cannot
 # silently reuse the first's generated journal: stale review rolls both back.
@@ -133,7 +134,10 @@ review = plan(channel, double)
 require(review.get("valid") is True, "independent initial previews")
 require(commit(channel, double, review).get("error") == "stale_plan", "dependent duplicate did not roll back")
 require(sql("SELECT count(*) FROM finance_ledger_opening_balances") == "0", "plan rollback left evidence")
-journal = write(channel, "opening_balances.submit", company, **source)
+committed = commit(channel, ops, preview)
+require("results" in committed, "reviewed opening commit failed")
+journal = committed["results"][0]["result"]["result"]["record"]
+require(commit(channel, ops, preview).get("error") == "plan_already_used", "consumed plan was replayed")
 require(read(channel, "trial_balance.get", company, as_of="2026-07-01")["through_entry_number"] == 0, "submission posted")
 retry = write(channel, "opening_balances.submit", company, **source)
 require(retry["id"] == journal["id"], "retry duplicated journal")
@@ -144,7 +148,6 @@ posted = write(channel, "journal.approve", company, "approver", journal_id=journ
 entry_id = posted["decision"]["entry_id"]
 trial = read(channel, "trial_balance.get", company, as_of="2026-07-01")
 expected = {"1000": ("10000", "0"), "1100": ("3000", "0"), "5000": ("2000", "0"), "2000": ("0", "1500"), "3000": ("0", "8000"), "4000": ("0", "5500")}
-from decimal import Decimal
 for row in trial["rows"]:
     code = row["code"]
     require((Decimal(row["debit_balance"]), Decimal(row["credit_balance"])) == tuple(map(Decimal, expected[code])), "account does not reconcile: " + code)

@@ -126,7 +126,7 @@ pub(crate) async fn prepare(
         });
         mapped.push(json!({"source_id":source_id,"account_id":account.id,
             "account_code":account.code,"account_name":account.name,
-            "debit":debit.display(book.minor_units),"credit":credit.display(book.minor_units)}));
+            "debit":debit,"credit":credit}));
     }
     let entry = NewEntry {
         entry_date: source.conversion_date,
@@ -186,12 +186,11 @@ pub(crate) async fn prepare(
         })?;
         None
     };
-    let debit: rust_decimal::Decimal = entry.lines.iter().map(|l| l.debit.amount()).sum();
-    let credit: rust_decimal::Decimal = entry.lines.iter().map(|l| l.credit.amount()).sum();
+    let debit: Money = entry.lines.iter().map(|l| l.debit).sum();
+    let credit: Money = entry.lines.iter().map(|l| l.credit).sum();
     let review = json!({"conversion_date":source.conversion_date.to_string(),
-        "currency_code":book.currency_code,"source_reference":reference,"rows":mapped,
-        "debit":Money::display_decimal(debit, book.minor_units),
-        "credit":Money::display_decimal(credit, book.minor_units),
+        "currency_code":book.currency_code,"minor_units":book.minor_units,"source_reference":reference,"rows":mapped,
+        "debit":debit,"credit":credit,
         "existing_journal":existing,"posts":false,
         "excluded":"Open invoices and bills, asset registers, bank reconciliation items, tax return detail and historical transactions are not migrated. Control-account balances will remain differences until domain-owned opening items are supported. Income and expense balances appear on the conversion date; review the YTD reporting bridge with the accountant."});
     Ok(Prepared {
