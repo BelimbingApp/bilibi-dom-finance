@@ -300,7 +300,14 @@ impl Aging {
                             d.document_reference.as_deref().unwrap_or("Invoice"),
                         )?,
                     )
-                    .cell("customer", Cell::text(&c.name))
+                    .cell(
+                        "customer",
+                        Cell::text(&if d.party_name == c.name {
+                            c.name.clone()
+                        } else {
+                            format!("{} (invoiced as {})", c.name, d.party_name)
+                        }),
+                    )
                     .cell("due", Cell::text(&d.due_date))
                     .slot("late", f::tabular(&d.days_overdue.to_string())?)
                     .cell(

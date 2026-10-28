@@ -293,17 +293,29 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
             },
         )
         .await?;
+    let find = |r: &bilibi_finance_receivables::AgedReceivables| {
+        r.customers
+            .iter()
+            .find(|c| c.customer_id == customer.id)
+            .cloned()
+            .unwrap()
+    };
+    let (aged_before, aged) = (find(&before_rename), find(&after_rename));
+    assert_eq!(aged_before.name, first.party_name.as_deref().unwrap());
+    assert_eq!(aged.name, "R2 later party");
+    assert_eq!(aged.code, aged_before.code);
+    assert_eq!(aged.total, aged_before.total);
+    assert_eq!(aged.bucket_totals, aged_before.bucket_totals);
+    assert_eq!(after_rename.total, before_rename.total);
     assert_eq!(
-        serde_json::to_vec(&before_rename)?,
-        serde_json::to_vec(&after_rename)?
+        after_rename.through_entry_number,
+        before_rename.through_entry_number
     );
-    let aged = after_rename
-        .customers
+    assert_eq!(aged.documents.len(), aged_before.documents.len());
+    assert!(aged
+        .documents
         .iter()
-        .find(|c| c.customer_id == customer.id)
-        .unwrap();
-    assert_eq!(aged.name, first.party_name.as_deref().unwrap());
-    assert_eq!(aged.documents[0].party_name, aged.name);
+        .all(|d| d.party_name == first.party_name.as_deref().unwrap()));
     // Attachment labels are capture snapshots; a new capture reads the final source label.
     let final_scan = attachments
         .attach(&admin, 1, source, first.id, &file)
