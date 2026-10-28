@@ -86,8 +86,8 @@ pub(super) struct Chooser {
     candidates: Vec<Candidate>,
     likely: bool,
     reason: String,
-    /// The company this dialog created; a later refusal keeps it chosen so
-    /// trying again links to it instead of creating it twice.
+    /// The company this dialog created and still has chosen, for the page's
+    /// warning that it exists while the customer was not added.
     pub created: Option<i64>,
 }
 
@@ -135,6 +135,7 @@ impl Chooser {
     pub(super) fn read(&mut self, form: &HashMap<String, String>) -> bool {
         if let Some(mode) = form.get("company_mode") {
             self.mode = if mode == "new" {
+                self.created = None;
                 Mode::New
             } else {
                 Mode::Existing
@@ -190,6 +191,7 @@ impl Chooser {
 
     pub(super) fn clear(&mut self) {
         self.selected = None;
+        self.created = None;
         self.hits.clear();
         self.query.clear();
     }
@@ -340,9 +342,6 @@ impl Chooser {
         credential: &str,
         event: &str,
     ) -> Result<Chosen> {
-        if let Some(created) = self.created {
-            return Ok(Chosen::Company(created));
-        }
         match self.mode {
             Mode::Existing => Ok(match &self.selected {
                 Some(selected) => match selected.id.parse::<i64>() {
