@@ -56,6 +56,7 @@ inventory::submit! { Module {
         ("finance-payables-002-payments", include_str!("../migrations/002-payments.sql")),
         ("finance-payables-003-matching", include_str!("../migrations/003-matching.sql")),
         ("finance-payables-004-vendors", include_str!("../migrations/004-vendors.sql")),
+        ("finance-payables-005-vendor-company-scope", include_str!("../migrations/005-vendor-company-scope.sql")),
     ],
     services: &[Service { id: SERVICE, factory: |s| { let payables = Arc::new(Payables {
         db: s.get::<Db>("base/database.pool")?.as_ref().clone(),

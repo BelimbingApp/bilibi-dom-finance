@@ -186,7 +186,6 @@ impl Vendors {
                 "Vendors",
             )?,
             actions,
-            ..Header::default()
         })?;
         if let Some((kind, message)) = &self.notice {
             body.push(&render(Alert {

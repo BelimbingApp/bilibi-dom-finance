@@ -33,7 +33,7 @@ All keys below start with `finance.payables.` and take `company_id`.
 | `bill.create`, `bill.replace_draft` | `vendor_id` replaces all former party input fields |
 | `payment.submit` | `vendor_id`, allocations and payment fields; `supplier_key` may identify an unmatched historical group |
 
-Vendor settings and historical matches require `finance.payables.settings.manage`; reads require `finance.payables.view`. Company finding, creation, facts and relationships use Core's own permissions. Migration `finance-payables-004-vendors` adds the master and mapping tables without rewriting existing records. Evidence adds the `vendor` and `vendor_key` datasets with explicit field lists.
+Vendor settings and historical matches require `finance.payables.settings.manage`; reads require `finance.payables.view`. Company finding, creation, facts and relationships use Core's own permissions. Migration `finance-payables-004-vendors` adds the master and mapping tables without rewriting existing records. `finance-payables-005-vendor-company-scope` keeps vendor registration independent of opening a book, as customer registration is. Evidence adds the `vendor` and `vendor_key` datasets with explicit field lists.
 
 Run the linked-vendor proof on a disposable database with `cargo run -p bilibi-finance-walkthrough-fixture --bin vendors`. Set `VENDORS_UI=1`, `APP_ORIGIN` and `BIND_ADDR` to keep the same composed app running for browser proof. After the proof has populated the disposable database, `cargo run -p bilibi-finance-walkthrough-fixture --bin vendors -- serve` serves it again without rerunning the scenarios.
 

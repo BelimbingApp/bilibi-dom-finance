@@ -107,6 +107,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     )
     .await?;
+    let before_book = p
+        .create_vendor(
+            &manager,
+            2,
+            &VendorInput {
+                code: "BEFORE-BOOK".into(),
+                core_company_id: v.company.id,
+                payment_terms_days: 7,
+                payable_account_id: None,
+                expense_account_id: None,
+                tax_code_id: None,
+                active: true,
+            },
+        )
+        .await?;
+    assert_eq!(
+        p.get_vendor(&manager, 2, before_book.id)
+            .await?
+            .payment_terms_days,
+        7
+    );
+    refused(
+        p.get_vendor(&manager, 1, before_book.id).await,
+        "vendor_id",
+        "this company",
+    );
     let input = VendorInput {
         code: "VEN-A".into(),
         core_company_id: v.company.id,
