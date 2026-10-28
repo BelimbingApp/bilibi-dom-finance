@@ -400,12 +400,6 @@ impl Receivables {
         v::text(&mut data, "reference", false, 100)?;
         v::text(&mut data, "description", false, 500)?;
         v::account(&mut data, "deposit_account_id", &chart, AccountType::Asset)?;
-        if data["deposit_account_id"] == setup["receivable_account_id"] {
-            return Err(invalid(
-                "deposit_account_id",
-                "is the account that records amounts customers owe; choose the bank or cash account receipts are paid into",
-            ));
-        }
         let customer = store::find(
             client,
             CUSTOMERS,
@@ -509,13 +503,19 @@ impl Receivables {
                 "do not add up to the payment amount",
             ));
         }
+        let deposit = data["deposit_account_id"].as_i64().ok_or(Error::Internal)?;
+        if setup["receivable_account_id"].as_i64() == Some(deposit)
+            || credits.iter().any(|(control, _)| *control == deposit)
+        {
+            return Err(invalid(
+                "deposit_account_id",
+                "is an account that records amounts customers owe; choose the bank or cash account receipts are paid into",
+            ));
+        }
         let (number, reference) = next_number(client, tenant, company, &series, true).await?;
         let credits = group(credits);
         let settlement_account_ids = credits.keys().copied().collect();
-        let mut lines = vec![NewLine::debit(
-            data["deposit_account_id"].as_i64().ok_or(Error::Internal)?,
-            amount,
-        )];
+        let mut lines = vec![NewLine::debit(deposit, amount)];
         lines.extend(
             credits
                 .into_iter()

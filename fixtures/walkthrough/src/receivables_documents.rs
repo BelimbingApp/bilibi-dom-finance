@@ -239,6 +239,19 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
 
     ar.configure(&admin, 1, &json!({"receivable_account_id":control2}))
         .await?;
+    for deposit in [control1, control2] {
+        let mut refused = payment(
+            "2026-09-10",
+            "1",
+            json!([{"document_id":first.id,"amount":"1"}]),
+        );
+        refused["deposit_account_id"] = json!(deposit);
+        field(
+            ar.record_payment(&admin, 1, &refused).await,
+            "deposit_account_id",
+            "is an account that records amounts customers owe; choose the bank or cash account receipts are paid into",
+        );
+    }
     // Accounts can be deactivated only at zero. Temporarily offset the invoice
     // through the ledger, deactivate, then reverse the offset. This leaves the
     // real outstanding invoice on its inactive control without bypassing guards.
@@ -449,6 +462,12 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
     // Settle the auxiliary January invoice, keeping its distinct tax out of later windows.
     let jan_payment = ar.record_payment(&admin, 1, &closed_payment).await?;
     assert_eq!(jan_payment.payment_number, 1);
+    field(
+        ar.configure(&admin, 1, &json!({"receivable_account_id":bank}))
+            .await,
+        "receivable_account_id",
+        "is an account receipts are paid into (a bank or cash account); choose the account that records amounts customers owe",
+    );
     let baseline = ar
         .aged_receivables(&admin, 1, date(2026, 10, 6), &AgingOptions::default())
         .await?;

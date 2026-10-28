@@ -222,13 +222,17 @@ impl Settings {
     }
 
     /// The receivable account choices: the active asset accounts, without
-    /// those receipts have been recorded as paid into (a bank or cash account);
-    /// `setup.configure` refuses them too, which covers receipts not read here.
+    /// those receipts have been recorded as paid into (a bank or cash account),
+    /// except the one already saved; `setup.configure` refuses them too, which
+    /// covers receipts not read here.
     fn receivable_choices(&self) -> Vec<Choice> {
         self.accounts
             .iter()
             .filter(|a| {
-                a.active && a.account_type == "asset" && !self.receipts_into.contains(&a.id)
+                a.active
+                    && a.account_type == "asset"
+                    && (!self.receipts_into.contains(&a.id)
+                        || self.setup.as_ref().map(|s| s.receivable_account_id) == Some(a.id))
             })
             .map(|a| Choice::new(a.choice_label(), a.id.to_string()))
             .collect()
