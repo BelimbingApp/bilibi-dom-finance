@@ -46,6 +46,11 @@ bilibi_menu::contribute!(
 );
 fn field_label(key: &str) -> &str {
     match key {
+        "part" => "Batch number",
+        "part_count" => "Batch count",
+        "replaces_batch_id" => "Register to replace",
+        "reason" => "Correction reason",
+        "effective_date" => "Correction date",
         "csv" => "Source register CSV",
         "series_id" => "Opening invoice series",
         "source_reference" => "Source reference",

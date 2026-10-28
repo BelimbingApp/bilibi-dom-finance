@@ -567,7 +567,7 @@ impl FixedAssets {
             .ok_or(FixedAssetsError::NotFound)?;
         let a = store::asset(&a, units)?;
         if c.query_opt("SELECT i.id FROM finance_fixed_assets_opening_items i JOIN finance_fixed_assets_opening_decisions d ON d.replaces_batch_id=i.batch_id AND d.tenant_id=$1 AND d.company_id=$2 WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.asset_id=$3",&[&s.tenant(),&company,&id]).await?.is_some() {return Err(invalid("asset_id","belongs to a replaced opening register; use the replacement asset"));}
-        if c.query_opt("SELECT i.id FROM finance_fixed_assets_opening_items i JOIN finance_fixed_assets_opening_decisions d ON d.batch_id=i.batch_id AND d.tenant_id=$1 AND d.company_id=$2 WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.asset_id=$3 AND d.effective_date>$4::text::date",&[&s.tenant(),&company,&id,&input.event.effective_date.to_string()]).await?.is_some() {return Err(invalid("effective_date","cannot precede the register's correction date"));}
+        if c.query_opt("SELECT i.id FROM finance_fixed_assets_opening_items i JOIN finance_fixed_assets_opening_decisions d ON d.batch_id=i.batch_id AND d.tenant_id=$1 AND d.company_id=$2 WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.asset_id=$3 AND d.replaces_batch_id IS NOT NULL AND d.effective_date>$4::text::date",&[&s.tenant(),&company,&id,&input.event.effective_date.to_string()]).await?.is_some() {return Err(invalid("effective_date","cannot precede the register's correction date"));}
         let activity = Activity::load(c, s, company, units).await?;
         if activity.voided(id) {
             return Err(FixedAssetsError::AssetVoided);

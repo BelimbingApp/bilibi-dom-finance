@@ -329,7 +329,7 @@ impl Payables {
         batch: i64,
         date: jiff::civil::Date,
     ) -> Result<()> {
-        if c.query_opt("SELECT 1 FROM (SELECT r.payment_date day FROM finance_payables_payments r JOIN finance_payables_payment_allocations a ON a.payment_id=r.reverses_payment_id AND a.tenant_id=$1 AND a.company_id=$2 JOIN finance_payables_opening_items i ON i.document_id=a.document_id AND i.tenant_id=$1 AND i.company_id=$2 AND i.batch_id=$3 WHERE r.tenant_id=$1 AND r.company_id=$2 UNION ALL SELECT effective_date FROM finance_payables_opening_decisions WHERE tenant_id=$1 AND company_id=$2 AND batch_id=$3) dates WHERE day>$4::text::date LIMIT 1",&[&s.tenant(),&company,&batch,&date.to_string()]).await?.is_some() {return Err(invalid("effective_date","cannot precede a dependent reversal or the prior register's correction date"));}
+        if c.query_opt("SELECT 1 FROM (SELECT r.payment_date AS correction_date FROM finance_payables_payments r JOIN finance_payables_payment_allocations a ON a.payment_id=r.reverses_payment_id AND a.tenant_id=$1 AND a.company_id=$2 JOIN finance_payables_opening_items i ON i.document_id=a.document_id AND i.tenant_id=$1 AND i.company_id=$2 AND i.batch_id=$3 WHERE r.tenant_id=$1 AND r.company_id=$2 UNION ALL SELECT effective_date FROM finance_payables_opening_decisions WHERE tenant_id=$1 AND company_id=$2 AND batch_id=$3) dates WHERE correction_date>$4::text::date LIMIT 1",&[&s.tenant(),&company,&batch,&date.to_string()]).await?.is_some() {return Err(invalid("effective_date","cannot precede a dependent reversal or the prior register's correction date"));}
         Ok(())
     }
 }
