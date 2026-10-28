@@ -75,8 +75,7 @@ impl Receivables {
                     "SELECT EXISTS (SELECT 1 FROM finance_receivables_payments WHERE tenant_id=$1 AND company_id=$2 AND deposit_account_id=$3)",
                     &[&tenant, &company, &control],
                 )
-                .await
-                .map_err(Error::from)?[0]
+                .await?[0]
                 .get::<_, bool>(0);
         if deposit {
             return Err(crate::invalid(
