@@ -263,14 +263,23 @@ impl Reports {
                             "Fiscal years",
                             false,
                             "/finance/ledger/fiscal-years",
-                            SetupState::SetUp,
+                            if open == 0 {
+                                SetupState::Incomplete
+                            } else {
+                                SetupState::SetUp
+                            },
                             format!(
-                                "{} fiscal {}; the latest runs {} to {}. {open} open {}.",
+                                "{} fiscal {}; the latest runs {} to {}. {open} open {}.{}",
                                 years.len(),
                                 if years.len() == 1 { "year" } else { "years" },
                                 latest.start_date,
                                 latest.end_date,
-                                if open == 1 { "period" } else { "periods" }
+                                if open == 1 { "period" } else { "periods" },
+                                if open == 0 {
+                                    " No period is open, so nothing can be posted; open the next fiscal year."
+                                } else {
+                                    ""
+                                }
                             ),
                         )
                     }
