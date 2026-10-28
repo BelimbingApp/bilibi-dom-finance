@@ -10,6 +10,7 @@ mod entries;
 mod entry;
 mod journal;
 mod journals;
+mod opening;
 mod trial;
 mod view;
 mod years;
@@ -64,6 +65,11 @@ macro_rules! route {
         }) }
     };
 }
+route!(
+    "finance/ledger.opening-balances",
+    "/finance/ledger/opening-balances",
+    "opening"
+);
 route!("finance/ledger.book", "/finance/ledger/book", "book");
 route!(
     "finance/ledger.accounts",
@@ -148,6 +154,12 @@ menu!(
     "/finance/ledger/trial-balance",
     9
 );
+menu!(
+    "finance.ledger.opening-balances",
+    "Opening balances",
+    "/finance/ledger/opening-balances",
+    11
+);
 menu!("finance.ledger.book", "Book", "/finance/ledger/book", 10);
 
 // Every write these pages make is a ledger contract (ADR 01).
@@ -163,6 +175,8 @@ inventory::submit! { Contribution::new(PAGE_WRITES, PAGES, Provenance { module: 
         ("designate", "finance.ledger.account.update"),
         ("activate", "finance.ledger.account.update"),
         ("reverse", "finance.ledger.entry.reverse"),
+        ("preview_opening", "finance.ledger.opening_balances.submit"),
+        ("submit_opening", "finance.ledger.opening_balances.submit"),
         ("submit_journal", "finance.ledger.journal.submit"),
         ("ask_approve", "finance.ledger.journal.approve"),
         ("approve", "finance.ledger.journal.approve"),
@@ -533,7 +547,7 @@ fn field_label(path: &str) -> String {
 fn failure(error: ContractError) -> Result<Failure> {
     Ok(match error {
         ContractError::Backend(error @ (Error::Unauthorized | Error::StepUpRequired { .. })) => {
-            return Err(error)
+            return Err(error);
         }
         ContractError::Forbidden | ContractError::Backend(Error::Forbidden) => Failure::Denied,
         ContractError::InvalidInput(fields) => Failure::Refused(Refusal {
@@ -878,6 +892,7 @@ pub(crate) fn event_type(event: &Value) -> Result<&str> {
 impl Page<Scope, Error> for Pages {
     fn title(&self, operation: &str) -> Option<&'static str> {
         Some(match operation {
+            "opening" => "Opening balances",
             "book" => "Book",
             "accounts" => "Chart of accounts",
             "account" => "Account",
@@ -919,6 +934,7 @@ impl Pages {
     fn state(&self, r: &PageRequest<'_, Scope>) -> Result<Box<dyn LiveState<Scope, Error>>> {
         let pages = self.clone();
         Ok(match r.operation {
+            "opening" => Box::new(opening::Opening::new(pages)),
             "book" => Box::new(book::Book::new(pages)),
             "accounts" => Box::new(accounts::Accounts::new(pages, r.query, r.framed)?),
             "account" => Box::new(account::Account::new(pages, id_param(r.path)?)),

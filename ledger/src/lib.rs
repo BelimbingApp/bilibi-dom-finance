@@ -73,6 +73,8 @@ mod evidence;
 mod journals;
 mod late_recordings;
 mod money;
+mod opening;
+mod opening_csv;
 mod periods;
 mod postings;
 mod totals;
@@ -85,6 +87,7 @@ pub use contributions::{
 };
 pub use evidence::EvidencePage;
 pub use money::{MinorUnits, Money, MoneyError};
+pub use opening::OpeningBalances;
 
 use bilibi_company::WriteError;
 use bilibi_database::{Change, Db, Error, MutationBoundary, MutationTransaction};
@@ -112,6 +115,7 @@ inventory::submit! {
             ("finance-ledger-004-periods", include_str!("../migrations/004-periods.sql")),
             ("finance-ledger-005-journals", include_str!("../migrations/005-journals.sql")),
             ("finance-ledger-006-journal-withdrawal", include_str!("../migrations/006-journal-withdrawal.sql")),
+            ("finance-ledger-007-opening-balances", include_str!("../migrations/007-opening-balances.sql")),
         ],
         services: &[Service { id: SERVICE, factory: |services| {
             agent_operations::bind(services.get("base/tenancy.parties")?)?;
@@ -218,7 +222,9 @@ pub enum LedgerError {
     NotOwned,
     /// The approver prepared the record, impersonated whoever did, or was
     /// impersonated by them, while the company requires separation of duties.
-    #[error("Someone else must approve this because the company requires separation of duties, including when impersonating. For a one-person company, change Separation of duties on Approval exceptions: /finance/reports/approval-exceptions")]
+    #[error(
+        "Someone else must approve this because the company requires separation of duties, including when impersonating. For a one-person company, change Separation of duties on Approval exceptions: /finance/reports/approval-exceptions"
+    )]
     SamePerson,
     #[error("Not found")]
     ExceptionNotFound,

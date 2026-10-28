@@ -8,6 +8,7 @@
 //! 100), `reviewer@other.example.test` (the administrator, who approves the
 //! manager's journals) or `viewer@other.example.test` (view only), with the
 //! walkthrough password. Pass `empty` to stop before the book is opened.
+//! Pass `opening` for the chart and open periods with no posted entries.
 //! After seeding it drives the Journal entries page's period control through
 //! its real `LiveState` and prints one proof line.
 use bilibi_database::{pool, Error};
@@ -76,7 +77,9 @@ async fn main() -> Outcome<()> {
     );
     if unopened && !std::env::args().any(|arg| arg == "empty") {
         let (account, pin) = seed(&ledger, &manager, &reviewer).await?;
-        period_proof(services, &manager, account, pin).await?;
+        if !std::env::args().any(|arg| arg == "opening") {
+            period_proof(services, &manager, account, pin).await?;
+        }
     }
     println!(
         "Ledger fixture at {origin}: manager@other.example.test, reviewer@other.example.test, viewer@other.example.test; walkthrough password"
@@ -158,6 +161,10 @@ async fn seed(
     ledger
         .open_fiscal_year(manager, COMPANY, &NewFiscalYear::default())
         .await?;
+
+    if std::env::args().any(|arg| arg == "opening") {
+        return Ok((ids["1000"], 0));
+    }
 
     let money = |text: &str| Money::parse(text, units);
     let post = |day: Date,

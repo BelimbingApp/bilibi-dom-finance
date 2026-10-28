@@ -256,6 +256,18 @@ const DATASETS: &[(&str, &str, &[&str])] = &[
         ],
     ),
     (
+        "opening_balances",
+        "finance_ledger_opening_balances",
+        &[
+            "id",
+            "tenant_id",
+            "company_id",
+            "source_reference",
+            "source_csv",
+            "journal_id",
+        ],
+    ),
+    (
         "period",
         "finance_ledger_periods",
         &[

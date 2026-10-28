@@ -55,6 +55,7 @@ records (`Book`, `Account`, `Entry`, `FiscalYear`, `Period`, `ClosingEvent`,
 | `list_approval_exceptions`, `get_approval_exception` | `finance.ledger.view` | The exceptions log with each review; `ExceptionNotFound` |
 | `review_approval_exception` | `finance.ledger.approval-exceptions.review` | An independent reviewer's reading of one exception, optional `note` |
 | `submit_journal` | `finance.ledger.journals.submit` | Keeps a manual journal for approval (see Manual journals) |
+| `submit_opening_balances` | `finance.ledger.journals.submit` | Maps source CSV to a balanced approval journal; identical source retries return that journal (see Accounting system conversion) |
 | `approve_journal` | `finance.ledger.journals.approve` | Posts a submitted journal as an entry by its approver |
 | `reject_journal` | `finance.ledger.journals.approve` | Rejects a submitted journal with a `reason` |
 | `withdraw_journal`, `replace_journal` | `finance.ledger.journals.submit` | The submitter takes back a journal that is still waiting, or corrects it: withdraws it and submits the corrected journal in one transaction (see Manual journals) |
@@ -63,7 +64,7 @@ records (`Book`, `Account`, `Entry`, `FiscalYear`, `Period`, `ClosingEvent`,
 | `account_totals` | `finance.ledger.view` | Per-account debit and credit totals over entries dated `from` through `to`, optionally `through_entry_number` and `exclude_closing` (see Account totals) |
 | `account_totals_by_owner` | `finance.ledger.view` | The same totals, one row per account and owner module, for a control-account tie-out |
 | `evidence_page` | `finance.ledger.view` | One ID-ordered page of one of the ledger's tables for the auditor's pack (see Evidence) |
-| `Ledger::evidence_datasets` | none | The sixteen dataset names, sorted |
+| `Ledger::evidence_datasets` | none | The seventeen dataset names, sorted |
 | `Ledger::account_types`, `Ledger::late_recording_thresholds`, `Ledger::journal_statuses` | none | The five account types; the report's 45 and 60 days; `submitted`, `approved`, `rejected`, `withdrawn` |
 
 Every call authorizes the capability for the scope's actor and the target
@@ -92,11 +93,12 @@ H1 makes the facade-only writes reachable through the Platform's shared `/api/v1
 | `book.open`, `account.create`, `account.update` | Reviewed book/chart changes; account update preserves omitted fields and uses `clear_parent` to remove a grouping |
 | `journal.submit`, `journal.approve`, `journal.reject` | Submission does not post; approval posts once with separation of duties; rejection records a reason without posting |
 | `journal.withdraw`, `journal.replace` | Only the journal's submitter, while it waits: withdrawal records an optional `reason` and posts nothing; replacement takes the `journal.submit` fields plus `journal_id`, withdraws it and submits the correction, which needs its own approval |
+| `opening_balances.submit` | Reviewed CSV mapping to one opening journal; source reference and exact CSV are retained; approval is separate |
 | `entry.reverse` | Mirror a manual entry once, never an owned or closing entry |
 | `fiscal_year.open`, `fiscal_year.close`, `fiscal_year.reopen`, `fiscal_year.lock` | Open monthly periods, close with computed entry, reopen with closing reversal, or atomically lock all remaining closed periods |
 | `period.close`, `period.reopen`, `period.lock` | Existing facade ordering, reason and permanent-lock rules |
 
-The eight reads return at most `page_size` records (1–100, default 100) on list operations. The sixteen writes require shared plan preview/commit; direct calls refuse writes. Preview validates normalized/defaulted values on the caller's connection, without business mutations, and shows exact proposed entry lines, current accounts/periods and consequential designation changes. Amounts are decimal strings, never binary floats. Commit reauthorizes and joins the shared audited transaction through private facade methods; all operations and audit rows roll back together on refusal. A successful record response has `path: null`: a write commits no page path.
+The eight reads return at most `page_size` records (1–100, default 100) on list operations. The seventeen writes require shared plan preview/commit; direct calls refuse writes. Preview validates normalized/defaulted values on the caller's connection, without business mutations, and shows exact proposed entry lines, current accounts/periods and consequential designation changes. Amounts are decimal strings, never binary floats. Commit reauthorizes and joins the shared audited transaction through private facade methods; all operations and audit rows roll back together on refusal. A successful record response has `path: null`: a write commits no page path.
 
 The pinned Platform previews every step before executing any. A transaction-local FIFO of review hashes rechecks each step immediately before mutation, so earlier steps cannot silently change later reviewed facts. Dependent steps need separate plans. Same-company account edits conservatively review the full chart, so even independent account edits need separate plans. Whole-year lock composes existing period locks in date order on the same transaction; it adds no year-lock event. No operation exposes direct posting, owner/settlement bypasses or disabling controls. See [guide.md](guide.md) for consent, staleness and safe ordering.
 
@@ -129,6 +131,7 @@ The ledger has pages so a person without an AI agent can do the same daily work.
 | (account record) | `/finance/ledger/accounts/{id}` | Edits the name and group in place, deactivates or activates the account, marks the retained earnings account, reads today's balance. |
 | Journal entries | `/finance/ledger/entries` | Lists entries oldest first, 100 at a time. The shared period filter narrows by entry date; with no period, every date is listed ("All dates"). |
 | (entry record) | `/finance/ledger/entries/{id}` | Reads the lines. Reverses a manual entry in a dialog. |
+| Opening balances | `/finance/ledger/opening-balances` | Paste source closing balances, preview every mapped row and totals, then submit one journal for approval. |
 | Manual journals | `/finance/ledger/journals` | Lists journals by status. Submits one with its lines in a dialog. `?correct={id}` opens the dialog prefilled from the person's own waiting journal, and `?copy={id}` from a rejected or withdrawn one. |
 | (journal record) | `/finance/ledger/journals/{id}` | Approves it (it posts) or rejects it with a reason. The ledger refuses the person who submitted it while the company separates duties. Its submitter corrects it (Correct) or withdraws it (Withdraw) while it waits, and starts again from a rejected or withdrawn one. |
 | Fiscal years | `/finance/ledger/fiscal-years` | Opens a year after a review that names the company and shows the calculated last day. Closes, reopens and locks periods. Closes, reopens and locks a year. |
@@ -299,6 +302,67 @@ never posts. Posted entries are untouched; they are only reversed. The
 rejection route stays: an approver rejects with a reason, and the submitter
 starts a new journal from the rejected one (`?copy={id}` prefills it).
 
+## Accounting system conversion
+
+Opening balances establish the source closing trial balance in a book **without posted entries**. They do not complete an accounting system conversion: open invoices and bills, bank reconciliation items, asset registers, tax return detail and historical transactions need separate domain-owned opening operations.
+
+### Conversion date and source evidence
+
+The **conversion date is the first date Bilibi owns transaction processing**. Close the source system immediately before that date, in the company's accounting timezone, and post the opening journal on the conversion date. For example, a 1 July conversion uses the final source closing trial balance at 30 June. Agree the cut-off, accounting timezone, transactions in transit and first live posting with the accountant; avoid overlapping source and Bilibi postings.
+
+Retain the approved source trial balance, chart mapping, source system/export date, frozen backup and supporting schedules. Choose a permanent source reference for this export. The ledger retains the submitted CSV, mapped journal lines, preparer, reviewer and posting through its normal audit and evidence contracts. Retain the original reports and sign-off alongside the company's records; the CSV does not replace them.
+
+**Client-specific accounting advice:** the accountant determines the applicable reporting framework, retained earnings, mid-year income and expense treatment, comparatives, tax balances and any currency or rounding adjustments. A mid-year source trial balance must preserve the YTD income and expense position. Imported income and expense balances post on the conversion date, so that month's flows include the opening YTD amounts. Earlier months and prior-year comparatives are not reconstructed. Review the source YTD reporting bridge before relying on period reports.
+
+### Prepare and review in the UI
+
+1. Open the book with the source currency and appropriate minor units. Create the approved chart and open the fiscal year covering conversion. Complete these steps before preparing the opening journal.
+2. Open **Bookkeeping → Opening balances**. Enter the conversion date, book currency and permanent source reference. Paste the source CSV after mapping its account codes to Bilibi's existing chart.
+3. Choose **Preview opening balances**. Check every source ID, mapped account and amount against the source closing trial balance. An unmapped/inactive account, duplicate source ID, wrong currency, invalid precision or unbalanced total refuses the entire submission. No suspense line or currency conversion is added.
+4. Choose **Submit for approval**. This keeps one immutable journal and its source evidence; it posts nothing. The returned journal appears in Manual journals.
+5. An independent authorized reviewer opens that journal, chooses Approve and reviews **Approve and post**. The ordinary period, account and duty-separation controls still apply. Where separation is disabled by an authorized company decision, same-person approval records an approval exception.
+6. Read the trial balance as of conversion and record its entry-number pin. Reconcile each mapped account and debit/credit totals to the source, then retain the reviewed reconciliation report. Submission and posting are recorded states; reconciliation sign-off remains an external accountant-reviewed record in this slice.
+
+The file is UTF-8 CSV with commas, optional BOM, quoted fields and CRLF/LF/CR line endings. Use this exact header, unique source row identifiers and ungrouped positive amounts on one side of each row:
+
+```csv
+source_id,account_code,debit,credit
+source-bank,1000,10000.00,
+source-capital,3000,,10000.00
+```
+
+These example codes and currency choices belong to fixture companies, not product defaults. Replace them with the approved chart mapping. A source ID identifies one source trial-balance row, not an invoice. Multiple source rows may map to one account; reconcile their combined balance. Omit zero-balance rows. The limit is 2–500 balance rows and 128 KiB; larger conversions are not supported by this operation and must not be split into repeated opening journals.
+
+### Retry and correction
+
+Retry the same source reference, conversion date, currency and **exact CSV bytes** after a lost response. The operation returns its recorded journal, including its current decision, without another journal or entry. Whitespace/line-ending changes count as different CSV bytes. Reusing a reference for different data is refused. Another source reference is also refused while a submitted or approved opening journal exists, protecting against importing one source twice under a different name.
+
+If a submission is wrong, reject it with a reason and submit the corrected CSV with a new source reference. The rejected source remains evidence. After posting, reverse the entry through the existing reviewed reversal operation and submit an independently approved correction journal, retaining references to the original source and correction. Do not delete, overwrite or repeat the opening import. Read the balances again at a new entry-number pin after correction. Closed periods and archived companies retain their existing controls.
+
+### Prepare and review through MCP
+
+Describe `finance.ledger.opening_balances.submit` and read `book.get`, the complete paged `account.list`, `fiscal_year.list` and `trial_balance.get`. Use the same `conversion_date`, `currency_code`, `source_reference` and `csv` as the UI, plus `company_id`. Preview one plan, inspect all `changes.rows`, totals and exclusions, obtain consent and commit the exact inputs. Keep the source reference for a fresh plan if the response is lost. Plans and plan codes remain single-use; source retries are separate from replaying a consumed code.
+
+Approval uses `finance.ledger.journal.approve` in a **separate plan and review** with an eligible reviewer. Book opening, account creation, fiscal-year opening, opening submission and journal approval cannot rely on hypothetical earlier plan results. Respect the installation's plan bounds and read generated identifiers before the next dependent step. Never send database credentials or source-system passwords in CSV, descriptions or references.
+
+### Reconciliation report and unsupported opening state
+
+Retain a concise report with the conversion date/timezone, source system/export and reference, source closing trial balance, target trial balance and entry pin, account-by-account differences, journal/entry and reviewer references, unresolved exceptions and excluded history. Include the following supporting schedules where applicable:
+
+| Area | Current boundary and follow-up |
+| --- | --- |
+| Receivables and payables | Keep source document IDs, original/due dates, gross/tax amounts, currencies, prior allocations, credits and residual unpaid amounts. Partially paid items contribute their residual balances to opening controls. This operation creates no settleable or ageable documents. Their control-account tie-outs correctly show these ledger postings as differences. **Do not enter ordinary invoices or bills to recreate them:** doing so duplicates control balances and may duplicate income, expense and tax. Domain-owned opening items and settlement/aging proof remain follow-up work. |
+| Bank and cash | Reconcile the opening bank ledger balance to the source trial balance, bank statement and outstanding cheque/deposit bridge. Opening bank reconciliation items are not created here. |
+| Fixed assets | Retain source IDs, cost, accumulated depreciation, carrying values, methods, lives, residual values and depreciation through cutover. Reconcile register totals to the GL. This operation does not establish asset opening state or a depreciation continuation schedule. |
+| Tax and payroll | Reconcile source liabilities/refunds, filed/paid periods and supporting tax/payroll schedules separately. The journal creates no tax document or tax-return history. |
+| Historical/comparative reporting | Preserve the source backup, signed financial statements, prior closing trial balance and historical documents. This slice imports no historical transactions, comparative periods or original invoice issuance. |
+
+The scope follows the [28 October 2026 practitioner review on issue #57](https://github.com/BelimbingApp/bilibi-dom-finance/issues/57#issuecomment-6461498216). Complete conversion, including open-item settlement and aging through both UI and MCP, remains unsupported.
+
+### Disposable proof
+
+Run `cargo run -p bilibi-finance-walkthrough-fixture --bin opening-balances` on a fresh disposable composed database. It exercises mapping/balance/precision/currency refusals, racing retries, separate approval, six account balances, rejection and correction. `ledger-ui opening` serves a chart and open fiscal periods with no posted entries for browser proof. The existing `agent-operations` credential fixture plus `fixtures/walkthrough/opening-balances-operations.py` runs the same opening balances through MCP on a separate clean company. These proofs cover opening ledger balances only; they do not claim operational item migration.
+
 ## Posting notices
 
 `subscribe_postings` returns a `PostingSubscription` once its listening
@@ -438,13 +502,13 @@ or an option out of range is `InvalidOption`. The datasets are `account`,
 `approval_exception`, `approval_exception_review`, `book`,
 `bookkeeping_change`, `closing_event`, `duty_separation_change`, `entry`,
 `fiscal_year`, `journal`, `journal_event`, `journal_line`,
-`journal_replacement`, `late_recording_review`, `line` and `period`, with
+`journal_replacement`, `late_recording_review`, `line`, `opening_balances` and `period`, with
 Bilimbi's field lists (`src/evidence.rs`), less the entry's `legacy`. Dates are `YYYY-MM-DD`,
 instants ISO 8601 UTC with microseconds and amounts the column's exact text
 (`100.0000`). Each page is a live read on its own connection. The field lists
 are an export contract: freeze one once exported and never add a credential.
 
-## Schema (versions 001 to 006)
+## Schema (versions 001 to 007)
 
 `finance_ledger_books` (one per company; currency and minor units fixed for
 good), `finance_ledger_accounts` (code and type kept by a trigger, a
@@ -495,6 +559,10 @@ append-only `finance_ledger_journal_replacements`: a correction names the
 journal it replaces, and a deferred trigger refuses the link unless the same
 transaction withdrew that journal for the same submitter. The link is its own
 table because the journal and event evidence field lists are frozen.
+
+007 (a port addition) adds the append-only `finance_ledger_opening_balances`: the
+source reference and exact CSV of an opening-balances submission, linked to its
+ordinary approval journal, one per source reference and one per journal.
 
 ## Standards addressed
 
