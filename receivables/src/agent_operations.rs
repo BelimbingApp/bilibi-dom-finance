@@ -172,12 +172,13 @@ impl Write {
         client: &dyn OperationClient,
         scope: &Scope,
         input: &Value,
-    ) -> Result<Value> {
+    ) -> Result<(Value, Option<posting::PreparedIssue>)> {
         let service = OWNER.get().ok_or(Error::Internal)?;
         let company = id(input, "company_id")?;
         service
             .join(client, scope, company, self.capability())
             .await?;
+        let mut prepared_issue = None;
         let changes = match self {
             Self::BadDebt(action) => {
                 service
@@ -234,7 +235,9 @@ impl Write {
                     .ledger
                     .preview_post_entry_on(client, scope, company, &p.entry, &p.options)
                     .await?;
-                json!({"after":p.after,"facts":p.facts,"posting":posting})
+                let changes = json!({"after":p.after,"facts":p.facts,"posting":posting});
+                prepared_issue = Some(p);
+                changes
             }
             Self::Payment => {
                 let p = service
@@ -266,7 +269,7 @@ impl Write {
         };
         let mut review = json!({"company_id":company,"summary":self.summary(),"changes":changes});
         decimal_text(&mut review);
-        Ok(review)
+        Ok((review, prepared_issue))
     }
 }
 
@@ -359,7 +362,7 @@ impl WriteHandler for Write {
         input: &'a Value,
     ) -> OperationFuture<'a> {
         Box::pin(async move {
-            let review = self
+            let (review, _) = self
                 .review(client, scope, input)
                 .await
                 .map_err(|e| self.error(e))?;
@@ -381,7 +384,7 @@ impl WriteHandler for Write {
         Box::pin(async move {
             let service = owner()?;
             let company = id(input, "company_id").map_err(|e| self.error(e))?;
-            let review = self
+            let (review, prepared_issue) = self
                 .review(tx.sql(), scope, input)
                 .await
                 .map_err(|e| self.error(e))?;
@@ -443,7 +446,13 @@ impl WriteHandler for Write {
                     ),
                     Self::Issue => json!(
                         service
-                            .issue_document_on(tx, scope, company, id(input, "document_id")?)
+                            .issue_prepared_on(
+                                tx,
+                                scope,
+                                company,
+                                id(input, "document_id")?,
+                                prepared_issue.ok_or(Error::Internal)?
+                            )
                             .await?
                     ),
                     Self::Payment => {

@@ -307,13 +307,29 @@ impl Receivables {
         company: i64,
         id: i64,
     ) -> Result<Document> {
+        let prepared = self.prepare_issue(tx.sql(), scope, company, id).await?;
+        self.issue_prepared_on(tx, scope, company, id, prepared)
+            .await
+    }
+
+    /// Store the exact preparation bound by the transaction-local review fence.
+    /// Re-reading Core facts here could freeze a concurrent, unreviewed change.
+    pub(super) async fn issue_prepared_on(
+        &self,
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company: i64,
+        id: i64,
+        prepared: PreparedIssue,
+    ) -> Result<Document> {
+        self.join(tx.sql(), scope, company, ISSUE).await?;
         let PreparedIssue {
             before: old,
             after: mut data,
             entry,
             options,
             ..
-        } = self.prepare_issue(tx.sql(), scope, company, id).await?;
+        } = prepared;
         let tenant = scope.tenant();
         let entry = self
             .ledger

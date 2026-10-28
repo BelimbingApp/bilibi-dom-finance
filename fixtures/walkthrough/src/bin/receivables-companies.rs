@@ -393,6 +393,17 @@ async fn main() -> Outcome<()> {
     let issued = ar.issue_document(&manager, 1, fallback.id).await?;
     assert_eq!(issued.party_line1.as_deref(), Some("Primary office"));
     println!("PASS: expired billing attachment falls back to primary address");
+    let stale_draft = ar.create_draft(&manager, 1, &invoice("2026-08-31")).await?;
+    let stale_input = json!({"company_id":1,"document_id":stale_draft.id});
+    let mut review_tx = mutations
+        .begin(
+            &mut raw,
+            manager.mutation_context("walkthrough.changed-billing"),
+        )
+        .await?;
+    issue
+        .preview(review_tx.sql(), &manager, &stale_input)
+        .await?;
     addresses
         .update(
             &manager,
@@ -406,6 +417,19 @@ async fn main() -> Outcome<()> {
             },
         )
         .await?;
+    let changed = issue.commit(&mut review_tx, &manager, &stale_input).await;
+    assert!(
+        matches!(changed, Err(bilibi_agent_api::Error::StalePlan)),
+        "changed billing must require a fresh issue review"
+    );
+    review_tx.rollback().await?;
+    assert_eq!(
+        ar.get_document(&manager, 1, stale_draft.id).await?.status,
+        "draft"
+    );
+    println!(
+        "PASS: a billing address changed after preview refuses the reviewed issue without posting"
+    );
     assert_eq!(
         ar.get_document(&manager, 1, draft.id).await?.party_line1,
         frozen.party_line1
