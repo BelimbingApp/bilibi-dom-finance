@@ -113,7 +113,7 @@ pub async fn opening(db: &Db, services: &Services) -> Outcome<()> {
     }
     let waiting = std::time::Duration::from_secs(5);
     let input = json!({"company_id":COMPANY,"currency_code":"MYR","minor_units":2});
-    let mut tx = boundary
+    let tx = boundary
         .begin(
             &mut client,
             manager.mutation_context("finance.walkthrough.adopter.pool"),
