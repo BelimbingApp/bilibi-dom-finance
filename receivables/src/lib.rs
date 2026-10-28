@@ -30,9 +30,9 @@ pub use records::{
     PaymentQuery, PaymentReversal, Series, Setup, SetupChange, TaxCode, TaxLine,
 };
 pub use reports::{
-    AgedCustomer, AgedDocument, AgedReceivables, AgingBucket, AgingOptions, ControlAccountTieOut,
-    ControlAccountsTieOut, OtherPosting, ReceivedTaxOptions, ReceivedTaxTotal, TaxOptions,
-    TaxTotal,
+    AgedCustomer, AgedDocument, AgedReceivables, AgingBucket, AgingOptions, BalancePins,
+    ControlAccountTieOut, ControlAccountsTieOut, OtherPosting, ReceivedTaxOptions,
+    ReceivedTaxTotal, TaxOptions, TaxTotal,
 };
 pub use write_offs::{WriteOff, WriteOffEvent};
 

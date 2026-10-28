@@ -785,7 +785,7 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         )
         .await?;
     let tied = ar
-        .tie_out_control_accounts(&admin, 1, date(2026, 10, 7), None)
+        .tie_out_control_accounts(&admin, 1, date(2026, 10, 7), &Default::default())
         .await?;
     let one = tied
         .accounts
@@ -819,7 +819,7 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         )
         .await?;
     let restored = ar
-        .tie_out_control_accounts(&admin, 1, date(2026, 10, 8), None)
+        .tie_out_control_accounts(&admin, 1, date(2026, 10, 8), &Default::default())
         .await?;
     assert!(restored
         .accounts
@@ -912,6 +912,7 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
                 date(2026, 10, 1),
                 &AgingOptions {
                     bucket_days: buckets,
+                    through_opening_batch_id: None,
                     through_entry_number: None
                 }
             )

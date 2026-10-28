@@ -189,6 +189,37 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
     let assets = services.get::<FixedAssets>(bilibi_finance_fixed_assets::SERVICE)?;
     let trial = l.trial_balance(&s, company, date(2026, 7, 1), None).await?;
     assert_eq!(trial.total_debit.shown(trial.minor_units), "27000.00");
+    let before_ar = ar
+        .aged_receivables(
+            &s,
+            company,
+            date(2026, 7, 1),
+            &AgingOptions {
+                through_entry_number: Some(trial.through_entry_number),
+                ..Default::default()
+            },
+        )
+        .await?;
+    let before_ap = ap
+        .aged_payables(
+            &s,
+            company,
+            date(2026, 7, 1),
+            &bilibi_finance_payables::AgingQuery {
+                through_entry_number: Some(trial.through_entry_number),
+                ..Default::default()
+            },
+        )
+        .await?;
+    let before_ar_tie = ar
+        .tie_out_control_accounts(&s, company, date(2026, 7, 1), &Default::default())
+        .await?;
+    let before_ap_tie = ap
+        .tie_out_control_accounts(&s, company, date(2026, 7, 1), &Default::default())
+        .await?;
+    let before_assets = assets
+        .register_report(&s, company, date(2026, 7, 1), &Default::default())
+        .await?;
     let ar_input = json!({"source_reference":"AR-SOURCE","currency_code":"MYR","series_id":config["invoice_series"],"csv":AR});
     let ap_input = json!({"source_reference":"AP-SOURCE","currency_code":"MYR","csv":AP});
     let asset_input =
@@ -238,6 +269,58 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
             .import_opening_register(&s, company, &asset_input)
             .await?
     );
+    let reproduced_ar = ar
+        .aged_receivables(
+            &s,
+            company,
+            date(2026, 7, 1),
+            &AgingOptions {
+                through_entry_number: Some(before_ar.through_entry_number),
+                through_opening_batch_id: Some(before_ar.through_opening_batch_id),
+                ..Default::default()
+            },
+        )
+        .await?;
+    assert_eq!(
+        serde_json::to_value(&before_ar)?,
+        serde_json::to_value(&reproduced_ar)?
+    );
+    let reproduced_ap = ap
+        .aged_payables(
+            &s,
+            company,
+            date(2026, 7, 1),
+            &bilibi_finance_payables::AgingQuery {
+                through_entry_number: Some(before_ap.through_entry_number),
+                through_opening_batch_id: Some(before_ap.through_opening_batch_id),
+                ..Default::default()
+            },
+        )
+        .await?;
+    assert_eq!(
+        serde_json::to_value(&before_ap)?,
+        serde_json::to_value(&reproduced_ap)?
+    );
+    assert_eq!(
+        before_ar_tie.total_difference,
+        ar.tie_out_control_accounts(&s, company, date(2026, 7, 1), &before_ar_tie.pins())
+            .await?
+            .total_difference
+    );
+    assert_eq!(
+        before_ap_tie.total_difference,
+        ap.tie_out_control_accounts(&s, company, date(2026, 7, 1), &before_ap_tie.pins())
+            .await?
+            .total_difference
+    );
+    let reproduced_assets = assets
+        .register_report(&s, company, date(2026, 7, 1), &before_assets.pins())
+        .await?;
+    assert!(reproduced_assets.rows.is_empty());
+    assert_eq!(
+        before_assets.reconciliation,
+        reproduced_assets.reconciliation
+    );
     assert_eq!(
         trial,
         l.trial_balance(&s, company, date(2026, 7, 1), None).await?
@@ -255,12 +338,12 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         Money::ZERO
     );
     assert!(
-        ar.tie_out_control_accounts(&s, company, date(2026, 7, 1), None)
+        ar.tie_out_control_accounts(&s, company, date(2026, 7, 1), &Default::default())
             .await?
             .tied_out
     );
     assert!(
-        ap.tie_out_control_accounts(&s, company, date(2026, 7, 1), None)
+        ap.tie_out_control_accounts(&s, company, date(2026, 7, 1), &Default::default())
             .await?
             .tied_out
     );
@@ -324,7 +407,7 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         "3000.00"
     );
     assert!(
-        ar.tie_out_control_accounts(&s, company, date(2026, 7, 31), None)
+        ar.tie_out_control_accounts(&s, company, date(2026, 7, 31), &Default::default())
             .await?
             .tied_out
     );
@@ -357,7 +440,7 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         "1000.00"
     );
     assert!(
-        ap.tie_out_control_accounts(&s, company, date(2026, 7, 31), None)
+        ap.tie_out_control_accounts(&s, company, date(2026, 7, 31), &Default::default())
             .await?
             .tied_out
     );
@@ -378,7 +461,7 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         "1500.00"
     );
     assert!(
-        ap.tie_out_control_accounts(&s, company, date(2026, 7, 31), None)
+        ap.tie_out_control_accounts(&s, company, date(2026, 7, 31), &Default::default())
             .await?
             .tied_out
     );

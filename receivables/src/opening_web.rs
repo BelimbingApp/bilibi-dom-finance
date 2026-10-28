@@ -291,26 +291,31 @@ impl Opening {
                     fields.push(&render(field)?);
                 }
 
-                let answer = self
-                    .pages
-                    .contracts
-                    .read(
-                        scope,
-                        "finance.receivables.series.list",
-                        &json!({"company_id":company,"page_size":100}),
-                    )
-                    .await
-                    .map_err(|_| Error::Internal)?;
-                let options = answer["result"]["records"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter(|r| r["kind"] == "invoice" && r["active"] == true)
-                    .map(|r| {
-                        Choice::new(r["name"].as_str().unwrap_or(""), r["id"].to_string())
-                            .detail(r["code"].as_str().unwrap_or(""))
-                    })
-                    .collect();
+                let mut options = Vec::new();
+                let mut series_input = json!({"company_id":company,"page_size":100});
+                loop {
+                    let answer = self
+                        .pages
+                        .contracts
+                        .read(scope, "finance.receivables.series.list", &series_input)
+                        .await
+                        .map_err(|_| Error::Internal)?;
+                    options.extend(
+                        answer["result"]["records"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter(|r| r["kind"] == "invoice" && r["active"] == true)
+                            .map(|r| {
+                                Choice::new(r["name"].as_str().unwrap_or(""), r["id"].to_string())
+                                    .detail(r["code"].as_str().unwrap_or(""))
+                            }),
+                    );
+                    if answer["result"]["next_after_code"].is_null() {
+                        break;
+                    }
+                    series_input["after_code"] = answer["result"]["next_after_code"].clone();
+                }
                 fields.push(&render(
                     Combobox::new("conversion-series_id", "conversion[series_id]")
                         .label("Opening invoice series *")

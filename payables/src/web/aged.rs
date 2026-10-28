@@ -1,5 +1,5 @@
 //! Aged payables: what each supplier is owed, by how late it is, as of a day.
-//! Read through `Payables::aged_payables`, which fixes every figure to one
+//! Read through `finance.payables.aging.get`, which fixes every figure to one
 //! posting number so the buckets and the bills add up.
 use super::{company, format as f, render, Pages};
 use crate::{AgedDocument, AgedPayables, AgingQuery};
@@ -109,19 +109,21 @@ impl Aged {
             Some(date) => date,
             None => self.pages.today(scope).await?,
         };
-        self.units = self
+        self.units = self.pages.units(scope).await;
+        let answer = self
             .pages
-            .ledger
-            .get_book(scope, company)
-            .await
-            .ok()
-            .map(|b| b.minor_units);
-        match self
-            .pages
-            .payables
-            .aged_payables(scope, company, as_of, &AgingQuery::default())
-            .await
-        {
+            .contracts
+            .read(
+                scope,
+                "finance.payables.aging.get",
+                &serde_json::json!({"company_id":company,"as_of":as_of.to_string()}),
+            )
+            .await;
+        let aged = answer.and_then(|v| {
+            serde_json::from_value::<AgedPayables>(v["result"].clone())
+                .map_err(|_| bilibi_agent_api::Error::Internal)
+        });
+        match aged {
             Ok(aged) => {
                 let docs: Vec<&AgedDocument> =
                     aged.parties.iter().flat_map(|p| &p.documents).collect();

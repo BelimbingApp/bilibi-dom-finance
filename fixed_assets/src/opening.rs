@@ -140,6 +140,11 @@ impl FixedAssets {
             let service: Date = row[4]
                 .parse()
                 .map_err(|_| fail("in_service_date must be YYYY-MM-DD"))?;
+            if acquisition.year() < 1 || service.year() < 1 {
+                return Err(fail(
+                    "acquisition and in-service dates must be in year 0001 or later",
+                ));
+            }
             if acquisition >= context.entry.entry_date
                 || service < acquisition
                 || service > context.entry.entry_date

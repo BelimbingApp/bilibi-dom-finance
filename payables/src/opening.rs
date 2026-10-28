@@ -148,6 +148,9 @@ impl Payables {
             let due: Date = row[5]
                 .parse()
                 .map_err(|_| fail("due_date must be YYYY-MM-DD"))?;
+            if date.year() < 1 || due.year() < 1 {
+                return Err(fail("document and due dates must be in year 0001 or later"));
+            }
             if date >= context.entry.entry_date || due < date {
                 return Err(fail(
                     "document_date must precede conversion and due_date must not precede document_date",
@@ -303,4 +306,18 @@ pub(crate) async fn settlement_date(
 ) -> Result<()> {
     if c.query_opt("SELECT i.id FROM finance_payables_opening_items i JOIN finance_payables_opening_batches b ON b.id=i.batch_id AND b.tenant_id=$1 AND b.company_id=$2 WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=$3 AND b.conversion_date>$4::text::date",&[&s.tenant(),&company,&document,&date.to_string()]).await?.is_some() {return Err(invalid("document_id","cannot be settled before the conversion date"));}
     Ok(())
+}
+
+/// Opening records add no posting, so a reproduced subledger report also keeps
+/// this independent immutable-register boundary.
+pub(crate) async fn pin(
+    c: &dyn bilibi_agent_api::OperationClient,
+    s: &Scope,
+    company: i64,
+    through: Option<i64>,
+) -> Result<i64> {
+    if through.is_some_and(|id| id < 0) {
+        return Err(PayablesError::InvalidOption);
+    }
+    match through {Some(id)=>Ok(id),None=>Ok(c.query_opt("SELECT COALESCE(max(id),0) FROM finance_payables_opening_batches WHERE tenant_id=$1 AND company_id=$2",&[&s.tenant(),&company]).await?.ok_or(Error::Internal)?.get(0))}
 }

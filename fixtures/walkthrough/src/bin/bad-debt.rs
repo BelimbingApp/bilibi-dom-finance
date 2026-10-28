@@ -191,7 +191,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     assert_eq!(before.total, Decimal::from(378));
     assert!(
-        ar.tie_out_control_accounts(&manager, 1, date(2026, 9, 2), None)
+        ar.tie_out_control_accounts(&manager, 1, date(2026, 9, 2), &Default::default())
             .await?
             .tied_out
     );
@@ -322,7 +322,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     assert_eq!(net.total, Decimal::from(324));
     assert!(
-        ar.tie_out_control_accounts(&manager, 1, date(2026, 10, 1), None)
+        ar.tie_out_control_accounts(&manager, 1, date(2026, 10, 1), &Default::default())
             .await?
             .tied_out
     );
@@ -354,7 +354,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(money("27"))
     );
     assert!(
-        ar.tie_out_control_accounts(&manager, 1, date(2026, 10, 15), None)
+        ar.tie_out_control_accounts(&manager, 1, date(2026, 10, 15), &Default::default())
             .await?
             .tied_out
     );
@@ -412,7 +412,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?;
     assert!(
-        ar.tie_out_control_accounts(&manager, 1, date(2026, 10, 28), None)
+        ar.tie_out_control_accounts(&manager, 1, date(2026, 10, 28), &Default::default())
             .await?
             .tied_out
     );

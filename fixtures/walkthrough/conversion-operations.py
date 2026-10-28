@@ -126,6 +126,7 @@ revision=next(r["id"] for r in asset_context["category_revisions"] if r["categor
 ar_csv="source_id,customer_code,document_reference,document_date,due_date,original_total,outstanding,control_account_code\ninvoice-17,CONVERSION-CUSTOMER,OLD-INV-17,2026-05-15,2026-06-30,5000,3000,1100\n"
 ap_csv="source_id,vendor_key,vendor_name,document_reference,document_date,due_date,original_total,outstanding,control_account_code\nbill-29,conversion-vendor,Conversion vendor,OLD-BILL-29,2026-05-01,2026-06-15,2500,1500,2000\n"
 asset_csv=f"source_id,description,category_revision_id,acquisition_date,in_service_date,cost,accumulated_depreciation,remaining_life_months,residual_value\nasset-3,Source register asset,{revision},2024-06-01,2024-07-01,12000,1800,96,0\n"
+before_import={module:read(channel,f"finance.{module}.aging.get",company,"approver",as_of="2026-07-01",through_entry_number=trial["through_entry_number"]) for module in ["receivables","payables"]}
 inputs={"receivables":{"source_reference":"AR-SOURCE","currency_code":"MYR","series_id":invoice_series,"csv":ar_csv},"payables":{"source_reference":"AP-SOURCE","currency_code":"MYR","csv":ap_csv},"fixed_assets":{"source_reference":"ASSET-SOURCE","currency_code":"MYR","csv":asset_csv}}
 for module,old,new in [("receivables",",3000,1100",",3001,1100"),("payables",",1500,2000",",1501,2000"),("fixed_assets",",1800,96",",1801,96")]:
     changed=inputs[module]|{"csv":inputs[module]["csv"].replace(old,new)}
@@ -149,6 +150,9 @@ for module,expected in [("receivables","3000"),("payables","1500")]:
     require(Decimal(report["total"])==Decimal(expected),"opening aging does not reconcile")
     before=read(channel,f"finance.{module}.aging.get",company,"approver",as_of="2026-06-30")
     require(Decimal(before["total"])==0,"opening item visible before conversion")
+for module,report in before_import.items():
+    reproduced=read(channel,f"finance.{module}.aging.get",company,"approver",as_of="2026-07-01",through_entry_number=report["through_entry_number"],through_opening_batch_id=report["through_opening_batch_id"])
+    require(reproduced==report,"opening import changed a reproduced aging report")
 ar_context=read(channel,"finance.receivables.opening.context",company,"approver")
 ap_context=read(channel,"finance.payables.opening.context",company,"approver")
 invoice=ar_context["items"][0]["document_id"]

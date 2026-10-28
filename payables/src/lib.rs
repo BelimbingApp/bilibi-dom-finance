@@ -17,8 +17,8 @@ pub use payments::{
 };
 mod balances;
 pub use balances::{
-    AgedDocument, AgedParty, AgedPayables, AgingQuery, ControlAccount, OtherPosting, TaxQuery,
-    TaxTotal, TieOut,
+    AgedDocument, AgedParty, AgedPayables, AgingQuery, BalancePins, ControlAccount, OtherPosting,
+    TaxQuery, TaxTotal, TieOut,
 };
 mod evidence;
 pub use evidence::EvidencePage;

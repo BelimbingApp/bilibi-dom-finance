@@ -20,6 +20,7 @@ use std::collections::HashMap;
 struct Report {
     as_of: String,
     through_entry_number: i64,
+    through_opening_batch_id: i64,
     currency_code: String,
     minor_units: u32,
     buckets: Vec<Bucket>,
@@ -222,6 +223,10 @@ impl Aging {
                     &format!("{} {}", self.figures.decimal(r.total), r.currency_code),
                 ),
                 f::fact("Customers owing", &r.customers.len().to_string()),
+                f::fact(
+                    "Read through opening batch",
+                    &format!("#{}", r.through_opening_batch_id),
+                ),
                 f::fact(
                     "Read through ledger entry",
                     &format!("#{}", r.through_entry_number),

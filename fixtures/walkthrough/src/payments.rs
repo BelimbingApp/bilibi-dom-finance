@@ -547,7 +547,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
     assert_eq!(own.taxable_amount, money("100"));
     assert_eq!(own.tax_amount, money("5"));
     let tied = p
-        .tie_out_control_accounts(&manager, COMPANY, date(2026, 12, 31), None)
+        .tie_out_control_accounts(&manager, COMPANY, date(2026, 12, 31), &Default::default())
         .await?;
     let our = tied
         .accounts
@@ -573,7 +573,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         )
         .await?;
     let changed = p
-        .tie_out_control_accounts(&manager, COMPANY, date(2026, 12, 31), None)
+        .tie_out_control_accounts(&manager, COMPANY, date(2026, 12, 31), &Default::default())
         .await?;
     let our = changed
         .accounts
@@ -586,12 +586,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         .iter()
         .any(|p| p.owner_module.is_none() && p.balance == money("3")));
     let reproduced = p
-        .tie_out_control_accounts(
-            &manager,
-            COMPANY,
-            date(2026, 12, 31),
-            Some(tied.through_entry_number),
-        )
+        .tie_out_control_accounts(&manager, COMPANY, date(2026, 12, 31), &tied.pins())
         .await?;
     assert_eq!(reproduced.total_difference, tied.total_difference);
     let page = p
@@ -927,6 +922,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
             date(2026, 12, 31),
             &AgingQuery {
                 bucket_days: vec![60, 30],
+                through_opening_batch_id: None,
                 through_entry_number: None,
             },
         )
