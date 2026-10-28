@@ -302,7 +302,7 @@ impl Receivables {
             options,
             // The effective control is frozen in `after` and the posting;
             // unrelated defaults cannot change this saved draft's entry.
-            facts: json!({"draft":draft,"customer":customer,"customer_row":customer_row,"series":series,"credited_invoice":credited}),
+            facts: json!({"draft":draft,"customer":customer,"linked_company_id":crate::companies::linked(&customer_row),"series":series,"credited_invoice":credited}),
         })
     }
 
@@ -323,7 +323,7 @@ impl Receivables {
         let tenant = scope.tenant();
         // Freeze the linked company's facts on this full connection, under
         // the issuer's own Companies view; a restricted fact refuses the issue.
-        if let Some(linked) = crate::companies::linked(&facts["customer_row"]) {
+        if let Some(linked) = facts["linked_company_id"].as_i64() {
             let party = self.frozen_party(tx.sql(), scope, linked).await?;
             for (field, value) in party.as_object().into_iter().flatten() {
                 data[field] = value.clone();
