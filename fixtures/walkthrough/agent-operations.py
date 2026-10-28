@@ -147,12 +147,13 @@ for channel, company in [("api", 1), ("mcp", 2)]:
     asset = write(channel, "account.create", company, code="A", name="Asset", account_type="asset")
     income = write(channel, "account.create", company, code="I", name="Income", account_type="income")
     retained = write(channel, "account.create", company, code="E", name="Equity", account_type="equity", retained_earnings=True)
-    child = write(channel, "account.create", company, code="B", name="Child", account_type="asset", parent_id=asset["id"])
+    group = write(channel, "account_group.create", company, code="G", name="Asset group", account_type="asset")
+    child = write(channel, "account.create", company, code="B", name="Child", account_type="asset", parent_id=group["id"])
     child = write(channel, "account.update", company, account_id=child["id"], name="Changed", clear_parent=True, active=False)
     require(child["parent_id"] is None and child["active"] is False, "account update lost fields")
     page = read(channel, "account.list", company, page_size=2)
     page2 = read(channel, "account.list", company, page_size=2, after_code=page["next_after_code"])
-    require([a["code"] for a in page["records"] + page2["records"]] == ["A", "B", "E", "I"], "account cursor skipped/duplicated rows")
+    require([a["code"] for a in page["records"] + page2["records"]] == ["A", "B", "E", "G"], "account cursor skipped/duplicated rows")
     # Locale-aware PostgreSQL ordering must also govern the cursor predicate.
     # The original Rust string comparison skipped B after a in en_US.UTF-8.
     for code in ["a", "É", "z"]:
