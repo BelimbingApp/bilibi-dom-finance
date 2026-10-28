@@ -187,7 +187,7 @@ const BALANCES: &str = "SELECT d.*, d.issue_date::text issue_day, d.due_date::te
  AND NOT EXISTS(SELECT 1 FROM finance_receivables_write_off_events e WHERE e.write_off_id=w.id AND e.event='reversed' AND e.effective_date<=$3::text::date AND e.ledger_entry_number<=$4)),0) AS written_off
  FROM finance_receivables_documents d WHERE d.tenant_id=$1 AND d.company_id=$2
  AND d.kind='invoice' AND d.status='issued' AND d.issue_date<=$3::text::date AND d.ledger_entry_number<=$4
- AND NOT EXISTS(SELECT 1 FROM finance_receivables_opening_items i JOIN finance_receivables_opening_batches b ON b.id=i.batch_id AND b.tenant_id=$1 AND b.company_id=$2 WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=d.id AND (b.conversion_date>$3::text::date OR ($5::bigint IS NOT NULL AND b.id>$5)))";
+ AND NOT EXISTS(SELECT 1 FROM finance_receivables_opening_items i JOIN finance_receivables_opening_batches b ON b.id=i.batch_id AND b.tenant_id=$1 AND b.company_id=$2 WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=d.id AND (b.conversion_date>$3::text::date OR ($5::bigint IS NOT NULL AND b.id>$5))) ORDER BY d.id";
 
 async fn balances(
     client: &impl GenericClient,
@@ -256,11 +256,11 @@ impl Receivables {
             from_days: Some(start),
             to_days: None,
         });
-        // A linked customer's name is its company's, as Core names it now.
-        let mut labels: BTreeMap<i64, (String, String)> = BTreeMap::new();
+        // Codes are immutable; names come from issued documents, not live Core.
+        let mut labels: BTreeMap<i64, String> = BTreeMap::new();
         for row in store::list(client, store::CUSTOMERS, scope.tenant(), company).await? {
-            let customer = self.customer(client, scope, row).await?;
-            labels.insert(customer.id, (customer.code, customer.name));
+            let customer: crate::Customer = store::decode(row)?;
+            labels.insert(customer.id, customer.code);
         }
         let mut customers: BTreeMap<i64, AgedCustomer> = BTreeMap::new();
         let mut totals = vec![Decimal::ZERO; buckets.len()];
@@ -292,7 +292,8 @@ impl Receivables {
                     .map_or(buckets.len() - 1, |n| n + 1)
             };
             let customer_id = row.get("customer_id");
-            let (code, name) = labels[&customer_id].clone();
+            let code = labels[&customer_id].clone();
+            let name: String = row.get("party_name");
             let customer = customers
                 .entry(customer_id)
                 .or_insert_with(|| AgedCustomer {

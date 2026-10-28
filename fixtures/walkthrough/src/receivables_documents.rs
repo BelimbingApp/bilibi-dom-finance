@@ -228,6 +228,9 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
     assert_eq!(first.lines, draft.lines);
     assert_eq!(first.tax_lines, draft.tax_lines);
     assert_eq!(first.total, money("110"));
+    let before_rename = ar
+        .aged_receivables(&admin, 1, date(2026, 9, 1), &AgingOptions::default())
+        .await?;
     client
         .execute(
             "UPDATE companies SET legal_name='R2 later party' WHERE tenant_id=1 AND id=20",
@@ -241,6 +244,29 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
     let frozen = ar.get_document(&admin, 1, first.id).await?;
     assert_eq!(frozen.party_name, first.party_name);
     assert_eq!(frozen.party_tax_identifier, first.party_tax_identifier);
+    let after_rename = ar
+        .aged_receivables(
+            &admin,
+            1,
+            date(2026, 9, 1),
+            &AgingOptions {
+                through_entry_number: Some(before_rename.through_entry_number),
+                through_opening_batch_id: Some(before_rename.through_opening_batch_id),
+                ..AgingOptions::default()
+            },
+        )
+        .await?;
+    assert_eq!(
+        serde_json::to_vec(&before_rename)?,
+        serde_json::to_vec(&after_rename)?
+    );
+    let aged = after_rename
+        .customers
+        .iter()
+        .find(|c| c.customer_id == customer.id)
+        .unwrap();
+    assert_eq!(aged.name, first.party_name.as_deref().unwrap());
+    assert_eq!(aged.documents[0].party_name, aged.name);
     // Attachment labels are capture snapshots; a new capture reads the final source label.
     let final_scan = attachments
         .attach(&admin, 1, source, first.id, &file)
