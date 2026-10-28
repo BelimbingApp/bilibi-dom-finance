@@ -70,6 +70,7 @@ mod contributions;
 mod duties;
 mod entries;
 mod evidence;
+mod groups;
 mod journals;
 mod late_recordings;
 mod money;
@@ -77,6 +78,7 @@ mod opening;
 mod opening_csv;
 mod periods;
 mod postings;
+mod templates;
 mod totals;
 mod web;
 
@@ -116,6 +118,7 @@ inventory::submit! {
             ("finance-ledger-005-journals", include_str!("../migrations/005-journals.sql")),
             ("finance-ledger-006-journal-withdrawal", include_str!("../migrations/006-journal-withdrawal.sql")),
             ("finance-ledger-007-opening-balances", include_str!("../migrations/007-opening-balances.sql")),
+            ("finance-ledger-008-account-groups", include_str!("../migrations/008-account-groups.sql")),
         ],
         services: &[Service { id: SERVICE, factory: |services| {
             agent_operations::bind(services.get("base/tenancy.parties")?)?;
@@ -318,7 +321,9 @@ impl AccountType {
     }
 }
 
-/// One account of the chart, as the facade shows it.
+/// One row of the chart, as the facade shows it: an account that takes
+/// postings, or an account group (`is_group`) that takes none and stands for
+/// the total of everything under it. `parent_id` is the enclosing group.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Account {
     pub id: i64,
@@ -326,12 +331,20 @@ pub struct Account {
     pub name: String,
     pub account_type: AccountType,
     pub parent_id: Option<i64>,
+    pub is_group: bool,
     pub active: bool,
     pub retained_earnings: bool,
 }
+impl Account {
+    /// Whether an entry may post to it now: an active account, never a group.
+    pub fn postable(&self) -> bool {
+        self.active && !self.is_group
+    }
+}
 /// What creates an account: `code` (unique in the company), `name` and
-/// `account_type`, optionally grouped under a `parent_id` of the same type,
-/// `active` (true by default) and `retained_earnings` (false by default).
+/// `account_type`, optionally under an account group of the same type
+/// (`parent_id`), `active` (true by default) and `retained_earnings` (false
+/// by default).
 #[derive(Clone, Debug)]
 pub struct NewAccount {
     pub code: String,
@@ -358,13 +371,113 @@ impl NewAccount {
     }
 }
 /// What changes on an account: each `Some` replaces the field; `parent_id:
-/// Some(None)` removes the grouping. Code and type never change.
+/// Some(None)` takes it out of its group. Code and type never change.
 #[derive(Clone, Debug, Default)]
 pub struct AccountChange {
     pub name: Option<String>,
     pub parent_id: Option<Option<i64>>,
     pub active: Option<bool>,
     pub retained_earnings: Option<bool>,
+}
+/// What creates an account group: `code` (unique among the company's accounts
+/// and groups), `name` and `account_type`, optionally inside another group of
+/// the same type (`parent_id`). A group takes no postings.
+#[derive(Clone, Debug)]
+pub struct NewAccountGroup {
+    pub code: String,
+    pub name: String,
+    pub account_type: AccountType,
+    pub parent_id: Option<i64>,
+}
+impl NewAccountGroup {
+    pub fn new(
+        code: impl Into<String>,
+        name: impl Into<String>,
+        account_type: AccountType,
+    ) -> Self {
+        Self {
+            code: code.into(),
+            name: name.into(),
+            account_type,
+            parent_id: None,
+        }
+    }
+}
+/// What changes on an account group: each `Some` replaces the field;
+/// `parent_id: Some(None)` takes it out of its group. Code and type never
+/// change.
+#[derive(Clone, Debug, Default)]
+pub struct AccountGroupChange {
+    pub name: Option<String>,
+    pub parent_id: Option<Option<i64>>,
+}
+
+/// A starter chart: groups and accounts a company can start from, as data
+/// (`templates/*.json`). `review` says how far an accountant has checked it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ChartTemplate {
+    pub key: String,
+    pub name: String,
+    pub review: String,
+    pub description: String,
+    /// What a person should know before applying it, such as what needs
+    /// advice specific to the business.
+    pub notes: Vec<String>,
+    /// Groups and accounts, each after the group it sits in.
+    pub rows: Vec<ChartTemplateRow>,
+}
+/// One group or account a starter chart creates.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ChartTemplateRow {
+    pub code: String,
+    pub name: String,
+    pub account_type: AccountType,
+    pub is_group: bool,
+    pub parent_code: Option<String>,
+    pub retained_earnings: bool,
+}
+/// What applying a starter chart to a company would do now: the template's
+/// exact rows, how many rows the company's chart already has, and which of
+/// the template's codes those use. A chart that has any row is never changed:
+/// `applicable` is true only for an empty one.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ChartTemplatePreview {
+    pub template: ChartTemplate,
+    pub existing_rows: usize,
+    pub conflicting_codes: Vec<String>,
+    pub applicable: bool,
+}
+/// What applying a starter chart created.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ChartTemplateApplied {
+    pub key: String,
+    pub groups: usize,
+    pub accounts: usize,
+}
+
+/// One row of the chart with its figure at a date. An account reports its own
+/// `balance`; a group reports the `total` of every account under it, and never
+/// a balance of its own. Both are on the account type's natural side (debits
+/// less credits for asset and expense, credits less debits for the others) and
+/// negative when the figure sits on the other side.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ChartBalance {
+    #[serde(flatten)]
+    pub account: Account,
+    pub balance: Option<Money>,
+    pub total: Option<Money>,
+}
+/// The chart's figures as of a date, counted through `through_entry_number`
+/// (see [`TrialBalance`]), every account and group by code.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ChartBalances {
+    pub company_id: i64,
+    #[serde(serialize_with = "as_text")]
+    pub as_of: Date,
+    pub through_entry_number: i64,
+    pub currency_code: String,
+    pub minor_units: MinorUnits,
+    pub rows: Vec<ChartBalance>,
 }
 
 /// The module and record an entry belongs to: `module` is the owner's
@@ -1021,6 +1134,45 @@ pub(crate) async fn trial_balance_of(
     })
 }
 
+/// The chart's balances and group totals on one snapshot, for a caller that
+/// has already authorized the company.
+pub(crate) async fn chart_balances_of(
+    client: &dyn bilibi_agent_api::OperationClient,
+    tenant: i64,
+    company_id: i64,
+    as_of: Date,
+    through_entry_number: Option<i64>,
+) -> Result<ChartBalances> {
+    let trial = trial_balance_of(client, tenant, company_id, as_of, through_entry_number).await?;
+    let chart = accounts::list(client, tenant, company_id).await?;
+    Ok(ChartBalances {
+        company_id,
+        as_of,
+        through_entry_number: trial.through_entry_number,
+        currency_code: trial.currency_code,
+        minor_units: trial.minor_units,
+        rows: groups::roll_up(chart, &trial.rows),
+    })
+}
+
+/// The starter chart `key` against the company's chart as it is now.
+pub(crate) async fn chart_template_preview(
+    client: &dyn bilibi_agent_api::OperationClient,
+    tenant: i64,
+    company_id: i64,
+    key: &str,
+) -> Result<ChartTemplatePreview> {
+    let template = templates::require(key)?;
+    let (existing_rows, conflicting_codes) =
+        templates::existing(client, tenant, company_id, template).await?;
+    Ok(ChartTemplatePreview {
+        template: template.clone(),
+        existing_rows,
+        conflicting_codes,
+        applicable: existing_rows == 0,
+    })
+}
+
 /// The facade, resolved from the registry as [`SERVICE`].
 pub struct Ledger {
     db: Db,
@@ -1270,6 +1422,221 @@ impl Ledger {
             })
             .await?;
         Ok(account)
+    }
+
+    /// Adds an account group (`finance.ledger.accounts.manage`): a row of the
+    /// chart that takes no postings and stands for the total of the accounts
+    /// and groups under it. Its code is unique among the company's accounts
+    /// and groups; its type and any enclosing group must match.
+    pub async fn create_account_group(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        new: &NewAccountGroup,
+    ) -> Result<Account> {
+        let mut client = self.db.get().await.map_err(Error::from)?;
+        let mut tx = self
+            .write(
+                &mut client,
+                scope,
+                company_id,
+                &[MANAGE_ACCOUNTS],
+                "finance.ledger.create_account_group",
+            )
+            .await?;
+        let group = Self::create_account_group_on(&mut tx, scope, company_id, new).await?;
+        tx.commit().await?;
+        Ok(group)
+    }
+
+    async fn create_account_group_on(
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company_id: i64,
+        new: &NewAccountGroup,
+    ) -> Result<Account> {
+        join(tx, scope, company_id, MANAGE_ACCOUNTS).await?;
+        let tenant = scope.tenant();
+        let valid = accounts::validate_new_group(tx.sql(), tenant, company_id, new)
+            .await?
+            .map_err(LedgerError::Invalid)?;
+        let group = tx
+            .mutate(move |sql| {
+                Box::pin(async move {
+                    let group = accounts::insert(sql, tenant, company_id, &valid).await?;
+                    let change = account_change(
+                        group.id,
+                        serde_json::Value::Null,
+                        accounts::to_json(&group),
+                    );
+                    Ok((group, vec![change]))
+                })
+            })
+            .await?;
+        Ok(group)
+    }
+
+    /// Changes an account group's name or the group it sits in
+    /// (`finance.ledger.accounts.manage`). A group never sits under itself or
+    /// anything under it.
+    pub async fn update_account_group(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        group_id: i64,
+        change: &AccountGroupChange,
+    ) -> Result<Account> {
+        let mut client = self.db.get().await.map_err(Error::from)?;
+        let mut tx = self
+            .write(
+                &mut client,
+                scope,
+                company_id,
+                &[MANAGE_ACCOUNTS],
+                "finance.ledger.update_account_group",
+            )
+            .await?;
+        let group =
+            Self::update_account_group_on(&mut tx, scope, company_id, group_id, change).await?;
+        tx.commit().await?;
+        Ok(group)
+    }
+
+    async fn update_account_group_on(
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company_id: i64,
+        group_id: i64,
+        change: &AccountGroupChange,
+    ) -> Result<Account> {
+        join(tx, scope, company_id, MANAGE_ACCOUNTS).await?;
+        let tenant = scope.tenant();
+        let current = accounts::find(tx.sql(), tenant, company_id, group_id)
+            .await?
+            .ok_or(LedgerError::AccountNotFound)?;
+        let next = accounts::validate_group_change(tx.sql(), tenant, company_id, &current, change)
+            .await?
+            .map_err(LedgerError::Invalid)?;
+        let group = tx
+            .mutate(move |sql| {
+                Box::pin(async move {
+                    let saved = accounts::update(sql, tenant, company_id, &next).await?;
+                    let change = account_change(
+                        saved.id,
+                        accounts::to_json(&current),
+                        accounts::to_json(&saved),
+                    );
+                    Ok((saved, vec![change]))
+                })
+            })
+            .await?;
+        Ok(group)
+    }
+
+    /// The starter charts a company may choose from, each with its rows.
+    pub fn chart_templates() -> &'static [ChartTemplate] {
+        templates::all()
+    }
+
+    /// What applying the starter chart `key` to the company would do now
+    /// (`finance.ledger.view`); `Invalid` for a key that names none.
+    pub async fn preview_chart_template(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        key: &str,
+    ) -> Result<ChartTemplatePreview> {
+        let client = self.db.get().await.map_err(Error::from)?;
+        authorize(&**client, scope, company_id, VIEW).await?;
+        chart_template_preview(&**client, scope.tenant(), company_id, key).await
+    }
+
+    /// Creates the starter chart `key`'s groups and accounts in one
+    /// transaction (`finance.ledger.accounts.manage`), for a company whose
+    /// chart is empty. A chart with any account or group is never changed: it
+    /// is refused, and so is a second application. The rows are the
+    /// company's own afterwards; the template is not linked to them.
+    pub async fn apply_chart_template(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        key: &str,
+    ) -> Result<ChartTemplateApplied> {
+        let mut client = self.db.get().await.map_err(Error::from)?;
+        let mut tx = self
+            .write(
+                &mut client,
+                scope,
+                company_id,
+                &[MANAGE_ACCOUNTS],
+                "finance.ledger.apply_chart_template",
+            )
+            .await?;
+        let applied = Self::apply_chart_template_on(&mut tx, scope, company_id, key).await?;
+        tx.commit().await?;
+        Ok(applied)
+    }
+
+    async fn apply_chart_template_on(
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company_id: i64,
+        key: &str,
+    ) -> Result<ChartTemplateApplied> {
+        join(tx, scope, company_id, MANAGE_ACCOUNTS).await?;
+        let tenant = scope.tenant();
+        let preview = chart_template_preview(tx.sql(), tenant, company_id, key).await?;
+        if !preview.applicable {
+            return Err(LedgerError::Invalid(vec![FieldError::new(
+                "base",
+                format!(
+                    "The chart already has {} account(s) or group(s). A starter chart applies only to an empty chart.",
+                    preview.existing_rows
+                ),
+            )]));
+        }
+        let template = templates::require(key)?;
+        let applied = tx
+            .mutate(move |sql| {
+                Box::pin(async move {
+                    let mut ids: std::collections::BTreeMap<&str, i64> = Default::default();
+                    let mut changes = Vec::new();
+                    let (mut groups, mut accounts_made) = (0, 0);
+                    for row in &template.rows {
+                        let valid = accounts::ValidAccount {
+                            code: row.code.clone(),
+                            name: row.name.clone(),
+                            account_type: row.account_type,
+                            parent_id: row.parent_code.as_deref().and_then(|c| ids.get(c).copied()),
+                            is_group: row.is_group,
+                            active: true,
+                            retained_earnings: row.retained_earnings,
+                        };
+                        let account = accounts::insert(sql, tenant, company_id, &valid).await?;
+                        ids.insert(row.code.as_str(), account.id);
+                        if row.is_group {
+                            groups += 1;
+                        } else {
+                            accounts_made += 1;
+                        }
+                        changes.push(account_change(
+                            account.id,
+                            serde_json::Value::Null,
+                            accounts::to_json(&account),
+                        ));
+                    }
+                    Ok((
+                        ChartTemplateApplied {
+                            key: template.key.clone(),
+                            groups,
+                            accounts: accounts_made,
+                        },
+                        changes,
+                    ))
+                })
+            })
+            .await?;
+        Ok(applied)
     }
 
     /// Posts a journal entry (`finance.ledger.entries.post`). It is refused
@@ -1539,6 +1906,30 @@ impl Ledger {
         authorize(client, scope, company_id, VIEW).await?;
         trial_balance_of(
             client,
+            scope.tenant(),
+            company_id,
+            as_of,
+            through_entry_number,
+        )
+        .await
+    }
+
+    /// Each account's balance and each group's total as of a date
+    /// (`finance.ledger.view`), every row of the chart by code, counted
+    /// through one pinned entry number like [`Ledger::trial_balance`]. A
+    /// group's total sums the accounts under it; it is never an account's own
+    /// balance, and no posting is counted twice.
+    pub async fn chart_balances(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        as_of: Date,
+        through_entry_number: Option<i64>,
+    ) -> Result<ChartBalances> {
+        let client = self.db.get().await.map_err(Error::from)?;
+        authorize(&**client, scope, company_id, VIEW).await?;
+        chart_balances_of(
+            &**client,
             scope.tenant(),
             company_id,
             as_of,

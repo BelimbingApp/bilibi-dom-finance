@@ -383,9 +383,16 @@ pub(super) struct Account {
     pub name: String,
     pub account_type: String,
     pub active: bool,
+    #[serde(default)]
+    pub is_group: bool,
 }
 
 impl Account {
+    /// An active account, never an account group: what a picker may offer.
+    pub(super) fn postable(&self) -> bool {
+        self.active && !self.is_group
+    }
+
     pub(super) fn label(&self) -> String {
         format!("{} {}", self.code, self.name)
     }

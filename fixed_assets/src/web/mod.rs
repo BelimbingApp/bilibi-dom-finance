@@ -339,7 +339,10 @@ impl Pages {
                     a["code"].as_str(),
                     a["name"].as_str(),
                     a["account_type"].as_str(),
-                    a["active"].as_bool(),
+                    // A group takes no postings, so it is never a choice.
+                    a["active"]
+                        .as_bool()
+                        .map(|active| active && a["is_group"].as_bool() != Some(true)),
                 ) {
                     accounts.push((id, format!("{code} {name}"), kind.to_owned(), active));
                 }

@@ -172,7 +172,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
     let money = |text: &str| Money::parse(text, book.minor_units).expect("fixture amount");
 
     println!("\n== Report sections (company 1)");
-    // A sub-account under the bank account, so a listed parent brings it.
+    // A group over the bank and cash accounts, so a listed group brings both.
     let mut accounts = ledger.list_accounts(&manager, COMPANY).await?;
     let id = |accounts: &[bilibi_finance_ledger::Account], code: &str| {
         accounts
@@ -181,13 +181,37 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
             .map(|account| account.id)
             .ok_or("fixture account")
     };
-    if id(&accounts, "1020").is_err() {
+    if id(&accounts, "1800").is_err() {
+        ledger
+            .create_account_group(
+                &manager,
+                COMPANY,
+                &bilibi_finance_ledger::NewAccountGroup::new(
+                    "1800",
+                    "Cash and bank",
+                    bilibi_finance_ledger::AccountType::Asset,
+                ),
+            )
+            .await?;
+        accounts = ledger.list_accounts(&manager, COMPANY).await?;
+        let group = id(&accounts, "1800")?;
+        ledger
+            .update_account(
+                &manager,
+                COMPANY,
+                id(&accounts, "1000")?,
+                &bilibi_finance_ledger::AccountChange {
+                    parent_id: Some(Some(group)),
+                    ..Default::default()
+                },
+            )
+            .await?;
         let mut on_hand = NewAccount::new(
             "1020",
             "Cash on hand",
             bilibi_finance_ledger::AccountType::Asset,
         );
-        on_hand.parent_id = Some(id(&accounts, "1000")?);
+        on_hand.parent_id = Some(group);
         ledger.create_account(&manager, COMPANY, &on_hand).await?;
         accounts = ledger.list_accounts(&manager, COMPANY).await?;
     }
@@ -231,10 +255,10 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
     let layout = json!([
         {"report": "profit_and_loss", "name": "Revenue", "accounts": ["4000"]},
         {"report": "profit_and_loss", "name": "Direct costs", "accounts": ["5000"]},
-        {"report": "balance_sheet", "name": "Cash and receivables", "accounts": ["1000", "1100"]},
+        {"report": "balance_sheet", "name": "Cash and receivables", "accounts": ["1800", "1100"]},
         {"report": "balance_sheet", "name": "Owed to others", "accounts": ["2000", "2100"]},
-        {"report": "balance_sheet", "name": "Cash, listed twice", "accounts": ["1000"]},
-        {"report": "cash_position", "name": "Bank and cash on hand", "accounts": [" 1000 ", "9999"]},
+        {"report": "balance_sheet", "name": "Cash, listed twice", "accounts": ["1800"]},
+        {"report": "cash_position", "name": "Bank and cash on hand", "accounts": [" 1800 ", "9999"]},
     ]);
     println!(
         "manager saves six sections: {}",

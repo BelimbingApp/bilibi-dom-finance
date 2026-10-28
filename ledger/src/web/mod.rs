@@ -8,6 +8,8 @@ mod accounts;
 mod book;
 mod entries;
 mod entry;
+mod group;
+mod groups;
 mod journal;
 mod journals;
 mod opening;
@@ -82,6 +84,16 @@ route!(
     "account"
 );
 route!(
+    "finance/ledger.groups",
+    "/finance/ledger/account-groups",
+    "groups"
+);
+route!(
+    "finance/ledger.group",
+    "/finance/ledger/account-groups/{id}",
+    "group"
+);
+route!(
     "finance/ledger.entries",
     "/finance/ledger/entries",
     "entries"
@@ -131,28 +143,34 @@ menu!(
     5
 );
 menu!(
+    "finance.ledger.groups",
+    "Account groups",
+    "/finance/ledger/account-groups",
+    6
+);
+menu!(
     "finance.ledger.entries",
     "Journal entries",
     "/finance/ledger/entries",
-    6
+    7
 );
 menu!(
     "finance.ledger.journals",
     "Manual journals",
     "/finance/ledger/journals",
-    7
+    8
 );
 menu!(
     "finance.ledger.years",
     "Fiscal years",
     "/finance/ledger/fiscal-years",
-    8
+    9
 );
 menu!(
     "finance.ledger.trial-balance",
     "Trial balance",
     "/finance/ledger/trial-balance",
-    9
+    10
 );
 menu!(
     "finance.ledger.opening-balances",
@@ -160,7 +178,7 @@ menu!(
     "/finance/ledger/opening-balances",
     11
 );
-menu!("finance.ledger.book", "Book", "/finance/ledger/book", 10);
+menu!("finance.ledger.book", "Book", "/finance/ledger/book", 12);
 
 // Every write these pages make is a ledger contract (ADR 01).
 inventory::submit! { Contribution::new(PAGE_WRITES, PAGES, Provenance { module: MODULE, source: file!(), line: line!() }, &PageWrites {
@@ -174,6 +192,10 @@ inventory::submit! { Contribution::new(PAGE_WRITES, PAGES, Provenance { module: 
         ("deactivate", "finance.ledger.account.update"),
         ("designate", "finance.ledger.account.update"),
         ("activate", "finance.ledger.account.update"),
+        ("ask_template", "finance.ledger.chart_template.apply"),
+        ("apply_template", "finance.ledger.chart_template.apply"),
+        ("create_group", "finance.ledger.account_group.create"),
+        ("save_group_field", "finance.ledger.account_group.update"),
         ("reverse", "finance.ledger.entry.reverse"),
         ("preview_opening", "finance.ledger.opening_balances.submit"),
         ("submit_opening", "finance.ledger.opening_balances.submit"),
@@ -381,6 +403,25 @@ impl Pages {
             }
         }
         Ok(Ok(all))
+    }
+
+    /// The chart's balances and group totals as of today, or `None` when the
+    /// book is not open or the figures cannot be read.
+    pub(crate) async fn chart_figures(&self, scope: &Scope) -> Result<Option<view::ChartBalances>> {
+        let today = self.today(scope).await?;
+        Ok(
+            match self
+                .read(
+                    scope,
+                    "finance.ledger.chart_balance.get",
+                    json!({"as_of": today.to_string()}),
+                )
+                .await?
+            {
+                Read::Found(value) => view::parse(value),
+                _ => None,
+            },
+        )
     }
 
     /// The company's book, its controls, and what refused when it cannot be read.
@@ -825,6 +866,17 @@ pub(crate) fn account_name(account: &view::Account) -> Result<Html> {
     })
 }
 
+/// A plain link to an account group's page.
+#[derive(Template)]
+#[template(
+    source = r#"<a href="/finance/ledger/account-groups/{{ id }}" class="text-link hover:underline">{{ label }}</a>"#,
+    ext = "html"
+)]
+pub(crate) struct GroupLink<'a> {
+    pub id: i64,
+    pub label: &'a str,
+}
+
 /// A plain link to an account's page.
 #[derive(Template)]
 #[template(
@@ -897,6 +949,8 @@ impl Page<Scope, Error> for Pages {
             "book" => "Book",
             "accounts" => "Chart of accounts",
             "account" => "Account",
+            "groups" => "Account groups",
+            "group" => "Account group",
             "entries" => "Journal entries",
             "entry" => "Journal entry",
             "journals" => "Manual journals",
@@ -939,6 +993,8 @@ impl Pages {
             "book" => Box::new(book::Book::new(pages)),
             "accounts" => Box::new(accounts::Accounts::new(pages, r.query, r.framed)?),
             "account" => Box::new(account::Account::new(pages, id_param(r.path)?)),
+            "groups" => Box::new(groups::Groups::new(pages, r.query, r.framed)?),
+            "group" => Box::new(group::Group::new(pages, id_param(r.path)?)),
             "entries" => Box::new(entries::Entries::new(pages, r.query, r.framed)?),
             "entry" => Box::new(entry::Entry::new(pages, id_param(r.path)?)),
             "journals" => Box::new(journals::Journals::new(pages, r.query, r.framed)?),

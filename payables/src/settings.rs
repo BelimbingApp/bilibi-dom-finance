@@ -14,6 +14,12 @@ pub(crate) fn account(
         .iter()
         .find(|a| a.id == id)
         .ok_or_else(|| invalid(field, "is not an account of this company"))?;
+    if a.is_group {
+        return Err(invalid(
+            field,
+            "is an account group; choose an account under it",
+        ));
+    }
     if !a.active {
         return Err(invalid(field, "is inactive"));
     }

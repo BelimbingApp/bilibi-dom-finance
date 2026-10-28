@@ -783,7 +783,7 @@ impl Document {
         let accounts: Vec<Choice> = self
             .accounts
             .iter()
-            .filter(|a| a.active && a.account_type == "income")
+            .filter(|a| a.postable() && a.account_type == "income")
             .map(|a| Choice::new(a.label(), a.id.to_string()))
             .collect();
         let taxes: Vec<Choice> = self

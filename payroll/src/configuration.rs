@@ -223,6 +223,7 @@ fn account(
         None => None,
         Some(id) => match accounts.iter().find(|a| a.id == id) {
             None => Some("is not an account of this company"),
+            Some(a) if a.is_group => Some("is an account group; choose an account under it"),
             Some(a) if !a.active => Some("is inactive"),
             Some(a) if liability && a.account_type != AccountType::Liability => {
                 Some("must be an account of type liability")

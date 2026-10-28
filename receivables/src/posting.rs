@@ -775,6 +775,9 @@ fn posting_account(
         .iter()
         .find(|a| a.id == id)
         .ok_or("is not a ledger account of this company")?;
+    if account.is_group {
+        return Err("is a ledger account group; choose an account under it".into());
+    }
     if active && !account.active {
         return Err("is an inactive ledger account".into());
     }

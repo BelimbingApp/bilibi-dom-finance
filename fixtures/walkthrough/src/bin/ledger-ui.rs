@@ -7,13 +7,15 @@
 //! Sign in as `manager@other.example.test` (every ledger capability, in Company
 //! 100), `reviewer@other.example.test` (the administrator, who approves the
 //! manager's journals) or `viewer@other.example.test` (view only), with the
-//! walkthrough password. Pass `empty` to stop before the book is opened.
+//! walkthrough password. Pass `empty` to stop before the book is opened, or
+//! `bare` to open it with an empty chart (the starter charts are offered).
 //! Pass `opening` for the chart and open periods with no posted entries.
 //! After seeding it drives the Journal entries page's period control through
 //! its real `LiveState` and prints one proof line.
 use bilibi_database::{pool, Error};
 use bilibi_finance_ledger::{
-    AccountType, Ledger, Money, NewAccount, NewBook, NewEntry, NewFiscalYear, NewLine, PostOptions,
+    AccountChange, AccountType, Ledger, Money, NewAccount, NewAccountGroup, NewBook, NewEntry,
+    NewFiscalYear, NewLine, PostOptions,
 };
 use bilibi_finance_walkthrough_fixture::{install, sign_in};
 use bilibi_module_registry::Services;
@@ -75,7 +77,20 @@ async fn main() -> Outcome<()> {
         ledger.get_book(&manager, COMPANY).await,
         Err(bilibi_finance_ledger::LedgerError::BookNotOpen)
     );
-    if unopened && !std::env::args().any(|arg| arg == "empty") {
+    if unopened && std::env::args().any(|arg| arg == "bare") {
+        // An adopter who has opened the book and nothing else: the chart is
+        // empty, so the starter charts are offered.
+        ledger
+            .open_book(
+                &manager,
+                COMPANY,
+                &NewBook {
+                    currency_code: "MYR".into(),
+                    minor_units: 2,
+                },
+            )
+            .await?;
+    } else if unopened && !std::env::args().any(|arg| arg == "empty") {
         let (account, pin) = seed(&ledger, &manager, &reviewer).await?;
         if !std::env::args().any(|arg| arg == "opening") {
             period_proof(services, &manager, account, pin).await?;
@@ -135,9 +150,27 @@ async fn seed(
             ledger.create_account(manager, COMPANY, &account).await?.id,
         );
     }
-    // A group under cash: the operating account.
+    // A group over the bank accounts, and the operating account inside it.
+    let group = ledger
+        .create_account_group(
+            manager,
+            COMPANY,
+            &NewAccountGroup::new("1900", "Cash and bank", AccountType::Asset),
+        )
+        .await?;
+    ledger
+        .update_account(
+            manager,
+            COMPANY,
+            ids["1000"],
+            &AccountChange {
+                parent_id: Some(Some(group.id)),
+                ..AccountChange::default()
+            },
+        )
+        .await?;
     let mut operating = NewAccount::new("1010", "Operating account", AccountType::Asset);
-    operating.parent_id = Some(ids["1000"]);
+    operating.parent_id = Some(group.id);
     ids.insert(
         "1010",
         ledger

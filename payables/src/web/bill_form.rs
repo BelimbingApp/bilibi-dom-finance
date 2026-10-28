@@ -126,7 +126,7 @@ impl BillForm {
             .unwrap_or_default()
             .into_iter()
             .filter(|a| {
-                a.active && matches!(a.account_type, AccountType::Asset | AccountType::Expense)
+                a.postable() && matches!(a.account_type, AccountType::Asset | AccountType::Expense)
             })
             .collect();
         self.taxes = self

@@ -26,6 +26,7 @@ use bilibi_tenancy::{Authentication, Scope};
 use jiff::civil::{date, Date};
 
 pub mod attachments;
+pub mod charts;
 pub mod controls;
 pub mod matching;
 pub mod payables;

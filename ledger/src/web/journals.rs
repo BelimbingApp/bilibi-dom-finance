@@ -677,7 +677,7 @@ impl Journals {
                 .map(|m| error_text(name, m))
                 .collect()
         };
-        let choices: Vec<Choice> = view::by_name(accounts.iter().filter(|a| a.active))
+        let choices: Vec<Choice> = view::by_name(accounts.iter().filter(|a| a.postable()))
             .iter()
             .map(|a| view::account_choice(a))
             .collect();

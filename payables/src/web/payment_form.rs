@@ -86,7 +86,8 @@ impl PaymentForm {
             .unwrap_or_default()
             .into_iter()
             .filter(|a| {
-                a.active && matches!(a.account_type, AccountType::Asset | AccountType::Liability)
+                a.postable()
+                    && matches!(a.account_type, AccountType::Asset | AccountType::Liability)
             })
             .collect();
         if !self.started {

@@ -584,7 +584,7 @@ impl Reports {
             .list_accounts(scope, company_id)
             .await?
             .into_iter()
-            .find(|account| account.id == account_id)
+            .find(|account| account.id == account_id && !account.is_group)
             .ok_or(ReportsError::AccountNotFound)?;
         let totals = self
             .ledger

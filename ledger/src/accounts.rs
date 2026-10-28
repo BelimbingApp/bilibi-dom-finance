@@ -1,14 +1,19 @@
 //! The `finance_ledger_accounts` rows (Bilimbi `Ledger.Account` with the
-//! facade's parent, designation and deactivation rules). Code and type are
-//! the account's identity, since entries are posted against them; the
-//! facade authorizes and holds the company lock, and these run inside it.
-use crate::{Account, AccountChange, AccountType, FieldError, Money, NewAccount};
+//! facade's group, designation and deactivation rules): an account takes
+//! postings, an account group takes none and encloses accounts and groups.
+//! Code and type are the account's identity, since entries are posted against
+//! them; the facade authorizes and holds the company lock, and these run
+//! inside it.
+use crate::{
+    Account, AccountChange, AccountGroupChange, AccountType, FieldError, Money, NewAccount,
+    NewAccountGroup,
+};
 use bilibi_agent_api::OperationClient;
 use bilibi_database::Result;
 use serde_json::{json, Value};
 use tokio_postgres::{GenericClient, Row};
 
-const COLUMNS: &str = "id,code,name,account_type,parent_id,active,retained_earnings";
+const COLUMNS: &str = "id,code,name,account_type,parent_id,is_group,active,retained_earnings";
 const CODE_LIMIT: usize = 50;
 const NAME_LIMIT: usize = 200;
 
@@ -125,6 +130,7 @@ pub(crate) struct ValidAccount {
     pub name: String,
     pub account_type: AccountType,
     pub parent_id: Option<i64>,
+    pub is_group: bool,
     pub active: bool,
     pub retained_earnings: bool,
 }
@@ -135,20 +141,7 @@ pub(crate) async fn validate_new(
     new: &NewAccount,
 ) -> Result<std::result::Result<ValidAccount, Vec<FieldError>>> {
     let mut errors = Vec::new();
-    let code = new.code.trim().to_owned();
-    if code.is_empty() {
-        errors.push(FieldError::new("code", "can't be blank"));
-    } else if code.chars().count() > CODE_LIMIT {
-        errors.push(FieldError::new(
-            "code",
-            format!("should be at most {CODE_LIMIT} character(s)"),
-        ));
-    } else if find_by_code(client, tenant, company_id, &code)
-        .await?
-        .is_some()
-    {
-        errors.push(FieldError::new("code", "has already been taken"));
-    }
+    let code = new_code(client, tenant, company_id, &new.code, &mut errors).await?;
     let name = match name(&new.name) {
         Ok(name) => name,
         Err(error) => {
@@ -182,12 +175,86 @@ pub(crate) async fn validate_new(
             name,
             account_type: new.account_type,
             parent_id: new.parent_id,
+            is_group: false,
             active: new.active,
             retained_earnings: new.retained_earnings,
         })
     } else {
         Err(errors)
     })
+}
+
+/// The create attributes of an account group, trimmed, with its enclosing
+/// group checked, or the field errors. A group is always active and never
+/// designated for retained earnings.
+pub(crate) async fn validate_new_group(
+    client: &dyn OperationClient,
+    tenant: i64,
+    company_id: i64,
+    new: &NewAccountGroup,
+) -> Result<std::result::Result<ValidAccount, Vec<FieldError>>> {
+    let mut errors = Vec::new();
+    let code = new_code(client, tenant, company_id, &new.code, &mut errors).await?;
+    let name = match name(&new.name) {
+        Ok(name) => name,
+        Err(error) => {
+            errors.push(error);
+            String::new()
+        }
+    };
+    if let Some(parent_id) = new.parent_id {
+        if let Some(error) = parent_error(
+            client,
+            tenant,
+            company_id,
+            parent_id,
+            new.account_type,
+            None,
+        )
+        .await?
+        {
+            errors.push(error);
+        }
+    }
+    Ok(if errors.is_empty() {
+        Ok(ValidAccount {
+            code,
+            name,
+            account_type: new.account_type,
+            parent_id: new.parent_id,
+            is_group: true,
+            active: true,
+            retained_earnings: false,
+        })
+    } else {
+        Err(errors)
+    })
+}
+
+/// The code as trimmed, with what is wrong with it pushed on `errors`: blank,
+/// too long, or taken by another account or group of the company.
+async fn new_code(
+    client: &dyn OperationClient,
+    tenant: i64,
+    company_id: i64,
+    code: &str,
+    errors: &mut Vec<FieldError>,
+) -> Result<String> {
+    let code = code.trim().to_owned();
+    if code.is_empty() {
+        errors.push(FieldError::new("code", "can't be blank"));
+    } else if code.chars().count() > CODE_LIMIT {
+        errors.push(FieldError::new(
+            "code",
+            format!("should be at most {CODE_LIMIT} character(s)"),
+        ));
+    } else if find_by_code(client, tenant, company_id, &code)
+        .await?
+        .is_some()
+    {
+        errors.push(FieldError::new("code", "has already been taken"));
+    }
+    Ok(code)
 }
 
 /// The account as it will be after `change` (`Account.update_changeset/2`
@@ -201,6 +268,12 @@ pub(crate) async fn validate_change(
     change: &AccountChange,
     shown_units: crate::MinorUnits,
 ) -> Result<std::result::Result<Account, Vec<FieldError>>> {
+    if current.is_group {
+        return Ok(Err(vec![FieldError::new(
+            "account_id",
+            "is an account group; change it as a group",
+        )]));
+    }
     let mut errors = Vec::new();
     let mut next = current.clone();
     if let Some(value) = &change.name {
@@ -260,8 +333,56 @@ pub(crate) async fn validate_change(
     })
 }
 
-/// Why `parent_id` cannot group an account of `account_type`: it groups
-/// accounts of its own type, in this company, without a cycle.
+/// The group as it will be after `change`, or the field errors: its name and
+/// the group it sits in change; its code, type and being a group never do.
+pub(crate) async fn validate_group_change(
+    client: &dyn OperationClient,
+    tenant: i64,
+    company_id: i64,
+    current: &Account,
+    change: &AccountGroupChange,
+) -> Result<std::result::Result<Account, Vec<FieldError>>> {
+    if !current.is_group {
+        return Ok(Err(vec![FieldError::new(
+            "account_id",
+            "is an account; change it as an account",
+        )]));
+    }
+    let mut errors = Vec::new();
+    let mut next = current.clone();
+    if let Some(value) = &change.name {
+        match name(value) {
+            Ok(name) => next.name = name,
+            Err(error) => errors.push(error),
+        }
+    }
+    if let Some(parent_id) = change.parent_id {
+        next.parent_id = parent_id;
+        if let Some(parent_id) = parent_id {
+            if let Some(error) = parent_error(
+                client,
+                tenant,
+                company_id,
+                parent_id,
+                current.account_type,
+                Some(current.id),
+            )
+            .await?
+            {
+                errors.push(error);
+            }
+        }
+    }
+    Ok(if errors.is_empty() {
+        Ok(next)
+    } else {
+        Err(errors)
+    })
+}
+
+/// Why `parent_id` cannot enclose an account or group of `account_type`: it is
+/// an account group of the same type in this company, and not one the row
+/// itself encloses.
 async fn parent_error(
     client: &dyn OperationClient,
     tenant: i64,
@@ -276,6 +397,12 @@ async fn parent_error(
             "is not an account of this company",
         )));
     };
+    if !parent.is_group {
+        return Ok(Some(FieldError::new(
+            "parent_id",
+            "must be an account group",
+        )));
+    }
     if parent.account_type != account_type {
         return Ok(Some(FieldError::new(
             "parent_id",
@@ -362,8 +489,8 @@ pub(crate) async fn insert(
     let row = client
         .query_one(
             &format!(
-                "INSERT INTO finance_ledger_accounts(tenant_id,company_id,code,name,account_type,parent_id,active,retained_earnings,inserted_at,updated_at) \
-                 VALUES($1,$2,$3,$4,$5,$6,$7,$8,now() AT TIME ZONE 'UTC',now() AT TIME ZONE 'UTC') RETURNING {COLUMNS}"
+                "INSERT INTO finance_ledger_accounts(tenant_id,company_id,code,name,account_type,parent_id,is_group,active,retained_earnings,inserted_at,updated_at) \
+                 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,now() AT TIME ZONE 'UTC',now() AT TIME ZONE 'UTC') RETURNING {COLUMNS}"
             ),
             &[
                 &tenant,
@@ -372,6 +499,7 @@ pub(crate) async fn insert(
                 &account.name,
                 &account.account_type.as_str(),
                 &account.parent_id,
+                &account.is_group,
                 &account.active,
                 &account.retained_earnings,
             ],
@@ -415,6 +543,7 @@ pub(crate) fn to_json(account: &Account) -> Value {
         "name": account.name,
         "account_type": account.account_type.as_str(),
         "parent_id": account.parent_id,
+        "is_group": account.is_group,
         "active": account.active,
         "retained_earnings": account.retained_earnings,
     })
@@ -429,6 +558,7 @@ pub(crate) fn from_row(row: &Row) -> Account {
         // The column's CHECK constraint admits only the five types.
         account_type: AccountType::parse(&account_type).unwrap_or(AccountType::Asset),
         parent_id: row.get("parent_id"),
+        is_group: row.get("is_group"),
         active: row.get("active"),
         retained_earnings: row.get("retained_earnings"),
     }

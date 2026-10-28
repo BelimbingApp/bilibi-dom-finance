@@ -6,9 +6,9 @@
 //! answer; nothing here is a test double.
 use bilibi_database::{pool, Error};
 use bilibi_finance_ledger::{
-    AccountChange, AccountType, Entry, EntryOwner, EntryQuery, Ledger, LedgerError, MinorUnits,
-    Money, NewAccount, NewBook, NewEntry, NewLine, PostOptions, PostingEvent, PostingSubscription,
-    SERVICE,
+    AccountChange, AccountGroupChange, AccountType, Entry, EntryOwner, EntryQuery, Ledger,
+    LedgerError, MinorUnits, Money, NewAccount, NewAccountGroup, NewBook, NewEntry, NewLine,
+    PostOptions, PostingEvent, PostingSubscription, SERVICE,
 };
 use bilibi_finance_walkthrough_fixture::{install, sign_in, COMPANY};
 
@@ -263,7 +263,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .await,
     );
     show(
-        "manager groups an expense under the sales account",
+        "manager groups an expense under the sales account (an account, not a group)",
         ledger
             .create_account(&manager, COMPANY, &{
                 let mut new = NewAccount::new("5100", "Freight", AccountType::Expense);
@@ -282,17 +282,97 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             })
             .await,
     );
-    let petty = ledger
-        .create_account(&manager, COMPANY, &{
-            let mut new = NewAccount::new("1010", "Petty cash", AccountType::Asset);
-            new.parent_id = Some(cash);
+    show(
+        "manager adds a group with a code an account already has",
+        ledger
+            .create_account_group(
+                &manager,
+                COMPANY,
+                &NewAccountGroup::new("1000", "Current assets", AccountType::Asset),
+            )
+            .await,
+    );
+    let current = ledger
+        .create_account_group(
+            &manager,
+            COMPANY,
+            &NewAccountGroup::new("1900", "Current assets", AccountType::Asset),
+        )
+        .await?;
+    println!("manager adds group 1900 Current assets: {current:?}");
+    let current = current.id;
+    let nested = ledger
+        .create_account_group(&manager, COMPANY, &{
+            let mut new = NewAccountGroup::new("1950", "Cash and bank", AccountType::Asset);
+            new.parent_id = Some(current);
             new
         })
         .await?;
-    println!("manager adds 1010 Petty cash under 1000: {petty:?}");
+    println!("manager adds group 1950 inside 1900: {nested:?}");
+    let nested = nested.id;
+    show(
+        "manager adds an expense group inside the asset group 1900",
+        ledger
+            .create_account_group(&manager, COMPANY, &{
+                let mut new = NewAccountGroup::new("5900", "Overheads", AccountType::Expense);
+                new.parent_id = Some(current);
+                new
+            })
+            .await,
+    );
+    show(
+        "manager places group 1900 inside 1950, which sits inside 1900",
+        ledger
+            .update_account_group(
+                &manager,
+                COMPANY,
+                current,
+                &AccountGroupChange {
+                    parent_id: Some(Some(nested)),
+                    ..AccountGroupChange::default()
+                },
+            )
+            .await,
+    );
+    show(
+        "manager changes group 1900 as an account",
+        ledger
+            .update_account(
+                &manager,
+                COMPANY,
+                current,
+                &AccountChange {
+                    active: Some(false),
+                    ..AccountChange::default()
+                },
+            )
+            .await,
+    );
+    show(
+        "manager changes account 1000 as a group",
+        ledger
+            .update_account_group(
+                &manager,
+                COMPANY,
+                cash,
+                &AccountGroupChange {
+                    name: Some("Cash".into()),
+                    ..AccountGroupChange::default()
+                },
+            )
+            .await,
+    );
+    let petty = ledger
+        .create_account(&manager, COMPANY, &{
+            let mut new = NewAccount::new("1010", "Petty cash", AccountType::Asset);
+            new.parent_id = Some(nested);
+            new
+        })
+        .await?;
+    println!("manager adds 1010 Petty cash inside group 1950: {petty:?}");
     let petty = petty.id;
     show(
-        "manager renames 1010 and clears its parent",
+        "manager renames 1010 and takes it out of its group",
         ledger
             .update_account(
                 &manager,
@@ -306,43 +386,80 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
             .await,
     );
-    show("manager places 1000 under 1010, which sits under 1000", {
-        ledger
-            .update_account(
-                &manager,
-                COMPANY,
-                petty,
-                &AccountChange {
-                    parent_id: Some(Some(cash)),
-                    ..AccountChange::default()
-                },
-            )
-            .await?;
-        ledger
-            .update_account(
-                &manager,
-                COMPANY,
-                cash,
-                &AccountChange {
-                    parent_id: Some(Some(petty)),
-                    ..AccountChange::default()
-                },
-            )
-            .await
-    });
     show(
-        "manager places 1000 under 1100 (a sibling: no cycle)",
+        "manager puts account 1000 in group 1950 (a group of its type)",
         ledger
             .update_account(
                 &manager,
                 COMPANY,
                 cash,
                 &AccountChange {
-                    parent_id: Some(Some(receivables)),
+                    parent_id: Some(Some(nested)),
                     ..AccountChange::default()
                 },
             )
             .await,
+    );
+    show(
+        "manager puts account 1100 in the asset group 1900, and income account 4000 in it",
+        {
+            ledger
+                .update_account(
+                    &manager,
+                    COMPANY,
+                    receivables,
+                    &AccountChange {
+                        parent_id: Some(Some(current)),
+                        ..AccountChange::default()
+                    },
+                )
+                .await?;
+            ledger
+                .update_account(
+                    &manager,
+                    COMPANY,
+                    sales,
+                    &AccountChange {
+                        parent_id: Some(Some(current)),
+                        ..AccountChange::default()
+                    },
+                )
+                .await
+        },
+    );
+    show(
+        "manager renames group 1950 and moves it to the top",
+        ledger
+            .update_account_group(
+                &manager,
+                COMPANY,
+                nested,
+                &AccountGroupChange {
+                    name: Some("  Bank and cash  ".into()),
+                    parent_id: Some(None),
+                },
+            )
+            .await,
+    );
+    show(
+        "manager reads the chart's balances and group totals before any posting",
+        ledger
+            .chart_balances(&manager, COMPANY, date(2026, 12, 31), None)
+            .await
+            .map(|chart| {
+                chart
+                    .rows
+                    .iter()
+                    .filter(|r| r.account.parent_id.is_some() || r.account.is_group)
+                    .map(|r| {
+                        (
+                            r.account.code.clone(),
+                            r.balance.map(|m| m.to_string()),
+                            r.total.map(|m| m.to_string()),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            }),
     );
     show(
         "manager deactivates 1010 (balance zero)",
@@ -445,6 +562,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map(|_| ()),
     );
     show(
+        "manager posts to account group 1900: Dr 1900 / Cr 3000 5.00",
+        ledger
+            .post_entry(
+                &manager,
+                COMPANY,
+                &entry(
+                    "Posted to a group",
+                    vec![
+                        NewLine::debit(current, money("5.00")),
+                        NewLine::credit(capital, money("5.00")),
+                    ],
+                ),
+                &manual,
+            )
+            .await
+            .map(|e| e.entry_number),
+    );
+    show(
         "manager posts capital: Dr 1000 / Cr 3000 1,000.00",
         ledger
             .post_entry(
@@ -499,6 +634,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!(
         "subscriber hears: {}",
         heard(&mut subscription, Duration::from_secs(5)).await
+    );
+    show(
+        "manager reads group totals after the capital entry (1900 and 1950 hold accounts, never postings)",
+        ledger
+            .chart_balances(&manager, COMPANY, date(2026, 12, 31), None)
+            .await
+            .map(|chart| {
+                chart
+                    .rows
+                    .iter()
+                    .filter(|r| r.account.is_group || r.account.parent_id.is_some())
+                    .map(|r| {
+                        (
+                            r.account.code.clone(),
+                            r.balance.map(|m| m.to_string()),
+                            r.total.map(|m| m.to_string()),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            }),
     );
     show(
         "manager posts a second original entry for invoice:17",
@@ -915,6 +1070,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "UPDATE finance_ledger_accounts SET retained_earnings=true WHERE company_id=1 AND code='3100'",
         ),
         (
+            "INSERT a posting line on an account group",
+            "INSERT INTO finance_ledger_entry_lines(tenant_id,company_id,entry_id,line_number,account_id,debit,credit) \
+             SELECT 1,1,e.id,99,g.id,1,0 FROM finance_ledger_entries e, finance_ledger_accounts g \
+             WHERE e.company_id=1 AND e.entry_number=1 AND g.company_id=1 AND g.code='1900'",
+        ),
+        (
+            "UPDATE an account into a group",
+            "UPDATE finance_ledger_accounts SET is_group=true WHERE company_id=1 AND code='1000'",
+        ),
+        (
+            "UPDATE an account's group to an account",
+            "UPDATE finance_ledger_accounts a SET parent_id=p.id FROM finance_ledger_accounts p \
+             WHERE a.company_id=1 AND a.code='1100' AND p.company_id=1 AND p.code='1000'",
+        ),
+        (
             "INSERT an account with a parent of another company",
             "INSERT INTO finance_ledger_accounts(tenant_id,company_id,code,name,account_type,parent_id,inserted_at,updated_at) \
              SELECT 1,2,'1000','Cash','asset',id,now(),now() FROM finance_ledger_accounts WHERE company_id=1 AND code='1000'",
@@ -1136,5 +1306,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // NC2: reconciliation matching, reconciliations and statement-line posting.
     bilibi_finance_walkthrough_fixture::reconciliation_matching::run(&db, &services).await?;
     bilibi_finance_walkthrough_fixture::adopter_setup::reports(&db, &services).await?;
+    bilibi_finance_walkthrough_fixture::charts::run(&db, &services).await?;
     Ok(())
 }
