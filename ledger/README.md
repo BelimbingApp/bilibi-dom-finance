@@ -16,8 +16,9 @@ The currency list, names and decimal places come from Core Currency (`core/curre
 - **Proposal.** The Book page and `finance.ledger.book.currencies` propose the company's own base currency, else the tenant's, when it is enabled and not withdrawn, and say which. Nothing is hard-coded.
 - **Choice.** Opening accepts only an enabled, current currency. A code Core does not know, has withdrawn or the tenant has not enabled is refused with that reason.
 - **Decimal places.** They default to the currency's ISO 4217 value (`minor_units` may be omitted by an agent). A different value is allowed, since a company may keep finer or coarser books; the review and the page mark it *nonstandard* and name the standard. The review shows code, name and places (`changes.after.currency`: `currency_name`, `standard_minor_units`, `nonstandard_minor_units`, `reference`).
-- **List not available.** When no currency is enabled and the code is not in Core's list (the ISO seed has not been installed), a well-formed code is accepted *unchecked* and `minor_units` is required. The page shows a plain code field and says no currency is enabled and the code is not checked; the review says `reference: unchecked`. Once Core's list is enabled, this path closes.
-- Platform follow-up: Core has no "list installed" answer, so a tenant that installed the list but enabled nothing is treated as unavailable for an unknown code.
+- **Nothing enabled.** When Core's list is installed but the tenant has enabled no currency, no book opens: the page says "No currency is enabled yet" with a link to Core's Currencies page for someone allowed to enable one, shows no code field, and `book.open` (preview and commit, page and agent) refuses with the same words. `book.currencies` reports `reference: none_enabled`.
+- **List not available.** Only when Core's list was never installed (its `currencies` table is empty), a well-formed code is accepted *unchecked* and `minor_units` is required. The page shows a plain code field that says the code is not checked; the review says `reference: unchecked`; `book.currencies` reports `reference: unavailable`. Once the list is installed this path closes.
+- Platform follow-up: Core has no capability-free "list installed" answer (`Currencies::catalog` needs the view capability and a concrete client), so the ledger asks `SELECT 1 FROM currencies LIMIT 1` on the connection it was handed.
 
 ## Public API
 
@@ -95,7 +96,7 @@ H1 makes the facade-only writes reachable through the Platform's shared `/api/v1
 | Suffix under `finance.ledger.` | Contract |
 | --- | --- |
 | `book.get` | Book or null, controlled-bookkeeping and duty-separation changes |
-| `book.currencies` | The enabled currencies (code, name, ISO 4217 decimal places) matching an optional `search`, the proposed currency and its source, and whether the list is available |
+| `book.currencies` | The enabled currencies (code, name, ISO 4217 decimal places) matching an optional `search`, the proposed currency and its source, and `reference`: `iso4217` (currencies listed), `none_enabled` (list installed, nothing enabled) or `unavailable` (list not installed) |
 | `account.list` | Database-code-ordered chart; `after_code`, `next_after_code` |
 | `journal.get`, `journal.list` | Lines and decision; list by number with optional `status`, `after`, `next_after` |
 | `entry.get`, `entry.list` | Immutable lines and ownership/reversal identifiers; list filters `from`, `to`, `account_id`, `through_entry_number`, `exclude_closing`; cursor pair `after_date`, `after_id` in `next_after` |

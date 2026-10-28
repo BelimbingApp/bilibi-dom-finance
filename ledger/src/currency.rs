@@ -2,9 +2,12 @@
 //! owns the ISO 4217 codes, names and decimal places. The ledger keeps only
 //! the code and the decimal places the person confirmed.
 //!
-//! When the list has not been imported (nothing is enabled and the code is
-//! not in it), a well-formed code is accepted *unchecked* and the decimal
-//! places must be given: the book still opens, and the review says so.
+//! Three states of the list decide what a book may open with: *listed* (the
+//! tenant enabled some currencies: only those open a book), *none enabled* (the
+//! catalog is installed but nothing is enabled: no book opens until someone
+//! enables one) and *unavailable* (the catalog was never imported: a
+//! well-formed code is accepted *unchecked* and the decimal places must be
+//! given, and the review says so).
 use crate::FieldError;
 use bilibi_agent_api::OperationClient;
 use bilibi_currency::{normalize, Currencies, Currency, Unusable, BASE_KEY};
@@ -57,11 +60,57 @@ pub(crate) async fn choose_on(
     scope: &Scope,
     code: &str,
 ) -> Result<std::result::Result<Chosen, FieldError>> {
-    let currencies = &bound()?.currencies;
-    Ok(match currencies.check(tx, scope, code).await? {
-        Ok(currency) => Ok(Some(currency)),
-        Err(Unusable::Unknown) if currencies.enabled(tx.sql(), scope).await?.is_empty() => Ok(None),
-        Err(why) => Err(refusal(why)),
+    let why = match bound()?.currencies.check(tx, scope, code).await? {
+        Ok(currency) => return Ok(Ok(Some(currency))),
+        Err(why) => why,
+    };
+    let enabled = enabled(tx.sql(), scope).await?;
+    Ok(match reference(tx.sql(), &enabled).await? {
+        Reference::Unavailable => Ok(None),
+        Reference::NoneEnabled => Err(none_enabled()),
+        Reference::Listed => Err(refusal(why)),
+    })
+}
+
+/// How far the list can help: see the module notes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Reference {
+    Listed,
+    NoneEnabled,
+    Unavailable,
+}
+impl Reference {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Listed => "iso4217",
+            Self::NoneEnabled => "none_enabled",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+
+fn none_enabled() -> FieldError {
+    FieldError::new(
+        "currency_code",
+        "has nothing to choose from: no currency is enabled yet; enable one on the Currencies page",
+    )
+}
+
+async fn reference(client: &dyn OperationClient, enabled: &[Currency]) -> Result<Reference> {
+    if !enabled.is_empty() {
+        return Ok(Reference::Listed);
+    }
+    // `TODO(platform)`: Core offers no capability-free "is the catalog
+    // installed" read; its `catalog` needs the view capability and a
+    // `GenericClient`.
+    let installed = client
+        .query_opt("SELECT 1 FROM currencies LIMIT 1", &[])
+        .await?
+        .is_some();
+    Ok(if installed {
+        Reference::NoneEnabled
+    } else {
+        Reference::Unavailable
     })
 }
 
@@ -119,12 +168,16 @@ pub(crate) async fn choose(
     scope: &Scope,
     code: &str,
 ) -> Result<std::result::Result<Chosen, FieldError>> {
-    Ok(match get(client, scope, code).await? {
-        Some(currency) if currency.withdrawn => Err(refusal(Unusable::Withdrawn)),
-        Some(currency) if !currency.enabled => Err(refusal(Unusable::NotEnabled)),
-        Some(currency) => Ok(Some(currency)),
-        None if enabled(client, scope).await?.is_empty() => Ok(None),
-        None => Err(refusal(Unusable::Unknown)),
+    let enabled = enabled(client, scope).await?;
+    Ok(match reference(client, &enabled).await? {
+        Reference::Unavailable => Ok(None),
+        Reference::NoneEnabled => Err(none_enabled()),
+        Reference::Listed => match get(client, scope, code).await? {
+            Some(currency) if currency.withdrawn => Err(refusal(Unusable::Withdrawn)),
+            Some(currency) if !currency.enabled => Err(refusal(Unusable::NotEnabled)),
+            Some(currency) => Ok(Some(currency)),
+            None => Err(refusal(Unusable::Unknown)),
+        },
     })
 }
 
@@ -205,7 +258,7 @@ pub(crate) async fn options(
         .map(|c| json!({"code": c.code, "name": c.name, "minor_units": c.minor_units}))
         .collect();
     Ok(json!({
-        "reference": if all.is_empty() { "unavailable" } else { "iso4217" },
+        "reference": reference(client, &all).await?.as_str(),
         "proposed": proposed,
         "currencies": listed,
     }))

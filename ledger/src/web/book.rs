@@ -47,6 +47,9 @@ impl Options {
     fn listed(&self) -> bool {
         self.reference == "iso4217"
     }
+    fn none_enabled(&self) -> bool {
+        self.reference == "none_enabled"
+    }
 }
 
 pub(super) struct Book {
@@ -242,6 +245,22 @@ impl Book {
                 .id("ledger-book-not-open"),
             );
         }
+        if self.options.none_enabled() {
+            let mut empty = bilibi_ui::EmptyState::missing(
+                "No currency is enabled yet",
+                "A book opens in an enabled currency. Enable one on the Currencies page first.",
+            )
+            .id("ledger-book-none-enabled");
+            if self.pages.allowed(scope, bilibi_currency::MANAGE).await? {
+                empty = empty.action(render(Button {
+                    id: "ledger-book-currencies",
+                    href: bilibi_currency::CURRENCIES_PATH,
+                    body: Html::text("Open Currencies"),
+                    ..Button::default()
+                })?);
+            }
+            return render(empty);
+        }
         let errors = |name: &str| -> Vec<String> {
             self.refusal
                 .field(name)
@@ -296,7 +315,7 @@ impl Book {
                     .label("Currency code")
                     .value(&self.currency)
                     .required()
-                    .hint("No currency is enabled, so this code is not checked against ISO 4217. Three letters, like MYR. You cannot change it later.")
+                    .hint("The currency list has not been imported, so this code is not checked against ISO 4217. Three letters, like MYR. You cannot change it later.")
                     .errors(errors("currency_code"))
                     .attr("maxlength", "3")
                     .attr("data-debounce", "300"),
@@ -399,7 +418,7 @@ impl Book {
             }
             if currency["reference"].as_str() == Some("unchecked") {
                 detail.push_str(&format!(
-                    "No currency is enabled, so {code} was not checked against ISO 4217. "
+                    "The currency list has not been imported, so {code} was not checked against ISO 4217. "
                 ));
             }
             detail.push_str(if self.approver == "one_person" { "The currency and decimal places are permanent. Approval is still required. An authorized person may approve their own work; this records an approval exception." } else { "The currency and decimal places are permanent. Someone else must approve your work." });

@@ -94,21 +94,34 @@ def refused(channel, key, company, contains, who="manager", **values):
     require(body.get("valid") is False and "plan_code" not in body and contains in json.dumps(body), f"{key}: expected refusal {contains}")
 
 
+unavailable_proved = False
 for channel, company in [("api", 1), ("mcp", 2)]:
     print(f"\n== {channel}: company {company}")
     require(read(channel, "book.get", company)["book"] is None, "proof needs an unopened book")
     require(invoke(channel, "guide", {"key": "finance.ledger"}), "guide missing")
     require(invoke(channel, "describe", {"key": "finance.ledger.journal.submit"}), "schema missing")
     currencies = read(channel, "book.currencies", company)
-    if sql("SELECT count(*) FROM currencies") == "0":
+    if sql("SELECT count(*) FROM currencies") == "0" and not unavailable_proved:
         # The ISO list is not installed: a well-formed code opens unchecked and needs its decimal places.
+        unavailable_proved = True
         require(currencies["reference"] == "unavailable" and currencies["currencies"] == [], "list should be unavailable")
         refused(channel, "book.open", company, "minor_units", currency_code="MYR")
         unchecked = plan(channel, [operation("book.open", company, currency_code="MYR", minor_units=2)])
         require(unchecked["results"][0]["preview"]["result"]["changes"]["after"]["currency"]["reference"] == "unchecked", "unchecked review not marked")
         print("currency list unavailable: code accepted unchecked, decimal places required, review marked unchecked")
     else:
-        require(currencies["reference"] == "iso4217" and currencies["proposed"], "list and proposal expected")
+        # A disposable list of four currencies with three different decimal places; a seeded list keeps its own rows.
+        sql("INSERT INTO currencies (code, numeric_code, name, minor_units) VALUES ('MYR','458','Malaysian ringgit',2),('JPY','392','Japanese yen',0),('KWD','414','Kuwaiti dinar',3),('CHF','756','Swiss franc',2) ON CONFLICT DO NOTHING")
+        tenant = sql(f"SELECT tenant_id FROM companies WHERE id={company}")
+        sql(f"DELETE FROM currency_tenant_enabled WHERE tenant_id={tenant}")
+        none = read(channel, "book.currencies", company)
+        require(none["reference"] == "none_enabled" and none["currencies"] == [], "installed list with nothing enabled should say so")
+        refused(channel, "book.open", company, "no currency is enabled yet", currency_code="MYR", minor_units=2)
+        refused(channel, "book.open", company, "no currency is enabled yet", currency_code="QQQ", minor_units=2)
+        print("catalog installed, nothing enabled: reported as none_enabled, every book.open refused in the same words")
+        sql(f"INSERT INTO currency_tenant_enabled (tenant_id, code) VALUES ({tenant},'MYR'),({tenant},'JPY'),({tenant},'KWD')")
+        currencies = read(channel, "book.currencies", company)
+        require(currencies["reference"] == "iso4217", "list should be available once currencies are enabled")
         found = read(channel, "book.currencies", company, search="dinar")["currencies"]
         require(any(c["code"] == "KWD" and c["minor_units"] == 3 for c in found), "search by name failed")
         require(read(channel, "book.currencies", company, search="jpy")["currencies"][0]["minor_units"] == 0, "search by code failed")
@@ -119,7 +132,7 @@ for channel, company in [("api", 1), ("mcp", 2)]:
         standard, nonstandard = after(), after(minor_units=2)
         require(standard["minor_units"] == 3 and standard["currency"]["currency_name"] == "Kuwaiti dinar" and standard["currency"]["nonstandard_minor_units"] is False, "default decimal places not the standard")
         require(nonstandard["minor_units"] == 2 and nonstandard["currency"]["nonstandard_minor_units"] is True and nonstandard["currency"]["standard_minor_units"] == 3, "nonstandard not flagged")
-        print("currency list: search by name and code, refusals, standard default, nonstandard flagged, proposal from", currencies["proposed"]["source"])
+        print("currency list: search by name and code, refusals, standard default, nonstandard flagged, proposal:", (currencies["proposed"] or {}).get("source", "none"))
     direct = invoke(channel, "read", operation("book.open", company, currency_code="MYR", minor_units=2))
     require(direct.get("error") == "writes_not_enabled", "direct write was not refused")
     ops = [operation("book.open", company, currency_code="myr", minor_units=2)]
