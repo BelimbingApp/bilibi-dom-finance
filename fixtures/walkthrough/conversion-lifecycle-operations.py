@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Live opening-register correction MCP walkthrough, not a unit-test runner. Use only the disposable
-database and private credentials provisioned by the agent-operations binary.
+database and private credentials provisioned by `agent-operations conversion-credentials`.
+That fixture mode uses the browser reviewer for equivalent Core fact access.
 Every mutation goes through the real wire edge; SQL observes its effects.
 Tokens and plan codes never appear in output. See the ledger README.
 """

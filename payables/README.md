@@ -210,3 +210,5 @@ The `opening_batch` and `opening_item` evidence datasets retain the exact CSV, r
 ## Opening register corrections
 
 Stage a replacement export, then approve the complete reconciliation independently. Source batches, original records and approvals remain immutable. The [opening guide](opening-guide.md) describes batch limits, accounting dates, dependent reversals and historical report pins. `fixtures/walkthrough/src/bin/conversion.rs` proves the lifecycle on a disposable composed database.
+
+For browser/MCP parity, serve the disposable `conversion` fixture, provision credentials with `agent-operations conversion-credentials`, then run `fixtures/walkthrough/conversion-lifecycle-operations.py`. This mode uses the same independent reviewer for both doors; the default contractor fixture retains its Core fact masks.

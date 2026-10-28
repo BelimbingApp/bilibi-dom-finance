@@ -146,6 +146,8 @@ A direct import accepts 1–500 assets, at most 128 KiB. Identical source-refere
 Stage a replacement export, then approve the complete reconciliation independently. Source batches, original records and approvals remain immutable. The [opening guide](opening-guide.md) describes batch limits, accounting dates, dependent reversals and historical report pins. `fixtures/walkthrough/src/bin/conversion.rs` proves the lifecycle on a disposable composed database.
 
 
+For browser/MCP parity, serve the disposable `conversion` fixture, provision credentials with `agent-operations conversion-credentials`, then run `fixtures/walkthrough/conversion-lifecycle-operations.py`. This mode uses the same independent reviewer for both doors; the default contractor fixture retains its Core fact masks.
+
 ## Agent lifecycle operations
 
 MCP and `/api/v1` expose the same category preparation, acquisitions, depreciation and corrections as the pages. Discover `finance.fixed_assets.lifecycle` for the [step-by-step guide](lifecycle-guide.md). Every operation serves every channel and declares no step-up.
