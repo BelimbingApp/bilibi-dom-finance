@@ -325,6 +325,43 @@ pub async fn prove(
     assert!(ar.record_payment(&approver,company,&json!({"series_id":config["payment_series"],"customer_id":config["customer_id"],"payment_date":"2026-08-01","amount":"5","deposit_account_id":config["bank"],"allocations":[{"document_id":invoice,"amount":"5"}]})).await.is_err());
     // Old source exports survive and identical historical retries remain safe.
     assert_eq!(ar.import_opening_invoices(&approver,company,&json!({"source_reference":batches[0]["source_reference"],"currency_code":"MYR","series_id":config["invoice_series"],"csv":batches[0]["source_csv"]})).await?,batches[0]);
+    let opening = ledger
+        .opening_context_on(&**db.get().await?, &approver, company)
+        .await?;
+    assert!(ledger
+        .reverse_entry(
+            &approver,
+            company,
+            opening.entry.id,
+            &bilibi_finance_ledger::Reversal {
+                entry_date: day,
+                description: "Refused after append-only replacement".into(),
+                reference: None
+            }
+        )
+        .await
+        .is_err());
+    for table in [
+        "finance_receivables_opening_stages",
+        "finance_receivables_opening_decisions",
+        "finance_payables_opening_stages",
+        "finance_payables_opening_decisions",
+        "finance_fixed_assets_opening_stages",
+        "finance_fixed_assets_opening_decisions",
+        "finance_ledger_opening_recognition_replacements",
+    ] {
+        assert!(db
+            .get()
+            .await?
+            .execute(
+                &format!(
+                    "UPDATE {table} SET company_id=company_id WHERE tenant_id=1 AND company_id=$1"
+                ),
+                &[&company]
+            )
+            .await
+            .is_err());
+    }
     let run = assets
         .depreciate(&approver, company, date(2026, 8, 1))
         .await?;
