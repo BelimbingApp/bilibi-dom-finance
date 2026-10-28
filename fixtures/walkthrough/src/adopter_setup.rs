@@ -106,6 +106,40 @@ pub async fn opening(db: &Db, services: &Services) -> Outcome<()> {
         "opening rollbacks leave no book or duty change: {}",
         state["result"]
     );
+    let status = db.status();
+    let mut held = Vec::new();
+    for _ in 0..status.max_size - status.size + status.available {
+        held.push(db.get().await?);
+    }
+    let waiting = std::time::Duration::from_secs(5);
+    let input = json!({"company_id":COMPANY,"currency_code":"MYR","minor_units":2});
+    let mut tx = boundary
+        .begin(
+            &mut client,
+            manager.mutation_context("finance.walkthrough.adopter.pool"),
+        )
+        .await?;
+    let review = tokio::time::timeout(waiting, handler.preview(tx.sql(), &manager, &input))
+        .await
+        .map_err(|_| "book.open preview waited for a second pooled connection")??;
+    let listed = tokio::time::timeout(
+        waiting,
+        registry.call(
+            tx.sql(),
+            &manager,
+            "finance.ledger.book.currencies",
+            &json!({"company_id":COMPANY}),
+        ),
+    )
+    .await
+    .map_err(|_| "book.currencies waited for a second pooled connection")??;
+    tx.rollback().await?;
+    drop(held);
+    println!(
+        "book.open preview and book.currencies complete with every pool slot occupied: {} / {}",
+        review.envelope("finance.ledger.book.open"),
+        listed["result"]["reference"]
+    );
     for (value, units) in [
         ("12345.50", 2),
         ("-12345.50", 2),

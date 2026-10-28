@@ -11,7 +11,7 @@ and read through this module's facade; none of them reads its tables.
 
 ## Book currency
 
-The currency list, names and decimal places come from Core Currency (`core/currency`, ISO 4217; its README owns the source, seeds and updates). The ledger keeps no list of its own and depends on Core only through `Currencies`.
+The currency list, names and decimal places come from Core Currency (`core/currency`, ISO 4217; its README owns the source, seeds and updates). The ledger keeps no list of its own. Commits check a code through `Currencies`; a preview and the `book.currencies` read run Core's catalog query on the connection they were handed (`Currencies` reads cannot take the handed client), so they never wait for a second pooled connection under the company lock.
 
 - **Proposal.** The Book page and `finance.ledger.book.currencies` propose the company's own base currency, else the tenant's, when it is enabled and not withdrawn, and say which. Nothing is hard-coded.
 - **Choice.** Opening accepts only an enabled, current currency. A code Core does not know, has withdrawn or the tenant has not enabled is refused with that reason.

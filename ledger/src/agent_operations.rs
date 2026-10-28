@@ -266,7 +266,7 @@ impl Write {
                 let code = shaped_code(input)?;
                 let chosen = match tx {
                     Some(tx) => currency::choose_on(tx, scope, &code).await?,
-                    None => currency::choose(scope, &code).await?,
+                    None => currency::choose(client, scope, &code).await?,
                 }
                 .map_err(|refused| LedgerError::Invalid(vec![refused]))?;
                 let units = match input["minor_units"].as_i64() {
@@ -958,8 +958,13 @@ impl ReadHandler for Read {
                     json!({"book":books::find(client,tenant,company).await?,"controlled_bookkeeping":bookkeeping::latest(client,tenant,company).await?,"duty_separation":duties::latest_change(client,tenant,company).await?,"latest_entry_date":entries::latest_date(client,tenant,company).await?})
                 }
                 Self::Currencies => {
-                    currency::options(scope, company, input["search"].as_str().unwrap_or(""))
-                        .await?
+                    currency::options(
+                        client,
+                        scope,
+                        company,
+                        input["search"].as_str().unwrap_or(""),
+                    )
+                    .await?
                 }
                 Self::Accounts => {
                     let mut rows = accounts::page(

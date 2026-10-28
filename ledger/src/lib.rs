@@ -108,7 +108,7 @@ pub const SERVICE: &str = "finance/ledger.ledger";
 inventory::submit! {
     Module {
         id: MODULE, layer: Layer::Domains,
-        dependencies: &["base/agent_api", "base/authz", "base/database", "base/datetime", "base/locale", "base/menu", "base/party_ids", "base/tenancy", "base/ui", "core/company", "core/currency"],
+        dependencies: &["base/agent_api", "base/authz", "base/database", "base/datetime", "base/locale", "base/menu", "base/party_ids", "base/settings", "base/tenancy", "base/ui", "core/company", "core/currency"],
         migrations: &[
             ("finance-ledger-001-books-and-accounts", include_str!("../migrations/001-books-and-accounts.sql")),
             ("finance-ledger-002-entries", include_str!("../migrations/002-entries.sql")),
@@ -121,8 +121,8 @@ inventory::submit! {
         services: &[Service { id: SERVICE, factory: |services| {
             agent_operations::bind(services.get("base/tenancy.parties")?)?;
             currency::bind(
-                services.get::<Db>("base/database.pool")?.as_ref().clone(),
                 services.get("core/currency.currencies")?,
+                services.get("base/settings.store")?,
             )?;
             Ok(Arc::new(Ledger {
             db: services.get::<Db>("base/database.pool")?.as_ref().clone(),
