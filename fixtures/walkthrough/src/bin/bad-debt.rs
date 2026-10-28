@@ -32,6 +32,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = bilibi_web::App::new(db.clone(), &origin)?;
     let services = &app.services;
     bilibi_finance_walkthrough_fixture::without_step_up(services)?;
+    if std::env::args().any(|a| a == "serve-existing") {
+        if std::env::var("BILIBI_AGENT_PROOF").as_deref() != Ok("disposable")
+            || db
+                .get()
+                .await?
+                .query_opt(
+                    "SELECT id FROM users WHERE id=1 AND email='manager@example.test'",
+                    &[],
+                )
+                .await?
+                .is_none()
+        {
+            return Err(Error::Invalid.into());
+        }
+        return serve(app).await;
+    }
+
     bilibi_walkthrough_fixture::install(&db).await?;
     services
         .get::<Grants>("base/authz.grants")?
@@ -505,14 +522,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     drop(client);
     println!("Browser: {} /finance/receivables/invoices/{}; manager@example.test / admin@example.test; walkthrough password. Unpaid invoice {} remains open.",origin,invoices[3].id,invoices[0].id);
     if std::env::args().any(|a| a == "serve") {
-        axum::serve(
-            tokio::net::TcpListener::bind(
-                std::env::var("BIND_ADDR").unwrap_or("127.0.0.1:3186".into()),
-            )
-            .await?,
-            bilibi_web::router(app),
-        )
-        .await?;
+        serve(app).await?;
     }
+    Ok(())
+}
+
+async fn serve(app: bilibi_web::App) -> Result<(), Box<dyn std::error::Error>> {
+    axum::serve(
+        tokio::net::TcpListener::bind(
+            std::env::var("BIND_ADDR").unwrap_or("127.0.0.1:3186".into()),
+        )
+        .await?,
+        bilibi_web::router(app),
+    )
+    .await?;
     Ok(())
 }

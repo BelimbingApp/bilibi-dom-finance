@@ -45,7 +45,6 @@ impl Journals {
                     ("date", "Journal date"),
                     ("amount", "Amount"),
                     ("account", "Allowance or expense"),
-                    ("reason", "Reason and evidence"),
                     ("status", "Status"),
                     ("history", "History"),
                     ("actions", "Actions"),
@@ -116,10 +115,17 @@ impl Journals {
                     })?);
                 }
             }
-            let mut history = Html::text(&format!(
+            let mut history = render(Facts {
+                id: &format!("write-off-{}-assessment", w.id),
+                items: vec![
+                    f::fact("Reason", &w.reason),
+                    f::fact("Evidence reference", &w.evidence),
+                ],
+            })?;
+            history.push(&Html::text(&format!(
                 "Submitted · {} · ",
                 f::actor(Some(w.submitted_by_user_id), w.submitted_by_impersonator_id)
-            ));
+            )));
             history.push(&f::time(
                 display,
                 &format!("write-off-{}-submitted", w.id),
@@ -153,10 +159,6 @@ impl Journals {
                     .slot(
                         "account",
                         super::account_html(accounts, w.offset_account_id)?,
-                    )
-                    .cell(
-                        "reason",
-                        Cell::text(format!("{} · Evidence: {}", w.reason, w.evidence)),
                     )
                     .cell(
                         "status",
