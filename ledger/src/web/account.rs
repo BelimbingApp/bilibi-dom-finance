@@ -145,7 +145,7 @@ impl Account {
         let mut options = vec![Choice::new("No group", "")];
         options.extend(groups.iter().map(|a| view::account_choice(a)));
         let editor = render(
-            Combobox::new("ledger-account-parent-select", "parent")
+            Combobox::new("ledger-account-parent-input", "parent")
                 .aria_label("Group")
                 .placeholder("No group")
                 .wrapper_class("mb-0")

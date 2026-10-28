@@ -111,7 +111,10 @@ they govern this code and are not copied here.
   (`ledger/src/web/mod.rs`) for HTML a page controls; never `code name`. An
   inline editor passes the combobox as `InlineChoice`'s editor with an id of
   `...-input` (the wrapper owns `...-editor`). Platform gaps: the combobox draws
-  no required mark (it sets `required` on its input only) and the filter
+  no required mark (it sets `required` on its input only), so a required one
+  carries a trailing `*` in its `label` with the plain name as `aria_label`
+  (a stopgap until the Platform's Combobox draws the shared required marker),
+  and the filter
   toolbar has no combobox, so the Journal entries account filter is a shared
   `Form` on the `filters` event around one.
 - Declare every page or panel service's write events in its `PageWrites`

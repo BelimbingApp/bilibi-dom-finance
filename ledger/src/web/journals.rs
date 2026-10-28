@@ -620,7 +620,8 @@ impl Journals {
             let account_field = cell("account", "Account");
             let account = render(
                 Combobox::new(account_field.id.clone(), account_field.name.clone())
-                    .label("Account")
+                    .label("Account *")
+                    .aria_label("Account")
                     .placeholder("Choose an account")
                     .wrapper_class("mb-0")
                     .options(choices.clone())

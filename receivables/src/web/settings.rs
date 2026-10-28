@@ -409,7 +409,6 @@ impl Settings {
         })
     }
 
-    /// A row's choice edited in place: Active or Inactive, or an account.
     /// A row's account, edited in place with the combobox so the code stays
     /// muted and italic after the name.
     fn row_account(&self, row: &Row, display: Html, options: Vec<Choice>) -> Result<Html> {
@@ -426,6 +425,7 @@ impl Settings {
         })
     }
 
+    /// A row's choice edited in place: Active or Inactive.
     fn row_choice(&self, row: &Row, display: Html, options: Vec<Choice>) -> Result<Html> {
         let editor = Field::named(row.field)
             .id(format!("receivables-{}-editor", row.key()))
@@ -847,7 +847,8 @@ impl Settings {
             let account = field("account_id", "Tax account");
             body.push(&render(
                 Combobox::new(account.id.clone(), account.name.clone())
-                    .label("Tax account")
+                    .label("Tax account *")
+                    .aria_label("Tax account")
                     .value(account.value.clone())
                     .placeholder("Search liability accounts")
                     .options(self.account_choices("liability"))
