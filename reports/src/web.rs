@@ -292,7 +292,7 @@ impl State {
             self.flash = Some(match result {
                 Ok(artifact) => {
                     let message = if artifact.reference.kind == "ledger-pack" {
-                        "Ledger pack generated. Payroll source records and other subledger/source evidence are excluded; payroll journal lines remain included. See manifest.json for coverage."
+                        "Ledger pack generated. Payroll and other source records are excluded. Posted payroll journals are included."
                     } else {
                         "Auditor pack generated."
                     };

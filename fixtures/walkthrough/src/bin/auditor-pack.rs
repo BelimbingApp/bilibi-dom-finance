@@ -175,10 +175,10 @@ async fn main() -> Outcome<()> {
         .export_auditor_pack(&manager, COMPANY, date(2026, 3, 31))
         .await
     {
-        Err(ReportsError::Artifact("policy")) => {
-            println!("Unconfigured artifact retention refused")
+        Err(ReportsError::Artifact("policy" | "unsafe_root")) => {
+            println!("Unconfigured private artifact storage refused")
         }
-        other => panic!("Expected unconfigured retention, received {other:?}"),
+        other => panic!("Expected unconfigured private storage, received {other:?}"),
     }
     configure_storage(&db, services, &admin, &storage).await?;
     let debit = installed
@@ -497,7 +497,7 @@ async fn main() -> Outcome<()> {
             } else if mandatory {
                 "You do not have permission to export this company’s ledger."
             } else {
-                "Payroll source records and other subledger/source evidence are excluded"
+                "Payroll and other source records are excluded"
             }));
         grants.set_direct(&admin, 1, cap, None).await?;
     }

@@ -274,7 +274,12 @@ async fn credentials(db: &Db, services: &Services, root: &str) -> Outcome<()> {
     let callback = "https://example.test/accountant/callback";
     let registration=access.register_client(&serde_json::from_value::<ClientRegistration>(json!({"client_name":"External accountant proof","redirect_uris":[callback],"token_endpoint_auth_method":"none"}))?).await?;
     let client_id = registration["client_id"].as_str().ok_or(Error::Invalid)?;
-    let resource = format!("{}/mcp", std::env::var("APP_ORIGIN")?.trim_end_matches('/'));
+    let resource = format!(
+        "{}/mcp",
+        std::env::var("APP_ORIGIN")
+            .unwrap_or_else(|_| "http://127.0.0.1:4324".into())
+            .trim_end_matches('/')
+    );
     let mut saved = serde_json::Map::new();
     for (name, user) in [("first", 2), ("second", 3), ("supervisor", 1)] {
         let scope = sign_in(db, services, 1, user).await?;
