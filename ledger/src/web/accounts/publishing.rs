@@ -279,7 +279,7 @@ impl Accounts {
             .collect();
             self.publication = Some(Publication {
                 company,
-                company_name: self.pages.company_name(r.scope).await,
+                company_name: self.pages.company_name(r.scope).await?,
                 proposal: event == "propose_chart",
                 key: if event == "propose_chart" {
                     listed["proposal"]["configured"]
