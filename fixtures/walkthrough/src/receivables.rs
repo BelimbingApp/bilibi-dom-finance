@@ -696,6 +696,16 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
     let audit: i64 = client.query_one("SELECT count(*) FROM base_audit_mutations WHERE auditable_type LIKE 'finance.receivables.%'", &[]).await?.get(0);
     assert!(audit > 20);
     println!("receivables audit mutations: {audit}; concurrent duplicate serialized to one success and one field refusal");
+    // Uniqueness is per operating company, not per Core counterparty.
+    let other_customer = ar
+        .create_customer(
+            &admin,
+            3,
+            &json!({"code":"shared-company","core_company_id":10}),
+        )
+        .await?;
+    assert_eq!(other_customer.company.as_ref().map(|c| c.id), Some(10));
+    assert_ne!(other_customer.id, customer.id);
     // Company 3 is disposable and later walkthroughs already expect it archived.
     client
         .batch_execute("UPDATE companies SET status='archived' WHERE tenant_id=1 AND id=3")

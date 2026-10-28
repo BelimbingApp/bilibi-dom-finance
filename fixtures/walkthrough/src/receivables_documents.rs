@@ -556,6 +556,16 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         .expect("R2 customer");
     assert_eq!(baseline_customer.total, money("330").amount());
     let pin = baseline.through_entry_number;
+    let companies = services.get::<bilibi_company::CompanyService>(bilibi_company::SERVICE)?;
+    companies
+        .suspend_company(&admin, party.id, Some("Walkthrough: customer suspended"))
+        .await?;
+    field(
+        ar.create_draft(&admin, 1, &invoice(Some("2026-09-10"), "1"))
+            .await,
+        "customer_id",
+        "is a suspended company; reactivate it in Companies before invoicing",
+    );
     let paid = ar.record_payment(&admin, 1, &valid).await?;
     assert_eq!(paid.payment_number, 2);
     let entry = ledger.get_entry(&admin, 1, paid.ledger_entry_id).await?;
@@ -653,6 +663,9 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         &json!({"reversal_date":"2026-10-05","reason":"R2 outside receipt window"}),
     )
     .await?;
+    companies
+        .reactivate_company(&admin, party.id, Some("Walkthrough: customer reactivated"))
+        .await?;
     let reproduced = ar
         .aged_receivables(
             &admin,
