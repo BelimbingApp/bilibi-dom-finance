@@ -100,17 +100,88 @@ pub async fn prove(
         .await
         .is_err());
 
-    let mut part_ap = json!({"source_reference":"AP-CORRECTED","currency_code":"MYR","replaces_batch_id":batches[1]["id"],"reason":"Correct source bill original total","part":1,"part_count":1,"csv":batches[1]["source_csv"].as_str().unwrap().replace(",2500,",",2600,")});
-    ap.stage_opening_import(&preparer, company, &part_ap)
-        .await?;
+    let ap_header="source_id,vendor_code,vendor_name,document_reference,document_date,due_date,original_total,outstanding,control_account_code\n";
+    let ap_chunk = |start, end| {
+        let mut csv = ap_header.to_owned();
+        for n in start..end {
+            csv.push_str(&format!(
+                "corrected-{n},CONVERSION-VENDOR,Conversion vendor,CORRECTED-BILL-{n},2026-05-01,2026-06-15,0.20,0.15,2000\n"
+            ));
+        }
+        csv
+    };
+    let ap_common = json!({"source_reference":"AP-CORRECTED","currency_code":"MYR","replaces_batch_id":batches[1]["id"],"reason":"Correct source bill original total","part_count":20});
+    let revision = config["revision"].as_i64().unwrap();
+    let asset_header="source_id,description,category_revision_id,acquisition_date,in_service_date,cost,accumulated_depreciation,remaining_life_months,residual_value\n";
+    let asset_chunk = |start, end| {
+        let mut csv = asset_header.to_owned();
+        for n in start..end {
+            csv.push_str(&format!(
+                "corrected-{n},Source register asset {n},{revision},2024-06-01,2024-07-01,1.20,0.18,102,0\n"
+            ));
+        }
+        csv
+    };
+    let assets_common = json!({"source_reference":"ASSETS-CORRECTED","currency_code":"MYR","replaces_batch_id":batches[2]["id"],"reason":"Correct remaining prospective life","part_count":20});
+    for part in 1..=20 {
+        let mut bills = ap_common.clone();
+        bills["part"] = json!(part);
+        bills["csv"] = json!(ap_chunk((part - 1) * 500, part * 500));
+        assert_eq!(
+            ap.stage_opening_import(&preparer, company, &bills).await?["state"],
+            "committed"
+        );
+        let mut register = assets_common.clone();
+        register["part"] = json!(part);
+        register["csv"] = json!(asset_chunk((part - 1) * 500, part * 500));
+        assert_eq!(
+            assets
+                .stage_opening_import(&preparer, company, &register)
+                .await?["state"],
+            "committed"
+        );
+    }
+    let mut part_ap = ap_common.clone();
     part_ap["staged"] = json!(true);
     part_ap["csv"] = json!("");
-    let mut part_assets = json!({"source_reference":"ASSETS-CORRECTED","currency_code":"MYR","replaces_batch_id":batches[2]["id"],"reason":"Correct remaining prospective life","part":1,"part_count":1,"csv":batches[2]["source_csv"].as_str().unwrap().replace(",96,",",120,")});
-    assets
-        .stage_opening_import(&preparer, company, &part_assets)
-        .await?;
+    let mut part_assets = assets_common.clone();
     part_assets["staged"] = json!(true);
     part_assets["csv"] = json!("");
+    let mut bills_retry = ap_common.clone();
+    bills_retry["part"] = json!(20);
+    bills_retry["csv"] = json!(ap_chunk(9500, 10000));
+    assert_eq!(
+        ap.stage_opening_import(&preparer, company, &bills_retry)
+            .await?["already_staged"],
+        true
+    );
+    bills_retry["csv"] = json!(ap_chunk(9500, 9999));
+    assert!(ap
+        .stage_opening_import(&preparer, company, &bills_retry)
+        .await
+        .is_err());
+    let mut register_retry = assets_common.clone();
+    register_retry["part"] = json!(20);
+    register_retry["csv"] = json!(asset_chunk(9500, 10000));
+    assert_eq!(
+        assets
+            .stage_opening_import(&preparer, company, &register_retry)
+            .await?["already_staged"],
+        true
+    );
+    register_retry["csv"] = json!(asset_chunk(9500, 9999));
+    assert!(assets
+        .stage_opening_import(&preparer, company, &register_retry)
+        .await
+        .is_err());
+    assert!(ap
+        .import_opening_bills(&preparer, company, &part_ap)
+        .await
+        .is_err());
+    assert!(assets
+        .import_opening_register(&preparer, company, &part_assets)
+        .await
+        .is_err());
 
     // Corrections refuse standing dependent receipts and payments. Their own
     // audited reversal paths are the only way to release those dependencies.
@@ -355,10 +426,19 @@ pub async fn prove(
             .await
             .is_err());
     }
+    let bills = ap
+        .aged_payables(&approver, company, day, &Default::default())
+        .await?;
+    assert_eq!(bills.parties[0].documents.len(), 10_000);
+    assert_eq!(bills.total, ap_before.total);
+    let register = assets
+        .register_report(&approver, company, day, &Default::default())
+        .await?;
+    assert_eq!(register.rows.len(), 10_000);
     let run = assets
         .depreciate(&approver, company, date(2026, 8, 1))
         .await?;
-    assert_eq!(run.total, money("170"));
-    println!("Opening lifecycle: interrupted twenty-batch/10,000-invoice correction resumed; identical/concurrent retries, changed-source and self-approval refusals, late correction rollback, dependent receipts/payments/depreciation/disposal and owner reversals, accounting-date and original report boundaries, unchanged opening postings and prospective catch-up passed.");
+    assert_eq!(run.total, money("200"));
+    println!("Opening lifecycle: interrupted twenty-batch/10,000-invoice, bill and asset corrections resumed; identical/concurrent retries, changed-source and self-approval refusals, late correction rollback, dependent receipts/payments/depreciation/disposal and owner reversals, accounting-date and original report boundaries, unchanged opening postings and prospective catch-up passed.");
     Ok(())
 }
