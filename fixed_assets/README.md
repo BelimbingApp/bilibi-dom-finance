@@ -139,7 +139,11 @@ UI and MCP use `finance.fixed_assets.opening.context` and reviewed `finance.fixe
 
 The existing register report includes opening cost and accumulation from conversion onward, then subsequent depreciation, disposals and corrections at its normal four report pins. Depreciation-expense reconciliation counts subsequent charges separately from source accumulated depreciation. Retained source-period expense/YTD and comparative detail is not reconstructed by this import and must be reviewed with the source reporting bridge. The asset page shows source IDs, source reference, carrying value and the prospective basis.
 
-Each company can import one complete register of 1–500 assets, at most 128 KiB. Identical source-reference/CSV retries return the retained batch; changed retries are refused. **Correction or replacement of a committed opening register is not yet supported.** Non-straight-line prospective methods, zero remaining-life records, impairment/disposal history, capital allowances, staged larger registers and source-period depreciation detail remain follow-up work. The accountant approves source figures and future estimates; conversion does not replace the source archive.
+A direct import accepts 1–500 assets, at most 128 KiB. Identical source-reference/CSV retries return the retained batch; changed retries are refused. Committed corrections use independently approved staged replacements. Non-straight-line prospective methods, zero remaining-life records, impairment/disposal history, capital allowances and source-period depreciation detail remain follow-up work. The accountant approves source figures and future estimates; conversion does not replace the source archive.
+
+## Opening register corrections
+
+Stage a replacement export, then approve the complete reconciliation independently. Source batches, original records and approvals remain immutable. The [opening guide](opening-guide.md) describes batch limits, accounting dates, dependent reversals and historical report pins. `fixtures/walkthrough/src/bin/conversion.rs` proves the lifecycle on a disposable composed database.
 
 
 ## Agent lifecycle operations

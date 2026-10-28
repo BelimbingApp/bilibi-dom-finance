@@ -9,6 +9,40 @@ use serde_json::Value;
 const ISO: &str = "YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"";
 const DATASETS: &[(&str, &str, &[&str])] = &[
     (
+        "opening_stage",
+        "finance_receivables_opening_stages",
+        &[
+            "id",
+            "tenant_id",
+            "company_id",
+            "source_reference",
+            "part",
+            "payload",
+            "recorded_by_user_id",
+            "recorded_by_impersonator_id",
+            "recorded_at",
+        ],
+    ),
+    (
+        "opening_decision",
+        "finance_receivables_opening_decisions",
+        &[
+            "id",
+            "tenant_id",
+            "company_id",
+            "batch_id",
+            "replaces_batch_id",
+            "reason",
+            "effective_date",
+            "review",
+            "approval",
+            "state",
+            "recorded_by_user_id",
+            "recorded_by_impersonator_id",
+            "recorded_at",
+        ],
+    ),
+    (
         "opening_batch",
         "finance_receivables_opening_batches",
         &[

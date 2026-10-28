@@ -7,7 +7,7 @@ use bilibi_finance_ledger::{EntryOwner, Money, OpeningContext};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 
-const HEADER: &[&str] = &[
+pub(super) const HEADER: &[&str] = &[
     "source_id",
     "customer_code",
     "document_reference",
@@ -62,7 +62,7 @@ impl Receivables {
         let book = self.ledger.get_book_on(c, s, company).await?;
         let items: Vec<Value> = c.query("SELECT to_jsonb(i) FROM finance_receivables_opening_items i WHERE tenant_id=$1 AND company_id=$2 ORDER BY id", &[&s.tenant(), &company]).await?.iter().map(|row| row.get(0)).collect();
         Ok(
-            json!({"opening":opening,"book":book,"batch":store::find(c,BATCH,s.tenant(),company,None).await?,"header":HEADER,"items":items}),
+            json!({"opening":opening,"book":book,"batch":c.query_opt("SELECT to_jsonb(b) || jsonb_build_object('state','reconciled') FROM finance_receivables_opening_batches b WHERE tenant_id=$1 AND company_id=$2 ORDER BY id DESC LIMIT 1",&[&s.tenant(),&company]).await?.map(|r|r.get::<_,Value>(0)),"stages":c.query("SELECT to_jsonb(s) FROM finance_receivables_opening_stages s WHERE tenant_id=$1 AND company_id=$2 ORDER BY id",&[&s.tenant(),&company]).await?.iter().map(|r|r.get::<_,Value>(0)).collect::<Vec<_>>(),"decisions":c.query("SELECT to_jsonb(d) FROM finance_receivables_opening_decisions d WHERE tenant_id=$1 AND company_id=$2 ORDER BY id",&[&s.tenant(),&company]).await?.iter().map(|r|r.get::<_,Value>(0)).collect::<Vec<_>>(),"header":HEADER,"items":items}),
         )
     }
 
@@ -99,7 +99,7 @@ impl Receivables {
         let series = store::find(c, store::SERIES, s.tenant(), company, Some(series_id))
             .await?
             .ok_or(ReceivableError::SeriesNotFound)?;
-        let existing = store::find(c, BATCH, s.tenant(), company, None).await?;
+        let existing = c.query_opt("SELECT to_jsonb(b) || jsonb_build_object('state','reconciled') FROM finance_receivables_opening_batches b WHERE tenant_id=$1 AND company_id=$2 AND source_reference=$3",&[&s.tenant(),&company,&reference]).await?.map(|r|r.get::<_,Value>(0));
         if let Some(batch) = existing {
             if batch["source_reference"] != reference
                 || batch["source_csv"] != csv
@@ -110,8 +110,21 @@ impl Receivables {
                     "opening invoices have already been imported; the same source reference and exact CSV are required for a retry",
                 ));
             }
+            let retained=c.query_opt("SELECT review FROM finance_receivables_opening_decisions WHERE tenant_id=$1 AND company_id=$2 AND batch_id=$3",&[&s.tenant(),&company,&batch["id"].as_i64().ok_or(Error::Invalid)?]).await?;
+            if let Some(row) = retained {
+                let review: Value = row.get(0);
+                if review["replaces_batch_id"] != input["replaces_batch_id"]
+                    || review["reason"] != input["reason"]
+                    || review["effective_date"] != input["effective_date"]
+                {
+                    return Err(invalid(
+                        "source_reference",
+                        "already identifies different correction instructions",
+                    ));
+                }
+            }
             return Ok(Prepared {
-                review: json!({"batch":batch,"already_imported":true,"rows":[],"posts":false}),
+                review: json!({"state":"reconciled","batch":batch,"already_imported":true,"rows":[],"posts":false}),
                 context,
                 rows: vec![],
                 balance: Money::ZERO,
@@ -126,17 +139,19 @@ impl Receivables {
                 "must be an active invoice series; use a dedicated opening series",
             ));
         }
+        let replacement = self.opening_replacement(c, s, company, input).await?;
         let parsed = crate::opening_csv::parse(csv.as_bytes(), ",")
             .map_err(|e| invalid("csv", format!("cannot read CSV: {e:?}")))?;
         if parsed
             .first()
             .map(|r| r.iter().map(String::as_str).collect::<Vec<_>>())
             != Some(HEADER.to_vec())
-            || !(2..=501).contains(&parsed.len())
+            || !(2..=100001).contains(&parsed.len())
+            || (input["staged"] != true && (parsed.len() > 501 || csv.len() > 131072))
         {
             return Err(invalid(
                 "csv",
-                format!("requires header {} and 1 to 500 rows", HEADER.join(",")),
+                format!("requires header {} and 1 to 500 rows directly, or up to 100000 rows from staged batches", HEADER.join(",")),
             ));
         }
         let setup = store::find(c, store::SETUPS, s.tenant(), company, None)
@@ -240,18 +255,27 @@ impl Receivables {
                 ),
             ));
         }
-        if c.query_opt("SELECT id FROM finance_receivables_documents WHERE tenant_id=$1 AND company_id=$2 AND status='issued' LIMIT 1",&[&s.tenant(),&company]).await?.is_some() {return Err(invalid("csv","import opening invoices before issuing ordinary invoices"));}
+        if replacement.is_none() && c.query_opt("SELECT id FROM finance_receivables_documents WHERE tenant_id=$1 AND company_id=$2 AND status='issued' AND NOT EXISTS(SELECT 1 FROM finance_receivables_opening_items i WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=finance_receivables_documents.id) LIMIT 1",&[&s.tenant(),&company]).await?.is_some() {return Err(invalid("csv","import opening invoices before issuing ordinary invoices"));}
+        if let Some(old) = &replacement {
+            let old_id = old["id"].as_i64().ok_or(Error::Invalid)?;
+            let accounts=c.query("SELECT DISTINCT (source_facts->>'account_id')::bigint FROM finance_receivables_opening_items WHERE tenant_id=$1 AND company_id=$2 AND batch_id=$3",&[&s.tenant(),&company,&old_id]).await?;
+            if accounts.iter().any(|r| r.get::<_, i64>(0) != control) {
+                return Err(invalid("csv","a correction must retain every previously recognized opening account and its balance"));
+            }
+        }
         let approval = self
             .ledger
             .preview_approval_on(
                 c,
                 s,
                 company,
-                &context.approval(MODULE, input["override_reason"].as_str().map(str::to_owned)),
+                &self
+                    .opening_approval(c, s, company, &context, input)
+                    .await?,
             )
             .await?;
         Ok(Prepared {
-            review: json!({"conversion_date":context.entry.entry_date.to_string(),"entry_id":context.entry.id,"entry_number":context.entry.entry_number,"source_reference":reference,"currency_code":book.currency_code,"minor_units":book.minor_units,"rows":rows,"total":balance,"opening_balance":expected,"difference":Money::ZERO,"posts":false,"approval":approval,"already_imported":false}),
+            review: json!({"state":"previewed","replaces_batch_id":input["replaces_batch_id"],"reason":input["reason"],"effective_date":input["effective_date"],"staged":input["staged"]==true,"conversion_date":context.entry.entry_date.to_string(),"entry_id":context.entry.id,"entry_number":context.entry.entry_number,"source_reference":reference,"currency_code":book.currency_code,"minor_units":book.minor_units,"rows":rows,"total":balance,"opening_balance":expected,"difference":Money::ZERO,"posts":false,"approval":approval,"already_imported":false}),
             context,
             rows,
             balance,
@@ -290,8 +314,11 @@ impl Receivables {
         company: i64,
         input: &Value,
     ) -> Result<Value> {
+        let resolved = self.resolve_opening(tx.sql(), s, company, input).await?;
+        let input = &resolved;
         let p = self.prepare_opening(tx.sql(), s, company, input).await?;
-        if let Some(batch) = p.existing {
+        if let Some(mut batch) = p.existing {
+            batch["state"] = json!("reconciled");
             return Ok(batch);
         }
         self.ledger
@@ -299,10 +326,12 @@ impl Receivables {
                 tx,
                 s,
                 company,
-                &p.context
-                    .approval(MODULE, input["override_reason"].as_str().map(str::to_owned)),
+                &self
+                    .opening_approval(tx.sql(), s, company, &p.context, input)
+                    .await?,
             )
             .await?;
+        let review = p.review.clone();
         let tenant = s.tenant();
         let actor = s.user();
         let imp = s.impersonator().map(|p| p.user());
@@ -334,7 +363,7 @@ impl Receivables {
             Ok((batch,changes))
         })).await?;
         self.ledger
-            .recognize_opening_on(
+            .replace_opening_recognition_on(
                 tx,
                 s,
                 company,
@@ -342,10 +371,18 @@ impl Receivables {
                     module: MODULE.into(),
                     record: format!("opening:{}", batch["id"]),
                 },
+                input["replaces_batch_id"]
+                    .as_i64()
+                    .map(|id| format!("opening:{id}"))
+                    .as_deref(),
                 control,
                 p.balance,
             )
             .await?;
+        self.record_opening_decision(tx, s, company, &batch, input, &review)
+            .await?;
+        let mut batch = batch;
+        batch["state"] = json!("reconciled");
         Ok(batch)
     }
 }
@@ -359,6 +396,8 @@ pub(crate) async fn settlement_date(
     document: i64,
     date: jiff::civil::Date,
 ) -> Result<()> {
+    if c.query_opt("SELECT i.id FROM finance_receivables_opening_items i JOIN finance_receivables_opening_decisions d ON d.batch_id=i.batch_id AND d.tenant_id=$1 AND d.company_id=$2 WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=$3 AND d.effective_date>$4::text::date",&[&s.tenant(),&company,&document,&date.to_string()]).await?.is_some() {return Err(invalid("document_id","cannot be settled before the register's correction date"));}
+    if c.query_opt("SELECT i.id FROM finance_receivables_opening_items i JOIN finance_receivables_opening_decisions d ON d.replaces_batch_id=i.batch_id AND d.tenant_id=$1 AND d.company_id=$2 WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=$3",&[&s.tenant(),&company,&document]).await?.is_some() {return Err(invalid("document_id","belongs to a replaced opening register; use the replacement record"));}
     if c.query_opt("SELECT i.id FROM finance_receivables_opening_items i JOIN finance_receivables_opening_batches b ON b.id=i.batch_id AND b.tenant_id=$1 AND b.company_id=$2 WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=$3 AND b.conversion_date>$4::text::date",&[&s.tenant(),&company,&document,&date.to_string()]).await?.is_some() {return Err(invalid("document_id","cannot be settled before the conversion date"));}
     Ok(())
 }

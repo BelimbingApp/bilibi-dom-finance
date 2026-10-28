@@ -187,7 +187,7 @@ const BALANCES: &str = "SELECT d.*, d.issue_date::text issue_day, d.due_date::te
  AND NOT EXISTS(SELECT 1 FROM finance_receivables_write_off_events e WHERE e.write_off_id=w.id AND e.event='reversed' AND e.effective_date<=$3::text::date AND e.ledger_entry_number<=$4)),0) AS written_off
  FROM finance_receivables_documents d WHERE d.tenant_id=$1 AND d.company_id=$2
  AND d.kind='invoice' AND d.status='issued' AND d.issue_date<=$3::text::date AND d.ledger_entry_number<=$4
- AND NOT EXISTS(SELECT 1 FROM finance_receivables_opening_items i JOIN finance_receivables_opening_batches b ON b.id=i.batch_id AND b.tenant_id=$1 AND b.company_id=$2 WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=d.id AND (b.conversion_date>$3::text::date OR ($5::bigint IS NOT NULL AND b.id>$5)))";
+ AND NOT EXISTS(SELECT 1 FROM finance_receivables_opening_items i JOIN finance_receivables_opening_batches b ON b.id=i.batch_id AND b.tenant_id=$1 AND b.company_id=$2 WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=d.id AND (b.conversion_date>$3::text::date OR ($5::bigint IS NOT NULL AND b.id>$5) OR EXISTS(SELECT 1 FROM finance_receivables_opening_decisions own WHERE own.tenant_id=$1 AND own.company_id=$2 AND own.batch_id=b.id AND own.effective_date>$3::text::date) OR EXISTS(SELECT 1 FROM finance_receivables_opening_decisions x WHERE x.tenant_id=$1 AND x.company_id=$2 AND x.replaces_batch_id=b.id AND x.effective_date<=$3::text::date AND ($5::bigint IS NULL OR x.batch_id<=$5))))";
 
 async fn balances(
     client: &impl GenericClient,

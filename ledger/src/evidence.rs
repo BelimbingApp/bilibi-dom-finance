@@ -18,6 +18,17 @@ const ISO: &str = "YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"";
 /// list once exported; never add a credential to one.
 const DATASETS: &[(&str, &str, &[&str])] = &[
     (
+        "opening_recognition_replacement",
+        "finance_ledger_opening_recognition_replacements",
+        &[
+            "id",
+            "tenant_id",
+            "company_id",
+            "recognition_id",
+            "replaces_recognition_id",
+        ],
+    ),
+    (
         "opening_recognition",
         "finance_ledger_opening_recognitions",
         &[

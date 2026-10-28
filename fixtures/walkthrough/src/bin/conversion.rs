@@ -1,5 +1,7 @@
 //! Disposable opening-state conversion: browser first on Company 001, MCP on
 //! clean Company 002, then facade controls on Company 003. No product seeds.
+#[path = "../conversion_lifecycle.rs"]
+mod conversion_lifecycle;
 use bilibi_authz::{RoleDefinition, VocabularyContribution, VOCABULARY};
 use bilibi_database::{pool, Db};
 use bilibi_finance_fixed_assets::{Assumptions, FixedAssets, Method, ReportPins, RevisionInput};
@@ -313,11 +315,11 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         .await?;
     let b = ap.import_opening_bills(&s, company, &ap_input).await?;
     assert_eq!(b, ap.import_opening_bills(&s, company, &ap_input).await?);
-    let c = assets
+    let asset_batch = assets
         .import_opening_register(&s, company, &asset_input)
         .await?;
     assert_eq!(
-        c,
+        asset_batch,
         assets
             .import_opening_register(&s, company, &asset_input)
             .await?
@@ -614,6 +616,8 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
     println!(
         "Conversion facade proof: exact source balances, partial residuals, all three mismatch refusals, corrected preview, identical retries, independent approval, pre-cutoff exclusion, aged dates, control tie-outs, source accumulation differing from historical projection, prospective 106.25 depreciation, receipt, supplier payment and their reversals, guarded opening reversal, audit evidence and retained rows passed."
     );
+    drop(c);
+    conversion_lifecycle::prove(db, services, &config, [a, b, asset_batch], run.id).await?;
     Ok(())
 }
 #[tokio::main]

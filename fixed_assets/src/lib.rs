@@ -7,6 +7,7 @@ mod categories;
 mod contributions;
 mod opening;
 mod opening_csv;
+mod opening_lifecycle;
 mod opening_operations;
 mod opening_web;
 mod operations;
@@ -42,6 +43,7 @@ inventory::submit! { Module {
         ("finance-fixed-assets-001-acquisitions", include_str!("../migrations/001-acquisitions.sql")),
         ("finance-fixed-assets-002-runs-corrections", include_str!("../migrations/002-runs-corrections.sql")),
         ("finance-fixed-assets-003-opening-items", include_str!("../migrations/003-opening-items.sql")),
+            ("finance-fixed-assets-004-opening-lifecycle", include_str!("../migrations/004-opening-lifecycle.sql")),
     ],
     services: &[Service {id:opening_web::PAGES,factory:|services| Ok(Arc::new(bilibi_ui::page::PageService::<Scope,Error>(Arc::new(opening_web::Pages {db:services.get::<Db>("base/database.pool")?.as_ref().clone(),contracts:services.get(bilibi_agent_api::page::SERVICE)?,plans:services.get("base/agent_api.plans")?}))))},Service { id: SERVICE, factory: |s| { let assets = Arc::new(FixedAssets {
         db: s.get::<Db>("base/database.pool")?.as_ref().clone(),

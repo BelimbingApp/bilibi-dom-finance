@@ -5,7 +5,7 @@
 //! is specific to an account.
 
 /// The largest file the reader accepts, in bytes.
-pub(crate) const MAX_BYTES: usize = 128 * 1024;
+pub(crate) const MAX_BYTES: usize = 32 * 1024 * 1024;
 
 /// Why a file is not read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

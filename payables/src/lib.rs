@@ -8,6 +8,7 @@ mod contributions;
 mod documents;
 mod opening;
 mod opening_csv;
+mod opening_lifecycle;
 mod opening_operations;
 mod opening_web;
 mod vendors;
@@ -62,6 +63,7 @@ inventory::submit! { Module {
         ("finance-payables-004-vendors", include_str!("../migrations/004-vendors.sql")),
         ("finance-payables-005-vendor-company-scope", include_str!("../migrations/005-vendor-company-scope.sql")),
         ("finance-payables-006-opening-items", include_str!("../migrations/006-opening-items.sql")),
+            ("finance-payables-007-opening-lifecycle", include_str!("../migrations/007-opening-lifecycle.sql")),
     ],
     services: &[Service {id:opening_web::PAGES,factory:|services| Ok(Arc::new(bilibi_ui::page::PageService::<Scope,Error>(Arc::new(opening_web::Pages {db:services.get::<Db>("base/database.pool")?.as_ref().clone(),contracts:services.get(bilibi_agent_api::page::SERVICE)?,plans:services.get("base/agent_api.plans")?}))))},Service { id: SERVICE, factory: |s| { let payables = Arc::new(Payables {
         db: s.get::<Db>("base/database.pool")?.as_ref().clone(),

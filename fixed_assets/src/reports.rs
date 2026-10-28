@@ -187,10 +187,14 @@ impl FixedAssets {
             let id = int(v, "id")?;
             revision_map.insert(id, store::revision(c, s.tenant(), company, id).await?);
         }
+        let superseded:Vec<i64>=c.query("SELECT i.asset_id FROM finance_fixed_assets_opening_items i JOIN finance_fixed_assets_opening_decisions d ON d.replaces_batch_id=i.batch_id AND d.tenant_id=$1 AND d.company_id=$2 WHERE i.tenant_id=$1 AND i.company_id=$2 AND d.effective_date<=$4::text::date AND (SELECT max(a.asset_number) FROM finance_fixed_assets_opening_items n JOIN finance_fixed_assets_assets a ON a.id=n.asset_id AND a.tenant_id=$1 AND a.company_id=$2 WHERE n.tenant_id=$1 AND n.company_id=$2 AND n.batch_id=d.batch_id)<=$3",&[&s.tenant(),&company,&asset_pin,&date.to_string()]).await?.iter().map(|r|r.get(0)).collect();
+        let future:Vec<i64>=c.query("SELECT i.asset_id FROM finance_fixed_assets_opening_items i JOIN finance_fixed_assets_opening_decisions d ON d.batch_id=i.batch_id AND d.tenant_id=$1 AND d.company_id=$2 WHERE i.tenant_id=$1 AND i.company_id=$2 AND d.effective_date>$3::text::date",&[&s.tenant(),&company,&date.to_string()]).await?.iter().map(|r|r.get(0)).collect();
         let mut rows = Vec::new();
         for v in assets {
             let a = store::asset(&v, totals.minor_units)?;
-            if a.asset_number > asset_pin
+            if superseded.contains(&a.id)
+                || future.contains(&a.id)
+                || a.asset_number > asset_pin
                 || a.entry_number > through
                 || a.acquisition_date > date
                 || a.opening_date.is_some_and(|opening| opening > date)

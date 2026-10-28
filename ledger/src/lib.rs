@@ -127,6 +127,7 @@ inventory::submit! {
             ("finance-ledger-008-account-groups", include_str!("../migrations/008-account-groups.sql")),
             ("finance-ledger-009-chart-templates", include_str!("../migrations/009-chart-templates.sql")),
             ("finance-ledger-010-opening-recognitions", include_str!("../migrations/010-opening-recognitions.sql")),
+            ("finance-ledger-011-opening-replacements", include_str!("../migrations/011-opening-replacements.sql")),
         ],
         services: &[Service { id: SERVICE, factory: |services| {
             agent_operations::bind(services.get("base/tenancy.parties")?)?;

@@ -239,6 +239,13 @@ impl Bill {
             });
         }
         if let Some(opening) = &d.opening {
+            if let Some(batch) = opening["replaced_by_batch_id"].as_i64() {
+                items.push(f::fact(
+                    "Opening register",
+                    &format!("Replaced by register {batch}; retained as source evidence."),
+                ));
+            }
+
             items.push(f::fact(
                 "Opening source",
                 opening["source_reference"].as_str().unwrap_or(""),

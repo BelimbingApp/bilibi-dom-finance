@@ -32,8 +32,42 @@ fn company(input: &Value) -> Result<i64> {
 fn target() -> Value {
     json!({"type":"object","required":["company_id"],"properties":{"company_id":{"type":"integer","minimum":1}}})
 }
-fn schema() -> Value {
+fn base_schema() -> Value {
     json!({"type":"object","required":["company_id","source_reference","currency_code","csv"],"properties":{"company_id":{"type":"integer","minimum":1},"source_reference":{"type":"string","maxLength":100},"currency_code":{"type":"string","maxLength":3},"csv":{"type":"string","maxLength":131072,"description":"UTF-8 CSV; obtain the exact required header from opening.context. Import the complete opening register, at most 500 rows."},"override_reason":{"type":"string","maxLength":500}}})
+}
+fn schema() -> Value {
+    let mut value = base_schema();
+    let properties = value["properties"]
+        .as_object_mut()
+        .expect("schema properties");
+    properties.insert(
+        "part".into(),
+        json!({"type":"integer","minimum":1,"maximum":200}),
+    );
+    properties.insert(
+        "part_count".into(),
+        json!({"type":"integer","minimum":1,"maximum":200}),
+    );
+    properties.insert("staged".into(),json!({"type":"boolean","description":"Reconcile retained source batches; pass an empty csv."}));
+    properties.insert(
+        "replaces_batch_id".into(),
+        json!({"type":"integer","minimum":1}),
+    );
+    properties.insert(
+        "effective_date".into(),
+        json!({"type":"string","format":"date"}),
+    );
+    properties.insert("reason".into(), json!({"type":"string","maxLength":500}));
+    value
+}
+
+fn stage_schema() -> Value {
+    let mut value = schema();
+    value["required"]
+        .as_array_mut()
+        .expect("schema required")
+        .extend([json!("part"), json!("part_count")]);
+    value
 }
 fn output() -> Value {
     json!({"type":"object"})
@@ -95,9 +129,14 @@ impl WriteHandler for Import {
         input: &'a Value,
     ) -> OperationFuture<'a> {
         Box::pin(async move {
+            let resolved = owner()
+                .map_err(failure)?
+                .resolve_opening(c, s, company(input).map_err(failure)?, input)
+                .await
+                .map_err(failure)?;
             let prepared = owner()
                 .map_err(failure)?
-                .prepare_opening(c, s, company(input).map_err(failure)?, input)
+                .prepare_opening(c, s, company(input).map_err(failure)?, &resolved)
                 .await
                 .map_err(failure)?;
             fence(c, &json!({"input":input,"review":prepared.review}), false).await?;
@@ -113,8 +152,12 @@ impl WriteHandler for Import {
         Box::pin(async move {
             let owner = owner().map_err(failure)?;
             let company = company(input).map_err(failure)?;
+            let resolved = owner
+                .resolve_opening(tx.sql(), s, company, input)
+                .await
+                .map_err(failure)?;
             let prepared = owner
-                .prepare_opening(tx.sql(), s, company, input)
+                .prepare_opening(tx.sql(), s, company, &resolved)
                 .await
                 .map_err(failure)?;
             fence(
@@ -131,7 +174,51 @@ impl WriteHandler for Import {
         })
     }
 }
+struct Stage;
+impl WriteHandler for Stage {
+    fn owner(&self) -> &'static str {
+        MODULE
+    }
+    fn preview<'a>(
+        &'a self,
+        c: &'a dyn OperationClient,
+        s: &'a Scope,
+        input: &'a Value,
+    ) -> OperationFuture<'a> {
+        Box::pin(async move {
+            let prepared = owner()
+                .map_err(failure)?
+                .prepare_opening_stage(c, s, company(input).map_err(failure)?, input)
+                .await
+                .map_err(failure)?;
+            fence(c, &json!({"input":input,"review":prepared}), false).await?;
+            Ok(json!({"changes":prepared}).into())
+        })
+    }
+    fn commit<'a>(
+        &'a self,
+        tx: &'a mut MutationTransaction<'_>,
+        s: &'a Scope,
+        input: &'a Value,
+    ) -> OperationFuture<'a> {
+        Box::pin(async move {
+            let owner = owner().map_err(failure)?;
+            let company = company(input).map_err(failure)?;
+            let prepared = owner
+                .prepare_opening_stage(tx.sql(), s, company, input)
+                .await
+                .map_err(failure)?;
+            fence(tx.sql(), &json!({"input":input,"review":prepared}), true).await?;
+            let record = owner
+                .stage_opening_on(tx, s, company, input)
+                .await
+                .map_err(failure)?;
+            Ok(json!({"record":record,"path":"/finance/payables/opening"}).into())
+        })
+    }
+}
 inventory::submit! {Contribution::new(DEFINITIONS,"finance/payables.opening",Provenance{module:MODULE,source:file!(),line:line!()},&Definitions{operations:&[
  Operation{key:"finance.payables.opening.context",title:"Read opening import context",summary:"Read the approved conversion entry, source balances, CSV header and retained import batch for the current company.",keywords:&["conversion"],capability:VIEW,input:target,output,handler:Handler::Read(&Context),channels:Channels::Every,step_up:&[]},
+ Operation{key:"finance.payables.opening.stage",title:"Stage opening source batch",summary:"Retain one immutable source batch for a resumable register. Identical retries are safe. Reconcile only after all batches are committed, with approval independent of every staging preparer.",keywords:&["conversion"],capability:POST_DOCUMENTS,input:stage_schema,output,handler:Handler::SafeWrite(&Stage),channels:Channels::Every,step_up:&[]},
  Operation{key:"finance.payables.opening.import",title:"Opening bills",summary:"Preview a complete opening register and exact reconciliation, then approve once. Retain source evidence without a new acquisition, supply or tax posting. Identical retries return the retained batch. Requires approval independent of the opening source preparer.",keywords:&["conversion"],capability:POST_DOCUMENTS,input:schema,output,handler:Handler::SafeWrite(&Import),channels:Channels::Every,step_up:&[]}
 ],guides:&[bilibi_agent_api::Guide {key:"finance.payables.opening",title:"Opening bills",summary:"Convert source registers without duplicating opening postings.",keywords:&["conversion"],capability:VIEW,body:include_str!("../opening-guide.md")}]})}

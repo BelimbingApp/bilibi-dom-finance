@@ -224,7 +224,7 @@ pub(crate) async fn document_record(
         None
     };
     Ok(Some(Document {
-        opening: c.query_opt("SELECT i.source_facts || jsonb_build_object('source_reference',b.source_reference,'conversion_date',b.conversion_date::text) FROM finance_payables_opening_items i JOIN finance_payables_opening_batches b ON b.id=i.batch_id AND b.tenant_id=$1 AND b.company_id=$2 WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=$3",&[&tenant,&company,&id]).await?.map(|r|r.get(0)),
+        opening: c.query_opt("SELECT i.source_facts || jsonb_build_object('source_reference',b.source_reference,'conversion_date',b.conversion_date::text,'batch_id',b.id,'replaced_by_batch_id',(SELECT x.batch_id FROM finance_payables_opening_decisions x WHERE x.tenant_id=$1 AND x.company_id=$2 AND x.replaces_batch_id=b.id)) FROM finance_payables_opening_items i JOIN finance_payables_opening_batches b ON b.id=i.batch_id AND b.tenant_id=$1 AND b.company_id=$2 WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=$3",&[&tenant,&company,&id]).await?.map(|r|r.get(0)),
         id,
         vendor_id: crate::vendors::mapped(c, tenant, company, &text(&v, "party_key")?).await?,
         document_type: kind,
@@ -349,6 +349,7 @@ pub(crate) async fn outstanding(
     company: i64,
     bill: i64,
 ) -> DbResult<Money> {
+    if c.query_opt("SELECT i.id FROM finance_payables_opening_items i JOIN finance_payables_opening_decisions x ON x.replaces_batch_id=i.batch_id AND x.tenant_id=$1 AND x.company_id=$2 WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=$3",&[&tenant,&company,&bill]).await?.is_some() {return Ok(Money::ZERO);}
     crate::balances::owed(
         c,
         tenant,

@@ -56,6 +56,23 @@ impl Ledger {
         account: i64,
         balance: Money,
     ) -> Result<()> {
+        self.replace_opening_recognition_on(tx, scope, company, owner, None, account, balance)
+            .await
+    }
+
+    /// Transfer recognition to a reconciled replacement without altering the
+    /// journal or removing prior recognition. Only the current owner can transfer.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn replace_opening_recognition_on(
+        &self,
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company: i64,
+        owner: &EntryOwner,
+        replaces_record: Option<&str>,
+        account: i64,
+        balance: Money,
+    ) -> Result<()> {
         agent_operations::authorize_on(tx.sql(), scope, company, VIEW).await?;
         lock(tx, scope, company).await?;
         let context = self.opening_context_on(tx.sql(), scope, company).await?;
@@ -66,15 +83,24 @@ impl Ledger {
             )]));
         }
         let tenant = scope.tenant();
-        if tx.sql().query_opt("SELECT id FROM finance_ledger_opening_recognitions WHERE tenant_id=$1 AND company_id=$2 AND account_id=$3", &[&tenant,&company,&account]).await.map_err(Error::from)?.is_some() {
-            return Err(LedgerError::Invalid(vec![FieldError::new("items", "the opening account has already been imported")]));
-        }
+        let existing=tx.sql().query_opt("SELECT r.id,r.owner_module,r.owner_record FROM finance_ledger_opening_recognitions r WHERE r.tenant_id=$1 AND r.company_id=$2 AND r.account_id=$3 AND NOT EXISTS(SELECT 1 FROM finance_ledger_opening_recognition_replacements x WHERE x.tenant_id=$1 AND x.company_id=$2 AND x.replaces_recognition_id=r.id)",&[&tenant,&company,&account]).await.map_err(Error::from)?;
+        let replaces=match (existing,replaces_record) {
+            (None,None)=>None,
+            (Some(row),Some(record)) if row.get::<_,String>(1)==owner.module && row.get::<_,String>(2)==record && record!=owner.record=>Some(row.get::<_,i64>(0)),
+            _=>return Err(LedgerError::Invalid(vec![FieldError::new("items","the opening account has already been imported; a replacement must name its current owner")])),
+        };
         let entry = context.entry.id;
         let module = owner.module.clone();
         let reference = owner.record.clone();
         tx.mutate(move |sql| Box::pin(async move {
             let row = sql.query_one("INSERT INTO finance_ledger_opening_recognitions(tenant_id,company_id,entry_id,account_id,owner_module,owner_record,balance) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id", &[&tenant,&company,&entry,&account,&module,&reference,&balance.amount()]).await?;
-            Ok(((),vec![Change {kind:"finance.ledger.opening_recognition".into(),id:row.get(0),old:Value::Null,new:json!({"entry_id":entry,"account_id":account,"owner_module":module,"owner_record":reference,"balance":balance})}]))
+            let id:i64=row.get(0);
+            let mut changes=vec![Change {kind:"finance.ledger.opening_recognition".into(),id,old:Value::Null,new:json!({"entry_id":entry,"account_id":account,"owner_module":module,"owner_record":reference,"balance":balance})}];
+            if let Some(replaced)=replaces {
+                let row=sql.query_one("INSERT INTO finance_ledger_opening_recognition_replacements(tenant_id,company_id,recognition_id,replaces_recognition_id) VALUES($1,$2,$3,$4) RETURNING id",&[&tenant,&company,&id,&replaced]).await?;
+                changes.push(Change{kind:"finance.ledger.opening_recognition_replacement".into(),id:row.get(0),old:Value::Null,new:json!({"recognition_id":id,"replaces_recognition_id":replaced})});
+            }
+            Ok(((),changes))
         })).await?;
         Ok(())
     }

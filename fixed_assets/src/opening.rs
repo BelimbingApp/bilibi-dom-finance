@@ -5,7 +5,7 @@ use bilibi_agent_api::OperationClient;
 use bilibi_finance_ledger::{EntryOwner, OpeningContext};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
-const HEADER: &[&str] = &[
+pub(super) const HEADER: &[&str] = &[
     "source_id",
     "description",
     "category_revision_id",
@@ -57,7 +57,7 @@ impl FixedAssets {
         let items: Vec<Value> = c.query("SELECT to_jsonb(i) FROM finance_fixed_assets_opening_items i WHERE tenant_id=$1 AND company_id=$2 ORDER BY id", &[&s.tenant(), &company]).await?.iter().map(|row| row.get(0)).collect();
         let categories:Vec<Value>=c.query("SELECT to_jsonb(r) || jsonb_build_object('category_name',g.name) FROM finance_fixed_assets_category_revisions r JOIN finance_fixed_assets_categories g ON g.id=r.category_id AND g.tenant_id=r.tenant_id AND g.company_id=r.company_id WHERE r.tenant_id=$1 AND r.company_id=$2 ORDER BY r.id",&[&s.tenant(),&company]).await?.iter().map(|r|r.get(0)).collect();
         Ok(
-            json!({"opening":self.ledger.opening_context_on(c,s,company).await?,"book":self.ledger.get_book_on(c,s,company).await?,"batch":c.query_opt("SELECT to_jsonb(b) FROM finance_fixed_assets_opening_batches b WHERE tenant_id=$1 AND company_id=$2",&[&s.tenant(),&company]).await?.map(|r|r.get::<_,Value>(0)),"category_revisions":categories,"header":HEADER,"items":items}),
+            json!({"opening":self.ledger.opening_context_on(c,s,company).await?,"book":self.ledger.get_book_on(c,s,company).await?,"batch":c.query_opt("SELECT to_jsonb(b) || jsonb_build_object('state','reconciled') FROM finance_fixed_assets_opening_batches b WHERE tenant_id=$1 AND company_id=$2 ORDER BY id DESC LIMIT 1",&[&s.tenant(),&company]).await?.map(|r|r.get::<_,Value>(0)),"category_revisions":categories,"stages":c.query("SELECT to_jsonb(s) FROM finance_fixed_assets_opening_stages s WHERE tenant_id=$1 AND company_id=$2 ORDER BY id",&[&s.tenant(),&company]).await?.iter().map(|r|r.get::<_,Value>(0)).collect::<Vec<_>>(),"decisions":c.query("SELECT to_jsonb(d) FROM finance_fixed_assets_opening_decisions d WHERE tenant_id=$1 AND company_id=$2 ORDER BY id",&[&s.tenant(),&company]).await?.iter().map(|r|r.get::<_,Value>(0)).collect::<Vec<_>>(),"header":HEADER,"items":items}),
         )
     }
     pub(super) async fn prepare_opening(
@@ -87,22 +87,26 @@ impl FixedAssets {
         if input["currency_code"] != book.currency_code {
             return Err(invalid("currency_code", "must match the book's currency"));
         }
-        if let Some(row)=c.query_opt("SELECT to_jsonb(b) FROM finance_fixed_assets_opening_batches b WHERE tenant_id=$1 AND company_id=$2",&[&s.tenant(),&company]).await? {
+        if let Some(row)=c.query_opt("SELECT to_jsonb(b) || jsonb_build_object('state','reconciled') FROM finance_fixed_assets_opening_batches b WHERE tenant_id=$1 AND company_id=$2 AND source_reference=$3",&[&s.tenant(),&company,&reference]).await? {
             let batch:Value=row.get(0);
             if batch["source_reference"]!=reference || batch["source_csv"]!=csv {return Err(invalid("source_reference","the opening register has already been imported; the same source reference and exact CSV are required for a retry"));}
-            return Ok(Prepared{review:json!({"batch":batch,"already_imported":true,"rows":[],"posts":false}),context,rows:vec![],balances:BTreeMap::new(),existing:Some(batch)});
+            let retained=c.query_opt("SELECT review FROM finance_fixed_assets_opening_decisions WHERE tenant_id=$1 AND company_id=$2 AND batch_id=$3",&[&s.tenant(),&company,&batch["id"].as_i64().ok_or(Error::Invalid)?]).await?;
+            if let Some(row)=retained {let review:Value=row.get(0);if review["replaces_batch_id"]!=input["replaces_batch_id"] || review["reason"]!=input["reason"] || review["effective_date"]!=input["effective_date"] {return Err(invalid("source_reference","already identifies different correction instructions"));}}
+            return Ok(Prepared{review:json!({"state":"reconciled","batch":batch,"already_imported":true,"rows":[],"posts":false}),context,rows:vec![],balances:BTreeMap::new(),existing:Some(batch)});
         }
+        let replacement = self.opening_replacement(c, s, company, input).await?;
         let parsed = crate::opening_csv::parse(csv.as_bytes(), ",")
             .map_err(|e| invalid("csv", format!("cannot read CSV: {e:?}")))?;
         if parsed
             .first()
             .map(|r| r.iter().map(String::as_str).collect::<Vec<_>>())
             != Some(HEADER.to_vec())
-            || !(2..=501).contains(&parsed.len())
+            || !(2..=100001).contains(&parsed.len())
+            || (input["staged"] != true && (parsed.len() > 501 || csv.len() > 131072))
         {
             return Err(invalid(
                 "csv",
-                format!("requires header {} and 1 to 500 rows", HEADER.join(",")),
+                format!("requires header {} and 1 to 500 rows directly, or up to 100000 rows from staged batches", HEADER.join(",")),
             ));
         }
         let chart = self.ledger.list_accounts_on(c, s, company).await?;
@@ -235,18 +239,35 @@ impl FixedAssets {
             }
             reconciliation.push(json!({"account_id":account,"account_code":chart.iter().find(|a|a.id==account).map(|a|a.code.clone()),"register_balance":balance,"opening_balance":expected,"difference":Money::ZERO}));
         }
-        if c.query_opt("SELECT id FROM finance_fixed_assets_assets WHERE tenant_id=$1 AND company_id=$2 LIMIT 1",&[&s.tenant(),&company]).await?.is_some() {return Err(invalid("csv","import the opening register before registering ordinary acquisitions"));}
+        if replacement.is_none() && c.query_opt("SELECT id FROM finance_fixed_assets_assets WHERE tenant_id=$1 AND company_id=$2 AND opening_date IS NULL LIMIT 1",&[&s.tenant(),&company]).await?.is_some() {return Err(invalid("csv","import the opening register before registering ordinary acquisitions"));}
+        if let Some(old) = &replacement {
+            let old_id = old["id"].as_i64().ok_or(Error::Invalid)?;
+            let prior=c.query("SELECT source_facts FROM finance_fixed_assets_opening_items WHERE tenant_id=$1 AND company_id=$2 AND batch_id=$3",&[&s.tenant(),&company,&old_id]).await?;
+            for row in prior {
+                let facts: Value = row.get(0);
+                for field in ["cost_account_id", "accumulated_account_id"] {
+                    if !facts[field]
+                        .as_i64()
+                        .is_some_and(|id| balances.contains_key(&id))
+                    {
+                        return Err(invalid("csv","a correction must retain every previously recognized opening account and its balance"));
+                    }
+                }
+            }
+        }
         let approval = self
             .ledger
             .preview_approval_on(
                 c,
                 s,
                 company,
-                &context.approval(MODULE, input["override_reason"].as_str().map(str::to_owned)),
+                &self
+                    .opening_approval(c, s, company, &context, input)
+                    .await?,
             )
             .await?;
         Ok(Prepared {
-            review: json!({"conversion_date":context.entry.entry_date.to_string(),"entry_id":context.entry.id,"entry_number":context.entry.entry_number,"source_reference":reference,"currency_code":book.currency_code,"minor_units":book.minor_units,"rows":rows,"reconciliation":reconciliation,"posts":false,"approval":approval,"already_imported":false,"depreciation":"Prospective straight-line depreciation of source carrying value less residual value over the remaining useful life. A full first month is recognized at month-end, including a mid-month cut-off."}),
+            review: json!({"state":"previewed","replaces_batch_id":input["replaces_batch_id"],"reason":input["reason"],"effective_date":input["effective_date"],"staged":input["staged"]==true,"conversion_date":context.entry.entry_date.to_string(),"entry_id":context.entry.id,"entry_number":context.entry.entry_number,"source_reference":reference,"currency_code":book.currency_code,"minor_units":book.minor_units,"rows":rows,"reconciliation":reconciliation,"posts":false,"approval":approval,"already_imported":false,"depreciation":"Prospective straight-line depreciation of source carrying value less residual value over the remaining useful life. A full first month is recognized at month-end, including a mid-month cut-off."}),
             context,
             rows,
             balances,
@@ -280,8 +301,11 @@ impl FixedAssets {
         company: i64,
         input: &Value,
     ) -> Result<Value> {
+        let resolved = self.resolve_opening(tx.sql(), s, company, input).await?;
+        let input = &resolved;
         let p = self.prepare_opening(tx.sql(), s, company, input).await?;
-        if let Some(batch) = p.existing {
+        if let Some(mut batch) = p.existing {
+            batch["state"] = json!("reconciled");
             return Ok(batch);
         }
         self.ledger
@@ -289,10 +313,12 @@ impl FixedAssets {
                 tx,
                 s,
                 company,
-                &p.context
-                    .approval(MODULE, input["override_reason"].as_str().map(str::to_owned)),
+                &self
+                    .opening_approval(tx.sql(), s, company, &p.context, input)
+                    .await?,
             )
             .await?;
+        let review = p.review.clone();
         let tenant = s.tenant();
         let actor = s.user();
         let imp = s.impersonator().map(|p| p.user());
@@ -319,7 +345,7 @@ impl FixedAssets {
                 continue;
             }
             self.ledger
-                .recognize_opening_on(
+                .replace_opening_recognition_on(
                     tx,
                     s,
                     company,
@@ -327,11 +353,19 @@ impl FixedAssets {
                         module: MODULE.into(),
                         record: format!("opening:{}", batch["id"]),
                     },
+                    input["replaces_batch_id"]
+                        .as_i64()
+                        .map(|id| format!("opening:{id}"))
+                        .as_deref(),
                     account,
                     balance,
                 )
                 .await?;
         }
+        self.record_opening_decision(tx, s, company, &batch, input, &review)
+            .await?;
+        let mut batch = batch;
+        batch["state"] = json!("reconciled");
         Ok(batch)
     }
 }

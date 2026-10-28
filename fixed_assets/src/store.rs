@@ -6,6 +6,8 @@ use serde_json::{json, Value};
 
 #[derive(Clone, Copy)]
 pub(crate) enum Table {
+    OpeningStage,
+    OpeningDecision,
     OpeningBatch,
     OpeningItem,
     Category,
@@ -19,6 +21,8 @@ pub(crate) enum Table {
 impl Table {
     fn name(self) -> &'static str {
         match self {
+            Self::OpeningStage => "finance_fixed_assets_opening_stages",
+            Self::OpeningDecision => "finance_fixed_assets_opening_decisions",
             Self::OpeningBatch => "finance_fixed_assets_opening_batches",
             Self::OpeningItem => "finance_fixed_assets_opening_items",
             Self::Category => "finance_fixed_assets_categories",
@@ -32,6 +36,8 @@ impl Table {
     }
     fn kind(self) -> &'static str {
         match self {
+            Self::OpeningStage => "finance.fixed-assets.opening_stage",
+            Self::OpeningDecision => "finance.fixed-assets.opening_decision",
             Self::OpeningBatch => "finance.fixed-assets.opening_batch",
             Self::OpeningItem => "finance.fixed-assets.opening_item",
             Self::Category => "finance.fixed-assets.category",
@@ -45,6 +51,32 @@ impl Table {
     }
     fn fields(self) -> &'static [&'static str] {
         match self {
+            Self::OpeningStage => &[
+                "id",
+                "tenant_id",
+                "company_id",
+                "source_reference",
+                "part",
+                "payload",
+                "recorded_by_user_id",
+                "recorded_by_impersonator_id",
+                "recorded_at",
+            ],
+            Self::OpeningDecision => &[
+                "id",
+                "tenant_id",
+                "company_id",
+                "batch_id",
+                "replaces_batch_id",
+                "reason",
+                "effective_date",
+                "review",
+                "approval",
+                "state",
+                "recorded_by_user_id",
+                "recorded_by_impersonator_id",
+                "recorded_at",
+            ],
             Self::OpeningBatch => &[
                 "id",
                 "tenant_id",
@@ -351,6 +383,8 @@ pub struct EvidencePage {
 }
 pub(crate) fn datasets() -> Vec<&'static str> {
     vec![
+        "opening_stage",
+        "opening_decision",
         "opening_batch",
         "opening_item",
         "asset",
@@ -371,6 +405,8 @@ pub(crate) async fn page(
     after: Option<i64>,
 ) -> Result<EvidencePage> {
     let t = match dataset {
+        "opening_stage" => Table::OpeningStage,
+        "opening_decision" => Table::OpeningDecision,
         "opening_batch" => Table::OpeningBatch,
         "opening_item" => Table::OpeningItem,
         "asset" => Table::Asset,
