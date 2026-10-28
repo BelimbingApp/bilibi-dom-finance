@@ -93,13 +93,13 @@ impl Book {
                 Err(refused) => {
                     body.push(&unavailable("ledger-book-refused", "the book", &refused)?)
                 }
-                Ok(state) => {
-                    self.load_options(scope).await?;
-                    match &state.book {
-                        Some(book) => body.push(&self.facts(&state, book)?),
-                        None => body.push(&self.open_form(scope).await?),
+                Ok(state) => match &state.book {
+                    Some(book) => body.push(&self.facts(&state, book)?),
+                    None => {
+                        self.load_options(scope).await?;
+                        body.push(&self.open_form(scope).await?)
                     }
-                }
+                },
             }
         }
         let mut page = render(Header {
