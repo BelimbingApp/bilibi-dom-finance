@@ -200,14 +200,29 @@ async fn main() -> Outcome<()> {
         let credits = ar.create_series(&manager, COMPANY, &json!({"code":"CN","name":"Credit notes","kind":"credit_note","prefix":"CN-","number_width":5})).await?;
         let receipts = ar.create_series(&manager, COMPANY, &json!({"code":"RCP","name":"Receipts","kind":"payment","prefix":"RCP-","number_width":5})).await?;
         let tax = ar.create_tax_code(&manager, COMPANY, &json!({"code":"SVC","name":"Service tax","rate":"6","account_id":account("2100")?})).await?;
+        // Each customer is a Core company of this tenant, with a billing
+        // address in Core Address; the first two are recorded as customers
+        // of Company 100 in Companies, the third is not yet (the page offers
+        // to record it), the fifth is still pending (new invoices refused).
+        let companies = services.get::<bilibi_company::CompanyService>(bilibi_company::SERVICE)?;
+        let addresses = services.get::<bilibi_address::AddressService>(bilibi_address::SERVICE)?;
+        let customer_role = companies
+            .relationship_roles(&manager, false)
+            .await?
+            .into_iter()
+            .find(|role| role.code == "customer")
+            .map(|role| role.id)
+            .ok_or(Error::NotFound)?;
         let mut customer = Vec::new();
-        for (code, name, terms, email, city) in [
+        for (n, (code, name, terms, email, city, status, related)) in [
             (
                 "ACME",
                 "Acme Trading Sdn Bhd",
                 30,
                 "accounts@acme.example.test",
                 "Kuala Lumpur",
+                "active",
+                true,
             ),
             (
                 "BORNEO",
@@ -215,6 +230,8 @@ async fn main() -> Outcome<()> {
                 14,
                 "ap@borneo.example.test",
                 "Kuching",
+                "active",
+                true,
             ),
             (
                 "CAHAYA",
@@ -222,6 +239,8 @@ async fn main() -> Outcome<()> {
                 0,
                 "hello@cahaya.example.test",
                 "Penang",
+                "active",
+                false,
             ),
             (
                 "DELTA",
@@ -229,21 +248,94 @@ async fn main() -> Outcome<()> {
                 45,
                 "finance@delta.example.test",
                 "Johor Bahru",
+                "active",
+                true,
             ),
-        ] {
+            (
+                "EMAS",
+                "Emas Ventures",
+                30,
+                "admin@emas.example.test",
+                "Ipoh",
+                "pending",
+                false,
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let created = match companies
+                .create_company(
+                    &manager,
+                    &bilibi_company::NewCompany {
+                        name: name.into(),
+                        status: Some(status.into()),
+                        email: Some(email.into()),
+                        phone: Some(format!("+60 3 5555 01{n:02}")),
+                        tax_id: Some(format!("C{:08}", 25_000_000 + n)),
+                        registration_number: Some(format!("20240100{:04}", 100 + n)),
+                        ..bilibi_company::NewCompany::default()
+                    },
+                )
+                .await?
+            {
+                bilibi_company::CreateOutcome::Created(company) => company,
+                bilibi_company::CreateOutcome::Refused(errors) => {
+                    return Err(format!("company {name} refused: {errors:?}").into())
+                }
+            };
+            let target = bilibi_address::PartyId::Organisation(
+                bilibi_address::OrganisationId::new(created.id)?,
+            );
+            addresses
+                .create_and_attach(
+                    &manager,
+                    target,
+                    &bilibi_address::AddressInput {
+                        line1: Some(format!("{} Jalan Contoh", 12 + n)),
+                        locality: Some(city.into()),
+                        postcode: Some("50000".into()),
+                        ..bilibi_address::AddressInput::default()
+                    },
+                    &bilibi_address::AttachmentInput {
+                        kinds: vec![bilibi_address::AddressKind::Billing],
+                        is_primary: true,
+                        ..bilibi_address::AttachmentInput::default()
+                    },
+                )
+                .await
+                .map_err(|e| format!("billing address for {name}: {e:?}"))?;
+            if related {
+                companies
+                    .assign_relationship(
+                        &manager,
+                        &bilibi_party::RelationshipInput {
+                            source_organisation_id: bilibi_party::OrganisationId::new(COMPANY)?,
+                            target: bilibi_party::PartyId::Organisation(
+                                bilibi_party::OrganisationId::new(created.id)?,
+                            ),
+                            role_id: customer_role,
+                            dates: bilibi_party::EffectiveDates::new(None, None)?,
+                        },
+                    )
+                    .await
+                    .map_err(|e| format!("customer relationship for {name}: {e:?}"))?;
+            }
             customer.push(
                 ar.create_customer(
                     &manager,
                     COMPANY,
-                    &json!({
-                        "code": code, "name": name, "payment_terms_days": terms, "email": email,
-                        "phone": "+60 3 5555 0100", "line1": "12 Jalan Contoh", "locality": city,
-                        "postcode": "50000", "country_iso": "MY"
-                    }),
+                    &json!({"code": code, "core_company_id": created.id, "payment_terms_days": terms}),
                 )
                 .await?,
             );
         }
+        // A customer recorded before Finance read companies from Companies:
+        // only SQL can still make one, and the page offers to link it.
+        db.get().await?.execute(
+            "INSERT INTO finance_receivables_customers(tenant_id,company_id,code,name,email,line1,locality,postcode,country_iso,payment_terms_days,active,inserted_at,updated_at) VALUES(2,$1,'FAJAR','Fajar Logistics','ops@fajar.example.test','3 Jalan Lama','Melaka','75000','MY',21,true,now(),now())",
+            &[&COMPANY],
+        ).await?;
         let draft = |customer: i64, date: &str, lines: serde_json::Value| {
             let attrs = json!({"kind":"invoice","series_id":invoices.id,"customer_id":customer,"issue_date":date,"lines":lines});
             let (ar, manager) = (&ar, &manager);

@@ -2,6 +2,7 @@
 //! H2 exposes reviewed agent operations. The reference has no pages (`web: nil`);
 //! `web/` adds them, calling those same operations (ADR 01).
 mod agent_operations;
+mod companies;
 mod configuration;
 mod contributions;
 mod documents;
@@ -21,8 +22,8 @@ pub use contributions::{
 };
 pub use evidence::EvidencePage;
 pub use records::{
-    Allocation, Customer, Document, DocumentLine, DocumentQuery, Page, Payment, PaymentQuery,
-    PaymentReversal, Series, Setup, SetupChange, TaxCode, TaxLine,
+    Allocation, Customer, CustomerCompany, Document, DocumentLine, DocumentQuery, Page, Payment,
+    PaymentQuery, PaymentReversal, Series, Setup, SetupChange, TaxCode, TaxLine,
 };
 pub use reports::{
     AgedCustomer, AgedDocument, AgedReceivables, AgingBucket, AgingOptions, ControlAccountTieOut,
@@ -45,14 +46,15 @@ pub const SERVICE: &str = "finance/receivables.receivables";
 inventory::submit! {
     Module {
         id: MODULE, layer: Layer::Domains,
-        dependencies: &["base/agent_api", "base/authz", "base/database", "base/datetime", "base/locale", "base/menu", "base/party_ids", "base/tenancy", "base/ui", "core/company", "finance/ledger", "finance/attachments"],
-        migrations: &[("finance-receivables-001-receivables", include_str!("../migrations/001-receivables.sql")), ("finance-receivables-002-write-offs", include_str!("../migrations/002-write-offs.sql"))],
+        dependencies: &["base/agent_api", "base/authz", "base/database", "base/datetime", "base/locale", "base/menu", "base/party_ids", "base/records", "base/tenancy", "base/ui", "core/company", "finance/ledger", "finance/attachments"],
+        migrations: &[("finance-receivables-001-receivables", include_str!("../migrations/001-receivables.sql")), ("finance-receivables-002-write-offs", include_str!("../migrations/002-write-offs.sql")), ("finance-receivables-003-core-company", include_str!("../migrations/003-core-company.sql"))],
         services: &[Service { id: SERVICE, factory: |services| {
             let receivables = Arc::new(Receivables {
                 db: services.get::<Db>("base/database.pool")?.as_ref().clone(),
                 ledger: services.get(bilibi_finance_ledger::SERVICE)?,
                 attachments: services.get(bilibi_finance_attachments::SERVICE)?,
                 parties: services.get("base/tenancy.parties")?,
+                records: services.get(bilibi_records::SERVICE)?,
             });
             agent_operations::bind(receivables.clone())?;
             Ok(receivables)
@@ -62,6 +64,7 @@ inventory::submit! {
             display: services.get("base/datetime.display")?,
             locales: services.get("base/locale.locales")?,
             parties: services.get("base/tenancy.parties")?,
+            records: services.get(bilibi_records::SERVICE)?,
         })))) }],
     }
 }
@@ -148,6 +151,7 @@ pub struct Receivables {
     ledger: Arc<Ledger>,
     attachments: Arc<Attachments>,
     parties: Arc<bilibi_tenancy::PartyProofs>,
+    records: Arc<bilibi_records::Records>,
 }
 
 impl Receivables {

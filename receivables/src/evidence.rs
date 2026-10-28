@@ -80,6 +80,8 @@ const DATASETS: &[(&str, &str, &[&str])] = &[
             "active",
             "inserted_at",
             "updated_at",
+            "record_kind",
+            "record_id",
         ],
     ),
     (

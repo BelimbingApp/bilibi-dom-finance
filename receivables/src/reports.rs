@@ -1,5 +1,5 @@
 //! Mirrors Bilimbi Receivables.{Balances,Aging,TaxReport,TieOut}.
-use crate::{authorize, ReceivableError, Receivables, Result, MODULE, VIEW};
+use crate::{authorize, store, ReceivableError, Receivables, Result, MODULE, VIEW};
 use bilibi_database::Error;
 use bilibi_finance_ledger::{MinorUnits, TotalsQuery};
 use bilibi_tenancy::Scope;
@@ -238,11 +238,12 @@ impl Receivables {
             from_days: Some(start),
             to_days: None,
         });
-        let chart=client.query("SELECT id,code,name FROM finance_receivables_customers WHERE tenant_id=$1 AND company_id=$2", &[&scope.tenant(),&company]).await.map_err(Error::from)?;
-        let labels: BTreeMap<i64, (String, String)> = chart
-            .iter()
-            .map(|r| (r.get(0), (r.get(1), r.get(2))))
-            .collect();
+        // A linked customer's name is its company's, as Core names it now.
+        let mut labels: BTreeMap<i64, (String, String)> = BTreeMap::new();
+        for row in store::list(client, store::CUSTOMERS, scope.tenant(), company).await? {
+            let customer = self.customer(client, scope, row).await?;
+            labels.insert(customer.id, (customer.code, customer.name));
+        }
         let mut customers: BTreeMap<i64, AgedCustomer> = BTreeMap::new();
         let mut totals = vec![Decimal::ZERO; buckets.len()];
         for row in balances(client, scope, company, &as_of.to_string(), pin).await? {

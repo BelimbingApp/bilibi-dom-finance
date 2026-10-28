@@ -134,7 +134,7 @@ for channel, company in [("api", 1), ("mcp", 2)]:
     require(invoke(channel, "guide", {"key": "finance.receivables"}), "guide missing")
     for key in ["setup.configure", "series.create", "series.update", "tax_code.create", "tax_code.update", "customer.create", "customer.update", "draft.create", "draft.update", "draft.discard", "document.issue", "payment.record", "payment.reverse"]:
         require(invoke(channel, "describe", {"key": "finance.receivables." + key}), f"{key} not described")
-    require(invoke(channel, "read", op("customer.create", company, code="never", name="never")).get("error") == "writes_not_enabled", "direct write accepted")
+    require(invoke(channel, "read", op("customer.create", company, code="never", core_company_id=25)).get("error") == "writes_not_enabled", "direct write accepted")
     write(channel, "ledger.book.open", company, currency_code="MYR", minor_units=2)
     accounts = {}
     for code, kind in [("control", "asset"), ("other-control", "asset"), ("deposit", "asset"), ("income", "income"), ("other-income", "income"), ("tax", "liability")]:
@@ -156,11 +156,19 @@ for channel, company in [("api", 1), ("mcp", 2)]:
     tax = write(channel, "tax_code.create", company, code="T", name="Tax", rate="7.5", account_id=accounts["tax"])
     tax = write(channel, "tax_code.update", company, tax_code_id=tax["id"], name="Tax renamed")
     require(tax["rate"] == "7.5000" or tax["rate"] == "7.5", "tax rate changed")
-    customer = write(channel, "customer.create", company, code="C", name=" First customer ", country_iso="my", line1=" Address ", payment_terms_days=7, email="clear@example.test")
-    require(customer["country_iso"] == "MY" and customer["line1"] == "Address", "party normalization differs")
-    customer = write(channel, "customer.update", company, customer_id=customer["id"], name="Customer at issue", email="")
-    require(customer["email"] is None, "blank optional text did not clear")
+    # A customer is a Core company (#75): Company 025 of this tenant.
+    refused(channel, "customer.create", company, "does not exist", code="C", core_company_id=999999)
+    refused(channel, "customer.create", company, "cannot be the company itself", code="C", core_company_id=company)
+    refused(channel, "customer.create", company, "name", code="C", core_company_id=25, name="not accepted")
+    customer = write(channel, "customer.create", company, code=" C ", core_company_id=25, payment_terms_days=7)
+    require(customer["code"] == "C" and customer["company"]["id"] == 25 and customer["company"]["status"] == "active" and customer["name"] == customer["company"]["name"] and customer["line1"] is None, "linked customer differs")
+    require(customer["company"]["readable"] and customer["company"]["email"] and customer["company"]["tax_id"], "company facts not read")
+    refused(channel, "customer.update", company, "is read from the linked company", customer_id=customer["id"], name="Customer at issue")
+    refused(channel, "customer.create", company, "is already a customer of this company", code="C2", core_company_id=25)
+    refused(channel, "customer.link", company, "is already linked", customer_id=customer["id"], core_company_id=26)
+    customer = write(channel, "customer.update", company, customer_id=customer["id"], payment_terms_days=7)
     require(read(channel, "customer.get", company, customer_id=customer["id"]) == customer, "customer read differs")
+    party_name = customer["name"]
     refused(channel, "series.update", company, "prefix", series_id=second_payment, prefix="changed")
     refused(channel, "tax_code.update", company, "rate", tax_code_id=tax["id"], rate="8")
     refused(channel, "customer.update", company, "actor_id", customer_id=customer["id"], actor_id=7)
@@ -203,12 +211,13 @@ for channel, company in [("api", 1), ("mcp", 2)]:
     result = commit(channel, ops, review)
     require("results" in result, f"issuance failed: {result.get('error')}")
     invoice = result["results"][0]["result"]["result"]["record"]
-    require(invoice["document_reference"] == "INV-001" and invoice["party_name"] == "Customer at issue" and invoice["due_date"] == "2026-01-17", "issue snapshots differ")
+    require(invoice["document_reference"] == "INV-001" and invoice["party_name"] == party_name and invoice["party_tax_identifier"] == customer["company"]["tax_id"] and invoice["due_date"] == "2026-01-17", "issue snapshots differ")
     require(commit(channel, ops, review).get("error") == "plan_already_used", "code replay accepted")
     entry = read(channel, "ledger.entry.get", company, entry_id=invoice["ledger_entry_id"])
     require([(l["account_id"], l["debit"], l["credit"]) for l in entry["lines"]] == [(accounts["control"], "47.85", "0"), (accounts["income"], "0", "45.07"), (accounts["tax"], "0", "2.78")], "owned posting sides/amounts differ")
-    write(channel, "customer.update", company, customer_id=customer["id"], name="Customer after issue")
-    require(read(channel, "document.get", company, document_id=invoice["id"])["party_name"] == "Customer at issue", "issued party changed")
+    sql("UPDATE companies SET legal_name='Customer after issue' WHERE tenant_id=1 AND id=25")
+    require(read(channel, "customer.get", company, customer_id=customer["id"])["name"] == "Customer after issue", "company rename not read")
+    require(read(channel, "document.get", company, document_id=invoice["id"])["party_name"] == party_name, "issued party changed")
     print("draft keep/clear/replace/discard; repeated preview leaves rows/sequences untouched; INV-001 freezes due date/party and posts exact 47.85/45.07/2.78", flush=True)
 
     one, two = draft("1", None), draft("2", None)
@@ -268,11 +277,11 @@ for channel, company in [("api", 1), ("mcp", 2)]:
     # Audit capture fails after entry posting. Its rollback must undo both the
     # preceding independent customer update and every issue/ledger mutation.
     write(channel, "customer.update", company, customer_id=customer["id"], active=True)
-    ops = [op("customer.update", company, customer_id=customer["id"], phone="temporary"), op("document.issue", company, document_id=closed_draft["id"])]
+    ops = [op("customer.update", company, customer_id=customer["id"], payment_terms_days=9), op("document.issue", company, document_id=closed_draft["id"])]
     # A customer change affects issuance review, so use a DIFFERENT customer
     # for the first step to reach the intended late capture failure.
-    independent = write(channel, "customer.create", company, code="independent", name="Independent")
-    ops[0] = op("customer.update", company, customer_id=independent["id"], phone="temporary")
+    independent = write(channel, "customer.create", company, code="independent", core_company_id=31)
+    ops[0] = op("customer.update", company, customer_id=independent["id"], payment_terms_days=9)
     review = reviewed(channel, ops)
     before = state(company)
     used = sql("SELECT count(*) FROM base_agent_api_plans WHERE used_at IS NOT NULL")
@@ -286,7 +295,7 @@ for channel, company in [("api", 1), ("mcp", 2)]:
     require("results" in commit(channel, ops, review), "same failed code did not recover after capture repair")
 
     # A successful interleaving exercises both FIFOs without shared facts.
-    ops = [op("customer.update", company, customer_id=independent["id"], phone="first"), op("ledger.account.create", company, code="independent", name="Independent", account_type="asset"), op("customer.update", company, customer_id=customer["id"], phone="last")]
+    ops = [op("customer.update", company, customer_id=independent["id"], payment_terms_days=1), op("ledger.account.create", company, code="independent", name="Independent", account_type="asset"), op("customer.update", company, customer_id=customer["id"], payment_terms_days=2)]
     require(len(commit(channel, ops, reviewed(channel, ops))["results"]) == 3, "independent mixed-module batching failed")
     print("late audit failure rolls back earlier independent step and owned posting; same code recovers; independent interleaved H1/H2 plan succeeds", flush=True)
 
@@ -309,8 +318,8 @@ for channel, company in [("api", 1), ("mcp", 2)]:
         control("allow", "finance.receivables.view")
     require("error" in invoke(channel, "read", op("document.get", company, document_id=invoice["id"]), "other"), "cross-tenant disclosure")
     # Code cursor comparisons must use the same ICU collation as ORDER BY.
-    for code in ["a", "B", "É"]:
-        write(channel, "customer.create", company, code=code, name=code)
+    for code, linked in [("a", 26), ("B", 28), ("É", 29)]:
+        write(channel, "customer.create", company, code=code, core_company_id=linked)
     expected = json.loads(sql(f"SELECT json_agg(code ORDER BY code) FROM finance_receivables_customers WHERE company_id={company}"))
     found, cursor = [], None
     while True:
@@ -338,7 +347,7 @@ for channel, company in [("api", 1), ("mcp", 2)]:
 company = 2
 channel = "mcp"
 customer = read(channel, "customer.list", company)["records"][0]
-ops = [op("customer.update", company, customer_id=customer["id"], phone="archive fence")]
+ops = [op("customer.update", company, customer_id=customer["id"], payment_terms_days=8)]
 review = reviewed(channel, ops)
 control("archive", company)
 require("error" in commit(channel, ops, review), "archived target accepted commit")

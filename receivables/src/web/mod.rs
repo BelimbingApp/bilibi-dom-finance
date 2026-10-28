@@ -4,6 +4,7 @@
 //! `PageContracts`, the same contract the agent doors call; no page touches
 //! the facade or a table. Business meaning follows Belimbing's receivables.
 mod aging;
+mod company_pick;
 mod customer;
 mod customers;
 mod document;
@@ -55,6 +56,7 @@ pub(crate) struct Pages {
     pub display: Arc<DisplayPolicy>,
     pub locales: Arc<Locales>,
     pub parties: Arc<bilibi_tenancy::PartyProofs>,
+    pub records: Arc<bilibi_records::Records>,
 }
 
 bilibi_menu::contribute!(
@@ -154,6 +156,16 @@ inventory::submit! { Contribution::new(PAGE_WRITES, PAGES, Provenance { module: 
         ("save_write_off", "finance.receivables.write_off.reverse"),
         ("create_customer", "finance.receivables.customer.create"),
         ("save_customer", "finance.receivables.customer.update"),
+        ("link_customer", "finance.receivables.customer.link"),
+        // Adding or linking a customer may also create the company it is and
+        // records the customer relationship, through Core's own reviewed
+        // writes (`company_pick.rs`); the host permits them by the event the
+        // browser raised, so each event names every contract it may call.
+        ("create_customer", "core.company.create"),
+        ("create_customer", "core.company.relationship.assign"),
+        ("link_customer", "core.company.create"),
+        ("link_customer", "core.company.relationship.assign"),
+        ("record_relationship", "core.company.relationship.assign"),
         ("create_draft", "finance.receivables.draft.create"),
         ("save_draft", "finance.receivables.draft.update"),
         ("save_lines", "finance.receivables.draft.update"),
@@ -182,10 +194,10 @@ impl Pages {
         Ok(bilibi_authz::decide(&**c, scope, capability).await?.allowed)
     }
 
-    /// The name of the company the person works in, so a page can say whose
-    /// settings it changes (the shell's account menu reads it the same way).
-    /// Display only: a company the directory cannot name is "Company
-    /// unavailable", never a refusal.
+    /// The name of the current company, so a page can say whose settings it
+    /// changes (the shell's account menu reads it the same way). Display
+    /// only: a company the directory cannot name is "Company unavailable",
+    /// never a refusal.
     pub(super) async fn company_name(&self, scope: &Scope) -> String {
         let Some(id) = scope.current_company() else {
             return "Company unavailable".into();
@@ -207,10 +219,16 @@ impl Pages {
         self.display.display(&**c, scope, None, locale).await
     }
 
-    /// One read contract for the person's company; the answer is its `result`.
+    /// One read contract for the current company; the answer is its `result`.
     pub(super) async fn read(&self, scope: &Scope, key: &str, mut input: Value) -> Result<Value> {
         let company = Self::company(scope).ok_or(Error::Unauthorized)?;
         input["company_id"] = json!(company);
+        self.read_core(scope, key, input).await
+    }
+
+    /// A read contract of another module, with the input as given (Core
+    /// names its own company); the answer is its `result`.
+    pub(super) async fn read_core(&self, scope: &Scope, key: &str, input: Value) -> Result<Value> {
         let mut answer = self
             .contracts
             .read(scope, key, &input)
@@ -320,11 +338,111 @@ impl Pages {
             return Ok(Written::Refused(DENIED.into()));
         };
         input["company_id"] = json!(company);
-        match self
+        self.write_core(scope, credential, event, contract, input)
+            .await
+    }
+
+    /// A reviewed write of another module's contract on the person's behalf,
+    /// with the input as given: Core names its own company, so none is added.
+    pub(super) async fn write_core(
+        &self,
+        scope: &Scope,
+        credential: &str,
+        event: &str,
+        contract: &'static str,
+        input: Value,
+    ) -> Result<Written> {
+        let answer = self
             .contracts
             .submit(&Self::call(scope, credential, event, contract), input)
+            .await;
+        Self::written(contract, event, answer)
+    }
+
+    /// The review half of a confirmation on another module's contract: the
+    /// owner's review and the code that commits exactly that input.
+    pub(super) async fn review_core(
+        &self,
+        scope: &Scope,
+        credential: &str,
+        event: &str,
+        contract: &'static str,
+        input: Value,
+    ) -> Result<Reviewed> {
+        match self
+            .contracts
+            .preview(&Self::call(scope, credential, event, contract), input)
             .await
         {
+            Ok(value) => {
+                let result = &value["results"][0];
+                if result["valid"].as_bool() == Some(true) {
+                    if let Some(code) = value["plan_code"].as_str() {
+                        return Ok(Reviewed::Valid {
+                            code: code.to_owned(),
+                            review: result["preview"]["result"].clone(),
+                        });
+                    }
+                }
+                let mut fields: BTreeMap<String, Vec<String>> = BTreeMap::new();
+                if let Some(map) = result["error"]["fields"].as_object() {
+                    for (field, messages) in map {
+                        fields.insert(
+                            field.clone(),
+                            messages
+                                .as_array()
+                                .into_iter()
+                                .flatten()
+                                .filter_map(|m| m.as_str().map(str::to_owned))
+                                .collect(),
+                        );
+                    }
+                }
+                if fields.is_empty() {
+                    return Ok(Reviewed::Refused(
+                        if result["error"]["code"].as_str() == Some("missing_capability") {
+                            DENIED.into()
+                        } else {
+                            "That could not be reviewed. Please try again.".into()
+                        },
+                    ));
+                }
+                Ok(Reviewed::Invalid(fields))
+            }
+            Err(error) => Ok(match Self::written(contract, event, Err(error))? {
+                Written::Invalid(fields) => Reviewed::Invalid(fields),
+                Written::Refused(message) => Reviewed::Refused(message),
+                Written::Done(_) => Reviewed::Refused(DENIED.into()),
+            }),
+        }
+    }
+
+    /// Commits a reviewed confirmation with the same input and its code. A
+    /// commit answers the plan's envelope (`results[0].result`), where a
+    /// submit answers the one result itself.
+    pub(super) async fn commit_core(
+        &self,
+        scope: &Scope,
+        credential: &str,
+        event: &str,
+        contract: &'static str,
+        code: &str,
+        input: Value,
+    ) -> Result<Written> {
+        let answer = self
+            .contracts
+            .commit(&Self::call(scope, credential, event, contract), code, input)
+            .await
+            .map(|mut value| value["results"][0]["result"].take());
+        Self::written(contract, event, answer)
+    }
+
+    fn written(
+        contract: &str,
+        event: &str,
+        answer: std::result::Result<Value, ContractError>,
+    ) -> Result<Written> {
+        match answer {
             Ok(mut answer) => Ok(Written::Done(answer["result"]["record"].take())),
             Err(ContractError::InvalidInput(fields)) => Ok(Written::Invalid(fields)),
             Err(ContractError::Forbidden | ContractError::Backend(Error::Forbidden)) => {
@@ -366,6 +484,14 @@ pub(super) const DENIED: &str = "You do not have permission to do that.";
 pub(super) enum Written {
     Done(Value),
     /// Field errors keyed by the input's path (`lines.0.quantity`, `base`).
+    Invalid(BTreeMap<String, Vec<String>>),
+    Refused(String),
+}
+
+/// What a review came to: the owner's review with the code that commits
+/// it, or the refusal.
+pub(super) enum Reviewed {
+    Valid { code: String, review: Value },
     Invalid(BTreeMap<String, Vec<String>>),
     Refused(String),
 }
@@ -568,7 +694,9 @@ impl Pages {
             "customers" => State::Customers(Box::new(customers::Customers::new(
                 pages, r.query, r.framed,
             )?)),
-            "customer" => State::Customer(Box::new(customer::Customer::new(pages, r.path)?)),
+            "customer" => {
+                State::Customer(Box::new(customer::Customer::new(pages, r.path, r.framed)?))
+            }
             "invoices" => State::Invoices(Box::new(documents::Documents::new(
                 pages, r.query, r.framed,
             )?)),

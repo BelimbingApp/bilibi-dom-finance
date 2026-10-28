@@ -1,10 +1,10 @@
 //! Bilimbi Receivables.Configuration and Customers: setup history and code
 //! lists. All mutations hold the company lock and audit persisted row images.
 use crate::{
-    authorize, invalid,
+    authorize, companies, invalid,
     store::{self, Table, CUSTOMERS, HISTORY, SERIES, SETUPS, TAX},
-    validation as v, Customer, Page, ReceivableError as R, Receivables, Result, Series, Setup,
-    SetupChange, TaxCode, MANAGE_CUSTOMERS, MANAGE_SETUP, VIEW,
+    validation as v, Customer, CustomerCompany, Page, ReceivableError as R, Receivables, Result,
+    Series, Setup, SetupChange, TaxCode, MANAGE_CUSTOMERS, MANAGE_SETUP, VIEW,
 };
 use bilibi_agent_api::OperationClient;
 use bilibi_database::{Error, MutationTransaction};
@@ -18,7 +18,12 @@ pub(super) struct Prepared {
     pub before: Option<Value>,
     pub after: Value,
     pub accounts: Vec<Account>,
+    /// The Core company a customer write links to, as the actor sees it.
+    pub company: Option<CustomerCompany>,
 }
+
+/// What `customer.create` and `customer.link` name the Core company by.
+pub(crate) const LINK_FIELD: &str = "core_company_id";
 
 impl Receivables {
     pub async fn get_setup(&self, scope: &Scope, company: i64) -> Result<Setup> {
@@ -95,6 +100,7 @@ impl Receivables {
             before: old,
             after: data,
             accounts,
+            company: None,
         })
     }
 
@@ -187,26 +193,38 @@ impl Receivables {
     ) -> Result<TaxCode> {
         self.save_code(scope, company, TAX, Some(id), attrs).await
     }
+    /// Customers in code order, each with its linked company as this reader
+    /// may see it (name and status for everyone, facts under Companies view).
     pub async fn list_customers(&self, scope: &Scope, company: i64) -> Result<Vec<Customer>> {
-        self.code_list(scope, company, CUSTOMERS).await
+        let client = self.db.get().await.map_err(Error::from)?;
+        authorize(&**client, scope, company, VIEW).await?;
+        let mut customers = Vec::new();
+        for row in store::list(&**client, CUSTOMERS, scope.tenant(), company).await? {
+            customers.push(self.customer_with_facts(&**client, scope, row).await?);
+        }
+        Ok(customers)
     }
     pub async fn get_customer(&self, scope: &Scope, company: i64, id: i64) -> Result<Customer> {
         let client = self.db.get().await.map_err(Error::from)?;
         authorize(&**client, scope, company, VIEW).await?;
-        Ok(store::decode(
-            store::find(&**client, CUSTOMERS, scope.tenant(), company, Some(id))
-                .await?
-                .ok_or(R::CustomerNotFound)?,
-        )?)
+        let row = store::find(&**client, CUSTOMERS, scope.tenant(), company, Some(id))
+            .await?
+            .ok_or(R::CustomerNotFound)?;
+        self.customer_with_facts(&**client, scope, row).await
     }
+    /// Creates a customer linked to a Core company (`core_company_id`): the
+    /// Finance code, payment terms and availability are the record's own;
+    /// everything about the business is read from Core.
     pub async fn create_customer(
         &self,
         scope: &Scope,
         company: i64,
         attrs: &Value,
     ) -> Result<Customer> {
-        self.save_code(scope, company, CUSTOMERS, None, attrs).await
+        self.save_customer(scope, company, None, attrs).await
     }
+    /// Changes payment terms or availability; the party fields of a customer
+    /// recorded before linking stay editable until it is linked.
     pub async fn update_customer(
         &self,
         scope: &Scope,
@@ -214,8 +232,141 @@ impl Receivables {
         id: i64,
         attrs: &Value,
     ) -> Result<Customer> {
-        self.save_code(scope, company, CUSTOMERS, Some(id), attrs)
-            .await
+        self.save_customer(scope, company, Some(id), attrs).await
+    }
+    /// Links a customer recorded before this module read Core to its company
+    /// (`core_company_id`). The link is permanent; the party fields it was
+    /// captured with stay on the row as history and the company's facts
+    /// take over.
+    pub async fn link_customer(
+        &self,
+        scope: &Scope,
+        company: i64,
+        id: i64,
+        attrs: &Value,
+    ) -> Result<Customer> {
+        let mut client = self.db.get().await.map_err(Error::from)?;
+        let mut tx = self
+            .write(
+                &mut client,
+                scope,
+                company,
+                MANAGE_CUSTOMERS,
+                "finance.receivables.link_customer",
+            )
+            .await?;
+        let record = self
+            .link_customer_on(&mut tx, scope, company, id, attrs)
+            .await?;
+        tx.commit().await?;
+        Ok(record)
+    }
+
+    async fn save_customer(
+        &self,
+        scope: &Scope,
+        company: i64,
+        id: Option<i64>,
+        attrs: &Value,
+    ) -> Result<Customer> {
+        let mut client = self.db.get().await.map_err(Error::from)?;
+        let mut tx = self
+            .write(
+                &mut client,
+                scope,
+                company,
+                MANAGE_CUSTOMERS,
+                if id.is_some() {
+                    "finance.receivables.update_customer"
+                } else {
+                    "finance.receivables.create_customer"
+                },
+            )
+            .await?;
+        let record = self
+            .save_customer_on(&mut tx, scope, company, id, attrs)
+            .await?;
+        tx.commit().await?;
+        Ok(record)
+    }
+
+    /// Saves a customer row through the code preparation and answers it with
+    /// its company's facts, on the write's own transaction.
+    pub(super) async fn save_customer_on(
+        &self,
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company: i64,
+        id: Option<i64>,
+        attrs: &Value,
+    ) -> Result<Customer> {
+        let row = self
+            .save_code_on(tx, scope, company, CUSTOMERS, id, attrs)
+            .await?;
+        self.customer_with_facts(tx.sql(), scope, row).await
+    }
+
+    /// The link a customer recorded before linking will get: the row as it
+    /// is, then the proven company reference. Refused once linked.
+    pub(super) async fn prepare_link(
+        &self,
+        client: &dyn OperationClient,
+        scope: &Scope,
+        company: i64,
+        id: i64,
+        attrs: &Value,
+    ) -> Result<Prepared> {
+        self.join(client, scope, company, MANAGE_CUSTOMERS).await?;
+        let old = store::find(client, CUSTOMERS, scope.tenant(), company, Some(id))
+            .await?
+            .ok_or(R::CustomerNotFound)?;
+        if companies::linked(&old).is_some() {
+            return Err(invalid(
+                LINK_FIELD,
+                "is already linked; a customer's company never changes",
+            ));
+        }
+        let (linked, summary) = self
+            .linkable(client, scope, company, attrs, LINK_FIELD)
+            .await?;
+        let mut data = old.clone();
+        data["record_kind"] = json!(companies::KIND);
+        data["record_id"] = json!(linked.to_string());
+        Ok(Prepared {
+            before: Some(old),
+            after: data,
+            accounts: Vec::new(),
+            company: Some(summary),
+        })
+    }
+
+    pub(super) async fn link_customer_on(
+        &self,
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company: i64,
+        id: i64,
+        attrs: &Value,
+    ) -> Result<Customer> {
+        let Prepared {
+            before: old,
+            after: data,
+            ..
+        } = self
+            .prepare_link(tx.sql(), scope, company, id, attrs)
+            .await?;
+        let tenant = scope.tenant();
+        let row = tx
+            .mutate(move |sql| {
+                Box::pin(async move {
+                    let mut changes = Vec::new();
+                    let new = store::save(sql, CUSTOMERS, tenant, company, old, data, &mut changes)
+                        .await?;
+                    Ok((new, changes))
+                })
+            })
+            .await?;
+        self.customer_with_facts(tx.sql(), scope, row).await
     }
 
     async fn code_list<T: DeserializeOwned>(
@@ -263,9 +414,10 @@ impl Receivables {
         let mut tx = self
             .write(&mut client, scope, company, capability, &action)
             .await?;
-        let record = self
-            .save_code_on(&mut tx, scope, company, table, id, attrs)
-            .await?;
+        let record = store::decode(
+            self.save_code_on(&mut tx, scope, company, table, id, attrs)
+                .await?,
+        )?;
         tx.commit().await?;
         Ok(record)
     }
@@ -317,7 +469,7 @@ impl Receivables {
             })
             .collect();
         let defaults = if customer {
-            json!({"active":true,"payment_terms_days":0})
+            json!({"active":true,"payment_terms_days":0,"record_kind":null,"record_id":null})
         } else if tax {
             json!({"active":true})
         } else {
@@ -334,10 +486,38 @@ impl Receivables {
             }
         }
         v::text(&mut data, "code", true, 50)?;
-        v::text(&mut data, "name", true, 200)?;
         v::flag(&mut data, "active")?;
         let mut chart = Vec::new();
+        let mut company_summary = None;
         if customer {
+            // The link is the create's; `customer.link` sets it later for a
+            // customer recorded before this module read Core. Once linked,
+            // the party fields are Core's and are not accepted here.
+            let linked = match old.as_ref() {
+                Some(old) => companies::linked(old),
+                None => {
+                    let (linked, summary) = self
+                        .linkable(client, scope, company, attrs, LINK_FIELD)
+                        .await?;
+                    data["record_kind"] = json!(companies::KIND);
+                    data["record_id"] = json!(linked.to_string());
+                    company_summary = Some(summary);
+                    Some(linked)
+                }
+            };
+            if linked.is_some() {
+                if let Some(field) = companies::PARTY
+                    .iter()
+                    .find(|f| attrs.get(**f).is_some_and(|v| !v.is_null()))
+                {
+                    return Err(invalid(field, "is read from the linked company"));
+                }
+                for field in companies::PARTY {
+                    data[field] = old.as_ref().map_or(Value::Null, |o| o[field].clone());
+                }
+            } else {
+                v::text(&mut data, "name", true, 200)?;
+            }
             for (field, max) in [
                 ("tax_identifier", 50),
                 ("registration_identifier", 50),
@@ -362,6 +542,7 @@ impl Receivables {
             }
             v::range(&mut data, "payment_terms_days", 0, 3650)?;
         } else if tax {
+            v::text(&mut data, "name", true, 200)?;
             v::decimal(&mut data, "rate", false, Decimal::from(1000), 4)?;
             chart = self.ledger.list_accounts_on(client, scope, company).await?;
             v::integer(&mut data, "account_id", true)?;
@@ -369,6 +550,7 @@ impl Receivables {
                 v::account(&mut data, "account_id", &chart, AccountType::Liability)?;
             }
         } else {
+            v::text(&mut data, "name", true, 200)?;
             v::choice(&mut data, "kind", Self::series_kinds())?;
             if data["prefix"].is_null() {
                 data["prefix"] = json!("");
@@ -400,10 +582,12 @@ impl Receivables {
             before: old,
             after: data,
             accounts,
+            company: company_summary,
         })
     }
 
-    pub(super) async fn save_code_on<T: DeserializeOwned>(
+    /// Saves a series, tax code or customer row and answers the stored row.
+    pub(super) async fn save_code_on(
         &self,
         tx: &mut MutationTransaction<'_>,
         scope: &Scope,
@@ -411,7 +595,7 @@ impl Receivables {
         table: Table,
         id: Option<i64>,
         attrs: &Value,
-    ) -> Result<T> {
+    ) -> Result<Value> {
         let Prepared {
             before: old,
             after: data,
@@ -430,7 +614,6 @@ impl Receivables {
                 })
             })
             .await?;
-        let record = store::decode(new)?;
-        Ok(record)
+        Ok(new)
     }
 }

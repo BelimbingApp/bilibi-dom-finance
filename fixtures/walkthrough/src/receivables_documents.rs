@@ -34,6 +34,7 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
     let ledger = services.get::<Ledger>(bilibi_finance_ledger::SERVICE)?;
     let attachments = services.get::<Attachments>(bilibi_finance_attachments::SERVICE)?;
     let grants = services.get::<bilibi_authz::grants::Grants>("base/authz.grants")?;
+    let client = db.get().await?;
     let admin = sign_in(db, services, 1, 4).await?;
     let manager = sign_in(db, services, 1, 1).await?;
     let viewer = sign_in(db, services, 1, 2).await?;
@@ -76,7 +77,14 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
     ] {
         series.push(ar.create_series(&admin, 1, &json!({"code":format!("R2-{code}"),"name":format!("R2 {code}"),"kind":kind,"prefix":format!("R2-{code}-"),"number_width":3})).await?);
     }
-    let customer = ar.create_customer(&admin, 1, &json!({"code":"R2-customer","name":"R2 saved party","payment_terms_days":30,"line1":"Saved address"})).await?;
+    let customer = ar
+        .create_customer(
+            &admin,
+            1,
+            &json!({"code":"R2-customer","core_company_id":20,"payment_terms_days":30}),
+        )
+        .await?;
+    let party = customer.company.clone().expect("linked to Company 020");
     let tax = ar
         .create_tax_code(
             &admin,
@@ -147,13 +155,35 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
     ));
     ar.update_draft(&admin, 1, draft.id, &json!({"issue_date":"2026-08-31"}))
         .await?;
-    ar.update_customer(
-        &admin,
-        1,
-        customer.id,
-        &json!({"name":"R2 party at issue","line1":"Issue address","payment_terms_days":15}),
-    )
-    .await?;
+    ar.update_customer(&admin, 1, customer.id, &json!({"payment_terms_days":15}))
+        .await?;
+    // The issuer freezes the company's facts under their own Companies view:
+    // without it, or with a fact restricted for them, the issue is refused.
+    grants
+        .set_direct(&admin, admin.user(), bilibi_company::VIEW, Some(false))
+        .await?;
+    field(
+        ar.issue_document(&admin, 1, draft.id).await,
+        "customer_id",
+        "needs Companies view permission to freeze the company's details",
+    );
+    grants
+        .set_direct(&admin, admin.user(), bilibi_company::VIEW, None)
+        .await?;
+    client.execute("INSERT INTO field_restrictions(tenant_id,role_id,table_id,field_id) VALUES(1,4,'companies','tax_id') ON CONFLICT DO NOTHING", &[]).await?;
+    field(
+        ar.issue_document(&admin, 1, draft.id).await,
+        "customer_id",
+        "the company's tax ID is restricted for you, so it cannot be frozen on the document",
+    );
+    assert_eq!(
+        ar.get_customer(&admin, 1, customer.id)
+            .await?
+            .company
+            .map(|c| c.restricted),
+        Some(vec!["tax_id".to_owned()])
+    );
+    client.execute("DELETE FROM field_restrictions WHERE tenant_id=1 AND role_id=4 AND table_id='companies' AND field_id='tax_id'", &[]).await?;
     ar.update_tax_code(&admin, 1, tax.id, &json!({"name":"R2 renamed tax"}))
         .await?;
     // Direct denial must be checked again even on an already sealed owner scope.
@@ -186,22 +216,31 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
     };
     assert_eq!(first.document_number, Some(1));
     assert_eq!(first.document_reference.as_deref(), Some("R2-INV-001"));
-    assert_eq!(first.party_name.as_deref(), Some("R2 party at issue"));
-    assert_eq!(first.party_line1.as_deref(), Some("Issue address"));
+    // The party frozen at issue is the company's as Core held it then; the
+    // billing address waits on a Core Address read for the issuing
+    // connection (TODO(platform)), so it is not frozen yet.
+    assert_eq!(first.party_name.as_deref(), Some(party.name.as_str()));
+    assert_eq!(first.party_tax_identifier, party.tax_id);
+    assert_eq!(first.party_email, party.email);
+    assert_eq!(first.party_phone, party.phone);
+    assert!(first.party_line1.is_none());
     assert_eq!(first.due_date.as_deref(), Some("2026-09-15"));
     assert_eq!(first.lines, draft.lines);
     assert_eq!(first.tax_lines, draft.tax_lines);
     assert_eq!(first.total, money("110"));
-    ar.update_customer(
-        &admin,
-        1,
-        customer.id,
-        &json!({"name":"R2 later party","line1":"Later address"}),
-    )
-    .await?;
+    client
+        .execute(
+            "UPDATE companies SET legal_name='R2 later party' WHERE tenant_id=1 AND id=20",
+            &[],
+        )
+        .await?;
+    assert_eq!(
+        ar.get_customer(&admin, 1, customer.id).await?.name,
+        "R2 later party"
+    );
     let frozen = ar.get_document(&admin, 1, first.id).await?;
     assert_eq!(frozen.party_name, first.party_name);
-    assert_eq!(frozen.party_line1, first.party_line1);
+    assert_eq!(frozen.party_tax_identifier, first.party_tax_identifier);
     // Attachment labels are capture snapshots; a new capture reads the final source label.
     let final_scan = attachments
         .attach(&admin, 1, source, first.id, &file)
@@ -448,7 +487,7 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
     ledger
         .reopen_period(&admin, 1, january, "R2 restore period")
         .await?;
-    assert!(matches!(refused, Err(R::Ledger(_))));
+    assert!(matches!(refused, Err(R::Ledger(_))), "{refused:?}");
     assert_eq!(before, after);
     // Fail after the ledger, payment AND allocation inserts: even audit
     // capture must roll everything back, without consuming a series number.

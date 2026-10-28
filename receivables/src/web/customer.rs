@@ -1,28 +1,35 @@
-//! One customer: its details and address, edited in place, with the invoices
-//! and receipts that belong to it. Reads `customer.get`, `document.list` and
-//! `payment.list`; each edit calls `customer.update`.
+//! One customer: its Finance facts edited in place, the Core company it is
+//! (identity, status, tax and registration numbers, contact details and
+//! billing address read from Core through its contracts), the customer
+//! relationship, and the invoices and receipts that belong to it. Reads
+//! `customer.get`, `document.list`, `payment.list`, `core.address.company.list`
+//! and `core.company.relationship.list`; each edit calls `customer.update`;
+//! a customer recorded before Core companies links through `customer.link`.
 use super::{
-    format::{self as f},
+    company_pick::{self, Chooser, Chosen, Relation},
+    format::{self as f, Errors},
     render, Flash, Pages, Written, CUSTOMERS, INVOICES, RECEIPTS,
 };
-use crate::{Customer as Record, Document, Payment, MANAGE_CUSTOMERS};
+use crate::{Customer as Record, CustomerCompany, Document, Payment, MANAGE_CUSTOMERS};
 use bilibi_database::{Error, Result};
+use bilibi_records::{Reference, Resolved};
 use bilibi_tenancy::Scope;
 use bilibi_ui::{
     page::{LiveBody, LiveFuture, LiveInput, LiveRequest, LiveState},
-    params, BackLink, Card, Cell, CommitStates, CommitStatus, EmptyState, Facts, Field, FlexRow,
-    Header, Html, InlineChoice, InlineEdit, InputKind, ListColumns, PageVariant, SectionHeading,
-    StatusKind,
+    params, BackLink, Button, ButtonVariant, Card, Cell, CommitStates, CommitStatus, EmptyState,
+    Facts, Field, FlexRow, Form, Header, Html, InlineChoice, InlineEdit, InputKind, ListColumns,
+    ModalWidth, PageVariant, Restricted, SectionHeading, StatusKind,
 };
-use serde_json::json;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 
-/// `(key, label)` of the facts a customer edits in place, by card.
+/// `(key, label)` of the Finance facts a customer edits in place.
+const OWN: &[(&str, &str)] = &[("payment_terms_days", "Payment terms (days)")];
+/// The party facts a customer recorded before linking still edits itself.
 const DETAILS: &[(&str, &str)] = &[
     ("name", "Name"),
     ("email", "Email"),
     ("phone", "Phone"),
-    ("payment_terms_days", "Payment terms (days)"),
     ("tax_identifier", "Tax ID"),
     ("registration_identifier", "Registration number"),
 ];
@@ -35,11 +42,33 @@ const ADDRESS: &[(&str, &str)] = &[
     ("admin1_code", "State or region"),
     ("country_iso", "Country code"),
 ];
+const FORM: &str = "customer";
+const PREFIX: &str = "receivables-customer-link";
+
+/// What the page read from Core about the linked company.
+#[derive(Default)]
+struct CompanyView {
+    /// The reference as Base Records names it for this reader.
+    resolved: Option<Resolved>,
+    /// The company's current billing address, one line per row.
+    billing: Vec<String>,
+    /// Addresses are not readable for this person.
+    addresses_hidden: bool,
+    relation: Option<Relation>,
+}
+
+/// The Link to company dialog while it is open.
+struct Link {
+    chooser: Chooser,
+    errors: Errors,
+}
 
 pub(super) struct Customer {
     pages: Pages,
     id: i64,
     record: Option<Record>,
+    company: CompanyView,
+    company_name: String,
     documents: Vec<Document>,
     payments: Vec<Payment>,
     can_edit: bool,
@@ -48,14 +77,18 @@ pub(super) struct Customer {
     figures: f::Figures,
     invoices: ListColumns,
     receipts: ListColumns,
+    link: Option<Link>,
+    framed: bool,
 }
 
 impl Customer {
-    pub(super) fn new(pages: Pages, path: &HashMap<String, String>) -> Result<Self> {
+    pub(super) fn new(pages: Pages, path: &HashMap<String, String>, framed: bool) -> Result<Self> {
         Ok(Self {
             pages,
             id: params::positive_id(path.get("id").map(String::as_str)).unwrap_or(0),
             record: None,
+            company: CompanyView::default(),
+            company_name: String::new(),
             documents: vec![],
             payments: vec![],
             can_edit: false,
@@ -85,6 +118,8 @@ impl Customer {
                 ],
                 &["amount"],
             )?,
+            link: None,
+            framed,
         })
     }
 
@@ -113,6 +148,11 @@ impl Customer {
         };
         self.can_edit = self.pages.allowed(scope, MANAGE_CUSTOMERS).await?;
         self.figures = self.pages.figures(scope).await;
+        self.company_name = self.pages.company_name(scope).await;
+        self.company = CompanyView::default();
+        if let Some(company) = self.record.as_ref().and_then(|c| c.company.clone()) {
+            self.company = self.read_company(scope, &company).await?;
+        }
         if self.record.is_some() {
             self.documents = self
                 .pages
@@ -140,6 +180,40 @@ impl Customer {
             self.receipts.load(&self.payments, |p| p.id.to_string());
         }
         Ok(())
+    }
+
+    /// What Core says about the linked company for this reader: its name
+    /// and page (Base Records), its current billing address (Core Address)
+    /// and whether the current company records the relationship.
+    async fn read_company(&self, scope: &Scope, company: &CustomerCompany) -> Result<CompanyView> {
+        let resolved = self
+            .pages
+            .records
+            .resolve(scope, &[Reference::new("company", company.id.to_string())])
+            .await?
+            .into_iter()
+            .next();
+        let today = self.pages.today(scope).await;
+        let (billing, addresses_hidden) = match self
+            .pages
+            .read_core(
+                scope,
+                "core.address.company.list",
+                json!({"company_id": company.id}),
+            )
+            .await
+        {
+            Ok(rows) => (billing_lines(&rows, &today), false),
+            Err(Error::Forbidden | Error::Unauthorized) => (Vec::new(), true),
+            Err(error) => return Err(error),
+        };
+        let relation = Some(company_pick::relation(&self.pages, scope, company.id).await?);
+        Ok(CompanyView {
+            resolved,
+            billing,
+            addresses_hidden,
+            relation,
+        })
     }
 
     fn value(c: &Record, key: &str) -> String {
@@ -182,6 +256,167 @@ impl Customer {
         render(Facts { id, items })
     }
 
+    /// A fact of the company as the reader may see it: the value, a
+    /// restricted marker, or that Companies view is needed.
+    fn company_fact(
+        &self,
+        company: &CustomerCompany,
+        key: &str,
+        value: &Option<String>,
+    ) -> Result<Html> {
+        if !company.readable {
+            return render(
+                Restricted::new(format!("receivables-customer-company-{key}-restricted"))
+                    .reason("Not visible to you: viewing companies needs permission."),
+            );
+        }
+        if company.restricted.iter().any(|r| r == key) {
+            return render(Restricted::new(format!(
+                "receivables-customer-company-{key}-restricted"
+            )));
+        }
+        Ok(Html::text(f::optional(value)))
+    }
+
+    fn company_card(&self, c: &Record, company: &CustomerCompany) -> Result<Html> {
+        let name = match &self.company.resolved {
+            Some(resolved) if resolved.label.is_some() => {
+                render(resolved.pill("receivables-customer-company-pill", self.framed))?
+            }
+            _ => Html::text(&company.name),
+        };
+        let mut items = vec![
+            f::fact_html("Company", name),
+            f::fact_html("Company status", super::customers::company_badge(c)?),
+            f::fact_html(
+                "Tax ID",
+                self.company_fact(company, "tax_id", &company.tax_id)?,
+            ),
+            f::fact_html(
+                "Registration number",
+                self.company_fact(company, "registration_number", &company.registration_number)?,
+            ),
+            f::fact_html(
+                "Email",
+                self.company_fact(company, "email", &company.email)?,
+            ),
+            f::fact_html(
+                "Phone",
+                self.company_fact(company, "phone", &company.phone)?,
+            ),
+        ];
+        let billing = if self.company.addresses_hidden {
+            render(
+                Restricted::new("receivables-customer-billing-restricted")
+                    .reason("Not visible to you: viewing addresses needs permission."),
+            )?
+        } else if self.company.billing.is_empty() {
+            Html::text("No billing address in Companies yet.")
+        } else {
+            render(Lines {
+                id: "receivables-customer-billing",
+                lines: self.company.billing.clone(),
+            })?
+        };
+        items.push(f::fact_html("Billing address", billing));
+        let relation = match &self.company.relation {
+            Some(Relation::Recorded { since }) => Html::text(&match since {
+                Some(day) => format!(
+                    "Recorded as a customer of {} since {day}.",
+                    self.company_name
+                ),
+                None => format!("Recorded as a customer of {}.", self.company_name),
+            }),
+            Some(Relation::Missing) => {
+                let mut html = Html::text(&format!(
+                    "Not recorded as a customer of {} in Companies.",
+                    self.company_name
+                ));
+                if self.can_edit {
+                    html.push(&render(Button {
+                        id: "receivables-customer-record-relationship",
+                        button_type: "button",
+                        event: "record_relationship",
+                        class: "ml-2",
+                        working: "Recording…",
+                        body: Html::text("Record relationship"),
+                        ..Button::default()
+                    })?);
+                }
+                html
+            }
+            Some(Relation::Hidden) | None => render(
+                Restricted::new("receivables-customer-relationship-restricted")
+                    .reason("Not visible to you: viewing companies needs permission."),
+            )?,
+        };
+        items.push(f::fact_html("Relationship", relation));
+        render(Card {
+            id: "receivables-customer-company",
+            role: "region",
+            class: "mt-4",
+            body: {
+                let mut b = render(SectionHeading {
+                    title: "Company",
+                    description: "Read from Companies. Invoices issued from now on carry these details; invoices already issued keep the details they were issued with.",
+                    ..SectionHeading::default()
+                })?;
+                b.push(&render(Facts {
+                    id: "receivables-customer-company-facts",
+                    items,
+                })?);
+                b
+            },
+            ..Card::default()
+        })
+    }
+
+    fn link_dialog(&self, link: &Link) -> Result<Html> {
+        let labels = link.chooser.labels();
+        let mut body = render(link.errors.summary(&format!("{PREFIX}-errors"), &labels))?;
+        body.push(&f::group(
+            "receivables-customer-link-company",
+            "Company",
+            link.chooser.render(&link.errors, self.framed)?,
+        )?);
+        let actions = {
+            let mut a = render(Button {
+                id: &format!("{PREFIX}-cancel"),
+                button_type: "button",
+                event: "cancel_link",
+                body: Html::text("Cancel"),
+                ..Button::default()
+            })?;
+            a.push(&render(Button {
+                id: &format!("{PREFIX}-save"),
+                button_type: "button",
+                event: "link_customer",
+                variant: ButtonVariant::Primary,
+                working: "Linking…",
+                body: Html::text("Link customer"),
+                ..Button::default()
+            })?);
+            f::actions(a)?
+        };
+        let form = render(Form {
+            id: &format!("{PREFIX}-form"),
+            event: "link_change",
+            change: true,
+            class: "mt-4",
+            body,
+            actions,
+        })?;
+        f::modal(
+            "receivables-customer-link-modal",
+            "Link to company",
+            "This customer was recorded before Finance read companies from Companies. Link it to the company it is; the link is permanent, and invoices already issued keep their details.",
+            "cancel_link",
+            ModalWidth::Wide,
+            &self.flash,
+            form,
+        )
+    }
+
     fn body(&self) -> Result<String> {
         let back = render(BackLink {
             href: CUSTOMERS,
@@ -192,7 +427,7 @@ impl Customer {
         let Some(c) = &self.record else {
             let mut missing = EmptyState::missing(
                 "Customer not found",
-                "There is no such customer in this company, or you cannot read it.",
+                "There is no such customer in the current company, or you cannot read it.",
             );
             missing.id = "receivables-customer-missing".into();
             missing.action = back;
@@ -235,7 +470,6 @@ impl Customer {
             &self.statuses,
         );
         status_field.allow_empty = false;
-        let mut details = self.facts(c, "receivables-customer-details", DETAILS)?;
         let mut items = vec![
             f::fact("Code", &c.code),
             f::fact_html(
@@ -259,36 +493,69 @@ impl Customer {
             id: "receivables-customer-summary",
             items: std::mem::take(&mut items),
         })?;
-        summary.push(&details);
-        details = summary;
-        let identity = render(Card {
+        summary.push(&self.facts(c, "receivables-customer-details", OWN)?);
+        let mut parts = vec![render(Card {
             id: "receivables-customer-identity",
             role: "region",
             body: {
                 let mut b = render(SectionHeading {
+                    title: "In Finance",
+                    description:
+                        "Inactive stops new invoices; receipts and credit notes stay possible.",
+                    ..SectionHeading::default()
+                })?;
+                b.push(&summary);
+                b
+            },
+            ..Card::default()
+        })?];
+        match &c.company {
+            Some(company) => parts.push(self.company_card(c, company)?),
+            None => {
+                let mut heading = render(SectionHeading {
                     title: "Details",
+                    description: "Recorded before Finance read companies from Companies. Link this customer to its company to invoice it again; until then these details stay editable here.",
                     ..SectionHeading::default()
                 })?;
-                b.push(&details);
-                b
-            },
-            ..Card::default()
-        })?;
-        let address = render(Card {
-            id: "receivables-customer-address",
-            role: "region",
-            class: "mt-4",
-            body: {
-                let mut b = render(SectionHeading {
-                    title: "Address",
-                    description: "Printed on invoices you issue from now on. Invoices already issued keep the address they were issued with.",
-                    ..SectionHeading::default()
-                })?;
-                b.push(&self.facts(c, "receivables-customer-address-facts", ADDRESS)?);
-                b
-            },
-            ..Card::default()
-        })?;
+                if self.can_edit {
+                    heading.push(&render(Button {
+                        id: "receivables-customer-link",
+                        button_type: "button",
+                        event: "show_link",
+                        variant: ButtonVariant::Primary,
+                        class: "mt-2",
+                        body: Html::text("Link to company"),
+                        ..Button::default()
+                    })?);
+                }
+                parts.push(render(Card {
+                    id: "receivables-customer-party",
+                    role: "region",
+                    class: "mt-4",
+                    body: {
+                        let mut b = heading;
+                        b.push(&self.facts(c, "receivables-customer-party-facts", DETAILS)?);
+                        b
+                    },
+                    ..Card::default()
+                })?);
+                parts.push(render(Card {
+                    id: "receivables-customer-address",
+                    role: "region",
+                    class: "mt-4",
+                    body: {
+                        let mut b = render(SectionHeading {
+                            title: "Address",
+                            description: "Printed on credit notes you issue from now on. Documents already issued keep the address they were issued with.",
+                            ..SectionHeading::default()
+                        })?;
+                        b.push(&self.facts(c, "receivables-customer-address-facts", ADDRESS)?);
+                        b
+                    },
+                    ..Card::default()
+                })?);
+            }
+        }
         let mut invoice_rows = Vec::new();
         for d in &self.documents {
             let mut row = FlexRow::new(d.id.to_string());
@@ -326,7 +593,7 @@ impl Customer {
                 .slot("status", super::payments::status_badge(p)?),
             );
         }
-        let invoices = render(Card {
+        parts.push(render(Card {
             id: "receivables-customer-invoices",
             role: "region",
             class: "mt-4",
@@ -347,8 +614,8 @@ impl Customer {
                 b
             },
             ..Card::default()
-        })?;
-        let receipts = render(Card {
+        })?);
+        parts.push(render(Card {
             id: "receivables-customer-receipts",
             role: "region",
             class: "mt-4",
@@ -369,7 +636,7 @@ impl Customer {
                 b
             },
             ..Card::default()
-        })?;
+        })?);
         let mut body = f::announce(c.id)?;
         let pin_name = format!("{} {}", c.code, c.name);
         body.push(&render(Header {
@@ -383,27 +650,27 @@ impl Customer {
             subtitle: &format!("Customer {}", c.code),
             actions: back,
         })?);
-        for part in [identity, address, invoices, receipts] {
+        for part in parts {
             body.push(&part);
         }
+        let modal = match &self.link {
+            Some(link) => Some(self.link_dialog(link)?),
+            None => None,
+        };
         f::frame(
             "receivables-customer",
             PageVariant::Detail,
             &self.flash,
             body,
-            None,
+            modal,
         )
     }
 
-    async fn save_field(
-        &mut self,
-        scope: &Scope,
-        credential: &str,
-        v: &serde_json::Value,
-    ) -> Result<()> {
+    async fn save_field(&mut self, scope: &Scope, credential: &str, v: &Value) -> Result<()> {
         let key = v["field"].as_str().ok_or(Error::Invalid)?;
-        let label = DETAILS
+        let label = OWN
             .iter()
+            .chain(DETAILS)
             .chain(ADDRESS)
             .find(|(k, _)| *k == key)
             .map(|(_, l)| *l)
@@ -455,6 +722,236 @@ impl Customer {
             .put(key, f::commit_status(&written, key, label, &submitted));
         Ok(())
     }
+
+    /// The Link dialog's posted values.
+    async fn take_form(&mut self, scope: &Scope, v: &Value) -> Result<()> {
+        let form = params::form_values(v, FORM);
+        if form.is_empty() {
+            return Ok(());
+        }
+        let pages = self.pages.clone();
+        if let Some(link) = self.link.as_mut() {
+            if link.chooser.read(&form) {
+                link.chooser.search(&pages, scope).await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn link_now(&mut self, scope: &Scope, credential: &str) -> Result<()> {
+        let pages = self.pages.clone();
+        let Some(link) = self.link.as_mut() else {
+            return Ok(());
+        };
+        let company = match link
+            .chooser
+            .company(&pages, scope, credential, "link_customer")
+            .await?
+        {
+            Chosen::Company(id) => id,
+            Chosen::Invalid(errors) => {
+                link.errors = errors;
+                return Ok(());
+            }
+            Chosen::Refused(message) => {
+                link.errors = Errors::default();
+                self.flash.set(StatusKind::Error, message);
+                return Ok(());
+            }
+            Chosen::Review => {
+                link.errors = Errors::default();
+                return Ok(());
+            }
+        };
+        match pages
+            .write(
+                scope,
+                credential,
+                "link_customer",
+                "finance.receivables.customer.link",
+                json!({"customer_id": self.id, "core_company_id": company}),
+            )
+            .await?
+        {
+            Written::Done(_) => {
+                let recorded = company_pick::record_relationship(
+                    &pages,
+                    scope,
+                    credential,
+                    "link_customer",
+                    company,
+                )
+                .await?;
+                let (kind, message) =
+                    company_pick::relationship_flash("Customer linked.", &recorded);
+                self.link = None;
+                self.flash.set(kind, message);
+            }
+            Written::Invalid(fields) => {
+                // The contract names the company field as the agents do.
+                link.errors = Errors(
+                    fields
+                        .into_iter()
+                        .map(|(path, messages)| {
+                            (
+                                if path == "core_company_id" {
+                                    "company".to_owned()
+                                } else {
+                                    path
+                                },
+                                messages,
+                            )
+                        })
+                        .collect(),
+                );
+            }
+            Written::Refused(message) => {
+                self.link = None;
+                self.flash.set(
+                    StatusKind::Error,
+                    super::worded(message, "You do not have permission to change customers."),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    async fn event(&mut self, scope: &Scope, credential: &str, v: &Value) -> Result<()> {
+        let pages = self.pages.clone();
+        match v["type"].as_str().ok_or(Error::Invalid)? {
+            "clear-flash" => self.flash.dismiss(v),
+            "invoices_grid" => {
+                self.invoices.handle(&params::string_values(v));
+            }
+            "receipts_grid" => {
+                self.receipts.handle(&params::string_values(v));
+            }
+            "save_customer" => self.save_field(scope, credential, v).await?,
+            "show_link" => {
+                if self.can_edit && self.record.as_ref().is_some_and(|c| c.company.is_none()) {
+                    self.link = Some(Link {
+                        chooser: Chooser::new(PREFIX, FORM),
+                        errors: Errors::default(),
+                    });
+                } else {
+                    self.flash.set(StatusKind::Error, super::DENIED);
+                }
+            }
+            "cancel_link" => self.link = None,
+            "link_change" => self.take_form(scope, v).await?,
+            "pick_company" => {
+                let record = v["record"].as_str().ok_or(Error::Invalid)?;
+                if let Some(link) = self.link.as_mut() {
+                    link.chooser.pick(&pages, scope, record).await?;
+                    link.errors.0.remove("company");
+                }
+            }
+            "clear_company" => {
+                if let Some(link) = self.link.as_mut() {
+                    link.chooser.clear();
+                }
+            }
+            "use_candidate" => {
+                let id = v["company"].as_str().ok_or(Error::Invalid)?;
+                if let Some(link) = self.link.as_mut() {
+                    link.chooser.use_candidate(&pages, scope, id).await?;
+                }
+            }
+            "link_customer" => {
+                self.take_form(scope, v).await?;
+                self.link_now(scope, credential).await?;
+            }
+            "record_relationship" => {
+                let target = self
+                    .record
+                    .as_ref()
+                    .and_then(|c| c.company.as_ref().map(|co| co.id));
+                match target {
+                    Some(target) if self.can_edit => {
+                        let recorded = company_pick::record_relationship(
+                            &pages,
+                            scope,
+                            credential,
+                            "record_relationship",
+                            target,
+                        )
+                        .await?;
+                        let (kind, message) = match recorded {
+                            Ok(()) => (
+                                StatusKind::Success,
+                                "The customer relationship is recorded in Companies.".to_owned(),
+                            ),
+                            Err(reason) => (
+                                StatusKind::Error,
+                                format!("The customer relationship was not recorded: {reason}."),
+                            ),
+                        };
+                        self.flash.set(kind, message);
+                    }
+                    _ => self.flash.set(StatusKind::Error, super::DENIED),
+                }
+            }
+            _ => return Err(Error::Invalid),
+        }
+        Ok(())
+    }
+}
+
+/// The company's billing address as of `today`, from Core Address's owner
+/// list: the attachment carrying the billing kind within its dates, primary
+/// first (the list's order), else the primary address, else the first.
+fn billing_lines(rows: &Value, today: &str) -> Vec<String> {
+    let attachment = |row: &Value| row["attachment"]["attachment"].clone();
+    let current: Vec<&Value> = rows
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|row| {
+            let dates = &row["attachment"]["attachment"]["dates"];
+            let from = dates["effective_from"].as_str();
+            let to = dates["effective_to"].as_str();
+            today.is_empty() || (from.is_none_or(|f| f <= today) && to.is_none_or(|t| t >= today))
+        })
+        .collect();
+    let billing = |row: &Value| {
+        attachment(row)["kinds"]
+            .as_array()
+            .is_some_and(|k| k.iter().any(|v| v == "billing"))
+    };
+    let primary = |row: &Value| attachment(row)["is_primary"] == true;
+    let chosen = current
+        .iter()
+        .find(|row| billing(row))
+        .or_else(|| current.iter().find(|row| primary(row)))
+        .or_else(|| current.first());
+    let Some(row) = chosen else {
+        return Vec::new();
+    };
+    let a = &row["address"]["address"];
+    let text = |key: &str| a[key].as_str().map(str::trim).filter(|s| !s.is_empty());
+    let mut lines: Vec<String> = ["line1", "line2", "line3"]
+        .into_iter()
+        .filter_map(text)
+        .map(str::to_owned)
+        .collect();
+    let place: Vec<&str> = ["postcode", "locality", "admin1_code", "country_iso"]
+        .into_iter()
+        .filter_map(text)
+        .collect();
+    if !place.is_empty() {
+        lines.push(place.join(" "));
+    }
+    lines
+}
+
+#[derive(askama::Template)]
+#[template(
+    source = r#"<div id="{{ id }}">{% for line in lines %}<div>{{ line }}</div>{% endfor %}</div>"#,
+    ext = "html"
+)]
+struct Lines {
+    id: &'static str,
+    lines: Vec<String>,
 }
 
 impl LiveState<Scope, Error> for Customer {
@@ -462,17 +959,7 @@ impl LiveState<Scope, Error> for Customer {
         Box::pin(async move {
             match r.input {
                 LiveInput::Refresh | LiveInput::Params(_) => {}
-                LiveInput::Event(v) => match v["type"].as_str().ok_or(Error::Invalid)? {
-                    "clear-flash" => self.flash.dismiss(v),
-                    "invoices_grid" => {
-                        self.invoices.handle(&params::string_values(v));
-                    }
-                    "receipts_grid" => {
-                        self.receipts.handle(&params::string_values(v));
-                    }
-                    "save_customer" => self.save_field(r.scope, r.credential, v).await?,
-                    _ => return Err(Error::Invalid),
-                },
+                LiveInput::Event(v) => self.event(r.scope, r.credential, v).await?,
             }
             self.load(r.scope).await?;
             if self.record.is_none() {

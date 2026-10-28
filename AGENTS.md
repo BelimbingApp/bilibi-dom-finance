@@ -251,6 +251,20 @@ they govern this code and are not copied here.
 - Register assets through `FixedAssets`, never by posting or claiming their
   acquisition entry: it freezes one whole source debit and its revision;
   projected schedules are not posted depreciation (see `fixed_assets/README.md`).
+- A customer (and, when ported, a vendor) is a Finance record linked to a
+  Core company through Base Records (`record_kind`/`record_id`, checked with
+  `Records::check` on the write's own connection), never a copy of the
+  company's name, tax ID, contact details or address: read them on the handed
+  connection as `receivables/src/companies.rs` does (`PartyProofs::organisation_name`
+  for name and status on any connection, `bilibi_company::detail` for the
+  facts on a full one, under Core's own view capability and masks), freeze
+  them only at commit, and refuse a masked fact instead of freezing it. Core
+  exports no create, role or relationship read on a caller's connection and no
+  billing-address read, so the pages create the company and record the
+  relationship through Core's own contracts (`web/company_pick.rs`) and the
+  address is not frozen yet: these are Platform follow-ups
+  (BelimbingApp/bilibi#231), not something to work around with SQL on Core's
+  tables.
 - Never offer or accept an account receipts were paid into (`finance_receivables_payments.deposit_account_id`) as the receivable control account, nor the current control account, or an allocated invoice's saved control, as a receipt's deposit: `prepare_setup` (`receivables/src/configuration.rs`) and `record_payment` (`receivables/src/posting.rs`) refuse them for a person and an agent alike, and the settings page and receipt dialog leave them out of their choices. Receivables knows no account as "bank" beyond its own receipts.
 - Change receivable drafts through `Receivables`, not its tables: null/missing
   lines preserve snapshots, an array replaces them atomically, and discard

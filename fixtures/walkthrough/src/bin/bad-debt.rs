@@ -160,7 +160,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .create_customer(
             &manager,
             1,
-            &json!({"code":"BD","name":"Collection assessment customer","payment_terms_days":30}),
+            &json!({"code":"BD","core_company_id":35,"payment_terms_days":30}),
         )
         .await?;
     let tax=ar.create_tax_code(&manager,1,&json!({"code":"BD-service","name":"Service tax specimen","rate":"8","account_id":account("2100")?})).await?;

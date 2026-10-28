@@ -206,18 +206,102 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         )
         .await?;
     assert_eq!(unchanged.rate.normalize().to_string(), "10");
-    let customer = ar.create_customer(&manager, 1, &json!({"code":" A ","name":" Customer A ","country_iso":" my ","payment_terms_days":"30","email":"unvalidated","line1":" Street "})).await?;
-    assert_eq!(customer.country_iso.as_deref(), Some("MY"));
-    assert_eq!(customer.line1.as_deref(), Some("Street"));
+    // A customer is a Core company (#75): the Finance record keeps a code,
+    // payment terms and availability; the business is read from Core.
+    field(
+        ar.create_customer(&manager, 1, &json!({"code":"A"})).await,
+        "core_company_id",
+        "can't be blank",
+    );
+    field(
+        ar.create_customer(&manager, 1, &json!({"code":"A","core_company_id":1}))
+            .await,
+        "core_company_id",
+        "cannot be the company itself",
+    );
+    field(
+        ar.create_customer(&manager, 1, &json!({"code":"A","core_company_id":999_999}))
+            .await,
+        "core_company_id",
+        "does not exist",
+    );
+    field(
+        ar.create_customer(&manager, 1, &json!({"code":"A","core_company_id":100}))
+            .await,
+        "core_company_id",
+        "does not exist",
+    );
+    let customer = ar
+        .create_customer(
+            &manager,
+            1,
+            &json!({"code":" A ","core_company_id":"10","payment_terms_days":"30"}),
+        )
+        .await?;
+    let company = customer.company.clone().expect("linked to a company");
+    assert_eq!(
+        (customer.code.as_str(), company.id, company.status.as_str()),
+        ("A", 10, "active")
+    );
+    assert_eq!(customer.name, company.name);
+    assert!(company.readable && company.email.is_some() && company.tax_id.is_some());
+    assert!(customer.line1.is_none() && customer.email.is_none());
+    field(
+        ar.update_customer(&manager, 1, customer.id, &json!({"name":"New name"}))
+            .await,
+        "name",
+        "is read from the linked company",
+    );
     let unchanged = ar
         .update_customer(
             &manager,
             1,
             customer.id,
-            &json!({"code":{},"name":"New name"}),
+            &json!({"code":{},"core_company_id":11}),
         )
         .await?;
     assert_eq!(unchanged.code, "A");
+    assert_eq!(unchanged.company.as_ref().map(|c| c.id), Some(10));
+    field(
+        ar.create_customer(&manager, 1, &json!({"code":"A2","core_company_id":10}))
+            .await,
+        "core_company_id",
+        "is already a customer of this company",
+    );
+    field(
+        ar.link_customer(&manager, 1, customer.id, &json!({"core_company_id":11}))
+            .await,
+        "core_company_id",
+        "is already linked; a customer's company never changes",
+    );
+    // A customer recorded before this module read Core keeps its own party
+    // fields, reads as not linked, and is linked once, for good.
+    client.execute("INSERT INTO finance_receivables_customers(tenant_id,company_id,code,name,line1,country_iso,payment_terms_days,active,inserted_at,updated_at) VALUES(1,1,'LEGACY','Legacy party','Old street','MY',0,true,now(),now())", &[]).await?;
+    let legacy = ar
+        .list_customers(&manager, 1)
+        .await?
+        .into_iter()
+        .find(|c| c.code == "LEGACY")
+        .expect("legacy customer");
+    assert!(legacy.company.is_none() && legacy.line1.as_deref() == Some("Old street"));
+    let renamed = ar
+        .update_customer(
+            &manager,
+            1,
+            legacy.id,
+            &json!({"name":" Legacy renamed ","country_iso":" my "}),
+        )
+        .await?;
+    assert_eq!(
+        (renamed.name.as_str(), renamed.country_iso.as_deref()),
+        ("Legacy renamed", Some("MY"))
+    );
+    field(
+        ar.update_customer(&manager, 1, legacy.id, &json!({"country_iso":"M1"}))
+            .await,
+        "country_iso",
+        "has invalid format",
+    );
     ar.update_customer(&manager, 1, customer.id, &json!({"active":false}))
         .await?;
     let defaults = ar
@@ -247,20 +331,10 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         "can't be blank",
     );
     field(
-        ar.create_customer(&manager, 1, &json!({"code":"A","name":"Duplicate"}))
+        ar.create_customer(&manager, 1, &json!({"code":"A","core_company_id":11}))
             .await,
         "code",
         "has already been taken",
-    );
-    field(
-        ar.create_customer(
-            &manager,
-            1,
-            &json!({"code":"BAD","name":"Bad","country_iso":"M1"}),
-        )
-        .await,
-        "country_iso",
-        "has invalid format",
     );
     assert!(matches!(
         ar.get_customer(&viewer, 1, customer.id).await,
@@ -268,13 +342,80 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
     ));
     assert_eq!(
         ar.get_customer(&manager, 1, customer.id).await?.name,
-        "New name"
+        company.name
     );
-    assert_eq!(ar.list_customers(&manager, 1).await?.len(), 1);
+    assert_eq!(ar.list_customers(&manager, 1).await?.len(), 2);
     assert_eq!(ar.list_tax_codes(&manager, 1).await?.len(), 1);
     println!(
         "code lists: uniqueness, immutable identities, tax precision and flat customer addresses"
     );
+
+    // New invoices need a customer linked to an active company; a customer
+    // recorded before linking, a pending company and a suspended company
+    // are each refused in their own words, and linking is permanent.
+    field(
+        ar.create_draft(
+            &manager,
+            1,
+            &json!({"kind":"invoice","series_id":series.id,"customer_id":legacy.id}),
+        )
+        .await,
+        "customer_id",
+        "is not linked to a company; link it before invoicing",
+    );
+    let linked = ar
+        .link_customer(&manager, 1, legacy.id, &json!({"core_company_id":12}))
+        .await?;
+    let linked_company = linked.company.clone().expect("linked");
+    assert_eq!(
+        (linked_company.id, linked_company.status.as_str()),
+        (12, "pending")
+    );
+    assert_eq!(linked.name, linked_company.name);
+    assert!(linked.line1.is_none());
+    field(
+        ar.create_draft(
+            &manager,
+            1,
+            &json!({"kind":"invoice","series_id":series.id,"customer_id":legacy.id}),
+        )
+        .await,
+        "customer_id",
+        "is a pending company; activate it in Companies before invoicing",
+    );
+    let companies = services.get::<bilibi_company::CompanyService>(bilibi_company::SERVICE)?;
+    companies
+        .activate_company(
+            &manager,
+            12,
+            Some("Walkthrough: pending customer activated"),
+        )
+        .await?;
+    companies
+        .suspend_company(&manager, 12, Some("Walkthrough: suspended customer"))
+        .await?;
+    field(
+        ar.create_draft(
+            &manager,
+            1,
+            &json!({"kind":"invoice","series_id":series.id,"customer_id":legacy.id}),
+        )
+        .await,
+        "customer_id",
+        "is a suspended company; reactivate it in Companies before invoicing",
+    );
+    companies
+        .reactivate_company(&manager, 12, Some("Walkthrough: customer reactivated"))
+        .await?;
+    let reopened = ar
+        .create_draft(
+            &manager,
+            1,
+            &json!({"kind":"invoice","series_id":series.id,"customer_id":legacy.id}),
+        )
+        .await?;
+    ar.discard_draft(&manager, 1, reopened.id).await?;
+    println!("customers: linked to Core companies, pending and suspended companies refused for new invoices, a legacy customer linked once");
 
     let header = json!({"kind":"invoice","series_id":series.id,"customer_id":customer.id});
     let empty = ar.create_draft(&manager, 1, &header).await?;
@@ -526,8 +667,8 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         .await,
         Err(R::InvalidOption)
     ));
-    let race_a = json!({"code":"RACE","name":"Race A"});
-    let race_b = json!({"code":"RACE","name":"Race B"});
+    let race_a = json!({"code":"RACE","core_company_id":13});
+    let race_b = json!({"code":"RACE","core_company_id":14});
     let (a, b) = tokio::join!(
         ar.create_customer(&manager, 1, &race_a),
         ar.create_customer(&manager, 1, &race_b)
@@ -540,6 +681,7 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         "UPDATE finance_receivables_series SET prefix='changed' WHERE tenant_id=1 AND company_id=1",
         "UPDATE finance_receivables_tax_codes SET rate=20 WHERE tenant_id=1 AND company_id=1",
         "UPDATE finance_receivables_customers SET code='changed' WHERE tenant_id=1 AND company_id=1",
+        "UPDATE finance_receivables_customers SET record_id='15' WHERE tenant_id=1 AND company_id=1 AND code='LEGACY'",
         "TRUNCATE finance_receivables_document_lines",
     ] { let error = client.batch_execute(sql).await.expect_err("database must refuse"); println!("database refused: {}", error.as_db_error().map(|e| e.message()).unwrap_or("database error")); }
     let audit: i64 = client.query_one("SELECT count(*) FROM base_audit_mutations WHERE auditable_type LIKE 'finance.receivables.%'", &[]).await?.get(0);
@@ -550,10 +692,16 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         .batch_execute("UPDATE companies SET status='archived' WHERE tenant_id=1 AND id=3")
         .await?;
     assert!(matches!(
-        ar.create_customer(&admin, 3, &json!({"code":"X","name":"Archived"}))
+        ar.create_customer(&admin, 3, &json!({"code":"X","core_company_id":10}))
             .await,
         Err(R::CompanyArchived)
     ));
+    field(
+        ar.create_customer(&manager, 1, &json!({"code":"X","core_company_id":3}))
+            .await,
+        "core_company_id",
+        "is an archived company",
+    );
     println!("NR1 proof passed: setup, code lists, arithmetic, drafts, isolation, paging, concurrent writes, archival, SQL guards and audit");
     Ok(())
 }

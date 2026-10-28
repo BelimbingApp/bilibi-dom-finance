@@ -223,7 +223,11 @@ async fn main() -> Outcome<()> {
             )
             .await?;
         let customer = ar
-            .create_customer(&manager, company, &json!({"code":"H4","name":"H4 buyer"}))
+            .create_customer(
+                &manager,
+                company,
+                &json!({"code":"H4","core_company_id": if company == 1 { 32 } else { 34 }}),
+            )
             .await?;
         ap.put_settings(
             &manager,

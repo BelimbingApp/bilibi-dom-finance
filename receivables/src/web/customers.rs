@@ -1,6 +1,9 @@
 //! The customers list and its Add customer dialog. Reads
-//! `finance.receivables.customer.list`; Add calls `customer.create`.
+//! `finance.receivables.customer.list`; Add chooses or creates the Core
+//! company (`company_pick`), calls `customer.create`, then records the
+//! customer relationship from the current company.
 use super::{
+    company_pick::{self, Chooser, Chosen},
     format::{self as f, Errors},
     render, Flash, Pages, Written, CUSTOMERS,
 };
@@ -28,7 +31,7 @@ static SPEC: LazyLock<Arc<ListSpec>> = LazyLock::new(|| {
         page_sizes: SIZES.to_vec(),
         filters: [(
             "status".into(),
-            Filter::one_of(&["", "active", "inactive"], ""),
+            Filter::one_of(&["", "active", "inactive", "unlinked"], ""),
         )]
         .into(),
         omit_defaults: true,
@@ -38,8 +41,8 @@ static SPEC: LazyLock<Arc<ListSpec>> = LazyLock::new(|| {
     .expect("customers list spec")
 });
 
-/// The Add customer form's fields, in the order a clerk meets them.
-/// `(key, label, kind, maximum length, required, hint)`
+/// The customer's own fields in the Add customer form:
+/// `(key, label, kind, maximum, required, hint)`.
 pub(super) const FIELDS: &[(&str, &str, InputKind, &str, bool, &str)] = &[
     (
         "code",
@@ -47,11 +50,8 @@ pub(super) const FIELDS: &[(&str, &str, InputKind, &str, bool, &str)] = &[
         InputKind::Text,
         "50",
         true,
-        "A short name for this customer. It cannot be changed later.",
+        "A short name for this customer in Finance. It cannot be changed later.",
     ),
-    ("name", "Name", InputKind::Text, "200", true, ""),
-    ("email", "Email", InputKind::Email, "255", false, ""),
-    ("phone", "Phone", InputKind::Tel, "50", false, ""),
     (
         "payment_terms_days",
         "Payment terms (days)",
@@ -60,37 +60,16 @@ pub(super) const FIELDS: &[(&str, &str, InputKind, &str, bool, &str)] = &[
         false,
         "Days after the invoice date that payment is due. Leave empty for due on issue.",
     ),
-    ("tax_identifier", "Tax ID", InputKind::Text, "50", false, ""),
-    (
-        "registration_identifier",
-        "Registration number",
-        InputKind::Text,
-        "50",
-        false,
-        "",
-    ),
-    ("line1", "Address line 1", InputKind::Text, "255", false, ""),
-    ("line2", "Address line 2", InputKind::Text, "255", false, ""),
-    ("line3", "Address line 3", InputKind::Text, "255", false, ""),
-    ("locality", "City", InputKind::Text, "100", false, ""),
-    ("postcode", "Postcode", InputKind::Text, "20", false, ""),
-    (
-        "admin1_code",
-        "State or region",
-        InputKind::Text,
-        "20",
-        false,
-        "",
-    ),
-    (
-        "country_iso",
-        "Country code",
-        InputKind::Text,
-        "2",
-        false,
-        "Two capital letters, such as MY.",
-    ),
 ];
+const FORM: &str = "customer";
+const PREFIX: &str = "receivables-customer-new";
+
+/// The Add customer dialog while it is open.
+struct Create {
+    values: HashMap<String, String>,
+    chooser: Chooser,
+    errors: Errors,
+}
 
 pub(super) struct Customers {
     pages: Pages,
@@ -99,7 +78,7 @@ pub(super) struct Customers {
     all: Vec<Customer>,
     cut: bool,
     can_add: bool,
-    create: Option<(HashMap<String, String>, Errors)>,
+    create: Option<Create>,
     flash: Flash,
     framed: bool,
 }
@@ -109,6 +88,7 @@ impl Customers {
         let columns = vec![
             BuiltinColumn::new("code", "Code").sortable("code"),
             BuiltinColumn::new("name", "Name").sortable("name"),
+            BuiltinColumn::new("company", "Company"),
             BuiltinColumn::new("email", "Email"),
             BuiltinColumn::new("phone", "Phone"),
             BuiltinColumn::new("terms", "Terms").right(),
@@ -157,19 +137,15 @@ impl Customers {
             .filter(|c| match status.as_str() {
                 "active" => c.active,
                 "inactive" => !c.active,
+                "unlinked" => c.company.is_none(),
                 _ => true,
             })
             .filter(|c| {
                 search.is_empty()
-                    || [
-                        Some(&c.code),
-                        Some(&c.name),
-                        c.email.as_ref(),
-                        c.phone.as_ref(),
-                    ]
-                    .into_iter()
-                    .flatten()
-                    .any(|t| t.to_lowercase().contains(&search))
+                    || [Some(&c.code), Some(&c.name), email(c), phone(c)]
+                        .into_iter()
+                        .flatten()
+                        .any(|t| t.to_lowercase().contains(&search))
             })
             .collect();
         match self.list.sort_by.as_deref() {
@@ -222,9 +198,10 @@ impl Customers {
                         "Filter by status",
                         &self.list.filters["status"],
                         [
-                            ("All statuses", ""),
+                            ("All customers", ""),
                             ("Active", "active"),
                             ("Inactive", "inactive"),
+                            ("Not linked to a company", "unlinked"),
                         ]
                         .map(|(l, v)| Choice::new(l, v))
                         .to_vec(),
@@ -249,8 +226,9 @@ impl Customers {
                     })?,
                 )
                 .cell("name", Cell::text(&c.name))
-                .cell("email", Cell::text(f::optional(&c.email)))
-                .cell("phone", Cell::text(f::optional(&c.phone)))
+                .slot("company", company_badge(c)?)
+                .cell("email", Cell::text(f::optional(&email(c).cloned())))
+                .cell("phone", Cell::text(f::optional(&phone(c).cloned())))
                 .slot(
                     "terms",
                     f::tabular(&format!("{} days", c.payment_terms_days))?,
@@ -272,7 +250,7 @@ impl Customers {
         table.empty = Some(TableEmpty::Content(render(EmptyState::missing(
             "No customers",
             if self.all.is_empty() {
-                "Add the people and companies you invoice, then raise invoices to them."
+                "Add the companies you invoice, then raise invoices to them."
             } else {
                 "No customer matches the current filters."
             },
@@ -304,7 +282,7 @@ impl Customers {
         let mut body = header;
         body.push(&content);
         let modal = match &self.create {
-            Some((values, errors)) => Some(self.dialog(values, errors)?),
+            Some(create) => Some(self.dialog(create)?),
             None => None,
         };
         f::frame(
@@ -316,33 +294,29 @@ impl Customers {
         )
     }
 
-    fn dialog(&self, values: &HashMap<String, String>, errors: &Errors) -> Result<Html> {
-        let labels: Vec<_> = FIELDS
+    fn dialog(&self, create: &Create) -> Result<Html> {
+        let mut labels: Vec<_> = FIELDS
             .iter()
             .map(|(key, label, ..)| {
                 (
                     (*key).to_owned(),
-                    format!("receivables-customer-new-{key}"),
+                    format!("{PREFIX}-{key}"),
                     (*label).to_owned(),
                 )
             })
             .collect();
-        let mut body = render(errors.summary("receivables-customer-new-errors", &labels))?;
-        let mut customer = Html::EMPTY;
-        let mut contact = Html::EMPTY;
-        let mut address = Html::EMPTY;
+        labels.extend(create.chooser.labels());
+        let mut body = render(create.errors.summary(&format!("{PREFIX}-errors"), &labels))?;
+        let mut own = Html::EMPTY;
         for (key, label, kind, max, required, hint) in FIELDS {
-            let mut field = Field::in_form("customer", key)
-                .id(format!("receivables-customer-new-{key}"))
+            let mut field = Field::in_form(FORM, key)
+                .id(format!("{PREFIX}-{key}"))
                 .label(*label)
                 .kind(*kind)
-                .value(values.get(*key).cloned().unwrap_or_default())
-                .errors(errors.under(key, label));
+                .value(create.values.get(*key).cloned().unwrap_or_default())
+                .errors(create.errors.under(key, label));
             field = if *kind == InputKind::Number {
-                field
-                    .attr("min", "0")
-                    .attr("max", max_for_terms())
-                    .attr("step", "1")
+                field.attr("min", "0").attr("max", "3650").attr("step", "1")
             } else {
                 field.attr("maxlength", max)
             };
@@ -352,46 +326,26 @@ impl Customers {
             if !hint.is_empty() {
                 field = field.hint(*hint);
             }
-            // A long hint takes the row, so a short neighbour does not sit
-            // beside a taller one.
-            if *key == "payment_terms_days" || *key == "country_iso" {
-                field = field.wrapper_class("mb-3 sm:col-span-2");
-            }
-            let rendered = render(field)?;
-            match *key {
-                "code" | "name" | "payment_terms_days" => customer.push(&rendered),
-                "email" | "phone" | "tax_identifier" | "registration_identifier" => {
-                    contact.push(&rendered)
-                }
-                _ => address.push(&rendered),
-            }
+            own.push(&render(field)?);
         }
         body.push(&f::group(
-            "receivables-customer-identity",
-            "Customer",
-            customer,
+            "receivables-customer-company",
+            "Company",
+            create.chooser.render(&create.errors, self.framed)?,
         )?);
-        body.push(&f::group(
-            "receivables-customer-contact",
-            "Contact and tax",
-            contact,
-        )?);
-        body.push(&f::group(
-            "receivables-customer-address",
-            "Address",
-            address,
-        )?);
+        body.push(&f::group("receivables-customer-terms", "In Finance", own)?);
         let actions = {
             let mut a = render(Button {
-                id: "receivables-customer-new-cancel",
+                id: &format!("{PREFIX}-cancel"),
                 button_type: "button",
                 event: "cancel_create",
                 body: Html::text("Cancel"),
                 ..Button::default()
             })?;
             a.push(&render(Button {
-                id: "receivables-customer-new-save",
-                button_type: "submit",
+                id: &format!("{PREFIX}-save"),
+                button_type: "button",
+                event: "create_customer",
                 variant: ButtonVariant::Primary,
                 working: "Adding…",
                 body: Html::text("Add customer"),
@@ -400,15 +354,15 @@ impl Customers {
             f::actions(a)?
         };
         let form = render(Form {
-            id: "receivables-customer-new-form",
-            event: "create_customer",
-            change: false,
+            id: &format!("{PREFIX}-form"),
+            event: "customer_change",
+            change: true,
             class: "mt-4",
             body,
             actions,
         })?;
         f::modal(
-            "receivables-customer-new",
+            "receivables-customer-new-modal",
             "Add customer",
             "",
             "cancel_create",
@@ -418,6 +372,126 @@ impl Customers {
         )
     }
 
+    /// The dialog's own values and the company chooser's, from a posted form.
+    async fn take_form(&mut self, scope: &Scope, v: &serde_json::Value) -> Result<()> {
+        let form = params::form_values(v, FORM);
+        if form.is_empty() {
+            return Ok(());
+        }
+        let pages = self.pages.clone();
+        let Some(create) = self.create.as_mut() else {
+            return Ok(());
+        };
+        for (key, ..) in FIELDS {
+            if let Some(value) = form.get(*key) {
+                create.values.insert((*key).to_owned(), value.clone());
+            }
+        }
+        if create.chooser.read(&form) {
+            create.chooser.search(&pages, scope).await?;
+        }
+        Ok(())
+    }
+
+    async fn add(&mut self, scope: &Scope, credential: &str) -> Result<Option<String>> {
+        let pages = self.pages.clone();
+        let Some(create) = self.create.as_mut() else {
+            return Ok(None);
+        };
+        let mut input = json!({});
+        let mut local = Errors::default();
+        let code = f::posted(&create.values, "code");
+        f::put(&mut input, "code", code);
+        let terms = f::posted(&create.values, "payment_terms_days");
+        if !terms.is_empty() {
+            match terms.parse::<i64>() {
+                Ok(n) => input["payment_terms_days"] = json!(n),
+                Err(_) => local
+                    .0
+                    .entry("payment_terms_days".into())
+                    .or_default()
+                    .push("must be a whole number of days".into()),
+            }
+        }
+        if code.is_empty() {
+            local
+                .0
+                .entry("code".into())
+                .or_default()
+                .push("can't be blank".into());
+        }
+        if !local.is_empty() {
+            create.errors = local;
+            return Ok(None);
+        }
+        let company = match create
+            .chooser
+            .company(&pages, scope, credential, "create_customer")
+            .await?
+        {
+            Chosen::Company(id) => id,
+            Chosen::Invalid(errors) => {
+                create.errors = errors;
+                return Ok(None);
+            }
+            Chosen::Refused(message) => {
+                create.errors = Errors::default();
+                self.flash.set(StatusKind::Error, message);
+                return Ok(None);
+            }
+            Chosen::Review => {
+                create.errors = Errors::default();
+                return Ok(None);
+            }
+        };
+        input["core_company_id"] = json!(company);
+        match pages
+            .write(
+                scope,
+                credential,
+                "create_customer",
+                "finance.receivables.customer.create",
+                input,
+            )
+            .await?
+        {
+            Written::Done(record) => {
+                let recorded = company_pick::record_relationship(
+                    &pages,
+                    scope,
+                    credential,
+                    "create_customer",
+                    company,
+                )
+                .await?;
+                let (kind, message) =
+                    company_pick::relationship_flash("Customer added.", &recorded);
+                self.create = None;
+                self.flash.set(kind, message);
+                self.load(scope).await?;
+                Ok(record["id"].as_i64().map(|id| format!("{CUSTOMERS}/{id}")))
+            }
+            Written::Invalid(fields) => {
+                create.errors = Errors(fields);
+                if create.chooser.created.is_some() {
+                    self.flash.set(
+                        StatusKind::Warning,
+                        "The company was created in Companies, but the customer was not added yet. Fix the fields and add it again.",
+                    );
+                }
+                Ok(None)
+            }
+            Written::Refused(message) => {
+                self.create = None;
+                self.flash.set(
+                    StatusKind::Error,
+                    super::worded(message, "You do not have permission to add customers."),
+                );
+                Ok(None)
+            }
+        }
+    }
+
     async fn event(
         &mut self,
         scope: &Scope,
@@ -425,6 +499,7 @@ impl Customers {
         v: &serde_json::Value,
     ) -> Result<LiveBody> {
         let mut redirect = None;
+        let pages = self.pages.clone();
         match v["type"].as_str().ok_or(Error::Invalid)? {
             "clear-flash" => self.flash.dismiss(v),
             "filter" => self.list.apply_filters(&params::form_values(v, "filters")),
@@ -437,69 +512,38 @@ impl Customers {
             }
             "show_create" => {
                 if self.pages.allowed(scope, crate::MANAGE_CUSTOMERS).await? {
-                    self.create = Some((HashMap::new(), Errors::default()));
+                    self.create = Some(Create {
+                        values: HashMap::new(),
+                        chooser: Chooser::new(PREFIX, FORM),
+                        errors: Errors::default(),
+                    });
                 } else {
                     self.flash.set(StatusKind::Error, super::DENIED);
                 }
             }
             "cancel_create" => self.create = None,
+            "customer_change" => self.take_form(scope, v).await?,
+            "pick_company" => {
+                let record = v["record"].as_str().ok_or(Error::Invalid)?;
+                if let Some(create) = self.create.as_mut() {
+                    create.chooser.pick(&pages, scope, record).await?;
+                    create.errors.0.remove("company");
+                }
+            }
+            "clear_company" => {
+                if let Some(create) = self.create.as_mut() {
+                    create.chooser.clear();
+                }
+            }
+            "use_candidate" => {
+                let id = v["company"].as_str().ok_or(Error::Invalid)?;
+                if let Some(create) = self.create.as_mut() {
+                    create.chooser.use_candidate(&pages, scope, id).await?;
+                }
+            }
             "create_customer" => {
-                let form = params::form_values(v, "customer");
-                let mut input = json!({});
-                let mut local = Errors::default();
-                for (key, _, kind, ..) in FIELDS {
-                    let text = f::posted(&form, key);
-                    if *kind == InputKind::Number {
-                        match text.parse::<i64>() {
-                            Ok(n) if !text.is_empty() => input[*key] = json!(n),
-                            _ if text.is_empty() => {}
-                            _ => local
-                                .0
-                                .entry((*key).into())
-                                .or_default()
-                                .push("must be a whole number of days".into()),
-                        }
-                    } else if *key == "country_iso" {
-                        f::put(&mut input, key, &text.to_uppercase());
-                    } else {
-                        f::put(&mut input, key, text);
-                    }
-                }
-                if !local.is_empty() {
-                    self.create = Some((form, local));
-                } else {
-                    match self
-                        .pages
-                        .write(
-                            scope,
-                            credential,
-                            "create_customer",
-                            "finance.receivables.customer.create",
-                            input,
-                        )
-                        .await?
-                    {
-                        Written::Done(record) => {
-                            self.create = None;
-                            self.flash.set(StatusKind::Success, "Customer added.");
-                            if let Some(id) = record["id"].as_i64() {
-                                redirect = Some(format!("{CUSTOMERS}/{id}"));
-                            }
-                            self.load(scope).await?;
-                        }
-                        Written::Invalid(fields) => self.create = Some((form, Errors(fields))),
-                        Written::Refused(message) => {
-                            self.create = None;
-                            self.flash.set(
-                                StatusKind::Error,
-                                super::worded(
-                                    message,
-                                    "You do not have permission to add customers.",
-                                ),
-                            );
-                        }
-                    }
-                }
+                self.take_form(scope, v).await?;
+                redirect = self.add(scope, credential).await?;
             }
             _ => return Err(Error::Invalid),
         }
@@ -514,8 +558,32 @@ impl Customers {
     }
 }
 
-fn max_for_terms() -> &'static str {
-    "3650"
+/// The customer's email: its company's, or its own before linking.
+fn email(c: &Customer) -> Option<&String> {
+    c.company
+        .as_ref()
+        .map_or(c.email.as_ref(), |company| company.email.as_ref())
+}
+
+fn phone(c: &Customer) -> Option<&String> {
+    c.company
+        .as_ref()
+        .map_or(c.phone.as_ref(), |company| company.phone.as_ref())
+}
+
+/// The company's status in Core, or that the customer has no company yet.
+pub(super) fn company_badge(c: &Customer) -> Result<Html> {
+    use bilibi_ui::BadgeKind;
+    match &c.company {
+        None => f::badge("Not linked", BadgeKind::Warning),
+        Some(company) => match company.status.as_str() {
+            "active" => f::badge("Active", BadgeKind::Success),
+            "pending" => f::badge("Pending", BadgeKind::Warning),
+            "suspended" => f::badge("Suspended", BadgeKind::Warning),
+            "archived" => f::badge("Archived", BadgeKind::Neutral),
+            _ => f::badge("Unavailable", BadgeKind::Neutral),
+        },
+    }
 }
 
 impl LiveState<Scope, Error> for Customers {

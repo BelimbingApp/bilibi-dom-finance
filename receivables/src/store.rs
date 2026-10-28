@@ -62,6 +62,8 @@ pub(crate) const CUSTOMERS: Table = Table {
         "country_iso",
         "payment_terms_days",
         "active",
+        "record_kind",
+        "record_id",
     ],
     timestamps: true,
 };

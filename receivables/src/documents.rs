@@ -243,8 +243,10 @@ impl Receivables {
         )
         .await?
         .ok_or_else(|| invalid("customer_id", "is not a customer of this company"))?;
-        if customer["active"] != true && data["kind"] == "invoice" {
-            return Err(invalid("customer_id", "is an inactive customer"));
+        if data["kind"] == "invoice" {
+            // A new invoice needs a customer linked to an active company and
+            // available for Finance; a credit note may name any customer.
+            Self::invoiceable(&self.customer(client, scope, customer.clone()).await?)?;
         }
         if data["kind"] == "credit_note" {
             let credited = store::find(
