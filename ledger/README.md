@@ -574,7 +574,7 @@ or an option out of range is `InvalidOption`. The datasets are `account`,
 `approval_exception`, `approval_exception_review`, `book`,
 `bookkeeping_change`, `closing_event`, `duty_separation_change`, `entry`,
 `fiscal_year`, `journal`, `journal_event`, `journal_line`,
-`journal_replacement`, `late_recording_review`, `line`, `opening_balances` and `period`. Existing datasets mirror Bilimbi's field lists (`src/evidence.rs`), less the entry's `legacy`; `opening_balances` exports the retained source reference, CSV and journal link. Dates are `YYYY-MM-DD`,
+`journal_replacement`, `late_recording_review`, `line`, `opening_balances` and `period`. Existing datasets mirror Bilimbi's field lists (`src/evidence.rs`), less the entry's `legacy` and plus the account's `is_group`; `opening_balances` exports the retained source reference, CSV and journal link. Dates are `YYYY-MM-DD`,
 instants ISO 8601 UTC with microseconds and amounts the column's exact text
 (`100.0000`). Each page is a live read on its own connection. The field lists
 are an export contract: freeze one once exported and never add a credential.
