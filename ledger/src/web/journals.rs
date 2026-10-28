@@ -147,6 +147,16 @@ struct Draft {
     /// The amount whose suggestion the person cleared: it is not offered
     /// again until the amount it balanced changes.
     declined: Option<String>,
+    /// The line whose typed amount "Fill difference" would replace, waiting
+    /// for the person to ask a second time.
+    replacing: Option<usize>,
+}
+
+/// What "Fill difference" would put on a line: the side and amount that
+/// balance the other lines.
+struct Balancing {
+    side: Side,
+    money: crate::Money,
 }
 
 impl Draft {
@@ -165,6 +175,7 @@ impl Draft {
             notice: String::new(),
             fill: None,
             declined: None,
+            replacing: None,
         }
     }
 
@@ -294,6 +305,70 @@ impl Draft {
         }
     }
 
+    /// The amount that balances the journal when it goes on `line`, from every
+    /// other line. The error is the sentence to show when there is none.
+    fn balancing(&self, line: usize) -> std::result::Result<Balancing, String> {
+        let mut difference = Decimal::ZERO;
+        for (i, other) in self.lines.iter().enumerate().filter(|(i, _)| *i != line) {
+            for (side, sign) in [(Side::Debit, Decimal::ONE), (Side::Credit, -Decimal::ONE)] {
+                let text = other.amount(side);
+                if text.is_empty() {
+                    continue;
+                }
+                match crate::Money::parse(text, self.units) {
+                    Ok(money) => difference += sign * money.amount(),
+                    Err(_) => {
+                        return Err(format!(
+                            "Line {} has an amount the book cannot hold. Correct it first.",
+                            i + 1
+                        ))
+                    }
+                }
+            }
+        }
+        let side = if difference.is_sign_negative() {
+            Side::Debit
+        } else {
+            Side::Credit
+        };
+        match crate::Money::new(difference.abs(), self.units) {
+            Ok(money) if money.is_positive() => Ok(Balancing { side, money }),
+            Ok(_) => Err("The other lines already balance. There is no difference to fill.".into()),
+            Err(_) => Err("The difference cannot be held by the book.".into()),
+        }
+    }
+
+    /// Puts the balancing amount on `line`. A typed amount there that differs
+    /// is replaced only when asked for a second time in a row.
+    fn fill_difference(&mut self, line: usize) {
+        self.refusal = Refusal::default();
+        self.notice.clear();
+        let asked = self.replacing.take() == Some(line);
+        if self.lines.len() < 3 || line >= self.lines.len() {
+            return;
+        }
+        let balancing = match self.balancing(line) {
+            Ok(balancing) => balancing,
+            Err(text) => {
+                self.notice = text;
+                return;
+            }
+        };
+        let amount = balancing.money.shown(self.units);
+        let current = &self.lines[line];
+        if current.amount(balancing.side) == amount
+            && current.amount(balancing.side.other()).is_empty()
+        {
+            return;
+        }
+        if !current.no_amount() && !asked {
+            self.replacing = Some(line);
+            return;
+        }
+        self.lines[line].set(balancing.side, &amount);
+        self.lines[line].set(balancing.side.other(), "");
+    }
+
     /// Whether the amount at `line` and `side` is the dialog's own suggestion.
     fn suggested(&self, line: usize, side: Side) -> bool {
         self.fill
@@ -316,6 +391,7 @@ impl Draft {
         }
         self.refusal = Refusal::default();
         self.notice.clear();
+        self.replacing = None;
     }
 
     fn input(&mut self) -> Value {
@@ -781,6 +857,10 @@ impl Journals {
                         ..Attrs::default()
                     }),
             )?;
+            let replacing = draft
+                .replacing
+                .filter(|line| *line == i)
+                .and_then(|line| draft.balancing(line).ok());
             let amount = |side: Side, key: &str, label: &str, value: &str| {
                 let mut field = cell(key, label)
                     .value(value)
@@ -798,6 +878,32 @@ impl Journals {
                     .value(&line.description)
                     .attr("data-debounce", "300"),
             )?;
+            // With three or more lines the balancing amount is a deliberate
+            // choice of line, not a suggestion.
+            let mut fill = Html::EMPTY;
+            if draft.lines.len() > 2 {
+                fill = render(Button {
+                    id: &format!("ledger-journal-fill-{i}"),
+                    button_type: "button",
+                    event: "fill_difference",
+                    name: "index",
+                    value: &i.to_string(),
+                    body: render(FillLabel {
+                        n: i + 1,
+                        replace: replacing.as_ref().map(|b| {
+                            format!(
+                                "{} {}",
+                                match b.side {
+                                    Side::Debit => "debit",
+                                    Side::Credit => "credit",
+                                },
+                                b.money.display(draft.units)
+                            )
+                        }),
+                    })?,
+                    ..Button::default()
+                })?;
+            }
             // The ledger names a line problem on the account field when the
             // account is missing, and on the amount fields otherwise.
             body.push(&render(LineRow {
@@ -806,6 +912,7 @@ impl Journals {
                 debit,
                 credit,
                 note,
+                fill,
                 remove,
             })?);
         }
@@ -1019,7 +1126,7 @@ pub(super) fn status_badge(status: &str) -> Result<Html> {
 
 #[derive(Template)]
 #[template(
-    source = r#"<div id="ledger-journal-line-{{ n }}" class="mt-3 grid grid-cols-1 items-start gap-2 sm:grid-cols-4"><div class="sm:col-span-2">{{ account|safe }}</div>{{ debit|safe }}{{ credit|safe }}<div class="sm:col-span-2">{{ note|safe }}</div><div>{{ remove|safe }}</div></div>"#,
+    source = r#"<div id="ledger-journal-line-{{ n }}" class="mt-3 grid grid-cols-1 items-start gap-2 sm:grid-cols-4"><div class="sm:col-span-2">{{ account|safe }}</div>{{ debit|safe }}{{ credit|safe }}<div class="sm:col-span-2">{{ note|safe }}</div><div class="flex flex-wrap items-center gap-2">{{ fill|safe }}{{ remove|safe }}</div></div>"#,
     ext = "html"
 )]
 struct LineRow {
@@ -1028,7 +1135,18 @@ struct LineRow {
     debit: Html,
     credit: Html,
     note: Html,
+    fill: Html,
     remove: Html,
+}
+
+#[derive(Template)]
+#[template(
+    source = r#"{% match replace %}{% when Some with (amount) %}Replace with {{ amount }}<span class="sr-only"> on line {{ n }}</span>{% when None %}Fill difference<span class="sr-only"> on line {{ n }}</span>{% endmatch %}"#,
+    ext = "html"
+)]
+struct FillLabel {
+    n: usize,
+    replace: Option<String>,
 }
 
 #[derive(Template)]
@@ -1082,8 +1200,19 @@ impl LiveState<Scope, Error> for Journals {
                             draft.suggest(&before);
                         }
                     }
+                    "fill_difference" => {
+                        if let Some(draft) = &mut self.draft {
+                            let index = value["index"]
+                                .as_str()
+                                .and_then(|i| i.parse::<usize>().ok());
+                            if let Some(index) = index {
+                                draft.fill_difference(index);
+                            }
+                        }
+                    }
                     "add_line" => {
                         if let Some(draft) = &mut self.draft {
+                            draft.replacing = None;
                             if draft.lines.len() < MAX_LINES {
                                 draft.lines.push(LineDraft::default());
                                 draft.suggest(&[]);
@@ -1099,6 +1228,7 @@ impl LiveState<Scope, Error> for Journals {
                                 index.filter(|i| *i < draft.lines.len() && draft.lines.len() > 2)
                             {
                                 draft.lines.remove(index);
+                                draft.replacing = None;
                                 draft.refusal = Refusal::default();
                                 draft.suggest(&[]);
                             }

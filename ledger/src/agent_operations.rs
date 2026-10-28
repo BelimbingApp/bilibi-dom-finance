@@ -184,6 +184,7 @@ fn reversal(input: &Value) -> Result<Reversal> {
 }
 fn new_entry(input: &Value, units: MinorUnits) -> Result<NewEntry> {
     let mut lines = Vec::new();
+    let mut balancing = None;
     for (index, line) in input["lines"]
         .as_array()
         .ok_or(LedgerError::InvalidOption)?
@@ -203,12 +204,44 @@ fn new_entry(input: &Value, units: MinorUnits) -> Result<NewEntry> {
                 })
                 .unwrap_or(Ok(Money::ZERO))
         };
+        let (debit, credit) = (amount("debit")?, amount("credit")?);
+        if line.get("balance").and_then(Value::as_bool) == Some(true) {
+            if line.get("debit").is_some() || line.get("credit").is_some() {
+                return Err(balance_refusal(
+                    index,
+                    "cannot be combined with a debit or credit; the line takes the amount that balances the journal",
+                ));
+            }
+            if balancing.replace(index).is_some() {
+                return Err(balance_refusal(index, "can be set on only one line"));
+            }
+        }
         lines.push(NewLine {
             account_id: id(line, "account_id")?,
-            debit: amount("debit")?,
-            credit: amount("credit")?,
+            debit,
+            credit,
             description: opt_text(line, "description"),
         });
+    }
+    if let Some(index) = balancing {
+        // The other lines' difference goes on the opposite side, so the
+        // journal balances exactly at the book's minor units.
+        let (debits, credits) = lines.iter().fold((Money::ZERO, Money::ZERO), |(d, c), l| {
+            (d + l.debit, c + l.credit)
+        });
+        if debits == credits {
+            return Err(balance_refusal(
+                index,
+                "has nothing to balance; the other lines already match",
+            ));
+        }
+        let difference = Money::new((debits - credits).amount().abs(), units)
+            .map_err(|e| balance_refusal(index, &e.to_string()))?;
+        if debits.amount() > credits.amount() {
+            lines[index].credit = difference;
+        } else {
+            lines[index].debit = difference;
+        }
     }
     Ok(NewEntry {
         entry_date: date(input, "entry_date")?,
@@ -216,6 +249,10 @@ fn new_entry(input: &Value, units: MinorUnits) -> Result<NewEntry> {
         reference: opt_text(input, "reference"),
         lines,
     })
+}
+
+fn balance_refusal(index: usize, message: &str) -> LedgerError {
+    LedgerError::Invalid(vec![FieldError::new("balance", message).on_line(index + 1)])
 }
 
 #[derive(Clone, Copy)]
@@ -1248,6 +1285,9 @@ fn string(max: usize) -> Value {
 fn day() -> Value {
     json!({"type":"string","format":"date"})
 }
+fn balance() -> Value {
+    json!({"type":"boolean","description":"On at most one line, instead of debit and credit: the line takes the debit or credit that balances the other lines. The preview shows the figure."})
+}
 fn boolean() -> Value {
     json!({"type":"boolean"})
 }
@@ -1301,7 +1341,7 @@ fn change_schema() -> Value {
 fn submit_schema() -> Value {
     schema(
         &["entry_date", "description", "lines"],
-        json!({"entry_date":day(),"description":string(500),"reference":string(100),"lines":{"type":"array","items":{"type":"object","required":["account_id"],"properties":{"account_id":identifier(),"debit":string(25),"credit":string(25),"description":string(500)}}}}),
+        json!({"entry_date":day(),"description":string(500),"reference":string(100),"lines":{"type":"array","items":{"type":"object","required":["account_id"],"properties":{"account_id":identifier(),"debit":string(25),"credit":string(25),"balance":balance(),"description":string(500)}}}}),
     )
 }
 fn withdraw_schema() -> Value {
@@ -1313,7 +1353,7 @@ fn withdraw_schema() -> Value {
 fn replace_schema() -> Value {
     schema(
         &["journal_id", "entry_date", "description", "lines"],
-        json!({"journal_id":identifier(),"reason":string(500),"entry_date":day(),"description":string(500),"reference":string(100),"lines":{"type":"array","items":{"type":"object","required":["account_id"],"properties":{"account_id":identifier(),"debit":string(25),"credit":string(25),"description":string(500)}}}}),
+        json!({"journal_id":identifier(),"reason":string(500),"entry_date":day(),"description":string(500),"reference":string(100),"lines":{"type":"array","items":{"type":"object","required":["account_id"],"properties":{"account_id":identifier(),"debit":string(25),"credit":string(25),"balance":balance(),"description":string(500)}}}}),
     )
 }
 fn opening_input(input: &Value) -> Result<OpeningBalances> {
