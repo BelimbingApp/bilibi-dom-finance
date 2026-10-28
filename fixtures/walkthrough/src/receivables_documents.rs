@@ -1157,6 +1157,26 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         .await?;
     assert!(matches!(refused, Err(R::CompanyArchived)));
     assert!(readable.is_ok());
+    let linked_legacy = ar
+        .list_customers(&admin, 1)
+        .await?
+        .into_iter()
+        .find(|c| c.code == "LEGACY")
+        .expect("legacy customer linked in the setup walkthrough");
+    let linked_company = linked_legacy.company.clone().expect("linked");
+    let legacy_draft = ar
+        .create_draft(
+            &admin,
+            1,
+            &json!({"kind":"invoice","series_id":series[0].id,"customer_id":linked_legacy.id,"issue_date":"2026-08-31","lines":[{"description":"R2 linked legacy line","quantity":"1","unit_price":"5"}]}),
+        )
+        .await?;
+    let legacy_invoice = ar.issue_document(&admin, 1, legacy_draft.id).await?;
+    assert_eq!(
+        legacy_invoice.party_name.as_deref(),
+        Some(linked_company.name.as_str())
+    );
+    assert!(legacy_invoice.party_line1.is_none() && legacy_invoice.party_country_iso.is_none());
     println!("NR2 proof passed: numbering and rollback, immutable owned postings, dated/pinned reports, all 13 exports, SQL guards, row audits, tenant isolation, archive read-only (company restored active)");
     Ok(())
 }

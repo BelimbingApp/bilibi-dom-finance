@@ -246,11 +246,17 @@ impl Receivables {
         data["issued_by_impersonator_id"] = json!(scope.impersonator().map(|s| s.user()));
         // The party frozen on the document. A linked customer's party is its
         // company's: the name now, and the facts the commit reads from Core
-        // on its full connection (`frozen_party`); the billing address waits
-        // on a Core Address read for this connection (TODO(platform)). A
-        // customer recorded before linking freezes the party it carries.
+        // on its full connection (`frozen_party`); the columns it carried
+        // before linking are not copied and the billing address stays empty
+        // until Core Address offers a read for this connection
+        // (TODO(platform)). A customer recorded before linking freezes the
+        // party it carries.
         for field in crate::companies::PARTY {
-            data[format!("party_{field}")] = customer_row[field].clone();
+            data[format!("party_{field}")] = if customer.company.is_some() {
+                Value::Null
+            } else {
+                customer_row[field].clone()
+            };
         }
         if customer.company.is_some() {
             data["party_name"] = json!(customer.name);
