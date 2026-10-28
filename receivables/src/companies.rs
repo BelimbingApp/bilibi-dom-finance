@@ -8,10 +8,8 @@
 //! current-relationship read and the billing address on a caller's
 //! connection (BelimbingApp/bilibi#231), so a preview shows what the commit
 //! will freeze and Finance composes the link in its own transaction.
-use crate::{invalid, store, Customer, CustomerCompany, Receivables, Result};
+use crate::{invalid, store, CompanyFacts, Customer, Receivables, Result};
 use bilibi_agent_api::OperationClient;
-use bilibi_database::Error;
-use bilibi_party_ids::OrganisationId;
 use bilibi_tenancy::Scope;
 use serde_json::{json, Value};
 use tokio_postgres::GenericClient;
@@ -33,26 +31,12 @@ pub(crate) const PARTY: [&str; 12] = [
     "admin1_code",
     "country_iso",
 ];
-/// Core's facts an issued document freezes beside the name, with the words
-/// a refusal uses for each.
-const FACTS: [(&str, &str); 4] = [
-    ("tax_id", "tax ID"),
-    ("registration_number", "registration number"),
-    ("email", "email"),
-    ("phone", "phone"),
-];
-
 /// The linked company's id on a customer row, `None` while unlinked.
 pub(crate) fn linked(row: &Value) -> Option<i64> {
     if row["record_kind"].as_str() != Some(KIND) {
         return None;
     }
     row["record_id"].as_str()?.parse().ok().filter(|id| *id > 0)
-}
-
-fn blank_to_none(value: String) -> Option<String> {
-    let value = value.trim();
-    (!value.is_empty()).then(|| value.to_owned())
 }
 
 impl Receivables {
@@ -102,104 +86,45 @@ impl Receivables {
         client: &dyn OperationClient,
         scope: &Scope,
         id: i64,
-    ) -> Result<CustomerCompany> {
-        let named = match OrganisationId::new(id) {
-            Ok(organisation) => {
-                self.parties
-                    .organisation_name(client, scope, organisation)
-                    .await?
-            }
-            Err(_) => None,
-        };
-        let (name, status) = match named {
-            Some(named) => (named.name, named.status),
-            None => ("Company unavailable".into(), "unavailable".into()),
-        };
-        Ok(CustomerCompany {
-            id,
-            name,
-            status,
-            path: format!("/companies/{id}"),
-            readable: false,
-            tax_id: None,
-            registration_number: None,
-            email: None,
-            phone: None,
-            restricted: Vec::new(),
-        })
+    ) -> Result<CompanyFacts> {
+        Ok(bilibi_finance_ledger::CompanyLinks::new(&self.parties)
+            .company_summary(client, scope, id)
+            .await?)
     }
-
-    /// The facts Companies view lets the reader see; without it the summary
-    /// stays as it is. A restricted fact stays `None` and is named.
     pub(crate) async fn company_facts(
         &self,
         client: &(impl GenericClient + Sync),
         scope: &Scope,
-        company: &mut CustomerCompany,
+        company: &mut CompanyFacts,
     ) -> Result<()> {
-        let (detail, masked) = match bilibi_company::detail(client, scope, company.id).await {
-            Ok(read) => read,
-            Err(Error::Forbidden | Error::NotFound) => return Ok(()),
-            Err(error) => return Err(error.into()),
-        };
-        company.readable = true;
-        company.restricted = FACTS
-            .iter()
-            .filter(|(field, _)| masked.contains(*field))
-            .map(|(field, _)| (*field).to_owned())
-            .collect();
-        let visible = |field: &str, value: Option<String>| {
-            if masked.contains(field) {
-                None
-            } else {
-                value.and_then(blank_to_none)
-            }
-        };
-        company.tax_id = visible("tax_id", Some(detail.tax_id));
-        company.registration_number = visible("registration_number", detail.registration_number);
-        company.email = visible("email", Some(detail.email));
-        company.phone = visible("phone", Some(detail.phone));
-        Ok(())
+        Ok(bilibi_finance_ledger::CompanyLinks::new(&self.parties)
+            .company_facts(client, scope, company)
+            .await?)
     }
-
-    /// The party an issued document freezes for a linked customer: the
-    /// company's name and the facts the issuer may read, none of them masked
-    /// (a mask is never frozen as a fact). The billing address is not frozen
-    /// yet: Core Address offers no read on the issuing connection
-    /// (TODO(platform)).
     pub(crate) async fn frozen_party(
         &self,
         client: &(impl GenericClient + Sync),
         scope: &Scope,
         id: i64,
     ) -> Result<Value> {
-        let (company, masked) =
-            bilibi_company::detail(client, scope, id)
-                .await
-                .map_err(|error| match error {
-                    Error::Forbidden => invalid(
-                        "customer_id",
-                        "needs Companies view permission to freeze the company's details",
-                    ),
-                    Error::NotFound => invalid(
-                        "customer_id",
-                        "is linked to a company that no longer exists",
-                    ),
-                    other => other.into(),
-                })?;
-        if let Some((_, label)) = FACTS.iter().find(|(field, _)| masked.contains(*field)) {
-            return Err(invalid(
-                "customer_id",
-                format!("the company's {label} is restricted for you, so it cannot be frozen on the document"),
-            ));
-        }
-        Ok(json!({
-            "party_name": company.display_name(),
-            "party_tax_identifier": blank_to_none(company.tax_id),
-            "party_registration_identifier": company.registration_number.and_then(blank_to_none),
-            "party_email": blank_to_none(company.email),
-            "party_phone": blank_to_none(company.phone),
-        }))
+        Ok(bilibi_finance_ledger::CompanyLinks::new(&self.parties)
+            .frozen_party(client, scope, id, "customer_id")
+            .await
+            .map_err(|error| match error {
+                bilibi_finance_ledger::LedgerError::Invalid(fields) => {
+                    crate::ReceivableError::Invalid(
+                        fields
+                            .into_iter()
+                            .map(|f| crate::FieldError {
+                                field: f.field.into(),
+                                line: f.line,
+                                message: f.message,
+                            })
+                            .collect(),
+                    )
+                }
+                other => other.into(),
+            })?)
     }
 
     /// Whether a new invoice may name this customer: linked, available for
@@ -245,7 +170,7 @@ impl Receivables {
         company: i64,
         attrs: &Value,
         field: &str,
-    ) -> Result<(i64, CustomerCompany)> {
+    ) -> Result<(i64, CompanyFacts)> {
         let id = match &attrs[field] {
             Value::Number(n) => n.as_i64(),
             Value::String(s) => s.trim().parse().ok(),

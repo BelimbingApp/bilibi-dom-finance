@@ -13,6 +13,41 @@ const ISO: &str = "YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"";
 /// list once exported; never add a credential to one.
 const DATASETS: &[(&str, &str, &[&str])] = &[
     (
+        "vendor",
+        "finance_payables_vendors",
+        &[
+            "id",
+            "tenant_id",
+            "company_id",
+            "code",
+            "record_kind",
+            "record_id",
+            "payment_terms_days",
+            "payable_account_id",
+            "expense_account_id",
+            "tax_code_id",
+            "active",
+            "inserted_at",
+            "updated_at",
+        ],
+    ),
+    (
+        "vendor_key",
+        "finance_payables_vendor_keys",
+        &[
+            "id",
+            "tenant_id",
+            "company_id",
+            "vendor_id",
+            "supplier_key",
+            "reason",
+            "confirmed_by_user_id",
+            "confirmed_by_impersonator_id",
+            "inserted_at",
+            "updated_at",
+        ],
+    ),
+    (
         "allocation",
         "finance_payables_payment_allocations",
         &[

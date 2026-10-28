@@ -8,7 +8,7 @@ use bilibi_finance_ledger::{
     MinorUnits, Money, NewAccount, Reversal,
 };
 use bilibi_finance_payables::{
-    DocumentLineInput, DocumentPageQuery, DocumentQuery, NewDocument, NewTaxCode, Party, Payables,
+    DocumentLineInput, DocumentPageQuery, DocumentQuery, NewDocument, NewTaxCode, Payables,
     PayablesError, Settings, SettingsInput, TaxAmountInput, TaxCodeDetails, Tolerance,
     ToleranceKind, DOCUMENT_SOURCE,
 };
@@ -59,15 +59,9 @@ async fn db_refuses(c: &tokio_postgres::Client, label: &str, sql: &str) -> Outco
         Ok(()) => Err(format!("{label}: database accepted forbidden write").into()),
     }
 }
-fn draft(number: &str, expense: i64, tax: i64, units: MinorUnits) -> NewDocument {
+fn draft(vendor: i64, number: &str, expense: i64, tax: i64, units: MinorUnits) -> NewDocument {
     NewDocument {
-        party: Party {
-            key: "supplier-001".into(),
-            name: "Fixture supplier".into(),
-            tax_id: Some("tax-001".into()),
-            registration_id: Some("registration-001".into()),
-            address: Some("Fixture address".into()),
-        },
+        vendor_id: Some(vendor),
         party_document_number: Some(number.into()),
         document_date: date(2026, 12, 15),
         due_date: None,
@@ -96,6 +90,15 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
     let attachments = services.get::<Attachments>(bilibi_finance_attachments::SERVICE)?;
     let grants = services.get::<Grants>("base/authz.grants")?;
     let manager = sign_in(db, services, 1, 1).await?;
+    let vendor = crate::vendors::vendor(
+        db,
+        services,
+        &manager,
+        COMPANY,
+        "supplier-001",
+        "Fixture supplier",
+    )
+    .await?;
     let admin = sign_in(db, services, 1, 4).await?;
     let staff = sign_in(db, services, 1, 3).await?;
     let other = sign_in(db, services, 2, 5).await?;
@@ -182,7 +185,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         p.create_tax_code(&manager, COMPANY, &fine_tax).await,
         |e| matches!(e, PayablesError::Invalid(_)),
     )?;
-    let input = draft("SUP-001", expense, code.id, units);
+    let input = draft(vendor, "SUP-001", expense, code.id, units);
     refused(
         "reader cannot record",
         p.create_bill(&staff, COMPANY, &input).await,
@@ -385,7 +388,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         p.void_document(&manager, COMPANY, bill.id, "Wrong").await,
         |e| matches!(e, PayablesError::NotVoidable),
     )?;
-    let mut note = draft("NOTE-001", expense, code.id, units);
+    let mut note = draft(vendor, "NOTE-001", expense, code.id, units);
     note.party.name = "Caller cannot replace supplier".into();
     note.lines[0].amount = money("10");
     let note = p
@@ -406,7 +409,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
             .outstanding,
         Some(money("95.20"))
     );
-    let mut excessive = draft("EXCESS", expense, code.id, units);
+    let mut excessive = draft(vendor, "EXCESS", expense, code.id, units);
     refused(
         "debit note too large",
         p.create_debit_note(&manager, COMPANY, bill.id, &excessive)
@@ -432,7 +435,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         .create_bill(
             &manager,
             COMPANY,
-            &draft("VOID-001", expense, code.id, units),
+            &draft(vendor, "VOID-001", expense, code.id, units),
         )
         .await?;
     refused(
@@ -446,7 +449,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         .create_bill(
             &manager,
             COMPANY,
-            &draft("VOID-001", expense, code.id, units),
+            &draft(vendor, "VOID-001", expense, code.id, units),
         )
         .await?;
     assert_ne!(replacement.id, voided.id);
@@ -467,7 +470,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         .create_bill(
             &manager,
             COMPANY,
-            &draft("STALE-001", expense, code.id, units),
+            &draft(vendor, "STALE-001", expense, code.id, units),
         )
         .await?;
     approve(&p, &admin, stale.id).await?;
@@ -511,7 +514,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         .create_bill(
             &manager,
             COMPANY,
-            &draft("INACTIVE", retired.id, code.id, units),
+            &draft(vendor, "INACTIVE", retired.id, code.id, units),
         )
         .await?;
     approve(&p, &admin, inactive.id).await?;
@@ -531,7 +534,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         p.post_document(&manager, COMPANY, inactive.id).await,
         |e| matches!(e, PayablesError::Ledger(LedgerError::Invalid(_))),
     )?;
-    let mut early = draft("NO-PERIOD", expense, code.id, units);
+    let mut early = draft(vendor, "NO-PERIOD", expense, code.id, units);
     early.document_date = date(2027, 1, 1);
     let early = p.create_bill(&manager, COMPANY, &early).await?;
     approve(&p, &admin, early.id).await?;
@@ -625,7 +628,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         ),
     )
     .await?;
-    let mut rounded = draft("ROUND-HALF", expense, code.id, units);
+    let mut rounded = draft(vendor, "ROUND-HALF", expense, code.id, units);
     let rounding_code = p
         .create_tax_code(
             &manager,
@@ -646,7 +649,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
     rounded.lines[0].amount = money("0.05");
     let rounded = p.create_bill(&manager, COMPANY, &rounded).await?;
     assert_eq!(rounded.total_tax, money("0.01"));
-    let mut stated = draft("STATED-TAX", expense, code.id, units);
+    let mut stated = draft(vendor, "STATED-TAX", expense, code.id, units);
     stated.tax_lines = Some(vec![TaxAmountInput {
         tax_code_id: code.id,
         tax_amount: money("7.99"),

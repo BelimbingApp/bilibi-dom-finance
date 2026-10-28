@@ -24,7 +24,8 @@ pub struct Allocation {
 #[derive(Clone, Debug)]
 pub struct NewPayment {
     pub payment_date: Date,
-    pub party_key: String,
+    pub vendor_id: Option<i64>,
+    pub supplier_key: Option<String>,
     pub paid_from_account_id: i64,
     pub reference: Option<String>,
     pub description: Option<String>,
@@ -172,7 +173,9 @@ impl Payables {
         input: &NewPayment,
     ) -> Result<PaymentRequest> {
         join(tx, s, company, SUBMIT_PAYMENTS).await?;
-        let (mut value, _) = self.validate_payment(tx.sql(), s, company, input).await?;
+        let (mut value, _) = self
+            .validate_payment(tx.sql(), s, company, input, false)
+            .await?;
         value["submitted_by_user_id"] = json!(s.user());
         value["submitted_by_impersonator_id"] = json!(s.impersonator().map(|p| p.user()));
         let allocations = input.allocations.clone();
@@ -234,7 +237,9 @@ impl Payables {
             .check_approval(tx, s, company, &approval(&r, override_reason))
             .await?;
         let input = requested(&r);
-        let (mut value, groups) = self.validate_payment(tx.sql(), s, company, &input).await?;
+        let (mut value, groups) = self
+            .validate_payment(tx.sql(), s, company, &input, true)
+            .await?;
         // Reserve only the record ID; the database assigns the payment number.
         let payment_id: i64 = tx
             .sql()
@@ -393,6 +398,7 @@ impl Payables {
         s: &Scope,
         company: i64,
         input: &NewPayment,
+        decided_request: bool,
     ) -> Result<(Value, BTreeMap<i64, Money>)> {
         let book = self.ledger.get_book_on(c, s, company).await?;
         let accounts = self.ledger.list_accounts_on(c, s, company).await?;
@@ -402,8 +408,44 @@ impl Payables {
             "paid_from_account_id",
             &[AccountType::Asset, AccountType::Liability],
         )?;
-        let key = string(&input.party_key, "party_key", 100, true)?
-            .ok_or(PayablesError::InvalidOption)?;
+        let first = input
+            .allocations
+            .first()
+            .ok_or_else(|| invalid("allocations", "needs at least one allocation"))?;
+        let first_bill = store::document_record(c, s.tenant(), company, first.document_id)
+            .await?
+            .ok_or_else(|| invalid("allocations", "is not a document of this company"))?;
+        let key = first_bill.party.key.clone();
+        if let Some(vendor) = input.vendor_id {
+            self.vendor_on(c, s, company, vendor).await?;
+            if vendors::mapped(c, s.tenant(), company, &key).await? != Some(vendor) {
+                return Err(invalid(
+                    "vendor_id",
+                    "does not match the allocated bill's confirmed supplier key",
+                ));
+            }
+        } else if input.supplier_key.as_deref() != Some(key.as_str()) {
+            return Err(invalid(
+                "vendor_id",
+                "is required; an unmatched historical bill may instead name its supplier_key",
+            ));
+        }
+        if input.vendor_id.is_none() && !decided_request {
+            if let Some(vendor) = vendors::mapped(c, s.tenant(), company, &key).await? {
+                if key == vendors::key(vendor) {
+                    return Err(invalid(
+                        "vendor_id",
+                        "is required for a linked vendor's bills",
+                    ));
+                }
+            }
+        }
+        if input.supplier_key.as_ref().is_some_and(|k| k != &key) {
+            return Err(invalid(
+                "supplier_key",
+                "does not match the allocated bills",
+            ));
+        }
         let reference = optional(&input.reference, "reference", 100)?;
         let description = optional(&input.description, "description", 500)?;
         if input.allocations.is_empty() {
@@ -428,7 +470,10 @@ impl Payables {
                     return Err(invalid("document_id", "is not a posted bill"));
                 }
                 if b.party.key != key {
-                    return Err(invalid("document_id", "is another party's bill"));
+                    return Err(invalid(
+                        "document_id",
+                        "has another supplier key; pay each historical key separately",
+                    ));
                 }
                 if b.document_date > input.payment_date {
                     return Err(invalid("document_id", "is dated after the payment"));
@@ -602,7 +647,8 @@ pub(super) fn approval(r: &PaymentRequest, override_reason: Option<String>) -> A
 pub(super) fn requested(r: &PaymentRequest) -> NewPayment {
     NewPayment {
         payment_date: r.payment_date,
-        party_key: r.party_key.clone(),
+        vendor_id: None,
+        supplier_key: Some(r.party_key.clone()),
         paid_from_account_id: r.paid_from_account_id,
         reference: r.reference.clone(),
         description: r.description.clone(),

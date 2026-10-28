@@ -166,14 +166,32 @@ impl Payables {
         } else {
             None
         };
-        let party = original.as_ref().map_or(&input.party, |b| &b.party);
-        let key =
-            string(&party.key, "party_key", 100, true)?.ok_or(PayablesError::InvalidOption)?;
-        let name =
-            string(&party.name, "party_name", 200, true)?.ok_or(PayablesError::InvalidOption)?;
-        let tax_id = optional(&party.tax_id, "party_tax_id", 50)?;
-        let registration = optional(&party.registration_id, "party_registration_id", 50)?;
-        let address = optional(&party.address, "party_address", 1000)?;
+        let vendor = if original.is_none() {
+            let id = input
+                .vendor_id
+                .ok_or_else(|| invalid("vendor_id", "is required"))?;
+            let v = self.vendor_on(c, s, company, id).await?;
+            Self::billable(&v)?;
+            Some(v)
+        } else {
+            None
+        };
+        let party = original
+            .as_ref()
+            .map(|b| b.party.clone())
+            .unwrap_or_else(|| {
+                let v = vendor.as_ref().expect("new bill vendor");
+                Party {
+                    key: vendors::key(v.id),
+                    name: v.company.name.clone(),
+                    ..Party::default()
+                }
+            });
+        let key = party.key;
+        let name = party.name;
+        let tax_id = party.tax_id;
+        let registration = party.registration_id;
+        let address = party.address;
         let number = string(
             input.party_document_number.as_deref().unwrap_or_default(),
             "party_document_number",
@@ -181,12 +199,19 @@ impl Payables {
             bill.is_none(),
         )?;
         let description = optional(&input.description, "description", 500)?;
-        let due = input.due_date.unwrap_or(input.document_date);
+        let due = input.due_date.unwrap_or(
+            input
+                .document_date
+                .checked_add(jiff::Span::new().days(i64::from(
+                    vendor.as_ref().map_or(0, |v| v.payment_terms_days),
+                )))
+                .map_err(|_| invalid("due_date", "is out of range"))?,
+        );
         if due < input.document_date {
             return Err(invalid("due_date", "cannot be before the document date"));
         }
-        if bill.is_none() && c.query_opt("SELECT id FROM finance_payables_documents WHERE tenant_id=$1 AND company_id=$2 AND party_key=$3 AND party_document_number=$4 AND document_type='bill' AND status<>'voided' AND id<>COALESCE($5::bigint,0)",&[&tenant,&company,&key,&number,&replacing]).await?.is_some() {
-            return Err(invalid("party_document_number","is already recorded for this party"));
+        if bill.is_none() && c.query_opt("SELECT id FROM finance_payables_documents WHERE tenant_id=$1 AND company_id=$2 AND (party_key=$3 OR party_key IN (SELECT supplier_key FROM finance_payables_vendor_keys WHERE tenant_id=$1 AND company_id=$2 AND vendor_id=$6)) AND party_document_number=$4 AND document_type='bill' AND status<>'voided' AND id<>COALESCE($5::bigint,0)",&[&tenant,&company,&key,&number,&replacing,&input.vendor_id]).await?.is_some() {
+            return Err(invalid("party_document_number","is already recorded for this vendor or a confirmed historical supplier key"));
         }
         let book = self.ledger.get_book_on(c, s, company).await?;
         let accounts = self.ledger.list_accounts_on(c, s, company).await?;
@@ -351,9 +376,44 @@ impl Payables {
         input: &NewDocument,
     ) -> Result<Document> {
         join(tx, s, company, CREATE_DOCUMENTS).await?;
-        let (header, lines, taxes, _) = self
+        let (mut header, lines, taxes, _) = self
             .prepare_document(tx.sql(), s, company, bill, input, None)
             .await?;
+        if bill.is_none() {
+            let vendor = self
+                .vendor_on(
+                    tx.sql(),
+                    s,
+                    company,
+                    input
+                        .vendor_id
+                        .ok_or_else(|| invalid("vendor_id", "is required"))?,
+                )
+                .await?;
+            let facts = bilibi_finance_ledger::CompanyLinks::new(&self.parties)
+                .frozen_party(tx.sql(), s, vendor.company.id, "vendor_id")
+                .await?;
+            for (field, label, max) in [
+                ("party_name", "name", 200),
+                ("party_tax_identifier", "tax ID", 50),
+                ("party_registration_identifier", "registration number", 50),
+            ] {
+                if facts[field]
+                    .as_str()
+                    .is_some_and(|v| v.chars().count() > max)
+                {
+                    return Err(invalid(
+                        "vendor_id",
+                        format!(
+                            "the company's {label} exceeds the document's {max} character limit"
+                        ),
+                    ));
+                }
+            }
+            header["party_name"] = facts["party_name"].clone();
+            header["party_tax_id"] = facts["party_tax_identifier"].clone();
+            header["party_registration_id"] = facts["party_registration_identifier"].clone();
+        }
         let tenant = s.tenant();
         let document = tx
             .mutate(move |sql| {
@@ -577,11 +637,19 @@ impl Payables {
             capacity["order_line_quantities"] = json!(quantities);
             b.payable_account_id.ok_or(PayablesError::NotPostedBill)?
         } else {
-            store::settings(c, s.tenant(), company)
+            let default = store::settings(c, s.tenant(), company)
                 .await?
                 .ok_or(PayablesError::PayablesNotConfigured)?
                 .1
-                .payable_account_id
+                .payable_account_id;
+            if let Some(vendor) = d.vendor_id {
+                self.vendor_on(c, s, company, vendor)
+                    .await?
+                    .payable_account_id
+                    .unwrap_or(default)
+            } else {
+                default
+            }
         };
         let debit = d.document_type == "bill";
         let side = |id, amount| {

@@ -191,6 +191,27 @@ async fn tax_input(
         reason: opt(v, "reason"),
     })
 }
+fn vendor_input(v: &Value) -> Result<VendorInput> {
+    let mut input = v.clone();
+    input
+        .as_object_mut()
+        .ok_or(PayablesError::InvalidOption)?
+        .remove("company_id");
+    input
+        .as_object_mut()
+        .ok_or(PayablesError::InvalidOption)?
+        .remove("vendor_id");
+    serde_json::from_value(input).map_err(|_| invalid("base", "vendor settings are invalid"))
+}
+fn vendor_schema(update: bool) -> Value {
+    let mut props = json!({"code":string(50),"core_company_id":identifier(),"payment_terms_days":{"type":"integer","minimum":0,"maximum":3650},"payable_account_id":{"type":["integer","null"]},"expense_account_id":{"type":["integer","null"]},"tax_code_id":{"type":["integer","null"]},"active":boolean()});
+    let mut required = vec!["code", "core_company_id", "payment_terms_days", "active"];
+    if update {
+        props["vendor_id"] = identifier();
+        required.push("vendor_id");
+    }
+    schema(&required, props)
+}
 fn document_input(v: &Value, units: MinorUnits) -> Result<NewDocument> {
     let mut lines = Vec::new();
     for (i, l) in v["lines"]
@@ -241,13 +262,7 @@ fn document_input(v: &Value, units: MinorUnits) -> Result<NewDocument> {
         })
         .transpose()?;
     Ok(NewDocument {
-        party: Party {
-            key: opt(v, "party_key").unwrap_or_default(),
-            name: opt(v, "party_name").unwrap_or_default(),
-            tax_id: opt(v, "party_tax_id"),
-            registration_id: opt(v, "party_registration_id"),
-            address: opt(v, "party_address"),
-        },
+        vendor_id: v["vendor_id"].as_i64(),
         party_document_number: opt(v, "party_document_number"),
         document_date: date(v, "document_date")?,
         due_date: v.get("due_date").map(|_| date(v, "due_date")).transpose()?,
@@ -279,7 +294,8 @@ fn payment_input(v: &Value, units: MinorUnits) -> Result<NewPayment> {
         .collect::<Result<_>>()?;
     Ok(NewPayment {
         payment_date: date(v, "payment_date")?,
-        party_key: text(v, "party_key")?.into(),
+        vendor_id: v["vendor_id"].as_i64(),
+        supplier_key: opt(v, "supplier_key"),
         paid_from_account_id: id(v, "paid_from_account_id")?,
         reference: opt(v, "reference"),
         description: opt(v, "description"),
@@ -289,6 +305,9 @@ fn payment_input(v: &Value, units: MinorUnits) -> Result<NewPayment> {
 
 #[derive(Clone, Copy)]
 enum Write {
+    VendorCreate,
+    VendorUpdate,
+    MapKey,
     Settings,
     TaxCreate,
     TaxUpdate,
@@ -306,7 +325,12 @@ enum Write {
 impl Write {
     fn capability(self) -> &'static str {
         match self {
-            Self::Settings | Self::TaxCreate | Self::TaxUpdate => MANAGE_SETTINGS,
+            Self::VendorCreate
+            | Self::VendorUpdate
+            | Self::MapKey
+            | Self::Settings
+            | Self::TaxCreate
+            | Self::TaxUpdate => MANAGE_SETTINGS,
             Self::Bill | Self::Replace | Self::Note => CREATE_DOCUMENTS,
             Self::Approve | Self::Void => APPROVE_DOCUMENTS,
             Self::Post => POST_DOCUMENTS,
@@ -335,6 +359,28 @@ impl Write {
             return Err(PayablesError::CompanyArchived);
         }
         let changes = match self {
+            Self::VendorCreate | Self::VendorUpdate => {
+                let input = vendor_input(v)?;
+                let after = p
+                    .prepare_vendor(c, s, company, v["vendor_id"].as_i64(), &input)
+                    .await?;
+                let before = match v["vendor_id"].as_i64() {
+                    Some(id) => json!(p.vendor_on(c, s, company, id).await?),
+                    None => Value::Null,
+                };
+                json!({"before":before,"after":after})
+            }
+            Self::MapKey => {
+                p.prepare_mapping(
+                    c,
+                    s,
+                    company,
+                    id(v, "vendor_id")?,
+                    text(v, "supplier_key")?,
+                    text(v, "reason")?,
+                )
+                .await?
+            }
             Self::Settings => {
                 let input = settings_input(c, s, company, v).await?;
                 let (before, reason) = p.validate_settings(c, s, company, &input).await?;
@@ -443,7 +489,9 @@ impl Write {
                 } else {
                     payment_input(v, p.ledger.get_book_on(c, s, company).await?.minor_units)?
                 };
-                let (value, groups) = p.validate_payment(c, s, company, &input).await?;
+                let (value, groups) = p
+                    .validate_payment(c, s, company, &input, request.is_some())
+                    .await?;
                 let mut capacity = Vec::new();
                 for a in &input.allocations {
                     capacity.push(json!({"document_id":a.document_id,"lowest_outstanding":balances::lowest(c,s.tenant(),company,a.document_id,input.payment_date).await?}));
@@ -577,6 +625,25 @@ impl WriteHandler for Write {
             let p = owner().map_err(|e| error(e, self.array()))?;
             let result: Result<Value> = async {
                 Ok(match self {
+                    Self::VendorCreate | Self::VendorUpdate => {
+                        let input = vendor_input(v)?;
+                        json!(
+                            p.save_vendor_on(tx, s, company, v["vendor_id"].as_i64(), &input)
+                                .await?
+                        )
+                    }
+                    Self::MapKey => {
+                        p.map_supplier_key_on(
+                            tx,
+                            s,
+                            company,
+                            id(v, "vendor_id")?,
+                            text(v, "supplier_key")?,
+                            text(v, "reason")?,
+                        )
+                        .await?;
+                        json!({"vendor_id":v["vendor_id"],"supplier_key":v["supplier_key"]})
+                    }
                     Self::Settings => json!(
                         p.put_settings_on(
                             tx,
@@ -717,6 +784,9 @@ impl WriteHandler for Write {
 }
 
 enum Read {
+    Vendor,
+    Vendors,
+    SupplierHistory,
     Settings,
     Taxes,
     Document,
@@ -758,6 +828,14 @@ impl ReadHandler for Read {
                 let after=v["after_id"].as_i64().filter(|n|!newest||*n>0).unwrap_or(if newest {i64::MAX} else {0});
                 let (cmp,order)=if newest {("<","DESC")} else {(">","")};
                 let result=match self {
+                    Self::Vendor=>json!(owner()?.get_vendor(s,company,id(v,"vendor_id")?).await?),
+                    Self::Vendors=>{
+                        let mut records=owner()?.list_vendors(s,company,after,limit).await?;
+                        let more=records.len()==limit as usize;
+                        let next=if more { records.last().map(|v|v.id) } else { None };
+                        json!({"records":records,"next_after_id":next})
+                    },
+                    Self::SupplierHistory=>json!({"records":owner()?.supplier_history_on(c,s,company).await?}),
                     Self::Settings=>json!({"settings":store::settings(c,tenant,company).await?.map(|(_,s)|s)}),
                     Self::Document=>document_value(store::document_record(c,tenant,company,id(v,"document_id")?).await?.ok_or(PayablesError::DocumentNotFound)?),
                     Self::Request=>json!(payments::request(c,tenant,company,id(v,"request_id")?).await?),
@@ -862,19 +940,10 @@ fn document_schema(note: bool) -> Value {
         props["bill_id"] = identifier();
         schema(&["bill_id", "document_date", "lines"], props)
     } else {
-        for (name, max) in [
-            ("party_key", 100),
-            ("party_name", 200),
-            ("party_tax_id", 50),
-            ("party_registration_id", 50),
-            ("party_address", 1000),
-        ] {
-            props[name] = string(max);
-        }
+        props["vendor_id"] = identifier();
         schema(
             &[
-                "party_key",
-                "party_name",
+                "vendor_id",
                 "party_document_number",
                 "document_date",
                 "lines",
@@ -894,13 +963,8 @@ fn replace_schema() -> Value {
 }
 fn payment_schema() -> Value {
     schema(
-        &[
-            "payment_date",
-            "party_key",
-            "paid_from_account_id",
-            "allocations",
-        ],
-        json!({"payment_date":day(),"party_key":string(100),"paid_from_account_id":identifier(),"reference":string(100),"description":string(500),"allocations":{"type":"array","items":object(&["document_id","amount"],json!({"document_id":identifier(),"amount":string(25)}))}}),
+        &["payment_date", "paid_from_account_id", "allocations"],
+        json!({"payment_date":day(),"vendor_id":identifier(),"supplier_key":string(100),"paid_from_account_id":identifier(),"reference":string(100),"description":string(500),"allocations":{"type":"array","items":object(&["document_id","amount"],json!({"document_id":identifier(),"amount":string(25)}))}}),
     )
 }
 fn document_id() -> Value {
@@ -934,6 +998,12 @@ fn list_schema(kind: &str) -> Value {
 
 inventory::submit! {Contribution::new(DEFINITIONS,"finance/payables.operations",Provenance {module:MODULE,source:file!(),line:line!()},&Definitions {
     operations:&[
+        Operation {key:"finance.payables.vendor.get",title:"Read a vendor",summary:"Read Finance settings and the linked Core company.",keywords:&[],capability:VIEW,input:||schema(&["vendor_id"],json!({"vendor_id":identifier()})),output,handler:Handler::Read(&Read::Vendor),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.payables.vendor.list",title:"List vendors",summary:"Read the current company's vendors by ID.",keywords:&[],capability:VIEW,input:||list_schema("vendor"),output,handler:Handler::Read(&Read::Vendors),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.payables.vendor.supplier_keys",title:"Review historical supplier keys",summary:"Read every distinct snapshot, possible collision and confirmed mapping without netting balances.",keywords:&[],capability:VIEW,input:||schema(&[],json!({})),output,handler:Handler::Read(&Read::SupplierHistory),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.payables.vendor.create",title:"Add a vendor",summary:"Link a Core company through Base Records; retain Finance settings only.",keywords:&[],capability:MANAGE_SETTINGS,input:||vendor_schema(false),output,handler:Handler::SafeWrite(&Write::VendorCreate),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.payables.vendor.update",title:"Change vendor settings",summary:"Change terms, availability and account or tax defaults; code and company are permanent.",keywords:&[],capability:MANAGE_SETTINGS,input:||vendor_schema(true),output,handler:Handler::SafeWrite(&Write::VendorUpdate),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.payables.vendor.map_supplier_key",title:"Confirm a historical supplier match",summary:"Permanently map one reviewed key with a reason. Original snapshots, allocations and aging groups stay unchanged.",keywords:&[],capability:MANAGE_SETTINGS,input:||schema(&["vendor_id","supplier_key","reason"],json!({"vendor_id":identifier(),"supplier_key":string(100),"reason":string(500)})),output,handler:Handler::SafeWrite(&Write::MapKey),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.payables.settings.get",title:"Read payables settings",summary:"Read the control account and matching tolerances; null before configuration.",keywords:&[],capability:VIEW,input:||schema(&[],json!({})),output,handler:Handler::Read(&Read::Settings),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.payables.tax_code.list",title:"List payables tax codes",summary:"Read configured tax codes by ID with a bounded cursor.",keywords:&[],capability:VIEW,input:||list_schema("tax"),output,handler:Handler::Read(&Read::Taxes),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.payables.document.get",title:"Read a payable document",summary:"Read a bill or debit note, immutable line and tax snapshots, status and outstanding.",keywords:&[],capability:VIEW,input:document_id,output,handler:Handler::Read(&Read::Document),channels:Channels::Every,step_up:&[]},

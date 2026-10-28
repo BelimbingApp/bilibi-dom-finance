@@ -2,6 +2,41 @@
 
 `finance/payables` owns a company's supplier documents. It mirrors Bilimbi.Finance.Payables settings, tax codes, bills, debit notes, document approvals, payment requests and payments, including aging, tax totals and control-account tie-out, and the three-way match. Reviewed agent operations expose the facade-only workflows. Slice NP4 adds the Bills list and bill detail pages. Slice NP5 adds the pages that record a bill or debit note, request, decide and reverse supplier payments, read aged payables and set payables up, so a person who has no AI agent can do every daily task; each page write is the contract the agent doors call.
 
+## Vendors
+
+Add a vendor by finding its company in Companies or creating it through the shared company picker. Finance keeps the vendor code, payment terms, payable account, default expense account, default tax code and availability for the current company. Core owns its identity, tax and registration numbers, contacts and status. The company link is permanent and checked through Base Records. A company can be both a customer and a vendor.
+
+The Vendors page records the vendor relationship through Core's reviewed contract. Each step is audited by its owner. If company creation succeeds but adding the vendor or recording the relationship is refused, the company remains in Companies; choose it again and complete the missing step. Core does not yet expose these writes on Finance's transaction (BelimbingApp/bilibi#231).
+
+New bills take `vendor_id`, including replacement drafts. Both Finance availability and an active company are required. Pending, suspended and archived companies are refused by name. Due date defaults to the document date plus the vendor's payment terms; the form offers its expense and tax defaults. Posting uses the vendor's payable account when configured, otherwise the company default. Posted bills retain their original control account for payments and debit notes.
+
+The bill freezes the company's name, tax ID and registration number at commit under the recorder's Companies view permission. A restricted fact refuses the write. The shared `CompanyLinks` reader and `CompanyChooser` in the ledger serve both customers and vendors. Preview can read the name and status; full facts need the committing connection. No billing address is frozen until Core offers the read on that connection (BelimbingApp/bilibi#231); the company link opens Core's current facts and billing addresses.
+
+### Historical supplier keys
+
+The historical-key review shows every distinct name, tax ID, registration number and address recorded for a key, with other keys that share a name or tax ID. A person confirms each match to a vendor with a reason. Unmatched keys stay available for review; Finance never creates a company from historical evidence. Confirmed mappings are permanent, audited and included in evidence exports.
+
+Mapping changes no document snapshot, payment key, allocation or aged balance. Aging keeps a separate row per original supplier key and adds its confirmed `vendor_id`. A payment request names `vendor_id` and allocates only bills with one supplier key, so matching two keys never nets their balances. For an unmatched historical bill, `supplier_key` is the explicit settlement input. Existing requests can still be approved and payments reversed after mapping, or after the linked company becomes unavailable. Debit notes retain their original bill's snapshot and key. New bills check duplicate supplier invoice numbers across the vendor's confirmed historical keys as well as its new key.
+
+### Vendor contracts
+
+All keys below start with `finance.payables.` and take `company_id`.
+
+| Contract | Input |
+| --- | --- |
+| `vendor.create` | `code`, `core_company_id`, `payment_terms_days`, `active`; optional nullable `payable_account_id`, `expense_account_id`, `tax_code_id` |
+| `vendor.update` | The same settings plus `vendor_id`; code and company cannot change |
+| `vendor.get` | `vendor_id` |
+| `vendor.list` | `after_id`, `page_size`; returns `records`, `next_after_id` |
+| `vendor.supplier_keys` | Historical snapshot groups and confirmed mappings |
+| `vendor.map_supplier_key` | `vendor_id`, `supplier_key`, `reason`; review before permanent confirmation |
+| `bill.create`, `bill.replace_draft` | `vendor_id` replaces all former party input fields |
+| `payment.submit` | `vendor_id`, allocations and payment fields; `supplier_key` may identify an unmatched historical group |
+
+Vendor settings and historical matches require `finance.payables.settings.manage`; reads require `finance.payables.view`. Company finding, creation, facts and relationships use Core's own permissions. Migration `finance-payables-004-vendors` adds the master and mapping tables without rewriting existing records. Evidence adds the `vendor` and `vendor_key` datasets with explicit field lists.
+
+Run the linked-vendor proof on a disposable database with `cargo run -p bilibi-finance-walkthrough-fixture --bin vendors`. Set `VENDORS_UI=1`, `APP_ORIGIN` and `BIND_ADDR` to keep the same composed app running for browser proof.
+
 ## Facade
 
 Resolve `Payables` through `finance/payables.payables`. Every call takes the sealed scope and an explicit company ID; every call authorizes through Core Company. Writes open through `Ledger::write`, holding the company lock on an audited `MutationTransaction` and refusing an archived company. Book and account validation use the ledger's authorized `get_book_on`/`list_accounts_on` on that same connection. Actor and impersonator always come from the scope.

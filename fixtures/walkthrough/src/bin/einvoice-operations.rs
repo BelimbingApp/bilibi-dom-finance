@@ -2,7 +2,7 @@
 //! linked-document flow. Run agent-operations first; never installs seeds.
 use bilibi_database::{pool, Db, Error, MutationBoundary};
 use bilibi_finance_ledger::{AccountType, Ledger, Money, NewAccount, NewBook, NewFiscalYear};
-use bilibi_finance_payables::{DocumentLineInput, NewDocument, Party, Payables, SettingsInput};
+use bilibi_finance_payables::{DocumentLineInput, NewDocument, Payables, SettingsInput};
 use bilibi_finance_receivables::Receivables;
 use bilibi_finance_walkthrough_fixture::sign_in;
 use bilibi_module_registry::Services;
@@ -284,11 +284,17 @@ async fn main() -> Outcome<()> {
                         &manager,
                         company,
                         &NewDocument {
-                            party: Party {
-                                key: "h4".into(),
-                                name: "H4 supplier".into(),
-                                ..Party::default()
-                            },
+                            vendor_id: Some(
+                                bilibi_finance_walkthrough_fixture::vendors::vendor(
+                                    &db,
+                                    &services,
+                                    &manager,
+                                    company,
+                                    "h4",
+                                    "H4 supplier",
+                                )
+                                .await?,
+                            ),
                             party_document_number: Some(format!("H4-{index}")),
                             document_date: date(2026, 1, 10),
                             due_date: None,

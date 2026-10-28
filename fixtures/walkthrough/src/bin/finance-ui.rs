@@ -8,7 +8,7 @@ use bilibi_finance_ledger::{
     AccountType, Ledger, Money, NewAccount, NewEntry, NewLine, PostOptions,
 };
 use bilibi_finance_payables::{
-    DocumentLineInput, NewDocument, Party, Payables, Settings, SettingsInput, DOCUMENT_SOURCE,
+    DocumentLineInput, NewDocument, Payables, Settings, SettingsInput, DOCUMENT_SOURCE,
 };
 use bilibi_finance_reconciliation::{NewBankAccount, Reconciliation};
 use bilibi_finance_walkthrough_fixture::{attachments::configure_storage, install, sign_in};
@@ -431,13 +431,17 @@ async fn main() -> Outcome<()> {
                 &manager,
                 COMPANY,
                 &NewDocument {
-                    party: Party {
-                        key: "browser-supplier".into(),
-                        name: "Paper supplier".into(),
-                        tax_id: None,
-                        registration_id: None,
-                        address: Some("Supplier address".into()),
-                    },
+                    vendor_id: Some(
+                        bilibi_finance_walkthrough_fixture::vendors::vendor(
+                            &db,
+                            services,
+                            &manager,
+                            COMPANY,
+                            "browser-supplier",
+                            "Paper supplier",
+                        )
+                        .await?,
+                    ),
                     party_document_number: Some(format!("BROWSER-{n}")),
                     document_date: date(2026, 10, 1),
                     due_date: Some(date(2026, 10, 31)),

@@ -4,7 +4,7 @@
 //! `.debit_note.create` contracts the agent doors call, and leaves approving
 //! and posting to the bill's own page.
 use super::{company, format as f, record_id, render, Pages, Written, INDEX};
-use crate::{Document, DocumentPageQuery, Party, TaxCode, APPROVE_DOCUMENTS, CREATE_DOCUMENTS};
+use crate::{Document, TaxCode, Vendor, APPROVE_DOCUMENTS, CREATE_DOCUMENTS};
 use askama::Template;
 use bilibi_database::{Error, Result};
 use bilibi_finance_ledger::{Account, AccountType, MinorUnits, Money};
@@ -34,12 +34,7 @@ struct Line {
 
 #[derive(Default)]
 struct Draft {
-    pick: String,
-    key: String,
-    name: String,
-    tax_id: String,
-    registration: String,
-    address: String,
+    vendor: String,
     number: String,
     date: String,
     due: String,
@@ -71,7 +66,7 @@ pub(super) struct BillForm {
     errors: Vec<(String, String)>,
     submitted: bool,
     notice: Option<String>,
-    suppliers: Vec<Party>,
+    suppliers: Vec<Vendor>,
     accounts: Vec<Account>,
     taxes: Vec<TaxCode>,
     units: Option<MinorUnits>,
@@ -171,34 +166,34 @@ impl BillForm {
             }
         }
         if !self.note {
-            self.suppliers = self.recent_suppliers(scope, company).await;
+            self.suppliers = self.vendors(scope, company).await?;
         }
         self.start(scope).await?;
         Ok(())
     }
 
-    /// The parties of the newest bills, newest first, one entry each.
-    async fn recent_suppliers(&self, scope: &Scope, company: i64) -> Vec<Party> {
-        let page = self
-            .pages
-            .payables
-            .page_documents(
-                scope,
-                company,
-                &DocumentPageQuery {
-                    document_type: Some("bill".into()),
-                    page_size: 100,
-                    ..DocumentPageQuery::default()
-                },
-            )
-            .await;
-        let mut seen = std::collections::HashSet::new();
-        page.map(|p| p.documents)
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|d| seen.insert(d.party.key.clone()))
-            .map(|d| d.party)
-            .collect()
+    async fn vendors(&self, scope: &Scope, company: i64) -> Result<Vec<Vendor>> {
+        let mut input = json!({"company_id":company,"page_size":100});
+        let mut vendors = Vec::new();
+        loop {
+            let answer = self
+                .pages
+                .contracts
+                .read(scope, "finance.payables.vendor.list", &input)
+                .await
+                .map_err(|_| Error::Forbidden)?;
+            for v in answer["result"]["records"].as_array().into_iter().flatten() {
+                let v: Vendor = serde_json::from_value(v.clone()).map_err(|_| Error::Internal)?;
+                if v.active && v.company.status == "active" {
+                    vendors.push(v);
+                }
+            }
+            if answer["result"]["next_after_id"].is_null() {
+                break;
+            }
+            input["after_id"] = answer["result"]["next_after_id"].clone();
+        }
+        Ok(vendors)
     }
 
     /// The first values of the form: today, or the draft being corrected.
@@ -207,11 +202,7 @@ impl BillForm {
         let mut draft = Draft::default();
         match (&self.source, self.note) {
             (Some(d), false) => {
-                draft.key = d.party.key.clone();
-                draft.name = d.party.name.clone();
-                draft.tax_id = d.party.tax_id.clone().unwrap_or_default();
-                draft.registration = d.party.registration_id.clone().unwrap_or_default();
-                draft.address = d.party.address.clone().unwrap_or_default();
+                draft.vendor = d.vendor_id.map(|id| id.to_string()).unwrap_or_default();
                 draft.number = d.party_document_number.clone().unwrap_or_default();
                 draft.date = d.document_date.to_string();
                 draft.due = d.due_date.to_string();
@@ -276,11 +267,8 @@ impl BillForm {
                 *into = (*text).into();
             }
         };
-        take(&fields, "key", &mut d.key);
-        take(&fields, "name", &mut d.name);
-        take(&fields, "tax_id", &mut d.tax_id);
-        take(&fields, "registration", &mut d.registration);
-        take(&fields, "address", &mut d.address);
+        let previous = d.vendor.clone();
+        take(&fields, "vendor", &mut d.vendor);
         take(&fields, "number", &mut d.number);
         take(&fields, "date", &mut d.date);
         take(&fields, "due", &mut d.due);
@@ -289,17 +277,20 @@ impl BillForm {
             d.lines = lines.into_values().collect();
             d.next = d.next.max(d.lines.last().map_or(0, |l| l.id));
         }
-        // Choosing a supplier fills the fields once; editing them afterwards
-        // does not choose again.
-        if let Some(pick) = fields.get("pick") {
-            if *pick != d.pick {
-                d.pick = (*pick).into();
-                if let Some(p) = self.suppliers.iter().find(|p| p.key == *pick) {
-                    d.key = p.key.clone();
-                    d.name = p.name.clone();
-                    d.tax_id = p.tax_id.clone().unwrap_or_default();
-                    d.registration = p.registration_id.clone().unwrap_or_default();
-                    d.address = p.address.clone().unwrap_or_default();
+        if previous != d.vendor {
+            if let Some(v) = self.suppliers.iter().find(|v| v.id.to_string() == d.vendor) {
+                for line in &mut d.lines {
+                    line.account = v
+                        .expense_account_id
+                        .map(|id| id.to_string())
+                        .unwrap_or_default();
+                    line.tax = v.tax_code_id.map(|id| id.to_string()).unwrap_or_default();
+                }
+                if let Ok(date) = d.date.parse::<jiff::civil::Date>() {
+                    d.due = date
+                        .checked_add(jiff::Span::new().days(i64::from(v.payment_terms_days)))
+                        .map(|d| d.to_string())
+                        .unwrap_or_default();
                 }
             }
         }
@@ -313,11 +304,9 @@ impl BillForm {
         if let Some(bill) = self.for_bill {
             v["bill_id"] = json!(bill);
         } else {
-            put(&mut v, "party_key", &d.key);
-            put(&mut v, "party_name", &d.name);
-            put(&mut v, "party_tax_id", &d.tax_id);
-            put(&mut v, "party_registration_id", &d.registration);
-            put(&mut v, "party_address", &d.address);
+            if let Ok(id) = d.vendor.parse::<i64>() {
+                v["vendor_id"] = json!(id);
+            }
         }
         put(&mut v, "party_document_number", &d.number);
         put(&mut v, "document_date", &d.date);
@@ -394,11 +383,7 @@ impl BillForm {
     fn locate(&self, path: &str) -> Option<(String, String)> {
         let top = |id: &str, label: &str| Some((format!("payables-record-{id}"), label.to_owned()));
         match path {
-            "party_key" => top("key", "Supplier code"),
-            "party_name" => top("name", "Supplier name"),
-            "party_tax_id" => top("tax-id", "Tax ID"),
-            "party_registration_id" => top("registration", "Registration number"),
-            "party_address" => top("address", "Address"),
+            "vendor_id" => top("vendor", "Vendor"),
             "party_document_number" => top("number", "Supplier's invoice number"),
             "document_date" => top("date", "Date"),
             "due_date" => top("due", "Due date"),
@@ -537,44 +522,25 @@ impl BillForm {
                 .value(value)
                 .errors(self.errors_for(&format!("payables-record-{element}")))
         };
-        let suppliers = if self.suppliers.is_empty() {
+        let suppliers = if self.note {
             None
         } else {
             Some(
-                Field::in_form(PREFIX, "pick")
-                    .id("payables-record-pick")
-                    .label("Supplier from a previous bill")
-                    .kind(InputKind::Select)
-                    .prompt("Choose a supplier to fill in the details")
-                    .value(d.pick.clone())
+                Combobox::new("payables-record-vendor", format!("{PREFIX}[vendor]"))
+                    .label("Vendor *")
+                    .aria_label("Vendor")
+                    .required()
+                    .value(&d.vendor)
                     .options(
                         self.suppliers
                             .iter()
-                            .map(|p| Choice::new(format!("{} · {}", p.key, p.name), p.key.clone()))
+                            .map(|v| Choice::new(&v.company.name, v.id.to_string()).detail(&v.code))
                             .collect(),
-                    ),
+                    )
+                    .errors(self.errors_for("payables-record-vendor")),
             )
         };
-        let party: Vec<Field> = if self.note {
-            vec![]
-        } else {
-            vec![
-                field("key", "key", "Supplier code", &d.key)
-                    .required()
-                    .hint("Your own short code for the supplier, such as SUP-001."),
-                field("name", "name", "Supplier name", &d.name).required(),
-                field("tax_id", "tax-id", "Tax ID", &d.tax_id),
-                field(
-                    "registration",
-                    "registration",
-                    "Registration number",
-                    &d.registration,
-                ),
-                field("address", "address", "Address", &d.address)
-                    .kind(InputKind::Textarea)
-                    .wrapper_class("md:col-span-2"),
-            ]
-        };
+        let party: Vec<Field> = vec![];
         let source_facts = match (&self.source, self.note) {
             (Some(b), true) => Some(render(Facts {
                 id: "payables-record-bill-facts",
@@ -773,7 +739,7 @@ impl BillForm {
             no_accounts,
             totals,
             save,
-            party_heading: if self.note { "Bill" } else { "Supplier" },
+            party_heading: if self.note { "Bill" } else { "Vendor" },
             document_heading: if self.note { "Debit note" } else { "Invoice" },
         }
         .render()
@@ -902,7 +868,7 @@ struct View {
     summary: Option<Html>,
     notice: Option<Html>,
     replaces: Option<String>,
-    suppliers: Option<Field>,
+    suppliers: Option<Combobox>,
     party: Vec<Field>,
     source_facts: Option<Html>,
     document: Vec<Field>,

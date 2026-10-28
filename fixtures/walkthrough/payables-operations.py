@@ -58,7 +58,7 @@ def invoke(channel, tool, args, who="manager"):
 
 
 def op(key, company, **values):
-    if not key.startswith("finance."):
+    if not key.startswith(("finance.", "core.")):
         key = "finance.payables." + key
     return {"key": key, "input": {"company_id": company, **values}}
 
@@ -148,7 +148,9 @@ for channel, company in [("api", 1), ("mcp", 2)]:
     require(Decimal(same["rate"]) == Decimal(tax["rate"]) == 5 and {k: v for k, v in same.items() if k != "rate"} == {k: v for k, v in tax.items() if k != "rate"} and sql(f"SELECT count(*) FROM finance_payables_tax_code_changes WHERE company_id={company}") == before, "tax no-op lost values or made history")
     print("settings omissions, explicit clears, conflicting clear refusal; tax create/update no-op and immutable code", flush=True)
 
-    draft = {"party_key": "party-a", "party_name": "Party A", "party_document_number": "SOURCE-1", "document_date": "2026-01-10", "lines": [
+    core = write(channel, "core.company.create", company, name=f"Payables {channel} vendor", status="active")
+    vendor = write(channel, "vendor.create", company, code="PARTY-A", core_company_id=core["id"], payment_terms_days=0, active=True)
+    draft = {"vendor_id": vendor["id"], "party_document_number": "SOURCE-1", "document_date": "2026-01-10", "lines": [
         {"description": "Net", "account_id": accounts["X"], "amount": "100.05", "tax_code_id": tax["id"]},
         {"description": "Fraction", "account_id": accounts["X"], "amount": "0.05", "tax_code_id": tax["id"]},
     ]}
@@ -193,7 +195,7 @@ for channel, company in [("api", 1), ("mcp", 2)]:
     void = write(channel, "document.void", company, document_id=void["id"], void_reason="Duplicate draft")
     require(void["status"] == "voided" and void["void_reason"] == "Duplicate draft", "void lost reason")
 
-    payment = {"payment_date": "2026-01-20", "party_key": "party-a", "paid_from_account_id": accounts["A"], "allocations": [{"document_id": bill["id"], "amount": "40"}, {"document_id": extra["id"], "amount": "7.25"}]}
+    payment = {"payment_date": "2026-01-20", "vendor_id": vendor["id"], "paid_from_account_id": accounts["A"], "allocations": [{"document_id": bill["id"], "amount": "40"}, {"document_id": extra["id"], "amount": "7.25"}]}
     request_record = write(channel, "payment.submit", company, **payment)
     require(request_record["status"] == "submitted" and read(channel, "payment.list", company)["records"] == [], "submission posted")
     refused(channel, "payment.approve", company, "cannot approve", request_id=request_record["id"], override_reason="Cannot bypass separation")

@@ -6,6 +6,8 @@ use tokio_postgres::{GenericClient, Row};
 
 #[derive(Clone, Copy)]
 pub(crate) enum Table {
+    Vendors,
+    VendorKeys,
     Settings,
     TaxCodes,
     SettingsChanges,
@@ -26,6 +28,8 @@ pub(crate) enum Table {
 impl Table {
     pub(crate) fn name(self) -> &'static str {
         match self {
+            Self::Vendors => "finance_payables_vendors",
+            Self::VendorKeys => "finance_payables_vendor_keys",
             Self::MatchEvents => "finance_payables_match_events",
             Self::MatchLines => "finance_payables_match_lines",
             Self::MatchExceptions => "finance_payables_match_exceptions",
@@ -46,6 +50,8 @@ impl Table {
     }
     fn kind(self) -> &'static str {
         match self {
+            Self::Vendors => "finance.payables.vendor",
+            Self::VendorKeys => "finance.payables.vendor_key",
             Self::Settings => "finance.payables.settings",
             Self::TaxCodes => "finance.payables.tax_code",
             Self::SettingsChanges => "finance.payables.settings_change",
@@ -213,6 +219,9 @@ pub(crate) async fn document_record(
     };
     Ok(Some(Document {
         id,
+        vendor_id: crate::vendors::mapped(c, tenant, company, &text(&v, "party_key")?)
+            .await
+            .map_err(|_| Error::Invalid)?,
         document_type: kind,
         status,
         document_number: opt_int(&v, "document_number"),

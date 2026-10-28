@@ -22,8 +22,8 @@ pub use contributions::{
 };
 pub use evidence::EvidencePage;
 pub use records::{
-    Allocation, Customer, CustomerCompany, Document, DocumentLine, DocumentQuery, Page, Payment,
-    PaymentQuery, PaymentReversal, Series, Setup, SetupChange, TaxCode, TaxLine,
+    Allocation, Customer, Document, DocumentLine, DocumentQuery, Page, Payment, PaymentQuery,
+    PaymentReversal, Series, Setup, SetupChange, TaxCode, TaxLine,
 };
 pub use reports::{
     AgedCustomer, AgedDocument, AgedReceivables, AgingBucket, AgingOptions, ControlAccountTieOut,
@@ -222,3 +222,5 @@ impl Receivables {
         Ok(tx)
     }
 }
+
+pub use bilibi_finance_ledger::CompanyFacts;

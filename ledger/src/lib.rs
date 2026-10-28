@@ -113,7 +113,7 @@ pub const SERVICE: &str = "finance/ledger.ledger";
 inventory::submit! {
     Module {
         id: MODULE, layer: Layer::Domains,
-        dependencies: &["base/agent_api", "base/authz", "base/database", "base/datetime", "base/locale", "base/menu", "base/party_ids", "base/settings", "base/tenancy", "base/ui", "core/company", "core/currency"],
+        dependencies: &["base/agent_api", "base/authz", "base/database", "base/datetime", "base/locale", "base/menu", "base/party_ids", "base/records", "base/settings", "base/tenancy", "base/ui", "core/company", "core/currency"],
         migrations: &[
             ("finance-ledger-001-books-and-accounts", include_str!("../migrations/001-books-and-accounts.sql")),
             ("finance-ledger-002-entries", include_str!("../migrations/002-entries.sql")),
@@ -4059,3 +4059,15 @@ fn duties_reopen(
         subject: format!("{label} {start} to {end}"),
     }
 }
+
+mod company_links;
+pub use company_links::{CompanyFacts, CompanyLinks};
+
+mod company_picker;
+pub use company_picker::{
+    record_relationship as record_company_relationship, relation as company_relation,
+    relationship_flash as company_relationship_flash, Chosen as ChosenCompany, CompanyChooser,
+    CompanyErrors, CompanyPickerContext, Relation as CompanyRelation,
+};
+
+pub use company_picker::company_billing_lines;

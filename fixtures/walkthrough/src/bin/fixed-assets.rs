@@ -10,8 +10,7 @@ use bilibi_finance_ledger::{
     NewFiscalYear, NewLine, PostOptions, Reversal,
 };
 use bilibi_finance_payables::{
-    DocumentLineInput, NewDocument, NewTaxCode, Party, Payables, Settings, SettingsInput,
-    TaxCodeDetails,
+    DocumentLineInput, NewDocument, NewTaxCode, Payables, Settings, SettingsInput, TaxCodeDetails,
 };
 use bilibi_finance_walkthrough_fixture::{install, sign_in, COMPANY};
 use bilibi_module_registry::{Contribution, Provenance, Services};
@@ -530,11 +529,17 @@ async fn run(db: &Db, services: &Services) -> Outcome<()> {
             &manager,
             COMPANY,
             &NewDocument {
-                party: Party {
-                    key: "supplier".into(),
-                    name: "Fixture supplier".into(),
-                    ..Default::default()
-                },
+                vendor_id: Some(
+                    bilibi_finance_walkthrough_fixture::vendors::vendor(
+                        db,
+                        services,
+                        &manager,
+                        COMPANY,
+                        "supplier",
+                        "Fixture supplier",
+                    )
+                    .await?,
+                ),
                 party_document_number: Some("asset-bill".into()),
                 document_date: date(2026, 1, 17),
                 due_date: None,

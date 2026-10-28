@@ -9,8 +9,7 @@ use bilibi_finance_ledger::{
     AccountType, Ledger, Money, NewAccount, NewEntry, NewLine, PostOptions,
 };
 use bilibi_finance_payables::{
-    DocumentLineInput, NewDocument, NewTaxCode, Party, Payables, Settings, SettingsInput,
-    TaxCodeDetails,
+    DocumentLineInput, NewDocument, NewTaxCode, Payables, Settings, SettingsInput, TaxCodeDetails,
 };
 use bilibi_finance_receivables::Receivables;
 use bilibi_finance_sst::{
@@ -594,12 +593,17 @@ async fn run(db: &Db, services: &Services) -> Outcome<()> {
             .await?;
         bill_codes.insert(code, created.id);
     }
+    let vendor = bilibi_finance_walkthrough_fixture::vendors::vendor(
+        &db,
+        &services,
+        &manager,
+        COMPANY,
+        "supplier-sst",
+        "SST supplier",
+    )
+    .await?;
     let document = |day: Date, lines: &[(&str, &str)]| NewDocument {
-        party: Party {
-            key: "supplier-sst".into(),
-            name: "SST supplier".into(),
-            ..Default::default()
-        },
+        vendor_id: Some(vendor),
         party_document_number: Some(format!("S-{day}")),
         document_date: day,
         due_date: None,

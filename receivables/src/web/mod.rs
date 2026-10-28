@@ -184,6 +184,15 @@ inventory::submit! { Contribution::new(PAGE_WRITES, PAGES, Provenance { module: 
 }) }
 
 impl Pages {
+    pub(super) fn company_picker(&self) -> bilibi_finance_ledger::CompanyPickerContext {
+        bilibi_finance_ledger::CompanyPickerContext {
+            records: self.records.clone(),
+            contracts: self.contracts.clone(),
+            service: PAGES,
+            role: "customer",
+        }
+    }
+
     /// The company a person works in now: the session's current company.
     pub(super) fn company(scope: &Scope) -> Option<i64> {
         scope.current_company().map(|id| id.get())

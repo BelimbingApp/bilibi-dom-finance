@@ -1,0 +1,315 @@
+//! Linked-vendor and historical-key proof on a disposable PostgreSQL database.
+//! VENDORS_UI=1 keeps the composed app running for browser verification.
+use bilibi_database::{pool, Error};
+use bilibi_finance_ledger::{Ledger, Money};
+use bilibi_finance_payables::{
+    AgingQuery, AllocationInput, DocumentLineInput, NewDocument, NewPayment, Payables,
+    PayablesError, Settings, SettingsInput, VendorInput,
+};
+use bilibi_finance_walkthrough_fixture::{install, sign_in, vendors::vendor};
+use jiff::civil::date;
+use serde_json::Value;
+
+bilibi_walkthrough_fixture::walkthrough_vocabulary!();
+bilibi_walkthrough_fixture::walkthrough_module_roles!();
+bilibi_finance_walkthrough_fixture::walkthrough_ledger_roles!();
+bilibi_finance_walkthrough_fixture::walkthrough_payables_roles!();
+
+fn refused<T: std::fmt::Debug>(r: Result<T, PayablesError>, field: &str, text: &str) {
+    match r {
+        Err(PayablesError::Invalid(e)) => assert!(
+            e.iter()
+                .any(|e| e.field == field && e.message.contains(text)),
+            "{e:?}"
+        ),
+        other => panic!("unexpected refusal: {other:?}"),
+    }
+}
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    bilibi_base::link();
+    bilibi_core::link();
+    bilibi_domains::link();
+    bilibi_extensions::link();
+    let db = pool(&std::env::var("DATABASE_URL")?)?;
+    let origin = std::env::var("APP_ORIGIN").unwrap_or_else(|_| "http://localhost:3198".into());
+    bilibi_database::migrate(&db, &bilibi_module_registry::discover()?).await?;
+    let app = bilibi_web::App::new(db.clone(), &origin)?;
+    bilibi_finance_walkthrough_fixture::without_step_up(&app.services)?;
+    let services = &app.services;
+    let installed = install(&db, services).await?;
+    let manager = sign_in(&db, services, 1, 1).await?;
+    let reviewer = sign_in(&db, services, 1, 4).await?;
+    let other = sign_in(&db, services, 2, 5).await?;
+    let viewer = sign_in(&db, services, 1, 2).await?;
+    let p = services.get::<Payables>(bilibi_finance_payables::SERVICE)?;
+    let ledger = services.get::<Ledger>(bilibi_finance_ledger::SERVICE)?;
+    let id = vendor(&db, services, &manager, 1, "VEN-A", "Vendor company").await?;
+    let v = p.get_vendor(&manager, 1, id).await?;
+    assert_eq!(v.record_kind, "company");
+    assert!(v.company.readable);
+    let account = |code: &str| {
+        installed
+            .accounts
+            .iter()
+            .find(|a| a.code == code)
+            .map(|a| a.id)
+            .ok_or(Error::NotFound)
+    };
+    let payable = account("2000")?;
+    let expense = account("5000")?;
+    let bank = account("1000")?;
+    p.put_settings(
+        &manager,
+        1,
+        &SettingsInput {
+            settings: Settings {
+                payable_account_id: payable,
+                quantity_tolerance: None,
+                price_tolerance: None,
+            },
+            reason: None,
+        },
+    )
+    .await?;
+    let input = VendorInput {
+        code: "VEN-A".into(),
+        core_company_id: v.company.id,
+        payment_terms_days: 30,
+        payable_account_id: Some(payable),
+        expense_account_id: Some(expense),
+        tax_code_id: None,
+        active: true,
+    };
+    p.update_vendor(&manager, 1, id, &input).await?;
+    refused(p.create_vendor(&manager, 1, &input).await, "code", "taken");
+    let mut invalid = input.clone();
+    invalid.code = "SELF".into();
+    invalid.core_company_id = 1;
+    refused(
+        p.create_vendor(&manager, 1, &invalid).await,
+        "core_company_id",
+        "itself",
+    );
+    invalid.core_company_id = 100;
+    refused(
+        p.create_vendor(&manager, 1, &invalid).await,
+        "core_company_id",
+        "",
+    );
+    invalid.core_company_id = 999999;
+    refused(
+        p.create_vendor(&manager, 1, &invalid).await,
+        "core_company_id",
+        "",
+    );
+    invalid = input.clone();
+    invalid.payable_account_id = Some(expense);
+    refused(
+        p.update_vendor(&manager, 1, id, &invalid).await,
+        "payable_account_id",
+        "",
+    );
+    assert!(p.create_vendor(&viewer, 1, &input).await.is_err());
+    assert!(p.get_vendor(&other, 1, id).await.is_err());
+    let money = |s: &str| Money::parse(s, installed.book.minor_units).expect("proof money");
+    let draft = |number: &str| NewDocument {
+        vendor_id: Some(id),
+        party_document_number: Some(number.into()),
+        document_date: date(2026, 10, 10),
+        due_date: None,
+        description: None,
+        lines: vec![DocumentLineInput {
+            description: "Supplies".into(),
+            account_id: expense,
+            amount: money("100"),
+            tax_code_id: None,
+            external_order_line_id: None,
+            order_line_id: None,
+            quantity: None,
+        }],
+        tax_lines: None,
+    };
+    let mut unlinked = draft("MISSING");
+    unlinked.vendor_id = None;
+    refused(
+        p.create_bill(&manager, 1, &unlinked).await,
+        "vendor_id",
+        "required",
+    );
+    for status in ["pending", "suspended", "archived"] {
+        // Identity fixture states, including a previously active company
+        // becoming unavailable between the vendor being added and a bill.
+        db.get()
+            .await?
+            .execute(
+                "UPDATE companies SET status=$2 WHERE id=$1",
+                &[&v.company.id, &status],
+            )
+            .await?;
+        refused(
+            p.create_bill(&manager, 1, &draft(&format!("REFUSED-{status}")))
+                .await,
+            "vendor_id",
+            status,
+        );
+    }
+    db.get().await?.execute("UPDATE companies SET status='active',tax_id='CORE-TAX',registration_number='CORE-REG' WHERE id=$1",&[&v.company.id]).await?;
+    let bill = p.create_bill(&manager, 1, &draft("VENDOR-BILL")).await?;
+    assert_eq!(bill.party.tax_id.as_deref(), Some("CORE-TAX"));
+    assert_eq!(bill.party.registration_id.as_deref(), Some("CORE-REG"));
+    assert!(bill.party.address.is_none());
+    assert_eq!(bill.due_date, date(2026, 11, 9));
+    assert_eq!(bill.vendor_id, Some(id));
+    p.approve_document(&reviewer, 1, bill.id).await?;
+    let bill = p.post_document(&manager, 1, bill.id).await?;
+    let snapshots: Vec<(i64, Value)> = {
+        // Historical evidence, as a database installed before vendors would
+        // contain. New product writes must never synthesize this evidence.
+        let mut c = db.get().await?;
+        let tx = c.transaction().await?;
+        let mut rows = vec![];
+        for (key, name, tax, address, number) in [
+            ("old-a", "Former Vendor", "OLD-TAX", "Old address", "OLD-1"),
+            (
+                "old-a",
+                "Vendor renamed",
+                "CHANGED-TAX",
+                "Changed address",
+                "OLD-2",
+            ),
+            (
+                "old-b",
+                "Former Vendor",
+                "OLD-TAX",
+                "Other address",
+                "OLD-3",
+            ),
+        ] {
+            let row=tx.query_one("INSERT INTO finance_payables_documents(tenant_id,company_id,document_type,status,party_key,party_name,party_tax_id,party_address,party_document_number,document_date,due_date,currency_code,total_net,total_tax,total,created_by_user_id) VALUES(1,1,'bill','draft',$1,$2,$3,$4,$5,'2026-10-01','2026-10-31','MYR',100,0,100,1) RETURNING id",&[&key,&name,&tax,&address,&number]).await?;
+            let document: i64 = row.get(0);
+            tx.execute("INSERT INTO finance_payables_document_lines(tenant_id,company_id,document_id,line_number,description,account_id,amount) VALUES(1,1,$1,1,'Historical line',$2,100)",&[&document,&expense]).await?;
+            rows.push((document, Value::Null));
+        }
+        tx.commit().await?;
+        rows
+    };
+    for (id, _) in &snapshots {
+        p.approve_document(&reviewer, 1, *id).await?;
+        p.post_document(&manager, 1, *id).await?;
+    }
+    let before:Vec<Value>=db.get().await?.query("SELECT to_jsonb(d) FROM finance_payables_documents d WHERE tenant_id=1 AND company_id=1 ORDER BY id",&[]).await?.into_iter().map(|r|r.get(0)).collect();
+    let histories = p.supplier_history(&manager, 1).await?;
+    let old = histories
+        .iter()
+        .find(|h| h.supplier_key == "old-a")
+        .ok_or(Error::NotFound)?;
+    assert_eq!(old.snapshots.as_array().map(Vec::len), Some(2));
+    assert!(old.collision_keys.contains(&"old-b".into()));
+    assert!(old.vendor_id.is_none());
+    let requested = p
+        .submit_payment(
+            &manager,
+            1,
+            &NewPayment {
+                payment_date: date(2026, 10, 12),
+                vendor_id: None,
+                supplier_key: Some("old-a".into()),
+                paid_from_account_id: bank,
+                reference: None,
+                description: None,
+                allocations: vec![AllocationInput {
+                    document_id: snapshots[0].0,
+                    amount: money("10"),
+                }],
+            },
+        )
+        .await?;
+    p.map_supplier_key(
+        &manager,
+        1,
+        id,
+        "old-a",
+        "Supplier verified against the original invoices",
+    )
+    .await?;
+    refused(
+        p.map_supplier_key(&manager, 1, id, "old-a", "Repeat").await,
+        "supplier_key",
+        "confirmed",
+    );
+    assert!(p
+        .supplier_history(&manager, 1)
+        .await?
+        .iter()
+        .find(|h| h.supplier_key == "old-b")
+        .is_some_and(|h| h.vendor_id.is_none()));
+    let after:Vec<Value>=db.get().await?.query("SELECT to_jsonb(d) FROM finance_payables_documents d WHERE tenant_id=1 AND company_id=1 ORDER BY id",&[]).await?.into_iter().map(|r|r.get(0)).collect();
+    assert_eq!(before, after);
+    refused(
+        p.create_bill(&manager, 1, &draft("OLD-1")).await,
+        "party_document_number",
+        "already recorded",
+    );
+    let payment = p.approve_payment(&reviewer, 1, requested.id).await?;
+    assert_eq!(payment.party_key, "old-a");
+    db.get()
+        .await?
+        .execute(
+            "UPDATE companies SET status='suspended' WHERE id=$1",
+            &[&v.company.id],
+        )
+        .await?;
+    p.reverse_payment(&reviewer, 1, payment.id, date(2026, 10, 13), None)
+        .await?;
+    let mut note = draft("NOTE");
+    note.vendor_id = None;
+    note.document_date = date(2026, 10, 14);
+    note.lines[0].amount = money("5");
+    let note = p.create_debit_note(&manager, 1, bill.id, &note).await?;
+    p.approve_document(&reviewer, 1, note.id).await?;
+    p.post_document(&manager, 1, note.id).await?;
+    let aged = p
+        .aged_payables(&manager, 1, date(2026, 10, 31), &AgingQuery::default())
+        .await?;
+    assert!(aged
+        .parties
+        .iter()
+        .any(|p| p.party_key == "old-a" && p.vendor_id == Some(id)));
+    assert!(aged
+        .parties
+        .iter()
+        .any(|p| p.party_key == "old-b" && p.vendor_id.is_none()));
+    assert!(aged
+        .parties
+        .iter()
+        .any(|p| p.party_key == format!("vendor:{id}")));
+    let c = db.get().await?;
+    assert!(c.execute("DELETE FROM finance_payables_vendor_keys WHERE tenant_id=1 AND company_id=1 AND supplier_key='old-a'",&[]).await.is_err());
+    assert!(c.execute("UPDATE finance_payables_vendors SET record_id='1' WHERE tenant_id=1 AND company_id=1 AND id=$1",&[&id]).await.is_err());
+    for dataset in ["vendor", "vendor_key"] {
+        assert!(!p
+            .evidence_page(&manager, 1, dataset, Some(500), None)
+            .await?
+            .rows
+            .is_empty());
+    }
+    let _ = ledger.get_book(&manager, 1).await?;
+    db.get()
+        .await?
+        .execute(
+            "UPDATE companies SET status='active' WHERE id=$1",
+            &[&v.company.id],
+        )
+        .await?;
+    println!("Vendors: Core links and statuses; defaults; frozen facts; explicit historical collisions; unchanged snapshots and keys; duplicate protection; legacy payment approval, reversal and debit notes; separate aged groups; evidence and SQL guards proved.");
+    if std::env::var("VENDORS_UI").as_deref() == Ok("1") {
+        println!("Vendor browser fixture at {origin}");
+        axum::serve(
+            tokio::net::TcpListener::bind(std::env::var("BIND_ADDR")?).await?,
+            bilibi_web::router(app),
+        )
+        .await?;
+    }
+    Ok(())
+}
