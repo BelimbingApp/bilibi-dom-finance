@@ -193,6 +193,15 @@ impl Receivables {
                     "cannot be before the credited invoice's",
                 ));
             }
+            crate::write_offs::settlement_date(
+                client,
+                scope,
+                company,
+                invoice.id,
+                date,
+                "issue_date",
+            )
+            .await?;
             if invoice.outstanding.is_none_or(|owed| draft.total > owed) {
                 return Err(invalid(
                     "total",
@@ -464,6 +473,8 @@ impl Receivables {
                 {
                     return Err(invalid("document_id", "was issued after the payment date"));
                 }
+                crate::write_offs::settlement_date(client, scope, company, id, date, "document_id")
+                    .await?;
                 if invoice.outstanding.is_none_or(|owed| allocated > owed) {
                     return Err(invalid(
                         "document_id",

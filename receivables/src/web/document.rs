@@ -63,11 +63,13 @@ pub(super) struct Document {
     lines_cols: ListColumns,
     tax_cols: ListColumns,
     applied_cols: ListColumns,
+    write_offs: super::write_offs::Journals,
 }
 
 impl Document {
     pub(super) fn new(pages: Pages, path: &HashMap<String, String>) -> Result<Self> {
         Ok(Self {
+            write_offs: super::write_offs::Journals::new()?,
             pages,
             id: params::positive_id(path.get("id").map(String::as_str)).unwrap_or(0),
             record: None,
@@ -146,6 +148,7 @@ impl Document {
             Err(Error::NotFound) => None,
             Err(error) => return Err(error),
         };
+        self.write_offs.load(&self.pages, scope).await?;
         self.can_manage = self.pages.allowed(scope, MANAGE_DOCUMENTS).await?;
         self.can_issue = self.pages.allowed(scope, ISSUE).await?;
         let Some(d) = &self.record else { return Ok(()) };
@@ -723,9 +726,19 @@ impl Document {
         if let Some(applied) = applied {
             body.push(&applied);
         }
+        body.push(
+            &self
+                .write_offs
+                .body(&d, &self.accounts, &self.figures, &display)?,
+        );
         body.push(&attachments_slot()?);
 
-        let modal = if let Some(lines) = &self.editing {
+        let modal = if let Some(dialog) =
+            self.write_offs
+                .dialog(&self.accounts, &self.flash, &self.figures)?
+        {
+            Some(dialog)
+        } else if let Some(lines) = &self.editing {
             Some(self.lines_dialog(lines)?)
         } else {
             match self.dialog {
@@ -993,6 +1006,24 @@ impl Document {
 
     async fn event(&mut self, scope: &Scope, credential: &str, v: &Value) -> Result<()> {
         match v["type"].as_str().ok_or(Error::Invalid)? {
+            "ask_submit_write_off"
+            | "ask_approve_write_off"
+            | "ask_reject_write_off"
+            | "ask_reverse_write_off"
+            | "save_write_off"
+            | "cancel_write_off"
+            | "write_off_grid" => {
+                self.write_offs
+                    .event(
+                        &self.pages,
+                        scope,
+                        credential,
+                        v,
+                        self.record.as_ref(),
+                        &mut self.flash,
+                    )
+                    .await?
+            }
             "clear-flash" => self.flash.dismiss(v),
             "lines_grid" => {
                 self.lines_cols.handle(&params::string_values(v));

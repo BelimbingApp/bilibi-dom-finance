@@ -13,9 +13,11 @@ mod sources;
 mod store;
 mod validation;
 mod web;
+mod write_offs;
 
 pub use contributions::{
-    CAPABILITIES, ISSUE, MANAGE_CUSTOMERS, MANAGE_DOCUMENTS, MANAGE_SETUP, POST_PAYMENTS, VIEW,
+    APPROVE_WRITE_OFFS, CAPABILITIES, ISSUE, MANAGE_CUSTOMERS, MANAGE_DOCUMENTS, MANAGE_SETUP,
+    POST_PAYMENTS, SUBMIT_WRITE_OFFS, VIEW,
 };
 pub use evidence::EvidencePage;
 pub use records::{
@@ -27,6 +29,7 @@ pub use reports::{
     ControlAccountsTieOut, OtherPosting, ReceivedTaxOptions, ReceivedTaxTotal, TaxOptions,
     TaxTotal,
 };
+pub use write_offs::{WriteOff, WriteOffEvent};
 
 use bilibi_database::{Db, Error, MutationTransaction};
 use bilibi_finance_attachments::Attachments;
@@ -43,7 +46,7 @@ inventory::submit! {
     Module {
         id: MODULE, layer: Layer::Domains,
         dependencies: &["base/agent_api", "base/authz", "base/database", "base/datetime", "base/locale", "base/menu", "base/party_ids", "base/tenancy", "base/ui", "core/company", "finance/ledger", "finance/attachments"],
-        migrations: &[("finance-receivables-001-receivables", include_str!("../migrations/001-receivables.sql"))],
+        migrations: &[("finance-receivables-001-receivables", include_str!("../migrations/001-receivables.sql")), ("finance-receivables-002-write-offs", include_str!("../migrations/002-write-offs.sql"))],
         services: &[Service { id: SERVICE, factory: |services| {
             let receivables = Arc::new(Receivables {
                 db: services.get::<Db>("base/database.pool")?.as_ref().clone(),

@@ -12,6 +12,7 @@ mod format;
 mod payment;
 mod payments;
 mod settings;
+mod write_offs;
 
 use crate::{MODULE, VIEW};
 use askama::Template;
@@ -147,6 +148,10 @@ route!("finance/receivables.settings", SETTINGS, "settings");
 inventory::submit! { Contribution::new(PAGE_WRITES, PAGES, Provenance { module: MODULE, source: file!(), line: line!() }, &PageWrites {
     service: PAGES,
     contracts: &[
+        ("save_write_off", "finance.receivables.write_off.submit"),
+        ("save_write_off", "finance.receivables.write_off.approve"),
+        ("save_write_off", "finance.receivables.write_off.reject"),
+        ("save_write_off", "finance.receivables.write_off.reverse"),
         ("create_customer", "finance.receivables.customer.create"),
         ("save_customer", "finance.receivables.customer.update"),
         ("create_draft", "finance.receivables.draft.create"),

@@ -23,6 +23,7 @@ pub(super) struct Prepared {
 
 // A single statement gives headers and children the same MVCC snapshot.
 pub(crate) const READ: &str = "SELECT to_jsonb(d) || jsonb_build_object(
+ 'write_offs',COALESCE((SELECT jsonb_agg(to_jsonb(w) || jsonb_build_object('events',COALESCE((SELECT jsonb_agg(to_jsonb(e) ORDER BY e.id) FROM finance_receivables_write_off_events e WHERE e.write_off_id=w.id AND e.tenant_id=$1 AND e.company_id=$2),'[]'::jsonb)) ORDER BY w.id) FROM finance_receivables_write_offs w WHERE w.document_id=d.id AND w.tenant_id=$1 AND w.company_id=$2),'[]'::jsonb),
  'outstanding',CASE WHEN d.kind='invoice' AND d.status='issued' THEN finance_receivables_outstanding(d.id) ELSE NULL END,
  'lines',COALESCE((SELECT jsonb_agg(to_jsonb(l) ORDER BY line_number) FROM finance_receivables_document_lines l WHERE l.tenant_id=$1 AND l.company_id=$2 AND l.document_id=d.id),'[]'::jsonb),
  'tax_lines',COALESCE((SELECT jsonb_agg(to_jsonb(t) ORDER BY tax_code) FROM finance_receivables_document_tax_lines t WHERE t.tenant_id=$1 AND t.company_id=$2 AND t.document_id=d.id),'[]'::jsonb))

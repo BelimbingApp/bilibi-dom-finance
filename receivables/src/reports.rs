@@ -170,7 +170,10 @@ const BALANCES: &str = "SELECT d.*, d.issue_date::text issue_day, d.due_date::te
  AND p.payment_date<=$3::text::date AND p.ledger_entry_number<=$4
  AND NOT EXISTS(SELECT 1 FROM finance_receivables_payment_reversals r
  WHERE r.tenant_id=$1 AND r.company_id=$2 AND r.payment_id=p.id
- AND r.reversal_date<=$3::text::date AND r.ledger_entry_number<=$4)),0) AS outstanding
+ AND r.reversal_date<=$3::text::date AND r.ledger_entry_number<=$4)),0) AS outstanding,
+ COALESCE((SELECT sum(w.amount) FROM finance_receivables_write_offs w WHERE w.tenant_id=$1 AND w.company_id=$2 AND w.document_id=d.id
+ AND EXISTS(SELECT 1 FROM finance_receivables_write_off_events e WHERE e.write_off_id=w.id AND e.event='approved' AND e.effective_date<=$3::text::date AND e.ledger_entry_number<=$4)
+ AND NOT EXISTS(SELECT 1 FROM finance_receivables_write_off_events e WHERE e.write_off_id=w.id AND e.event='reversed' AND e.effective_date<=$3::text::date AND e.ledger_entry_number<=$4)),0) AS written_off
  FROM finance_receivables_documents d WHERE d.tenant_id=$1 AND d.company_id=$2
  AND d.kind='invoice' AND d.status='issued' AND d.issue_date<=$3::text::date AND d.ledger_entry_number<=$4";
 
@@ -218,7 +221,7 @@ impl Receivables {
             return Err(ReceivableError::InvalidOption);
         }
         let book = self.ledger.get_book_on(client, scope, company).await?;
-        let pin=match options.through_entry_number { Some(n)=>n, None=>client.query_one("SELECT COALESCE(max(n),0) FROM (SELECT ledger_entry_number n FROM finance_receivables_documents WHERE tenant_id=$1 AND company_id=$2 UNION ALL SELECT ledger_entry_number FROM finance_receivables_payments WHERE tenant_id=$1 AND company_id=$2 UNION ALL SELECT ledger_entry_number FROM finance_receivables_payment_reversals WHERE tenant_id=$1 AND company_id=$2) x", &[&scope.tenant(),&company]).await.map_err(Error::from)?.get(0) };
+        let pin=match options.through_entry_number { Some(n)=>n, None=>client.query_one("SELECT COALESCE(max(n),0) FROM (SELECT ledger_entry_number n FROM finance_receivables_documents WHERE tenant_id=$1 AND company_id=$2 UNION ALL SELECT ledger_entry_number FROM finance_receivables_payments WHERE tenant_id=$1 AND company_id=$2 UNION ALL SELECT ledger_entry_number FROM finance_receivables_payment_reversals WHERE tenant_id=$1 AND company_id=$2 UNION ALL SELECT ledger_entry_number FROM finance_receivables_write_off_events WHERE tenant_id=$1 AND company_id=$2) x", &[&scope.tenant(),&company]).await.map_err(Error::from)?.get(0) };
         let mut buckets = vec![AgingBucket {
             from_days: None,
             to_days: Some(0),
@@ -243,7 +246,8 @@ impl Receivables {
         let mut customers: BTreeMap<i64, AgedCustomer> = BTreeMap::new();
         let mut totals = vec![Decimal::ZERO; buckets.len()];
         for row in balances(client, scope, company, &as_of.to_string(), pin).await? {
-            let outstanding: Decimal = row.get("outstanding");
+            let outstanding: Decimal =
+                row.get::<_, Decimal>("outstanding") - row.get::<_, Decimal>("written_off");
             if outstanding.is_zero() {
                 continue;
             }
@@ -507,7 +511,7 @@ impl Receivables {
         .await?
         {
             *subledger.entry(d.get("receivable_account_id")).or_default() +=
-                d.get::<_, Decimal>("outstanding");
+                d.get::<_, Decimal>("outstanding") - d.get::<_, Decimal>("written_off");
         }
         let controls=client.query("SELECT receivable_account_id FROM finance_receivables_documents WHERE tenant_id=$1 AND company_id=$2 AND status='issued' AND receivable_account_id IS NOT NULL UNION SELECT receivable_account_id FROM finance_receivables_setups WHERE tenant_id=$1 AND company_id=$2",&[&scope.tenant(),&company]).await.map_err(Error::from)?;
         let mut ids: BTreeSet<i64> = controls.iter().map(|r| r.get(0)).collect();
