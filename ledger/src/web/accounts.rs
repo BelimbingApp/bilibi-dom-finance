@@ -4,8 +4,8 @@
 //! account's page is `account.rs`; groups are managed on `groups.rs`.
 mod publishing;
 use super::{
-    account_name, capability_for, dialog_actions, error_text, event_type, figure, no_company,
-    render, shell, unavailable, view, Failure, Flash, Pages, Read, Refusal, Review,
+    account_name, capability_for, dialog_actions, error_text, event_type, figure, render, shell,
+    unavailable, view, Company, Failure, Flash, Pages, Read, Refusal, Review,
 };
 use crate::{AccountType, MANAGE_ACCOUNTS};
 use bilibi_database::{Error, Result};
@@ -41,6 +41,7 @@ static SPEC: LazyLock<Arc<ListSpec>> = LazyLock::new(|| {
         default_page_size: 50,
         page_size_param: "per_page".into(),
         filters: BTreeMap::from([
+            ("company".into(), Filter::string("")),
             (
                 "type".into(),
                 Filter::one_of(
@@ -146,6 +147,13 @@ struct Preview {
     rows: Vec<view::TemplateRow>,
 }
 
+struct Chart {
+    company: Company,
+    accounts: Vec<view::Account>,
+    figures: Option<view::ChartBalances>,
+    currency: String,
+}
+
 pub(super) struct Accounts {
     pages: Pages,
     list: ListState,
@@ -161,6 +169,8 @@ pub(super) struct Accounts {
 impl Accounts {
     pub(super) fn new(pages: Pages, query: &HashMap<String, String>, framed: bool) -> Result<Self> {
         let columns = vec![
+            BuiltinColumn::new("company", "Company"),
+            BuiltinColumn::new("currency", "Currency"),
             BuiltinColumn::new("code", "Code").sortable("code"),
             BuiltinColumn::new("name", "Name").sortable("name"),
             BuiltinColumn::new("kind", "Kind"),
@@ -194,112 +204,251 @@ impl Accounts {
         })
     }
 
+    /// The default is the current company. All companies is an explicit
+    /// comparison of separate charts; it never changes the session company.
+    fn selected(&self, scope: &Scope) -> Option<i64> {
+        match self.list.filters["company"].as_str() {
+            "all" => None,
+            "" => Pages::company(scope),
+            value => value.parse::<i64>().ok().filter(|id| *id > 0),
+        }
+    }
+
+    async fn target(&self, scope: &Scope) -> Result<Option<i64>> {
+        let Some(company) = self.selected(scope) else {
+            return Ok(None);
+        };
+        if !self
+            .pages
+            .companies(scope)
+            .await?
+            .iter()
+            .any(|c| c.id == company)
+        {
+            return Ok(None);
+        }
+        Ok(Some(company))
+    }
+
     async fn view(&mut self, scope: &Scope) -> Result<LiveBody> {
+        let companies = self.pages.companies(scope).await?;
+        let selected = self.selected(scope);
+        let all = self.list.filters["company"] == "all";
+        let listed: Vec<&Company> = companies
+            .iter()
+            .filter(|c| all || Some(c.id) == selected)
+            .collect();
         let can_manage = self.pages.allowed(scope, MANAGE_ACCOUNTS).await?;
         let mut body = Html::EMPTY;
         let mut actions = Html::EMPTY;
-        let mut rows_shown = 0;
-        let mut chart: Vec<view::Account> = Vec::new();
-        if Pages::company(scope).is_none() {
-            body.push(&no_company("ledger-accounts-no-company")?);
-        } else {
-            match self.pages.chart(scope).await? {
-                Err(refused) => body.push(&unavailable(
-                    "ledger-accounts-refused",
-                    "the chart of accounts",
-                    &refused,
-                )?),
-                Ok(listed) => {
-                    chart = listed;
-                    let book = self.pages.book(scope).await?.ok();
-                    let book_open = book.as_ref().is_some_and(|b| b.book.is_some());
-                    if self.pages.allowed(scope, crate::MANAGE_TEMPLATES).await? {
-                        for (event, label) in [
-                            ("propose_chart", "Template proposal"),
-                            ("publish_chart", "Save reusable chart"),
-                        ] {
-                            if event == "publish_chart" && chart.is_empty() {
-                                continue;
-                            }
-                            actions.push(&render(Button {
-                                id: &format!("ledger-{event}"),
-                                event,
-                                button_type: "button",
-                                body: Html::text(label),
-                                ..Button::default()
-                            })?);
-                        }
-                    }
-                    if can_manage && book_open {
-                        actions.push(&render(Button {
-                            id: "ledger-account-groups-link",
-                            href: super::groups::INDEX,
-                            class: "text-xs",
-                            body: Html::text("Account groups"),
-                            ..Button::default()
-                        })?);
-                        actions.push(&render(CreateButton {
-                            noun: "Account",
-                            id: "ledger-account-new",
-                            class: "text-xs",
-                            event: "new",
-                            button_type: "button",
-                            ..CreateButton::default()
-                        })?);
-                    }
-                    if !book_open && chart.is_empty() {
-                        let mut empty = EmptyState::missing(
-                            "The book is not open yet",
-                            "Open the company's book first. It sets the currency every account and entry uses.",
-                        )
-                        .id("ledger-accounts-no-book");
-                        empty = empty.action(render(Button {
-                            id: "ledger-accounts-open-book",
-                            href: super::book::INDEX,
-                            body: Html::text("Go to the book"),
-                            variant: ButtonVariant::Primary,
-                            ..Button::default()
-                        })?);
-                        body.push(&render(empty)?);
-                    } else if chart.is_empty() && can_manage {
-                        body.push(&self.starters(scope).await?);
+        let mut charts = Vec::new();
+        let (mut no_books, mut empty_charts, mut denied, mut failed) = (0, 0, 0, 0);
+        let mut draft_chart = Vec::new();
+        let mut editable = false;
+        let subtitle = match listed.as_slice() {
+            [one] => one.name.clone(),
+            _ if all => "All companies".into(),
+            _ => String::new(),
+        };
+        // The filter is always visible, including the single-company case:
+        // it offers only names the shared company directory authorizes.
+        let mut options = Vec::new();
+        if companies.len() > 1 {
+            options.push(Choice::new("All companies", "all"));
+        }
+        options.extend(
+            companies
+                .iter()
+                .map(|c| Choice::new(&c.name, c.id.to_string())),
+        );
+        body.push(&render(Form {
+            id: "ledger-accounts-company-filter",
+            event: "company_filter",
+            change: true,
+            class: "mb-4 max-w-sm",
+            body: render(
+                Combobox::new("ledger-accounts-company", "company_filter[company]")
+                    .label("Company")
+                    .wrapper_class("mb-0")
+                    .value(if all && companies.len() > 1 {
+                        "all".into()
                     } else {
-                        let figures = if book_open {
-                            self.pages.chart_figures(scope).await?
+                        selected.map(|id| id.to_string()).unwrap_or_default()
+                    })
+                    .options(options),
+            )?,
+            actions: Html::EMPTY,
+        })?);
+        if listed.is_empty() {
+            body.push(&render(
+                EmptyState::missing("No company available", "Select a company you can work in.")
+                    .id("ledger-accounts-no-company"),
+            )?);
+        }
+        for company in &listed {
+            let chart = match self.pages.chart_in(scope, company.id).await? {
+                Ok(chart) => chart,
+                Err(refused) => {
+                    if all {
+                        if matches!(refused, Read::Denied) {
+                            denied += 1;
                         } else {
-                            None
-                        };
-                        rows_shown = self.table(&chart, figures.as_ref(), &mut body)?;
+                            failed += 1;
+                        }
+                        continue;
                     }
+                    body.push(&render(SectionHeading {
+                        id: &format!("ledger-chart-{}", company.id),
+                        title: &company.name,
+                        ..SectionHeading::default()
+                    })?);
+                    body.push(&unavailable(
+                        &format!("ledger-chart-refused-{}", company.id),
+                        "the chart of accounts",
+                        &refused,
+                    )?);
+                    continue;
+                }
+            };
+            let book = self
+                .pages
+                .book_in(scope, company.id)
+                .await?
+                .ok()
+                .and_then(|b| b.book);
+            let book_open = book.is_some();
+            // A chart template is proposed from, or saved out of, the current company.
+            if !all
+                && Some(company.id) == Pages::company(scope)
+                && self.pages.allowed(scope, crate::MANAGE_TEMPLATES).await?
+            {
+                for (event, label) in [
+                    ("propose_chart", "Template proposal"),
+                    ("publish_chart", "Save reusable chart"),
+                ] {
+                    if event == "publish_chart" && chart.is_empty() {
+                        continue;
+                    }
+                    actions.push(&render(Button {
+                        id: &format!("ledger-{event}"),
+                        event,
+                        button_type: "button",
+                        body: Html::text(label),
+                        ..Button::default()
+                    })?);
                 }
             }
+            if !all && can_manage && book_open {
+                editable = true;
+                draft_chart = chart.clone();
+                actions.push(&render(Button {
+                    id: "ledger-account-groups-link",
+                    href: &format!("{}?company={}", super::groups::INDEX, company.id),
+                    body: Html::text("Account groups"),
+                    ..Button::default()
+                })?);
+                actions.push(&render(CreateButton {
+                    noun: "Account",
+                    id: "ledger-account-new",
+                    event: "new",
+                    button_type: "button",
+                    ..CreateButton::default()
+                })?);
+            }
+            if all && chart.is_empty() {
+                if book_open {
+                    empty_charts += 1;
+                } else {
+                    no_books += 1;
+                }
+            } else if !book_open && chart.is_empty() {
+                let current = Some(company.id) == Pages::company(scope);
+                let mut empty = EmptyState::missing(
+                    format!("{}: book not open", company.name),
+                    if current {
+                        "Open the company's book to choose its currency and decimal places."
+                    } else {
+                        "Choose this company in the top bar, then open its book."
+                    },
+                )
+                .id(format!("ledger-chart-no-book-{}", company.id));
+                if current {
+                    empty = empty.action(render(Button {
+                        id: "ledger-accounts-open-book",
+                        href: super::book::INDEX,
+                        body: Html::text("Go to the book"),
+                        variant: ButtonVariant::Primary,
+                        ..Button::default()
+                    })?);
+                }
+                body.push(&render(empty)?);
+            } else if chart.is_empty() && editable && !all {
+                body.push(&self.starters(scope, company.id).await?);
+            } else if chart.is_empty() {
+                body.push(&render(
+                    EmptyState::missing(
+                        format!("{}: no accounts yet", company.name),
+                        "Select this company to set up its chart.",
+                    )
+                    .id(format!("ledger-chart-empty-{}", company.id)),
+                )?);
+            }
+            let figures = if book_open {
+                self.pages.chart_figures_in(scope, company.id).await?
+            } else {
+                None
+            };
+            charts.push(Chart {
+                company: (*company).clone(),
+                accounts: chart,
+                figures,
+                currency: book.map(|b| b.currency_code).unwrap_or_default(),
+            });
         }
+        let rows_shown = if charts.iter().any(|c| !c.accounts.is_empty()) {
+            self.table(&charts, &mut body)?
+        } else {
+            0
+        };
+        if all {
+            if no_books + empty_charts + denied + failed > 0 {
+                body.push(&render(Alert { id: "ledger-accounts-company-states", kind: StatusKind::Info,
+                    body: Html::text(&format!("Companies without chart rows — books not open: {no_books}; empty charts: {empty_charts}; no access: {denied}; could not be read: {failed}. Select one company for details.")), ..Alert::default() })?);
+            }
+            body.push(&render(Note { id: "ledger-accounts-comparison", text: "Select one company to add accounts or apply a starter chart. Each balance is in its company's currency; no consolidation or currency translation is performed." })?);
+        }
+        body.push(&render(Note { id: "ledger-accounts-context", text: "This filter does not change the current company in the top bar. Each account opens in its named company." })?);
         let mut page = render(Header {
             title: Html::text("Chart of accounts"),
+            subtitle: &subtitle,
             title_actions: super::menu_pin(
                 "ledger-accounts-pin",
                 "nav-finance-ledger-accounts",
                 "Chart of accounts",
             )?,
             actions,
-            ..Header::default()
         })?;
         page.push(&body);
         if let Some(draft) = &mut self.draft {
-            draft.reconcile(&chart);
+            draft.reconcile(&draft_chart);
         }
-        if self.draft.is_some() && can_manage {
-            let form = self.form(&chart)?;
+        if self.draft.is_some() && editable {
             page.push(&render(Modal {
                 id: "ledger-account-modal",
                 title: "New account",
+                description: &format!("Add an account to {subtitle}."),
                 cancel_event: "close_modal",
-                body: form,
+                body: self.form(&draft_chart)?,
                 ..Modal::default()
             })?);
         }
         page.push(&self.publication_dialog()?);
         let mut query = self.list.to_params();
+        if !all {
+            if let Some(company) = selected {
+                query.insert("company".into(), company.to_string());
+            }
+        }
         if self.draft.is_some() {
             query.insert("new".into(), "1".into());
         }
@@ -311,17 +460,17 @@ impl Accounts {
         })
     }
 
-    fn table(
-        &mut self,
-        chart: &[view::Account],
-        figures: Option<&view::ChartBalances>,
-        body: &mut Html,
-    ) -> Result<usize> {
+    fn table(&mut self, charts: &[Chart], body: &mut Html) -> Result<usize> {
         let search = self.list.search.trim().to_lowercase();
-        let by_id: HashMap<i64, &view::Account> = chart.iter().map(|a| (a.id, a)).collect();
-        let mut shown: Vec<&view::Account> = chart
+        let by_id: HashMap<i64, &view::Account> = charts
             .iter()
-            .filter(|a| {
+            .flat_map(|c| c.accounts.iter())
+            .map(|a| (a.id, a))
+            .collect();
+        let mut shown: Vec<(&Chart, &view::Account)> = charts
+            .iter()
+            .flat_map(|c| c.accounts.iter().map(move |a| (c, a)))
+            .filter(|(_, a)| {
                 let kind = self.list.filters["type"].as_str();
                 let status = self.list.filters["status"].as_str();
                 (kind == "all" || a.account_type == kind)
@@ -342,12 +491,14 @@ impl Accounts {
             .collect();
         let descending = self.list.sort_dir == Some(SortDir::Desc);
         match self.list.sort_by.as_deref() {
-            Some("name") => shown.sort_by_key(|a| a.name.to_lowercase()),
-            Some("type") => shown.sort_by(|a, b| {
+            Some("name") => shown.sort_by_key(|(c, a)| (a.name.to_lowercase(), c.company.id)),
+            Some("type") => shown.sort_by(|(_, a), (_, b)| {
                 (a.account_type.as_str(), a.code.as_str())
                     .cmp(&(b.account_type.as_str(), b.code.as_str()))
             }),
-            _ => shown.sort_by(|a, b| a.code.cmp(&b.code)),
+            _ => shown.sort_by(|(ca, a), (cb, b)| {
+                (a.code.as_str(), ca.company.id).cmp(&(b.code.as_str(), cb.company.id))
+            }),
         }
         if descending {
             shown.reverse();
@@ -356,12 +507,12 @@ impl Accounts {
         self.list
             .clamp_to_last_page(total.div_ceil(self.list.page_size), true);
         let start = ((self.list.page - 1) * self.list.page_size) as usize;
-        let page: Vec<&view::Account> = shown
+        let page: Vec<(&Chart, &view::Account)> = shown
             .into_iter()
             .skip(start)
             .take(self.list.page_size as usize)
             .collect();
-        self.columns.load(&page, |a| a.id.to_string());
+        self.columns.load(&page, |(_, a)| a.id.to_string());
 
         let form = self.list.filters_form();
         body.push(&render(FilterToolbar::new(
@@ -413,18 +564,23 @@ impl Accounts {
             ],
         ))?);
 
-        let units = figures.map(|f| f.minor_units);
-        let figure_of = |id: i64| figures.and_then(|f| f.rows.iter().find(|r| r.id == id));
         let mut rows = Vec::new();
-        for account in &page {
+        for (chart, account) in &page {
+            let figures = chart.figures.as_ref();
+            let units = figures.map(|f| f.minor_units);
             let group = match account.parent_id.and_then(|id| by_id.get(&id)) {
                 Some(parent) => account_name(parent)?,
                 None => Html::text("—"),
             };
             let href = if account.is_group {
-                format!("{}/{}", super::groups::INDEX, account.id)
+                format!(
+                    "{}/{}?company={}",
+                    super::groups::INDEX,
+                    account.id,
+                    chart.company.id
+                )
             } else {
-                format!("{INDEX}/{}", account.id)
+                format!("{INDEX}/{}?company={}", account.id, chart.company.id)
             };
             let shown = |text: Option<&String>| -> Result<Html> {
                 match (text, units) {
@@ -432,9 +588,11 @@ impl Accounts {
                     _ => Ok(Html::text("—")),
                 }
             };
-            let own = figure_of(account.id);
+            let own = figures.and_then(|f| f.rows.iter().find(|r| r.id == account.id));
             rows.push({
                 let mut row = FlexRow::new(account.id.to_string())
+                    .cell("company", Cell::text(&chart.company.name))
+                    .cell("currency", Cell::text(&chart.currency))
                     .slot(
                         "code",
                         render(RecordLink {
@@ -652,8 +810,13 @@ impl LiveState<Scope, Error> for Accounts {
             match r.input {
                 LiveInput::Refresh => {}
                 LiveInput::Params(values) => {
-                    self.list =
+                    let list =
                         ListState::parse(values, SPEC.clone()).map_err(|_| Error::Internal)?;
+                    if list.filters["company"] != self.list.filters["company"] {
+                        self.draft = None;
+                        self.preview = None;
+                    }
+                    self.list = list;
                     if values.get("new").is_some() && self.draft.is_none() {
                         self.draft = Some(Draft::new());
                     }
@@ -666,9 +829,22 @@ impl LiveState<Scope, Error> for Accounts {
                     | "commit_publication"
                     | "close_publication"
                     | "publication_grid") => self.publication_event(&r, value, event).await?,
-                    "filters" => self
-                        .list
-                        .apply_filters(&params::form_values(value, FILTERS_FORM)),
+                    "company_filter" => {
+                        let company = params::form_values(value, "company_filter")
+                            .get("company")
+                            .cloned()
+                            .unwrap_or_default();
+                        let mut filters = self.list.filters_form();
+                        filters.insert("company".into(), company);
+                        self.list.apply_filters(&filters);
+                        self.draft = None;
+                        self.preview = None;
+                    }
+                    "filters" => {
+                        let mut filters = params::form_values(value, FILTERS_FORM);
+                        filters.insert("company".into(), self.list.filters["company"].clone());
+                        self.list.apply_filters(&filters);
+                    }
                     "page" => self.list.put_page(value["page"].as_str()),
                     "sort" => {
                         self.list.next_sort(value["sort"].as_str().unwrap_or(""));
@@ -733,13 +909,18 @@ impl Accounts {
     /// What an empty chart offers: each starter chart to preview, or an empty
     /// start (the header's New account, and Account groups). The chart is
     /// never filled in before a person chooses.
-    async fn starters(&mut self, scope: &Scope) -> Result<Html> {
+    async fn starters(&mut self, scope: &Scope, company: i64) -> Result<Html> {
         if self.preview.is_some() {
             return self.preview_card();
         }
         let response = match self
             .pages
-            .read(scope, "finance.ledger.chart_template.list", json!({}))
+            .read_in(
+                scope,
+                company,
+                "finance.ledger.chart_template.list",
+                json!({}),
+            )
             .await?
         {
             Read::Found(value) => value,
@@ -956,10 +1137,15 @@ impl Accounts {
         key: &str,
         sections: &[String],
     ) -> Result<()> {
+        let Some(company) = self.target(r.scope).await? else {
+            self.flash.error("Select one company you can work in.");
+            return Ok(());
+        };
         match self
             .pages
-            .review(
+            .review_in(
                 r.scope,
+                company,
                 r.credential,
                 event,
                 TEMPLATE_CONTRACT,
@@ -1021,13 +1207,18 @@ impl Accounts {
     }
 
     async fn create(&mut self, r: &LiveRequest<'_, Scope>) -> Result<()> {
+        let Some(company) = self.target(r.scope).await? else {
+            self.flash.error("Select one company you can work in.");
+            return Ok(());
+        };
         let Some(draft) = &mut self.draft else {
             return Ok(());
         };
         match self
             .pages
-            .submit(
+            .submit_in(
                 r.scope,
+                company,
                 r.credential,
                 "create",
                 "finance.ledger.account.create",

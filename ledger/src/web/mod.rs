@@ -409,15 +409,32 @@ impl Pages {
     /// Display only: a company the directory cannot name is "Company
     /// unavailable", never a refusal.
     pub(crate) async fn company_name(&self, scope: &Scope) -> Result<String> {
-        let Some(id) = scope.current_company() else {
+        let Some(company) = Self::company(scope) else {
             return Ok(String::new());
         };
+        let id = bilibi_party_ids::OrganisationId::new(company).map_err(|_| Error::NotFound)?;
         let client = self.db.get().await?;
         Ok(self
             .parties
             .organisation_name(&**client, scope, id)
             .await?
             .map(|company| company.name)
+            .unwrap_or_else(|| "Company unavailable".into()))
+    }
+
+    /// Name an explicit chart target only from the shared reachable list.
+    /// Core's organisation-name read also names directory-only companies;
+    /// that is broader than the companies an accountant can work in.
+    pub(crate) async fn company_name_in(&self, scope: &Scope, company: i64) -> Result<String> {
+        if Some(company) == Self::company(scope) {
+            return self.company_name(scope).await;
+        }
+        Ok(self
+            .companies(scope)
+            .await?
+            .into_iter()
+            .find(|c| c.id == company)
+            .map(|c| c.name)
             .unwrap_or_else(|| "Company unavailable".into()))
     }
 
@@ -469,6 +486,17 @@ impl Pages {
         &self,
         scope: &Scope,
     ) -> Result<std::result::Result<Vec<view::Account>, Read>> {
+        let Some(company) = Self::company(scope) else {
+            return Ok(Err(Read::NoCompany));
+        };
+        self.chart_in(scope, company).await
+    }
+
+    pub(crate) async fn chart_in(
+        &self,
+        scope: &Scope,
+        company: i64,
+    ) -> Result<std::result::Result<Vec<view::Account>, Read>> {
         let mut all = Vec::new();
         let mut after: Option<String> = None;
         for _ in 0..50 {
@@ -477,7 +505,7 @@ impl Pages {
                 input["after_code"] = json!(code);
             }
             match self
-                .read(scope, "finance.ledger.account.list", input)
+                .read_in(scope, company, "finance.ledger.account.list", input)
                 .await?
             {
                 Read::Found(value) => {
@@ -496,14 +524,19 @@ impl Pages {
         Ok(Ok(all))
     }
 
-    /// The chart's balances and group totals as of today, or `None` when the
-    /// book is not open or the figures cannot be read.
-    pub(crate) async fn chart_figures(&self, scope: &Scope) -> Result<Option<view::ChartBalances>> {
+    /// One company's chart balances and group totals as of today, or `None`
+    /// when its book or figures cannot be read through the contract.
+    pub(crate) async fn chart_figures_in(
+        &self,
+        scope: &Scope,
+        company: i64,
+    ) -> Result<Option<view::ChartBalances>> {
         let today = self.today(scope).await?;
         Ok(
             match self
-                .read(
+                .read_in(
                     scope,
+                    company,
                     "finance.ledger.chart_balance.get",
                     json!({"as_of": today.to_string()}),
                 )
@@ -1010,17 +1043,6 @@ pub(crate) fn account_name(account: &view::Account) -> Result<Html> {
     })
 }
 
-/// A plain link to an account group's page.
-#[derive(Template)]
-#[template(
-    source = r#"<a href="/finance/ledger/account-groups/{{ id }}" class="text-link hover:underline">{{ label }}</a>"#,
-    ext = "html"
-)]
-pub(crate) struct GroupLink<'a> {
-    pub id: i64,
-    pub label: &'a str,
-}
-
 /// A plain link to an account's page.
 #[derive(Template)]
 #[template(
@@ -1133,14 +1155,19 @@ impl Page<Scope, Error> for Pages {
 impl Pages {
     fn state(&self, r: &PageRequest<'_, Scope>) -> Result<Box<dyn LiveState<Scope, Error>>> {
         let pages = self.clone();
+        let company = if matches!(r.operation, "account" | "group" | "groups") {
+            target_company(r.query, r.scope)?
+        } else {
+            None
+        };
         Ok(match r.operation {
             "opening" => Box::new(opening::Opening::new(pages, r.query)),
             "book" => Box::new(book::Book::new(pages)),
             "books" => Box::new(books::Books::new(pages)),
             "accounts" => Box::new(accounts::Accounts::new(pages, r.query, r.framed)?),
-            "account" => Box::new(account::Account::new(pages, id_param(r.path)?)),
-            "groups" => Box::new(groups::Groups::new(pages, r.query, r.framed)?),
-            "group" => Box::new(group::Group::new(pages, id_param(r.path)?)),
+            "account" => Box::new(account::Account::new(pages, id_param(r.path)?, company)),
+            "groups" => Box::new(groups::Groups::new(pages, r.query, r.framed, company)?),
+            "group" => Box::new(group::Group::new(pages, id_param(r.path)?, company)),
             "entries" => Box::new(entries::Entries::new(pages, r.query, r.framed)?),
             "entry" => Box::new(entry::Entry::new(pages, id_param(r.path)?)),
             "journals" => Box::new(journals::Journals::new(pages, r.query, r.framed)?),
@@ -1149,5 +1176,22 @@ impl Pages {
             "trial" => Box::new(trial::Trial::new(pages, r.query)),
             _ => return Err(Error::NotFound),
         })
+    }
+}
+
+/// An explicit chart drill-through target, or the current company on a direct
+/// visit. This selects an address only; each contract still proves its target.
+fn target_company(
+    query: &std::collections::HashMap<String, String>,
+    scope: Option<&Scope>,
+) -> Result<Option<i64>> {
+    match query.get("company") {
+        Some(value) => value
+            .parse::<i64>()
+            .ok()
+            .filter(|id| *id > 0)
+            .map(Some)
+            .ok_or(Error::NotFound),
+        None => Ok(scope.and_then(Pages::company)),
     }
 }

@@ -92,7 +92,7 @@ pub use contributions::{
 };
 pub use evidence::EvidencePage;
 pub use money::{MinorUnits, Money, MoneyError};
-pub use opening::OpeningBalances;
+pub use opening::{OpeningBalances, OpeningProgress};
 pub use saved_templates::NewChartTemplate;
 
 use bilibi_company::WriteError;

@@ -1115,6 +1115,7 @@ impl WriteHandler for Write {
 
 enum Read {
     Book,
+    OpeningProgress,
     Currencies,
     Accounts,
     Journal,
@@ -1145,6 +1146,9 @@ impl ReadHandler for Read {
             let tenant = scope.tenant();
             let limit = input["page_size"].as_u64().unwrap_or(100).min(100) as usize;
             let result = match self {
+                Self::OpeningProgress => {
+                    json!({"opening": opening::progress(client, scope, company).await.map_err(invalid)?})
+                }
                 Self::Book => {
                     let book = books::find(client, tenant, company).await?;
                     let currency = match &book {
@@ -1562,6 +1566,7 @@ fn years_schema() -> Value {
 inventory::submit! { Contribution::new(DEFINITIONS,"finance/ledger.operations",Provenance { module:MODULE,source:file!(),line:line!() }, &Definitions {
     operations:&[
         Operation {key:"finance.ledger.book.get",title:"Read the book",summary:"Read currency, its name and standard decimal places, minor units and bookkeeping controls; book is null before opening.",keywords:&[],capability:VIEW,input:target_schema,output,handler:Handler::Read(&Read::Book),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.ledger.opening_balances.get",title:"Read opening-balance progress",summary:"Read the latest opening submission, its approval status, posted entry and reversal. opening is null before submission; this does not measure a complete accounting conversion.",keywords:&["conversion"],capability:VIEW,input:target_schema,output,handler:Handler::Read(&Read::OpeningProgress),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.book.currencies",title:"Choose the book's currency",summary:"List the enabled currencies with their ISO 4217 decimal places, matching a code or name, and the proposed currency: the company's base currency, else the tenant's. reference is none_enabled when the list is installed but no currency is enabled (no book can open yet), and unavailable when the list was never installed (a code is then accepted unchecked).",keywords:&[],capability:VIEW,input:currencies_schema,output,handler:Handler::Read(&Read::Currencies),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.journal.get",title:"Read a journal",summary:"Read lines, submission, decision, the approved entry identifier and whether it is the book's opening balances journal.",keywords:&[],capability:VIEW,input:journal_schema,output,handler:Handler::Read(&Read::Journal),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.account.list",title:"List accounts",summary:"Read the chart by code with a bounded cursor page: accounts, and account groups marked is_group.",keywords:&[],capability:VIEW,input:accounts_schema,output,handler:Handler::Read(&Read::Accounts),channels:Channels::Every,step_up:&[]},

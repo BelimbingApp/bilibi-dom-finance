@@ -5,7 +5,7 @@
 //! Reports is the one Finance module that depends on every other, so the
 //! overview lives here and no module learns of another. Each area reports only
 //! what its owner can determine: a module's own setup record exists or it does
-//! not. An area with nothing to measure (accountant access, opening balances)
+//! not. An area with nothing to measure (accountant access)
 //! has the state `not_tracked`; it is a link, never a completion claim.
 //!
 //! The overview works for one company named by the caller, which is the
@@ -345,13 +345,33 @@ impl Reports {
             ),
         });
 
+        let (state, summary) = match read(
+            self.ledger.opening_progress(scope, company_id).await,
+            |e| matches!(e, LedgerError::Unauthorized),
+            |_| false,
+        ) {
+            Ok(Some(Some(opening))) => {
+                use bilibi_finance_ledger::JournalStatus;
+                let (state, status) = match (opening.status, opening.reversed_by_entry_id) {
+                    (_, Some(_)) => (SetupState::Incomplete, "was posted and has been reversed"),
+                    (JournalStatus::Approved, _) => (SetupState::SetUp, "is posted"),
+                    (JournalStatus::Submitted, _) => (SetupState::Incomplete, "is awaiting approval"),
+                    (JournalStatus::Rejected, _) => (SetupState::Incomplete, "was rejected"),
+                    (JournalStatus::Withdrawn, _) => (SetupState::Incomplete, "was withdrawn"),
+                };
+                (state, format!("Opening journal {} dated {} {status}. Open invoices, bills and historical transactions are excluded; this does not establish a complete conversion.", opening.journal_number, opening.conversion_date))
+            }
+            Ok(Some(None)) => (SetupState::NotSetUp, "No opening balances have been submitted. Only needed when converting from another accounting system; a new company can start without them.".into()),
+            Err(state) => (state, failed(state)),
+            Ok(None) => unreachable!("`missing` is never true for opening balances"),
+        };
         areas.push(area(
             "opening-balances",
             "Opening balances",
             true,
             "/finance/ledger/opening-balances",
-            SetupState::NotTracked,
-            "For a company converting from another accounting system: submit the closing trial balance as one journal for approval. A new company does not need it.",
+            state,
+            summary,
         ));
 
         areas.push(

@@ -69,6 +69,7 @@ records (`Book`, `Account`, `Entry`, `FiscalYear`, `Period`, `ClosingEvent`,
 | `list_approval_exceptions`, `get_approval_exception` | `finance.ledger.view` | The exceptions log with each review; `ExceptionNotFound` |
 | `review_approval_exception` | `finance.ledger.approval-exceptions.review` | An independent reviewer's reading of one exception, optional `note` |
 | `submit_journal` | `finance.ledger.journals.submit` | Keeps a manual journal for approval (see Manual journals) |
+| `opening_progress` | `finance.ledger.view` | Latest opening submission, approval status, entry and any reversal; `None` before submission; measures opening balances only |
 | `submit_opening_balances` | `finance.ledger.journals.submit` | Maps source CSV to a balanced approval journal; identical source retries return that journal (see Accounting system conversion) |
 | `approve_journal` | `finance.ledger.journals.approve` | Posts a submitted journal as an entry by its approver |
 | `reject_journal` | `finance.ledger.journals.approve` | Rejects a submitted journal with a `reason` |
@@ -112,6 +113,7 @@ H1 makes the facade-only writes reachable through the Platform's shared `/api/v1
 | `chart_template.apply` | `sections` names the optional parts to include (none by default). The review lists every group and account to be created; a chart that already has any is refused and never changed |
 | `journal.submit`, `journal.approve`, `journal.reject` | Submission does not post; approval posts once with separation of duties; rejection records a reason without posting. A line may carry `balance: true` instead of `debit` and `credit` (on at most one line): the preview and the commit give it the debit or credit that balances the other lines at the book's minor units, and refuse `balance` beside a `debit` or `credit`, on a second line, or when the other lines already match |
 | `journal.withdraw`, `journal.replace` | Only the journal's submitter, while it waits: withdrawal records an optional `reason` and posts nothing; replacement takes the `journal.submit` fields (including `balance`) plus `journal_id`, withdraws it and submits the correction, which needs its own approval |
+| `opening_balances.get` | Latest opening submission with journal number, conversion date, status, posted entry and reversal identifiers; `opening: null` before submission |
 | `opening_balances.submit` | Reviewed CSV mapping to one opening journal; source reference and exact CSV are retained; optional `replaces_journal_id` withdraws the submitter's waiting opening journal and takes its place; approval is separate |
 | `entry.reverse` | Mirror a manual entry once, never an owned or closing entry |
 | `fiscal_year.open`, `fiscal_year.close`, `fiscal_year.reopen`, `fiscal_year.lock` | Open monthly periods, close with computed entry, reopen with closing reversal, or atomically lock all remaining closed periods |
@@ -147,7 +149,7 @@ The ledger has pages so a person without an AI agent can do the same daily work.
 | --- | --- | --- |
 | Book | `/finance/ledger/book` | Names the current company. Reads the currency and decimal places. Opens the book once: pick the currency from a searchable list (the company's base currency is proposed), review its decimal places, then confirm and choose who approves. Sees whether controlled bookkeeping and separation of duties are on. |
 | Company books | `/finance/ledger/books` | Lists every company the person may work in with its book (open, not open, no access), currency, latest fiscal year and earliest open period, and links each row to that company's fiscal years. See [Current company](#current-company-and-company-books). |
-| Chart of accounts | `/finance/ledger/accounts` | Searches and filters the chart (accounts and groups) with each account's balance and each group's total, adds an account in a dialog. With an empty chart it offers the starter charts: preview, tick the optional sections that apply, then apply, or start empty. |
+| Chart of accounts | `/finance/ledger/accounts` | Filters authorized companies' charts (default: current company), identifies each row's company and currency, and shows each account's balance and each group's total. Select one company to add an account in its named dialog. With an empty chart it offers the starter charts: preview, tick the optional sections that apply, then apply, or start empty. |
 | Account groups | `/finance/ledger/account-groups` | Lists the groups with what each holds and its total, adds a group in a dialog. |
 | (account record) | `/finance/ledger/accounts/{id}` | Edits the name and group in place, deactivates or activates the account, marks the retained earnings account, reads today's balance. |
 | (group record) | `/finance/ledger/account-groups/{id}` | Edits the name and the group it sits in, reads its total and what it holds. |
@@ -176,6 +178,15 @@ Journal entries use the shared period filter (`bilibi_datetime::PeriodFilter`, `
 Run the current-company proof with `--bin companies-ui` in place of `ledger-ui` below: it opens books in Companies 001 (MYR), 002 (JPY, a six-month first year) and 003 (USD, no fiscal year) of tenant 1, leaves the other 59 without a book, and signs in as `manager@example.test` (works in every company), `contractor@example.test` (Company 002 only) or `viewer@example.test` (no company).
 
 Run the proof on a disposable PostgreSQL 18 database with `DATABASE_URL=… APP_ORIGIN=http://127.0.0.1:4361 BIND_ADDR=127.0.0.1:4361 BILIBI_SETTINGS_KEY=$(openssl rand -hex 32) cargo run -p bilibi-finance-walkthrough-fixture --bin ledger-ui`. It seeds a chart, two fiscal years with closed periods, entries, and manual journals in each state, then drives the Journal entries period control through its live state, printing one `Journal entries period proof` line, and serves the app. Sign in as `manager@other.example.test` (submits), `reviewer@other.example.test` (approves) or `viewer@other.example.test` (reads), password `bilibi-dev`. Add `-- empty` to start with no book. [`screenshots/`](screenshots) shows the pages at desktop and phone width.
+
+### Comparing charts across companies
+
+The chart's Company filter offers only companies from the shared authorized company directory. It starts with the current company; an accountant with several companies can choose All companies. An accountant with one company sees only that company. Every chart, book and balance is read with an explicit company through its operation contract. No access, a book not open, an empty chart and unreadable balances remain distinct; an unreadable balance is shown as a dash, never zero.
+
+Every account row names its company and currency. Identical codes across companies remain separate accounts. Account and group links carry `?company=ID`; their pages identify that company, preserve it on Back and in sidebar pins, and bind every read, inline edit and confirmation to it. The top bar continues to show the session's current company: filtering and drill-through do not switch it or grant access. Journal entries still follow the current company, so an account belonging to another company asks the person to choose that company in the top bar before offering its entries link. Creation and starter-chart application require one selected company; changing the company filter drops any account draft or starter-chart review.
+
+This is a side-by-side operational comparison. Balances are not summed across companies, converted or consolidated. Practitioner validation of the default view and subsequent cross-company queues is tracked in [#103](https://github.com/BelimbingApp/bilibi-dom-finance/issues/103); consolidation scope in [#102](https://github.com/BelimbingApp/bilibi-dom-finance/issues/102), and bulk book opening in [#104](https://github.com/BelimbingApp/bilibi-dom-finance/issues/104).
+
 
 ## Capabilities
 
