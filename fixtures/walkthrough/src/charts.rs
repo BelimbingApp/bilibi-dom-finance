@@ -171,6 +171,16 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         json!(["sst"]),
         json!(["payroll"]),
         json!(["sst", "payroll"]),
+        json!([
+            "sst",
+            "payroll",
+            "inventory",
+            "intangibles",
+            "tax_recoverable",
+            "deposits",
+            "returns",
+            "finance_income"
+        ]),
     ] {
         let input = json!({"company_id": COMPANY, "template": TEMPLATE, "sections": sections});
         let mut tx = boundary
@@ -215,8 +225,8 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
     );
     tx.rollback().await?;
 
-    // The committed application ticks only the SST section; the payroll
-    // section was not chosen, so none of its rows are created.
+    // The committed application ticks only the SST section; no other
+    // section was chosen, so none of their rows are created.
     let sections = vec!["sst".to_owned()];
     let input = json!({"company_id": COMPANY, "template": TEMPLATE, "sections": sections});
 
@@ -257,9 +267,14 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         });
     let has = |code: &str| chart.iter().any(|a| a.code == code);
     println!(
-        "SST section created (2140, 2141, 2142): {}; payroll section omitted (2125, 2150, 2160, 6120, 6130, 6135): {}",
+        "SST section created (2140, 2141, 2142): {}; every other section omitted (2125, 2150, 2160, 6120, 6130, 6135, 1160, 1170, 1240, 1245, 6392, 2130, 4300, 4520): {}",
         ["2140", "2141", "2142"].iter().all(|c| has(c)),
-        ["2125", "2150", "2160", "6120", "6130", "6135"].iter().all(|c| !has(c)),
+        [
+            "2125", "2150", "2160", "6120", "6130", "6135", "1160", "1170", "1240", "1245", "6392",
+            "2130", "4300", "4520"
+        ]
+        .iter()
+        .all(|c| !has(c)),
     );
     println!(
         "created {} rows ({} groups, {} retained-earnings accounts); equal to the preview: {same}",

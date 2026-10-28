@@ -496,10 +496,14 @@ section), never a code identifier. One ships: `my-small-business`, a Malaysian s
 marked **draft, awaiting accountant review**. A person previews it on the Chart
 of accounts page (or an agent reads `chart_template.get`) and applies it with a
 reviewed write; nothing is created at install, on boot or when a book opens.
-Rows that only some businesses need belong to an optional **section** (`Registered for
-SST`: the sales and service tax payable group and its accounts; `Has employees`:
-net salaries payable, payroll deductions and employer contributions payable, and
-the employer EPF, SOCSO and EIS expenses). No section is chosen by default: the
+Rows that only some businesses need belong to an optional **section**, each with a
+one-line description of when to tick it: `Registered for SST` (the sales and service tax
+payable group and its accounts), `Has employees` (net salaries payable, payroll
+deductions and employer contributions payable, the employer EPF, SOCSO and EIS
+expenses), `Holds inventory`, `Has intangible assets` (at cost, accumulated
+amortisation, amortisation expense), `Has tax recoverable or advances`, `Takes
+customer deposits`, `Gives sales returns or allowances` and `Earns finance income`.
+No section is chosen by default: the
 preview shows a tickbox for each, the page and `chart_template.get` / `.apply`
 take the chosen keys as `sections` (the same input for a person and an agent),
 and the review lists exactly the rows that will be created. Rows of a section
