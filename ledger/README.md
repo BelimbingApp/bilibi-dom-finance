@@ -95,7 +95,7 @@ H1 makes the facade-only writes reachable through the Platform's shared `/api/v1
 
 | Suffix under `finance.ledger.` | Contract |
 | --- | --- |
-| `book.get` | Book or null, controlled-bookkeeping and duty-separation changes |
+| `book.get` | Book or null, the currency's name and standard decimal places (read by code, even if no longer enabled), controlled-bookkeeping and duty-separation changes |
 | `book.currencies` | The enabled currencies (code, name, ISO 4217 decimal places) matching an optional `search`, the proposed currency and its source, and `reference`: `iso4217` (currencies listed), `none_enabled` (list installed, nothing enabled) or `unavailable` (list not installed) |
 | `account.list` | Database-code-ordered chart; `after_code`, `next_after_code` |
 | `journal.get`, `journal.list` | Lines and decision; list by number with optional `status`, `after`, `next_after` |

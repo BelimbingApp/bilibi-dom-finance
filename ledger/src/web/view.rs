@@ -12,6 +12,12 @@ pub(crate) struct BookRow {
     pub minor_units: u8,
 }
 
+#[derive(Clone, Debug, Default, Deserialize)]
+pub(crate) struct BookCurrency {
+    pub currency_name: Option<String>,
+    pub standard_minor_units: Option<u32>,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub(crate) struct Change {
     pub controlled: Option<bool>,
@@ -21,6 +27,8 @@ pub(crate) struct Change {
 #[derive(Clone, Debug, Deserialize)]
 pub(crate) struct BookState {
     pub book: Option<BookRow>,
+    #[serde(default)]
+    pub currency: BookCurrency,
     pub controlled_bookkeeping: Option<Change>,
     pub duty_separation: Option<Change>,
 }

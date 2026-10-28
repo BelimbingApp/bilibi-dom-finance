@@ -955,7 +955,20 @@ impl ReadHandler for Read {
             let limit = input["page_size"].as_u64().unwrap_or(100).min(100) as usize;
             let result = match self {
                 Self::Book => {
-                    json!({"book":books::find(client,tenant,company).await?,"controlled_bookkeeping":bookkeeping::latest(client,tenant,company).await?,"duty_separation":duties::latest_change(client,tenant,company).await?,"latest_entry_date":entries::latest_date(client,tenant,company).await?})
+                    let book = books::find(client, tenant, company).await?;
+                    let currency = match &book {
+                        Some(book) => {
+                            currency::describe(
+                                client,
+                                scope,
+                                &book.currency_code,
+                                i64::from(book.minor_units.get()),
+                            )
+                            .await?
+                        }
+                        None => Value::Null,
+                    };
+                    json!({"book":book,"currency":currency,"controlled_bookkeeping":bookkeeping::latest(client,tenant,company).await?,"duty_separation":duties::latest_change(client,tenant,company).await?,"latest_entry_date":entries::latest_date(client,tenant,company).await?})
                 }
                 Self::Currencies => {
                     currency::options(
@@ -1259,7 +1272,7 @@ fn years_schema() -> Value {
 
 inventory::submit! { Contribution::new(DEFINITIONS,"finance/ledger.operations",Provenance { module:MODULE,source:file!(),line:line!() }, &Definitions {
     operations:&[
-        Operation {key:"finance.ledger.book.get",title:"Read the book",summary:"Read currency, minor units and bookkeeping controls; book is null before opening.",keywords:&[],capability:VIEW,input:target_schema,output,handler:Handler::Read(&Read::Book),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.ledger.book.get",title:"Read the book",summary:"Read currency, its name and standard decimal places, minor units and bookkeeping controls; book is null before opening.",keywords:&[],capability:VIEW,input:target_schema,output,handler:Handler::Read(&Read::Book),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.book.currencies",title:"Choose the book's currency",summary:"List the enabled currencies with their ISO 4217 decimal places, matching a code or name, and the proposed currency: the company's base currency, else the tenant's. reference is none_enabled when the list is installed but no currency is enabled (no book can open yet), and unavailable when the list was never installed (a code is then accepted unchecked).",keywords:&[],capability:VIEW,input:currencies_schema,output,handler:Handler::Read(&Read::Currencies),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.account.list",title:"List accounts",summary:"Read the chart by code with a bounded cursor page.",keywords:&[],capability:VIEW,input:accounts_schema,output,handler:Handler::Read(&Read::Accounts),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.journal.get",title:"Read a journal",summary:"Read lines, submission, decision, the approved entry identifier and whether it is the book's opening balances journal.",keywords:&[],capability:VIEW,input:journal_schema,output,handler:Handler::Read(&Read::Journal),channels:Channels::Every,step_up:&[]},

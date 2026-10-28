@@ -125,7 +125,7 @@ impl Book {
             Read::Found(value) => view::parse(value).unwrap_or_default(),
             _ => Options::default(),
         };
-        if !self.seeded {
+        if !self.seeded && !self.options.reference.is_empty() {
             self.seeded = true;
             if let Some(proposed) = &self.options.proposed {
                 self.currency = proposed.code.clone();
@@ -156,7 +156,6 @@ impl Book {
                 if on { yes } else { no },
             ))
         };
-        let listed = self.options.find(&book.currency_code);
         let mut body = render(SectionHeading {
             id: "ledger-book-heading",
             title: "Currency",
@@ -169,19 +168,19 @@ impl Book {
                 Fact {
                     title: "Currency",
                     id: "ledger-book-currency",
-                    value: Html::text(&match listed {
-                        Some(currency) => format!("{} — {}", book.currency_code, currency.name),
+                    value: Html::text(&match &state.currency.currency_name {
+                        Some(name) => format!("{} — {}", book.currency_code, name),
                         None => book.currency_code.clone(),
                     }),
                 },
                 Fact {
                     title: "Decimal places",
                     id: "ledger-book-units",
-                    value: Html::text(&match listed {
-                        Some(currency) if u32::from(book.minor_units) != currency.minor_units => {
+                    value: Html::text(&match state.currency.standard_minor_units {
+                        Some(standard) if u32::from(book.minor_units) != standard => {
                             format!(
                                 "{} (nonstandard; ISO 4217 uses {})",
-                                book.minor_units, currency.minor_units
+                                book.minor_units, standard
                             )
                         }
                         _ => book.minor_units.to_string(),

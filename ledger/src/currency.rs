@@ -195,6 +195,18 @@ pub(crate) fn default_units(chosen: &Chosen) -> std::result::Result<i64, FieldEr
         })
 }
 
+/// The same facts for an opened book's currency, found by code whether or not
+/// it is still enabled; `unchecked` when Core's list has no such code.
+pub(crate) async fn describe(
+    client: &dyn OperationClient,
+    scope: &Scope,
+    code: &str,
+    units: i64,
+) -> Result<Value> {
+    let currency = get(client, scope, code).await?;
+    Ok(facts(code, units, &currency))
+}
+
 /// What a review shows about the choice: the currency's name, its standard
 /// decimal places, and whether the chosen places differ from them.
 pub(crate) fn facts(code: &str, units: i64, chosen: &Chosen) -> Value {
