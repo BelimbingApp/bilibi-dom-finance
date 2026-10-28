@@ -6,7 +6,7 @@
 //! and `core.company.relationship.list`; each edit calls `customer.update`;
 //! a customer recorded before Core companies links through `customer.link`.
 use super::{
-    company_pick::{self, Chooser, Chosen, Relation},
+    company_pick::{self, Chooser, Relation, Submitted},
     format::{self as f, Errors},
     render, Flash, Pages, Written, CUSTOMERS, INVOICES, RECEIPTS,
 };
@@ -743,69 +743,29 @@ impl Customer {
         let Some(link) = self.link.as_mut() else {
             return Ok(());
         };
-        let company = match link
+        match link
             .chooser
-            .company(&pages.company_picker(), scope, credential, "link_customer")
-            .await?
-        {
-            Chosen::Company(id) => id,
-            Chosen::Invalid(errors) => {
-                link.errors = errors;
-                return Ok(());
-            }
-            Chosen::Refused(message) => {
-                link.errors = Errors::default();
-                self.flash.set(StatusKind::Error, message);
-                return Ok(());
-            }
-            Chosen::Review => {
-                link.errors = Errors::default();
-                return Ok(());
-            }
-        };
-        match pages
-            .write(
+            .submit_composed(
+                &pages.company_picker(),
                 scope,
                 credential,
                 "link_customer",
                 "finance.receivables.customer.link",
-                json!({"customer_id": self.id, "core_company_id": company}),
+                json!({"customer_id": self.id}),
             )
             .await?
         {
-            Written::Done(_) => {
-                let recorded = company_pick::record_relationship(
-                    &pages,
-                    scope,
-                    credential,
-                    "link_customer",
-                    company,
-                )
-                .await?;
-                let (kind, message) =
-                    company_pick::relationship_flash("Customer linked.", &recorded);
+            Submitted::Review => {
+                link.errors = Errors::default();
+            }
+            Submitted::Done(_) => {
                 self.link = None;
-                self.flash.set(kind, message);
+                self.flash.set(StatusKind::Success, "Customer linked.");
             }
-            Written::Invalid(fields) => {
-                // The contract names the company field as the agents do.
-                link.errors = Errors(
-                    fields
-                        .into_iter()
-                        .map(|(path, messages)| {
-                            (
-                                if path == "core_company_id" {
-                                    "company".to_owned()
-                                } else {
-                                    path
-                                },
-                                messages,
-                            )
-                        })
-                        .collect(),
-                );
+            Submitted::Invalid(fields) => {
+                link.errors = fields;
             }
-            Written::Refused(message) => {
+            Submitted::Refused(message) => {
                 self.link = None;
                 self.flash.set(
                     StatusKind::Error,

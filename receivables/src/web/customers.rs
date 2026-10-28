@@ -1,11 +1,11 @@
 //! The customers list and its Add customer dialog. Reads
 //! `finance.receivables.customer.list`; Add chooses or creates the Core
-//! company (`company_pick`), calls `customer.create`, then records the
-//! customer relationship from the current company.
+//! company (`company_pick`) and submits `customer.create`, which records
+//! the company, Finance customer and relationship in one transaction.
 use super::{
-    company_pick::{self, Chooser, Chosen},
+    company_pick::{Chooser, Submitted},
     format::{self as f, Errors},
-    render, Flash, Pages, Written, CUSTOMERS,
+    render, Flash, Pages, CUSTOMERS,
 };
 use crate::Customer;
 use bilibi_database::{Error, Result};
@@ -427,34 +427,10 @@ impl Customers {
             create.errors = local;
             return Ok(None);
         }
-        let company = match create
+        match create
             .chooser
-            .company(
+            .submit_composed(
                 &pages.company_picker(),
-                scope,
-                credential,
-                "create_customer",
-            )
-            .await?
-        {
-            Chosen::Company(id) => id,
-            Chosen::Invalid(errors) => {
-                create.errors = errors;
-                return Ok(None);
-            }
-            Chosen::Refused(message) => {
-                create.errors = Errors::default();
-                self.flash.set(StatusKind::Error, message);
-                return Ok(None);
-            }
-            Chosen::Review => {
-                create.errors = Errors::default();
-                return Ok(None);
-            }
-        };
-        input["core_company_id"] = json!(company);
-        match pages
-            .write(
                 scope,
                 credential,
                 "create_customer",
@@ -463,33 +439,21 @@ impl Customers {
             )
             .await?
         {
-            Written::Done(record) => {
-                let recorded = company_pick::record_relationship(
-                    &pages,
-                    scope,
-                    credential,
-                    "create_customer",
-                    company,
-                )
-                .await?;
-                let (kind, message) =
-                    company_pick::relationship_flash("Customer added.", &recorded);
+            Submitted::Review => {
+                create.errors = Errors::default();
+                Ok(None)
+            }
+            Submitted::Done(record) => {
                 self.create = None;
-                self.flash.set(kind, message);
+                self.flash.set(StatusKind::Success, "Customer added.");
                 self.load(scope).await?;
                 Ok(record["id"].as_i64().map(|id| format!("{CUSTOMERS}/{id}")))
             }
-            Written::Invalid(fields) => {
-                create.errors = Errors(fields);
-                if create.chooser.created.is_some() {
-                    self.flash.set(
-                        StatusKind::Warning,
-                        "The company was created in Companies, but the customer was not added yet. Fix the fields and add it again.",
-                    );
-                }
+            Submitted::Invalid(fields) => {
+                create.errors = fields;
                 Ok(None)
             }
-            Written::Refused(message) => {
+            Submitted::Refused(message) => {
                 self.create = None;
                 self.flash.set(
                     StatusKind::Error,

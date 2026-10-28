@@ -119,6 +119,11 @@ pub fn services(
 /// Company 001's book and chart through the ledger facade as the manager.
 pub async fn install(db: &Db, services: &Services) -> Result<Installed> {
     bilibi_walkthrough_fixture::install(db).await?;
+    // Fixture tenants are installed after migrations, through the Core defaults.
+    let client = db.get().await.map_err(Error::from)?;
+    bilibi_company::ensure_default_relationship_roles(&**client, 1).await?;
+    bilibi_company::ensure_default_relationship_roles(&**client, 2).await?;
+    drop(client);
     services
         .get::<Grants>("base/authz.grants")
         .map_err(Error::from)?

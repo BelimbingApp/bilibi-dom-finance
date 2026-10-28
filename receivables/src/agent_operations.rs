@@ -101,24 +101,60 @@ impl Write {
     }
     fn summary(self) -> &'static str {
         match self {
-            Self::BadDebt("submit") => "Propose an invoice-linked bad-debt journal; nothing posts until approval. No tax relief is inferred.",
-            Self::BadDebt("approve") => "Approve and post the bad-debt journal atomically with the invoice write-off. Revenue and tax remain unchanged.",
-            Self::BadDebt("reverse") => "Reverse the owned write-off journal and restore the invoice balance before recording any recovery receipt.",
-            Self::BadDebt(_) => "Reject the proposed bad-debt journal without posting; retain its evidence and decision.",
-            Self::Configure => "Change future document defaults; issued invoices keep their original control account.",
-            Self::Code(t,None) if t.name==SERIES.name => "Create a numbering series; code, kind, prefix and width are permanent.",
-            Self::Code(t,Some(_)) if t.name==SERIES.name => "Change the series name or active flag; preserve its numbering definition.",
-            Self::Code(t,None) if t.name==TAX.name => "Create a tax code; code and rate are permanent. Saved document snapshots do not change.",
-            Self::Code(t,Some(_)) if t.name==TAX.name => "Change tax code name, account or active flag; saved document snapshots do not change.",
-            Self::Code(_,None) => "Create a customer linked to a Core company, with its Finance code and payment terms; identity and contact details are read from Core.",
-            Self::Code(_,Some(_)) => "Change the customer's payment terms or availability; already issued documents retain their party snapshot.",
-            Self::Link => "Link a customer recorded before Core companies to its company, permanently; its own party fields stay as history.",
-            Self::Draft(false) => "Keep an unnumbered draft with rounded line and tax snapshots; no entry posts.",
-            Self::Draft(true) => "Change the draft; omitted lines keep snapshots, an array replaces them, and an empty array clears them.",
-            Self::Discard => "Discard the draft permanently, retaining its lines and totals without numbering or posting.",
-            Self::Issue => "Issue this saved invoice or credit note permanently: freeze party and due date, number it and post its owned entry.",
-            Self::Payment => "Number and post a receipt allocated in full to these invoices using their original control accounts.",
-            Self::Reverse => "Correct the receipt once with a dated mirror entry; retain its original record and allocations.",
+            Self::BadDebt("submit") => {
+                "Propose an invoice-linked bad-debt journal; nothing posts until approval. No tax relief is inferred."
+            }
+            Self::BadDebt("approve") => {
+                "Approve and post the bad-debt journal atomically with the invoice write-off. Revenue and tax remain unchanged."
+            }
+            Self::BadDebt("reverse") => {
+                "Reverse the owned write-off journal and restore the invoice balance before recording any recovery receipt."
+            }
+            Self::BadDebt(_) => {
+                "Reject the proposed bad-debt journal without posting; retain its evidence and decision."
+            }
+            Self::Configure => {
+                "Change future document defaults; issued invoices keep their original control account."
+            }
+            Self::Code(t, None) if t.name == SERIES.name => {
+                "Create a numbering series; code, kind, prefix and width are permanent."
+            }
+            Self::Code(t, Some(_)) if t.name == SERIES.name => {
+                "Change the series name or active flag; preserve its numbering definition."
+            }
+            Self::Code(t, None) if t.name == TAX.name => {
+                "Create a tax code; code and rate are permanent. Saved document snapshots do not change."
+            }
+            Self::Code(t, Some(_)) if t.name == TAX.name => {
+                "Change tax code name, account or active flag; saved document snapshots do not change."
+            }
+            Self::Code(_, None) => {
+                "Create the company when requested, link the Finance customer and record its current customer relationship in one transaction."
+            }
+            Self::Code(_, Some(_)) => {
+                "Change the customer's payment terms or availability; already issued documents retain their party snapshot."
+            }
+            Self::Link => {
+                "Create the company when requested and permanently link this customer with its current customer relationship in one transaction; historical party fields stay on record."
+            }
+            Self::Draft(false) => {
+                "Keep an unnumbered draft with rounded line and tax snapshots; no entry posts."
+            }
+            Self::Draft(true) => {
+                "Change the draft; omitted lines keep snapshots, an array replaces them, and an empty array clears them."
+            }
+            Self::Discard => {
+                "Discard the draft permanently, retaining its lines and totals without numbering or posting."
+            }
+            Self::Issue => {
+                "Issue this saved invoice or credit note permanently: freeze party and due date, number it and post its owned entry."
+            }
+            Self::Payment => {
+                "Number and post a receipt allocated in full to these invoices using their original control accounts."
+            }
+            Self::Reverse => {
+                "Correct the receipt once with a dated mirror entry; retain its original record and allocations."
+            }
         }
     }
     fn error(self, error: ReceivableError) -> bilibi_agent_api::Error {
@@ -165,13 +201,13 @@ impl Write {
                     }
                     _ => unreachable!(),
                 };
-                json!({"before":p.before,"after":p.after,"accounts":p.accounts,"company":p.company})
+                json!({"before":p.before,"after":p.after,"accounts":p.accounts,"target":p.target})
             }
             Self::Link => {
                 let p = service
                     .prepare_link(client, scope, company, id(input, "customer_id")?, input)
                     .await?;
-                json!({"before":p.before,"after":p.after,"company":p.company})
+                json!({"before":p.before,"after":p.after,"target":p.target})
             }
             Self::Draft(update) => {
                 let p = service
@@ -476,7 +512,7 @@ impl ReadHandler for Read {
                             // connection reads each linked company's facts.
                             let pooled = service.db.get().await.map_err(Error::from)?;
                             let mut records = Vec::with_capacity(rows.len());
-                            for row in rows { records.push(json!(service.customer_with_facts(&**pooled, scope, row).await?)); }
+                            for row in rows { records.push(json!(service.customer(&**pooled, scope, row).await?)); }
                             records
                         } else {
                             rows.into_iter().map(|r| {
@@ -591,11 +627,24 @@ fn customer_own_fields() -> Value {
 fn customer_party_fields() -> Value {
     json!({"name":string(200),"tax_identifier":string(50),"registration_identifier":string(50),"email":string(255),"phone":string(50),"line1":string(255),"line2":string(255),"line3":string(255),"locality":string(100),"postcode":string(20),"admin1_code":string(20),"country_iso":string(2)})
 }
+fn company_creation() -> Value {
+    object(
+        &["name"],
+        json!({
+            "name":string(160),"code":string(255),"status":choice(&["active","pending"]),
+            "legal_name":string(255),"registration_number":string(255),"tax_id":string(64),
+            "email":string(254),"phone":string(64),"website":string(255),"jurisdiction":string(2),
+            "parent_id":identifier(),"legal_entity_type_id":identifier(),
+            "create_anyway":object(&["candidate_ids","reason"],json!({"candidate_ids":{"type":"array","items":identifier()},"reason":string(500)}))
+        }),
+    )
+}
 fn customer_create() -> Value {
     let mut p = customer_own_fields();
     p["code"] = string(50);
-    p[LINK_FIELD] = json!({"type":"integer","minimum":1,"description":"The Core company this customer is (core.company.list, core.company.get); never the company invoicing it."});
-    schema(&["code", LINK_FIELD], p)
+    p[LINK_FIELD] = json!({"type":"integer","minimum":1,"description":"The Core company this customer is (core.company.list, core.company.get); omit when supplying new_company. Never the company invoicing it."});
+    p["new_company"] = company_creation();
+    schema(&["code"], p)
 }
 fn customer_update() -> Value {
     let mut p = customer_own_fields();
@@ -607,8 +656,8 @@ fn customer_update() -> Value {
 }
 fn customer_link() -> Value {
     schema(
-        &["customer_id", LINK_FIELD],
-        json!({"customer_id":identifier(),LINK_FIELD:{"type":"integer","minimum":1,"description":"The Core company this customer is."}}),
+        &["customer_id"],
+        json!({"customer_id":identifier(),LINK_FIELD:{"type":"integer","minimum":1,"description":"The Core company this customer is; omit when supplying new_company."},"new_company":company_creation()}),
     )
 }
 fn draft_fields() -> Value {
@@ -733,9 +782,9 @@ inventory::submit! { Contribution::new(DEFINITIONS,"finance/receivables.operatio
         Operation {key:"finance.receivables.series.update",title:"Change a numbering series",summary:"Change name or active flag; never change its code, kind, prefix or width.",keywords:&[],capability:MANAGE_SETUP,input:series_update,output,handler:Handler::SafeWrite(&Write::Code(SERIES,Some("series_id"))),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.tax_code.create",title:"Create a tax code",summary:"Create a percentage tax code on an active liability account. Also requires ledger view.",keywords:&[],capability:MANAGE_SETUP,input:tax_create,output,handler:Handler::SafeWrite(&Write::Code(TAX,None)),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.tax_code.update",title:"Change a tax code",summary:"Change name, account or active flag, preserving code and rate. Also requires ledger view.",keywords:&[],capability:MANAGE_SETUP,input:tax_update,output,handler:Handler::SafeWrite(&Write::Code(TAX,Some("tax_code_id"))),channels:Channels::Every,step_up:&[]},
-        Operation {key:"finance.receivables.customer.create",title:"Create a customer",summary:"Record a Core company as a customer of this company: a Finance code, payment terms and availability. Identity and contact details are the company's; record the customer relationship with core.company.relationship.assign.",keywords:&["company","party"],capability:MANAGE_CUSTOMERS,input:customer_create,output,handler:Handler::SafeWrite(&Write::Code(CUSTOMERS,None)),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.receivables.customer.create",title:"Create a customer",summary:"Record a Core company as a customer of this company: a Finance code, payment terms and availability. Supply core_company_id or new_company (Core duplicate review applies). Creates the company when requested, links it and records the current customer relationship atomically.",keywords:&["company","party"],capability:MANAGE_CUSTOMERS,input:customer_create,output,handler:Handler::SafeWrite(&Write::Code(CUSTOMERS,None)),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.customer.update",title:"Change a customer",summary:"Change payment terms or availability; a customer recorded before Core companies may still change its own party fields. Code, link and issued-document snapshots never change.",keywords:&[],capability:MANAGE_CUSTOMERS,input:customer_update,output,handler:Handler::SafeWrite(&Write::Code(CUSTOMERS,Some("customer_id"))),channels:Channels::Every,step_up:&[]},
-        Operation {key:"finance.receivables.customer.link",title:"Link a customer to its company",summary:"Link a customer recorded before Core companies to the Core company it is; permanent, and its issued documents keep their snapshots.",keywords:&["company","link"],capability:MANAGE_CUSTOMERS,input:customer_link,output,handler:Handler::SafeWrite(&Write::Link),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.receivables.customer.link",title:"Link a customer to its company",summary:"Supply core_company_id or new_company to permanently link a historical customer. Company creation, link and customer relationship commit together; issued snapshots stay unchanged.",keywords:&["company","link"],capability:MANAGE_CUSTOMERS,input:customer_link,output,handler:Handler::SafeWrite(&Write::Link),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.draft.create",title:"Create a receivables draft",summary:"Save an unnumbered invoice or credit note with derived amounts. Also requires ledger view and configured setup.",keywords:&[],capability:MANAGE_DOCUMENTS,input:draft_create,output,handler:Handler::SafeWrite(&Write::Draft(false)),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.draft.update",title:"Change a receivables draft",summary:"Change header or atomically replace lines; omit lines to keep snapshots. Also requires ledger view.",keywords:&[],capability:MANAGE_DOCUMENTS,input:draft_update,output,handler:Handler::SafeWrite(&Write::Draft(true)),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.draft.discard",title:"Discard a receivables draft",summary:"Keep the draft and its lines permanently as discarded, without numbering or posting.",keywords:&[],capability:MANAGE_DOCUMENTS,input:document,output,handler:Handler::SafeWrite(&Write::Discard),channels:Channels::Every,step_up:&[]},

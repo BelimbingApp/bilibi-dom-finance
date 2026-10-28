@@ -196,7 +196,7 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
     field(
         ar.issue_document(&admin, 1, draft.id).await,
         "customer_id",
-        "needs Companies view permission to freeze the company's details",
+        "needs Companies view permission to check the customer relationship",
     );
     grants
         .set_direct(&admin, admin.user(), bilibi_company::VIEW, None)
@@ -253,9 +253,8 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
     };
     assert_eq!(first.document_number, Some(1));
     assert_eq!(first.document_reference.as_deref(), Some("R2-INV-001"));
-    // The party frozen at issue is the company's as Core held it then; the
-    // billing address waits on a Core Address read for the issuing
-    // connection (TODO(platform)), so it is not frozen yet.
+    // The party is frozen as Core held it at issue. This company has no
+    // address attached; the receivables-companies proof covers dated addresses.
     assert_eq!(first.party_name.as_deref(), Some(party.name.as_str()));
     assert_eq!(first.party_tax_identifier, party.tax_id);
     assert_eq!(first.party_email, party.email);
@@ -1321,6 +1320,8 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         &json!({"reversal_date":"2026-10-11","reason":"Archived customer proof"}),
     )
     .await?;
-    println!("NR2 proof passed: numbering and rollback, immutable owned postings, dated/pinned reports, all 13 exports, SQL guards, row audits, tenant isolation, archive read-only (company restored active)");
+    println!(
+        "NR2 proof passed: numbering and rollback, immutable owned postings, dated/pinned reports, all 13 exports, SQL guards, row audits, tenant isolation, archive read-only (company restored active)"
+    );
     Ok(())
 }

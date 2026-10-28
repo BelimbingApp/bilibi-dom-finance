@@ -6,11 +6,9 @@
 //! customer relationship is then recorded from the current company through
 //! `core.company.relationship.assign`, Core's reviewed write.
 //!
-//! These are three writes, each reviewed and audited by its owner, not one
-//! transaction: Company exports neither its create nor a role or
-//! relationship read on a caller's connection, so Receivables cannot compose
-//! them in its own (TODO(platform)). The dialog says what was done when a
-//! later step is refused.
+//! `submit_composed` reviews and commits the customer's single operation,
+//! including Core's duplicate suggestions. The vendor's existing `company`
+//! flow still submits separate Core writes and reports a later refusal.
 use askama::Template;
 use bilibi_agent_api::{
     page::{Call, PageContracts},
@@ -66,6 +64,14 @@ pub enum Chosen {
     Refused(String),
     /// Likely duplicates were found; the dialog now shows them and waits
     /// for a choice or a reason.
+    Review,
+}
+
+/// The result of a single composed customer operation, including its duplicate review.
+pub enum CompanySubmission {
+    Done(Value),
+    Invalid(CompanyErrors),
+    Refused(String),
     Review,
 }
 
@@ -345,6 +351,101 @@ impl CompanyChooser {
         })
     }
 
+    /// Review and commit the owner's single operation. The owner accepts
+    /// either `core_company_id` or `new_company`, and exposes Core's duplicate
+    /// suggestions under `changes.target.creation` without creating anything.
+    pub async fn submit_composed(
+        &mut self,
+        pages: &CompanyPickerContext,
+        scope: &Scope,
+        credential: &str,
+        event: &str,
+        contract: &'static str,
+        mut input: Value,
+    ) -> Result<CompanySubmission> {
+        input["company_id"] = json!(match CompanyPickerContext::company(scope) {
+            Some(id) => id,
+            None => return Ok(CompanySubmission::Refused(DENIED.into())),
+        });
+        let reviewing = !self.candidates.is_empty() || self.likely;
+        match self.mode {
+            Mode::Existing => match self
+                .selected
+                .as_ref()
+                .and_then(|s| s.id.parse::<i64>().ok())
+            {
+                Some(id) => input["core_company_id"] = json!(id),
+                None => {
+                    return Ok(CompanySubmission::Invalid(errors_of(
+                        "company",
+                        "can't be blank",
+                    )));
+                }
+            },
+            Mode::New => {
+                let mut new = json!({});
+                for (key, ..) in NEW_FIELDS {
+                    put(&mut new, key, self.new.get(*key).map_or("", String::as_str));
+                }
+                if reviewing {
+                    if self.reason.is_empty() {
+                        return Ok(CompanySubmission::Invalid(errors_of(
+                            "company_reason",
+                            "can't be blank",
+                        )));
+                    }
+                    new["create_anyway"] = json!({"candidate_ids":self.candidates.iter().map(|c| c.id).collect::<Vec<_>>(),"reason":self.reason});
+                }
+                input["new_company"] = new;
+            }
+        }
+        let (code, review) = match pages
+            .review_core(scope, credential, event, contract, input.clone())
+            .await?
+        {
+            Reviewed::Valid { code, review } => (code, review),
+            Reviewed::Invalid(fields) => {
+                return Ok(CompanySubmission::Invalid(composed_errors(fields)));
+            }
+            Reviewed::Refused(message) => return Ok(CompanySubmission::Refused(message)),
+        };
+        let creation = &review["changes"]["target"]["creation"];
+        let candidates: Vec<Candidate> = creation["duplicate_candidates"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|c| {
+                Some(Candidate {
+                    id: c["id"].as_i64()?,
+                    name: c["name"].as_str()?.to_owned(),
+                    status: c["status"].as_str().unwrap_or("").into(),
+                    score: c["score"]
+                        .as_f64()
+                        .map(|s| format!("{:.0}%", s * 100.0))
+                        .unwrap_or_default(),
+                })
+            })
+            .collect();
+        let likely = creation["duplicates_likely"].as_bool().unwrap_or(false);
+        let changed = candidates.iter().map(|c| c.id).collect::<Vec<_>>()
+            != self.candidates.iter().map(|c| c.id).collect::<Vec<_>>();
+        if (!reviewing || changed) && (!candidates.is_empty() || likely) {
+            self.candidates = candidates;
+            self.likely = likely;
+            return Ok(CompanySubmission::Review);
+        }
+        Ok(
+            match pages
+                .commit_core(scope, credential, event, contract, &code, input)
+                .await?
+            {
+                Written::Done(record) => CompanySubmission::Done(record),
+                Written::Invalid(fields) => CompanySubmission::Invalid(composed_errors(fields)),
+                Written::Refused(message) => CompanySubmission::Refused(message),
+            },
+        )
+    }
+
     /// The company to link: the chosen one, or the one Core creates now from
     /// the new company's fields after its duplicate review. `event` is the
     /// page event the person raised, which the page declares for the Core
@@ -412,7 +513,7 @@ impl CompanyChooser {
                 return Ok(Chosen::Refused(worded(
                     message,
                     "You do not have permission to create companies.",
-                )))
+                )));
             }
         };
         if !reviewing {
@@ -525,7 +626,7 @@ pub async fn record_relationship(
             return Ok(Err(format!(
                 "you need permission to list companies to find the {} role",
                 pages.role
-            )))
+            )));
         }
         Err(error) => return Err(error),
     };
@@ -579,7 +680,9 @@ pub fn relationship_flash(
         ),
         Err(reason) => (
             StatusKind::Warning,
-            format!("{done} The {role} relationship was not recorded: {reason}. Record it on the company's Relationships page."),
+            format!(
+                "{done} The {role} relationship was not recorded: {reason}. Record it on the company's Relationships page."
+            ),
         ),
     }
 }
@@ -604,6 +707,30 @@ fn errors_of(path: &str, message: &str) -> CompanyErrors {
 /// Core's field names on the dialog's company fields. The dialog has no code
 /// field: Core derives the code from the name, so a taken code means a
 /// company of that name already exists and should be chosen instead.
+fn composed_errors(fields: BTreeMap<String, Vec<String>>) -> CompanyErrors {
+    CompanyErrors(
+        fields
+            .into_iter()
+            .map(|(field, messages)| {
+                let key = if field == "core_company_id" || field == "new_company" {
+                    "company".to_owned()
+                } else if let Some(field) = field.strip_prefix("new_company.") {
+                    if field == "create_anyway" {
+                        "company_reason".to_owned()
+                    } else if field == "code" {
+                        "company_name".to_owned()
+                    } else {
+                        format!("company_{field}")
+                    }
+                } else {
+                    field
+                };
+                (key, messages)
+            })
+            .collect(),
+    )
+}
+
 fn company_errors(fields: BTreeMap<String, Vec<String>>) -> CompanyErrors {
     CompanyErrors(
         fields
@@ -793,6 +920,10 @@ impl CompanyPickerContext {
             Err(ContractError::Forbidden | ContractError::Backend(Error::Forbidden)) => {
                 Ok(Written::Refused(DENIED.into()))
             }
+            Err(ContractError::StalePlan | ContractError::PlanExpired) => Ok(Written::Refused(
+                "The details changed or this review expired. Review them again before saving."
+                    .into(),
+            )),
             Err(ContractError::NotFound | ContractError::Backend(Error::NotFound)) => Ok(
                 Written::Refused("That record no longer exists. Reload the page.".into()),
             ),

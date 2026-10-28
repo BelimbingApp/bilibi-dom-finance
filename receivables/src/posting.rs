@@ -170,7 +170,7 @@ impl Receivables {
             if !customer.active {
                 return Err(invalid("customer_id", "is inactive"));
             }
-            Self::invoiceable(&customer)?;
+            self.invoiceable(client, scope, company, &customer).await?;
         }
         if series["active"] != true {
             return Err(invalid("series_id", "is inactive"));
@@ -244,22 +244,16 @@ impl Receivables {
         data["receivable_account_id"] = json!(control);
         data["issued_by_user_id"] = json!(scope.user());
         data["issued_by_impersonator_id"] = json!(scope.impersonator().map(|s| s.user()));
-        // The party frozen on the document. A linked customer's party is its
-        // company's: the name now, and the facts the commit reads from Core
-        // on its full connection (`frozen_party`); the columns it carried
-        // before linking are not copied and the billing address stays empty
-        // until Core Address offers a read for this connection
-        // (TODO(platform)). A customer recorded before linking freezes the
-        // party it carries.
+        // Preview and commit freeze the same Core facts on the handed connection.
         for field in crate::companies::PARTY {
-            data[format!("party_{field}")] = if customer.company.is_some() {
-                Value::Null
-            } else {
-                customer_row[field].clone()
-            };
+            data[format!("party_{field}")] = customer_row[field].clone();
         }
-        if customer.company.is_some() {
-            data["party_name"] = json!(customer.name);
+        if let Some(linked) = crate::companies::linked(&customer_row) {
+            let day = date.to_string().try_into().map_err(|_| Error::Internal)?;
+            let party = self.frozen_party(client, scope, linked, &day).await?;
+            for (field, value) in party.as_object().into_iter().flatten() {
+                data[field] = value.clone();
+            }
         }
         let mut lines = vec![if credit {
             NewLine::credit(control, draft.total)
@@ -318,17 +312,9 @@ impl Receivables {
             after: mut data,
             entry,
             options,
-            facts,
+            ..
         } = self.prepare_issue(tx.sql(), scope, company, id).await?;
         let tenant = scope.tenant();
-        // Freeze the linked company's facts on this full connection, under
-        // the issuer's own Companies view; a restricted fact refuses the issue.
-        if let Some(linked) = facts["linked_company_id"].as_i64() {
-            let party = self.frozen_party(tx.sql(), scope, linked).await?;
-            for (field, value) in party.as_object().into_iter().flatten() {
-                data[field] = value.clone();
-            }
-        }
         let entry = self
             .ledger
             .post_entry_in(tx, scope, company, &entry, &options)
@@ -467,7 +453,7 @@ impl Receivables {
                         return Err(invalid(
                             "document_id",
                             "is not an issued invoice of this customer",
-                        ))
+                        ));
                     }
                     other => other?,
                 };

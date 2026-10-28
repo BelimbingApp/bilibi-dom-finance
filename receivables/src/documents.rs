@@ -249,7 +249,13 @@ impl Receivables {
         if data["kind"] == "invoice" {
             // A new invoice needs a customer linked to an active company and
             // available for Finance; a credit note may name any customer.
-            Self::invoiceable(&self.customer(client, scope, customer.clone()).await?)?;
+            self.invoiceable(
+                client,
+                scope,
+                company,
+                &self.customer(client, scope, customer.clone()).await?,
+            )
+            .await?;
         }
         if data["kind"] == "credit_note" {
             let credited = store::find(

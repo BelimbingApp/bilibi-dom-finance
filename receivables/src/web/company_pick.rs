@@ -2,7 +2,7 @@
 use super::Pages;
 use bilibi_database::Result;
 pub(super) use bilibi_finance_ledger::{
-    ChosenCompany as Chosen, CompanyChooser as Chooser, CompanyRelation as Relation,
+    CompanyChooser as Chooser, CompanyRelation as Relation, CompanySubmission as Submitted,
 };
 use bilibi_tenancy::Scope;
 pub(super) async fn relation(pages: &Pages, scope: &Scope, target: i64) -> Result<Relation> {
@@ -23,10 +23,4 @@ pub(super) async fn record_relationship(
         target,
     )
     .await
-}
-pub(super) fn relationship_flash(
-    done: &str,
-    recorded: &std::result::Result<(), String>,
-) -> (bilibi_ui::StatusKind, String) {
-    bilibi_finance_ledger::company_relationship_flash("customer", done, recorded)
 }

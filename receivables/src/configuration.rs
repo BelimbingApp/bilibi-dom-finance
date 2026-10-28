@@ -3,8 +3,8 @@
 use crate::{
     authorize, companies, invalid,
     store::{self, Table, CUSTOMERS, HISTORY, SERIES, SETUPS, TAX},
-    validation as v, CompanyFacts, Customer, Page, ReceivableError as R, Receivables, Result,
-    Series, Setup, SetupChange, TaxCode, MANAGE_CUSTOMERS, MANAGE_SETUP, VIEW,
+    validation as v, Customer, Page, ReceivableError as R, Receivables, Result, Series, Setup,
+    SetupChange, TaxCode, MANAGE_CUSTOMERS, MANAGE_SETUP, VIEW,
 };
 use bilibi_agent_api::OperationClient;
 use bilibi_database::{Error, MutationTransaction};
@@ -19,7 +19,7 @@ pub(super) struct Prepared {
     pub after: Value,
     pub accounts: Vec<Account>,
     /// The Core company a customer write links to, as the actor sees it.
-    pub company: Option<CompanyFacts>,
+    pub target: Option<companies::Target>,
 }
 
 /// What `customer.create` and `customer.link` name the Core company by.
@@ -100,7 +100,7 @@ impl Receivables {
             before: old,
             after: data,
             accounts,
-            company: None,
+            target: None,
         })
     }
 
@@ -200,7 +200,7 @@ impl Receivables {
         authorize(&**client, scope, company, VIEW).await?;
         let mut customers = Vec::new();
         for row in store::list(&**client, CUSTOMERS, scope.tenant(), company).await? {
-            customers.push(self.customer_with_facts(&**client, scope, row).await?);
+            customers.push(self.customer(&**client, scope, row).await?);
         }
         Ok(customers)
     }
@@ -210,11 +210,11 @@ impl Receivables {
         let row = store::find(&**client, CUSTOMERS, scope.tenant(), company, Some(id))
             .await?
             .ok_or(R::CustomerNotFound)?;
-        self.customer_with_facts(&**client, scope, row).await
+        self.customer(&**client, scope, row).await
     }
-    /// Creates a customer linked to a Core company (`core_company_id`): the
-    /// Finance code, payment terms and availability are the record's own;
-    /// everything about the business is read from Core.
+    /// Creates a customer for `core_company_id` or `new_company`. Core company
+    /// creation (with duplicate review), the customer and its current customer
+    /// relationship share one transaction. Finance retains only code and terms.
     pub async fn create_customer(
         &self,
         scope: &Scope,
@@ -235,7 +235,8 @@ impl Receivables {
         self.save_customer(scope, company, Some(id), attrs).await
     }
     /// Links a customer recorded before this module read Core to its company
-    /// (`core_company_id`). The link is permanent; the party fields it was
+    /// (`core_company_id` or `new_company`), recording its customer relationship
+    /// in the same transaction. The link is permanent; the party fields it was
     /// captured with stay on the row as history and the company's facts
     /// take over.
     pub async fn link_customer(
@@ -303,7 +304,7 @@ impl Receivables {
         let row = self
             .save_code_on(tx, scope, company, CUSTOMERS, id, attrs)
             .await?;
-        self.customer_with_facts(tx.sql(), scope, row).await
+        self.customer(tx.sql(), scope, row).await
     }
 
     /// The link a customer recorded before linking will get: the row as it
@@ -326,17 +327,15 @@ impl Receivables {
                 "is already linked; a customer's company never changes",
             ));
         }
-        let (linked, summary) = self
-            .linkable(client, scope, company, attrs, LINK_FIELD)
-            .await?;
+        let target = self.prepare_target(client, scope, company, attrs).await?;
         let mut data = old.clone();
         data["record_kind"] = json!(companies::KIND);
-        data["record_id"] = json!(linked.to_string());
+        data["record_id"] = json!(target.id.map(|id| id.to_string()));
         Ok(Prepared {
             before: Some(old),
             after: data,
             accounts: Vec::new(),
-            company: Some(summary),
+            target: Some(target),
         })
     }
 
@@ -350,10 +349,12 @@ impl Receivables {
     ) -> Result<Customer> {
         let Prepared {
             before: old,
-            after: data,
+            after: mut data,
             ..
         } = self
             .prepare_link(tx.sql(), scope, company, id, attrs)
+            .await?;
+        self.compose_target(tx, scope, company, attrs, &mut data)
             .await?;
         let tenant = scope.tenant();
         let row = tx
@@ -366,7 +367,7 @@ impl Receivables {
                 })
             })
             .await?;
-        self.customer_with_facts(tx.sql(), scope, row).await
+        self.customer(tx.sql(), scope, row).await
     }
 
     async fn code_list<T: DeserializeOwned>(
@@ -490,7 +491,7 @@ impl Receivables {
         v::text(&mut data, "code", true, 50)?;
         v::flag(&mut data, "active")?;
         let mut chart = Vec::new();
-        let mut company_summary = None;
+        let mut target = None;
         if customer {
             // The link is the create's; `customer.link` sets it later for a
             // customer recorded before this module read Core. Once linked,
@@ -498,16 +499,14 @@ impl Receivables {
             let linked = match old.as_ref() {
                 Some(old) => companies::linked(old),
                 None => {
-                    let (linked, summary) = self
-                        .linkable(client, scope, company, attrs, LINK_FIELD)
-                        .await?;
+                    let prepared = self.prepare_target(client, scope, company, attrs).await?;
                     data["record_kind"] = json!(companies::KIND);
-                    data["record_id"] = json!(linked.to_string());
-                    company_summary = Some(summary);
-                    Some(linked)
+                    data["record_id"] = json!(prepared.id.map(|id| id.to_string()));
+                    target = Some(prepared);
+                    None
                 }
             };
-            if linked.is_some() {
+            if linked.is_some() || target.is_some() {
                 if let Some(field) = companies::PARTY
                     .iter()
                     .find(|f| attrs.get(**f).is_some_and(|v| !v.is_null()))
@@ -584,7 +583,7 @@ impl Receivables {
             before: old,
             after: data,
             accounts,
-            company: company_summary,
+            target,
         })
     }
 
@@ -600,11 +599,15 @@ impl Receivables {
     ) -> Result<Value> {
         let Prepared {
             before: old,
-            after: data,
+            after: mut data,
             ..
         } = self
             .prepare_code(tx.sql(), scope, company, table, id, attrs)
             .await?;
+        if table.name == CUSTOMERS.name && id.is_none() {
+            self.compose_target(tx, scope, company, attrs, &mut data)
+                .await?;
+        }
         let tenant = scope.tenant();
         let new = tx
             .mutate(move |sql| {

@@ -8,6 +8,8 @@ license.workspace = true
 [dependencies]
 askama.workspace = true
 bilibi-agent-api.workspace = true
+bilibi-address.workspace = true
+bilibi-party.workspace = true
 bilibi-authz.workspace = true
 bilibi-company.workspace = true
 bilibi-database.workspace = true

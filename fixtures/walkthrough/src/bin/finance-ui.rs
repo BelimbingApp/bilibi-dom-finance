@@ -202,8 +202,8 @@ async fn main() -> Outcome<()> {
         let tax = ar.create_tax_code(&manager, COMPANY, &json!({"code":"SVC","name":"Service tax","rate":"6","account_id":account("2100")?})).await?;
         // Each customer is a Core company of this tenant, with a billing
         // address in Core Address; the first two are recorded as customers
-        // of Company 100 in Companies, the third is not yet (the page offers
-        // to record it), the fifth is still pending (new invoices refused).
+        // of Company 100 in Companies; Finance records the remaining links
+        // atomically. The fifth is pending (new invoices refused).
         let companies = services.get::<bilibi_company::CompanyService>(bilibi_company::SERVICE)?;
         let addresses = services.get::<bilibi_address::AddressService>(bilibi_address::SERVICE)?;
         let customer_role = companies
@@ -281,7 +281,7 @@ async fn main() -> Outcome<()> {
             {
                 bilibi_company::CreateOutcome::Created(company) => company,
                 bilibi_company::CreateOutcome::Refused(errors) => {
-                    return Err(format!("company {name} refused: {errors:?}").into())
+                    return Err(format!("company {name} refused: {errors:?}").into());
                 }
             };
             let target = bilibi_address::PartyId::Organisation(
@@ -623,7 +623,9 @@ async fn main() -> Outcome<()> {
         &db, services, &manager, &operator, COMPANY,
     )
     .await?;
-    println!("Finance browser fixture: {origin}; manager@other.example.test, reviewer@other.example.test, viewer@other.example.test; walkthrough password");
+    println!(
+        "Finance browser fixture: {origin}; manager@other.example.test, reviewer@other.example.test, viewer@other.example.test; walkthrough password"
+    );
     axum::serve(
         tokio::net::TcpListener::bind(std::env::var("BIND_ADDR")?).await?,
         bilibi_web::router(app),

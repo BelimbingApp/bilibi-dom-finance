@@ -4072,7 +4072,8 @@ mod company_picker;
 pub use company_picker::{
     record_relationship as record_company_relationship, relation as company_relation,
     relationship_flash as company_relationship_flash, Chosen as ChosenCompany, CompanyChooser,
-    CompanyErrors, CompanyPickerContext, Relation as CompanyRelation,
+    CompanyErrors, CompanyPickerContext, CompanySubmission, Relation as CompanyRelation,
+    Reviewed as CompanyReview,
 };
 
 pub use company_picker::company_billing_lines;

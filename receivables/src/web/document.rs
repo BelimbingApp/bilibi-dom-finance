@@ -11,7 +11,7 @@ use super::{
 use crate::{Customer, Document as Record, Payment, Series, TaxCode, ISSUE, MANAGE_DOCUMENTS};
 use bilibi_database::{Error, Result};
 use bilibi_datetime::DisplayContext;
-use bilibi_finance_ledger::Money;
+use bilibi_finance_ledger::{CompanyReview, Money};
 use bilibi_tenancy::Scope;
 use bilibi_ui::{
     page::{LiveBody, LiveFuture, LiveInput, LiveRequest, LiveState, PanelSpec},
@@ -59,6 +59,8 @@ pub(super) struct Document {
     statuses: CommitStates,
     flash: Flash,
     dialog: Option<Dialog>,
+    issue_review: Option<(String, Value)>,
+    issue_banner: Html,
     editing: Option<Lines>,
     lines_cols: ListColumns,
     tax_cols: ListColumns,
@@ -85,6 +87,8 @@ impl Document {
             statuses: CommitStates::default(),
             flash: Flash::default(),
             dialog: None,
+            issue_review: None,
+            issue_banner: Html::default(),
             editing: None,
             lines_cols: f::columns(
                 "receivables-invoice-lines-table",
@@ -506,6 +510,7 @@ impl Document {
                         f::optional(&d.party_registration_identifier),
                     ),
                     f::fact("Email", f::optional(&d.party_email)),
+                    f::fact("Phone", f::optional(&d.party_phone)),
                     f::fact(
                         "Address",
                         &if lines.is_empty() {
@@ -776,18 +781,46 @@ impl Document {
             Some(self.lines_dialog(lines)?)
         } else {
             match self.dialog {
-                Some(Dialog::Issue) => Some(render(ConfirmDialog {
-                    id: "receivables-invoice-issue-confirm",
-                    consequence: &format!("Issue this {}?", kind.to_lowercase()),
-                    detail: &format!(
-                        "It is numbered from its series and posted to the ledger for {}. After that it can no longer be edited; a mistake is corrected with a credit note.",
-                        self.figures.with_currency(d.total, &d.currency_code)
-                    ),
-                    confirm: "Issue",
-                    working: "Issuing…",
-                    confirm_event: "issue",
-                    cancel_event: "cancel_dialog",
-                })?),
+                Some(Dialog::Issue) => {
+                    let party = self
+                        .issue_review
+                        .as_ref()
+                        .map(|(_, review)| &review["changes"]["after"]);
+                    let items = [
+                        ("party_name", "Name"),
+                        ("party_tax_identifier", "Tax ID"),
+                        ("party_registration_identifier", "Registration number"),
+                        ("party_email", "Email"),
+                        ("party_phone", "Phone"),
+                        ("party_line1", "Address line 1"),
+                        ("party_line2", "Address line 2"),
+                        ("party_line3", "Address line 3"),
+                        ("party_locality", "City"),
+                        ("party_postcode", "Postcode"),
+                        ("party_admin1_code", "State or region"),
+                        ("party_country_iso", "Country code"),
+                    ]
+                    .into_iter()
+                    .map(|(field, label)| {
+                        f::fact(label, party.and_then(|p| p[field].as_str()).unwrap_or("—"))
+                    })
+                    .collect();
+                    Some(render(IssueConfirmation {
+                        consequence: format!("Issue this {}?", kind.to_lowercase()),
+                        detail: format!(
+                            "It is numbered and posted for {}. These customer details will be kept on the document. After issue, it cannot be edited.",
+                            self.figures.with_currency(d.total, &d.currency_code)
+                        ),
+                        body: {
+                            let mut body = self.issue_banner.clone();
+                            body.push(&render(Facts {
+                                id: "receivables-invoice-party-review",
+                                items,
+                            })?);
+                            body
+                        },
+                    })?)
+                }
                 Some(Dialog::Discard) => Some(render(ConfirmDialog {
                     id: "receivables-invoice-discard-confirm",
                     consequence: "Discard this draft?",
@@ -1069,10 +1102,44 @@ impl Document {
                 self.applied_cols.handle(&params::string_values(v));
             }
             "save_draft" => self.save_field(scope, credential, v).await?,
-            "cancel_dialog" => self.dialog = None,
+            "cancel_dialog" => {
+                self.dialog = None;
+                self.issue_review = None;
+            }
             "ask_issue" => {
                 if self.can_issue && self.draft() {
-                    self.dialog = Some(Dialog::Issue);
+                    let mut input = json!({"document_id":self.id});
+                    input["company_id"] = json!(Pages::company(scope));
+                    match self
+                        .pages
+                        .company_picker()
+                        .review_core(
+                            scope,
+                            credential,
+                            "ask_issue",
+                            "finance.receivables.document.issue",
+                            input,
+                        )
+                        .await?
+                    {
+                        CompanyReview::Valid { code, review } => {
+                            self.issue_banner = self
+                                .pages
+                                .plans
+                                .instance()
+                                .await?
+                                .banner("receivables-issue-instance", "mb-4")
+                                .map_err(|_| Error::Internal)?;
+                            self.issue_review = Some((code, review));
+                            self.dialog = Some(Dialog::Issue);
+                        }
+                        CompanyReview::Invalid(fields) => {
+                            self.flash.set(StatusKind::Error, f::sentences(&fields))
+                        }
+                        CompanyReview::Refused(message) => {
+                            self.flash.set(StatusKind::Error, message)
+                        }
+                    }
                 } else {
                     self.flash.set(
                         StatusKind::Error,
@@ -1098,17 +1165,36 @@ impl Document {
                 } else {
                     ("discard", "finance.receivables.draft.discard")
                 };
-                match self
-                    .pages
-                    .write(
-                        scope,
-                        credential,
-                        event,
-                        contract,
-                        json!({"document_id": self.id}),
-                    )
-                    .await?
-                {
+                let written = if issue {
+                    let Some((code, _)) = self.issue_review.take() else {
+                        self.flash
+                            .set(StatusKind::Error, "Review this invoice before issuing it.");
+                        return Ok(());
+                    };
+                    let input = json!({"company_id":Pages::company(scope),"document_id":self.id});
+                    let answer = self
+                        .pages
+                        .contracts
+                        .commit(
+                            &Pages::call(scope, credential, event, contract),
+                            &code,
+                            input,
+                        )
+                        .await
+                        .map(|mut value| value["results"][0]["result"].take());
+                    Pages::written(contract, event, answer)?
+                } else {
+                    self.pages
+                        .write(
+                            scope,
+                            credential,
+                            event,
+                            contract,
+                            json!({"document_id":self.id}),
+                        )
+                        .await?
+                };
+                match written {
                     Written::Done(record) => {
                         self.flash.set(
                             StatusKind::Success,
@@ -1290,4 +1376,15 @@ impl LiveState<Scope, Error> for Document {
             query: HashMap::new(),
         }]
     }
+}
+
+#[derive(askama::Template)]
+#[template(
+    source = r#"{% import "dialog.html" as ui %}{% call ui::confirm_dialog(id="receivables-invoice-issue-confirm", consequence=consequence, detail=detail, confirm="Issue", working="Issuing…", confirm_event="issue", cancel_event="cancel_dialog", body=body) %}{% endcall %}"#,
+    ext = "html"
+)]
+struct IssueConfirmation {
+    consequence: String,
+    detail: String,
+    body: Html,
 }

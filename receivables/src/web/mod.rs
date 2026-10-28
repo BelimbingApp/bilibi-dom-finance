@@ -53,6 +53,7 @@ pub(super) const READ_LIMIT: usize = 2000;
 pub(crate) struct Pages {
     pub db: Db,
     pub contracts: Arc<PageContracts>,
+    pub plans: Arc<bilibi_agent_api::plans::Plans>,
     pub display: Arc<DisplayPolicy>,
     pub locales: Arc<Locales>,
     pub parties: Arc<bilibi_tenancy::PartyProofs>,
@@ -157,19 +158,12 @@ inventory::submit! { Contribution::new(PAGE_WRITES, PAGES, Provenance { module: 
         ("create_customer", "finance.receivables.customer.create"),
         ("save_customer", "finance.receivables.customer.update"),
         ("link_customer", "finance.receivables.customer.link"),
-        // Adding or linking a customer may also create the company it is and
-        // records the customer relationship, through Core's own reviewed
-        // writes (`company_pick.rs`); the host permits them by the event the
-        // browser raised, so each event names every contract it may call.
-        ("create_customer", "core.company.create"),
-        ("create_customer", "core.company.relationship.assign"),
-        ("link_customer", "core.company.create"),
-        ("link_customer", "core.company.relationship.assign"),
         ("record_relationship", "core.company.relationship.assign"),
         ("create_draft", "finance.receivables.draft.create"),
         ("save_draft", "finance.receivables.draft.update"),
         ("save_lines", "finance.receivables.draft.update"),
         ("discard", "finance.receivables.draft.discard"),
+        ("ask_issue", "finance.receivables.document.issue"),
         ("issue", "finance.receivables.document.issue"),
         ("save_receipt", "finance.receivables.payment.record"),
         ("reverse", "finance.receivables.payment.reverse"),
@@ -379,6 +373,10 @@ impl Pages {
             Err(ContractError::Forbidden | ContractError::Backend(Error::Forbidden)) => {
                 Ok(Written::Refused(DENIED.into()))
             }
+            Err(ContractError::StalePlan | ContractError::PlanExpired) => Ok(Written::Refused(
+                "The details changed or this review expired. Review them again before saving."
+                    .into(),
+            )),
             Err(ContractError::NotFound | ContractError::Backend(Error::NotFound)) => Ok(
                 Written::Refused("That record no longer exists. Reload the page.".into()),
             ),

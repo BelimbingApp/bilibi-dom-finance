@@ -7,7 +7,6 @@ use bilibi_party_ids::OrganisationId;
 use bilibi_tenancy::{PartyProofs, Scope};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tokio_postgres::GenericClient;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompanyFacts {
@@ -83,7 +82,7 @@ impl<'a> CompanyLinks<'a> {
     /// stays as it is. A restricted fact stays `None` and is named.
     pub async fn company_facts(
         &self,
-        client: &(impl GenericClient + Sync),
+        client: &dyn OperationClient,
         scope: &Scope,
         company: &mut CompanyFacts,
     ) -> Result<()> {
@@ -114,12 +113,11 @@ impl<'a> CompanyLinks<'a> {
 
     /// The party an issued document freezes for a linked customer: the
     /// company's name and the facts the issuer may read, none of them masked
-    /// (a mask is never frozen as a fact). The billing address is not frozen
-    /// yet: Core Address offers no read on the issuing connection
-    /// (TODO(platform)).
+    /// (a mask is never frozen as a fact). Record owners add the address
+    /// applicable to their document date through Core Address.
     pub async fn frozen_party(
         &self,
-        client: &(impl GenericClient + Sync),
+        client: &dyn OperationClient,
         scope: &Scope,
         id: i64,
         field: &'static str,
@@ -157,7 +155,9 @@ impl<'a> CompanyLinks<'a> {
         {
             return Err(invalid(
                 field,
-                format!("the company's {label} is restricted for you, so it cannot be frozen on the document"),
+                format!(
+                    "the company's {label} is restricted for you, so it cannot be frozen on the document"
+                ),
             ));
         }
         Ok(json!({

@@ -257,15 +257,13 @@ they govern this code and are not copied here.
   `Records::check` on the write's own connection), never a copy of the
   company's name, tax ID, contact details or address: read them on the handed
   connection as `ledger/src/company_links.rs` does (`PartyProofs::organisation_name`
-  for name and status on any connection, `bilibi_company::detail` for the
-  facts on a full one, under Core's own view capability and masks), freeze
-  them only at commit, and refuse a masked fact instead of freezing it. Core
-  exports no create, role or relationship read on a caller's connection and no
-  billing-address read, so the pages create the company and record the
-  relationship through Core's own contracts (`ledger/src/company_picker.rs`) and the
-  address is not frozen yet: these are Platform follow-ups
-  (BelimbingApp/bilibi#231), not something to work around with SQL on Core's
-  tables.
+  for name and status, `bilibi_company::detail` for facts under Core's own
+  view capability and masks). Receivables previews and freezes these facts and
+  the dated `bilibi_address::billing_address` on the handed connection, refusing
+  a masked fact. Its `customer.create` and `customer.link` compose Core's
+  `preview_create`, `create` and `assign_relationship` in the Finance transaction
+  (`receivables/src/companies.rs`); the vendor picker still uses separate Core
+  contracts (`ledger/src/company_picker.rs`). Never work around Core with SQL.
 - Never offer or accept an account receipts were paid into (`finance_receivables_payments.deposit_account_id`) as the receivable control account, nor the current control account, or an allocated invoice's saved control, as a receipt's deposit: `prepare_setup` (`receivables/src/configuration.rs`) and `record_payment` (`receivables/src/posting.rs`) refuse them for a person and an agent alike, and the settings page and receipt dialog leave them out of their choices. Receivables knows no account as "bank" beyond its own receipts.
 - Change receivable drafts through `Receivables`, not its tables: null/missing
   lines preserve snapshots, an array replaces them atomically, and discard
