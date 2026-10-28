@@ -234,7 +234,7 @@ impl State {
         match self
             .pages
             .display
-            .display(&**client, scope, scope.actor().organisation(), locale)
+            .display(&**client, scope, scope.current_company(), locale)
             .await
         {
             // TODO(platform): Settings' company proof requires an unarchived
@@ -287,11 +287,11 @@ impl State {
     }
 
     async fn event(&mut self, scope: &Scope, payload: &Value) -> Result<()> {
-        if scope.actor().organisation().is_none() {
+        if scope.current_company().is_none() {
             self.close();
             self.flash = Some((
                 StatusKind::Error,
-                "Use an account affiliated with the company to open its ledger.".into(),
+                "Choose a current company to open its ledger.".into(),
             ));
             return Ok(());
         }
@@ -540,12 +540,12 @@ impl State {
             subtitle,
             ..Header::default()
         })?];
-        if scope.actor().organisation().is_none() {
+        if scope.current_company().is_none() {
             self.close();
             parts.push(html(
                 EmptyState::missing(
-                    "No company is selected",
-                    "Use an account affiliated with the company to open its ledger.",
+                    "No current company",
+                    "Choose a current company to open its ledger.",
                 )
                 .id("reports-company-missing"),
             )?);
@@ -1210,8 +1210,7 @@ impl State {
 
 fn company(scope: &Scope) -> Result<i64> {
     scope
-        .actor()
-        .organisation()
+        .current_company()
         .map(|id| id.get())
         .ok_or(Error::Forbidden)
 }

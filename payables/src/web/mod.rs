@@ -331,7 +331,7 @@ impl Page<Scope, Error> for Pages {
 }
 
 fn company(scope: &Scope) -> Option<i64> {
-    scope.actor().organisation().map(|id| id.get())
+    scope.current_company().map(|id| id.get())
 }
 
 fn render(fragment: impl Template) -> Result<Html> {
@@ -404,7 +404,7 @@ impl Pages {
     /// The book's minor units, or none when the person may not read the book
     /// or it cannot be read: a page then shows amounts as stored.
     async fn units(&self, scope: &Scope) -> Option<bilibi_finance_ledger::MinorUnits> {
-        let company = scope.actor().organisation()?.get();
+        let company = scope.current_company()?.get();
         let book = self
             .contracts
             .read(
@@ -428,7 +428,7 @@ impl Pages {
         Option<bilibi_finance_ledger::MinorUnits>,
         Vec<(i64, String, String)>,
     )> {
-        let Some(company) = scope.actor().organisation().map(|c| c.get()) else {
+        let Some(company) = scope.current_company().map(|c| c.get()) else {
             return Ok((None, Vec::new()));
         };
         let mut input = serde_json::json!({"company_id":company});

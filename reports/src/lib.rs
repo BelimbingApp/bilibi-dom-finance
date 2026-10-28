@@ -34,6 +34,8 @@ mod controls;
 mod issued;
 mod layout;
 mod pack_owner;
+mod setup;
+mod setup_page;
 mod statement;
 mod web;
 
@@ -42,6 +44,7 @@ pub use bilibi_finance_ledger::{PostingEvent, PostingSubscription};
 pub use configuration::SECTIONS;
 pub use contributions::{CAPABILITIES, EXPORT, ISSUE};
 pub use issued::{EvidencePage, IssuedReport};
+pub use setup::{SetupArea, SetupOverview, SetupState};
 
 use bilibi_company::WriteError;
 use bilibi_database::{Change, Db, Error, MutationBoundary, MutationTransaction};
@@ -120,6 +123,12 @@ inventory::submit! {
                 reports: services.get(SERVICE)?,
                 display: services.get("base/datetime.display")?,
                 locales: services.get("base/locale.locales")?,
+            }))))
+        } }, Service { id: setup_page::PAGES, factory: |services| {
+            Ok(Arc::new(bilibi_ui::page::PageService::<Scope, Error>(Arc::new(setup_page::Pages {
+                db: services.get::<Db>("base/database.pool")?.as_ref().clone(),
+                contracts: services.get(bilibi_agent_api::page::SERVICE)?,
+                parties: services.get("base/tenancy.parties")?,
             }))))
         } }, Service { id: "finance/reports.downloads", factory: |services| {
             Ok(Arc::new(bilibi_ui::download::DownloadService::<Scope, Error>(Arc::new(auditor_pack::Downloads { reports: services.get(SERVICE)? }))))

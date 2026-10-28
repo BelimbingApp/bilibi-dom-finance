@@ -102,8 +102,10 @@ impl Book {
                 },
             }
         }
+        let company_name = self.pages.company_name(scope).await?;
         let mut page = render(Header {
             title: Html::text("Book"),
+            subtitle: &company_name,
             title_actions: super::menu_pin("ledger-book-pin", "nav-finance-ledger-book", "Book")?,
             ..Header::default()
         })?;

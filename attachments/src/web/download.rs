@@ -13,10 +13,9 @@ pub(crate) struct Downloads {
     pub attachments: Arc<Attachments>,
 }
 
-/// The company the scope's actor belongs to (Bilimbi
-/// `Scope.actor(scope).company_id`).
+/// The session's current company (Bilibi ADR 09); it grants nothing.
 pub(crate) fn company_of(scope: &Scope) -> Option<i64> {
-    scope.actor().organisation().map(|id| id.get())
+    scope.current_company().map(|id| id.get())
 }
 
 impl Download<Scope, Error> for Downloads {

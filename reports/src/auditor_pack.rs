@@ -806,8 +806,7 @@ impl Download<Scope, Error> for Downloads {
             }
             let company = request
                 .scope
-                .actor()
-                .organisation()
+                .current_company()
                 .ok_or(Error::NotFound)?
                 .get();
             let id = request.path.get("artifact_id").ok_or(Error::NotFound)?;

@@ -172,9 +172,9 @@ inventory::submit! { Contribution::new(PAGE_WRITES, PAGES, Provenance { module: 
 }) }
 
 impl Pages {
-    /// The company a person works in: the one their affiliation names.
+    /// The company a person works in now: the session's current company.
     pub(super) fn company(scope: &Scope) -> Option<i64> {
-        scope.actor().organisation().map(|id| id.get())
+        scope.current_company().map(|id| id.get())
     }
 
     pub(super) async fn allowed(&self, scope: &Scope, capability: &str) -> Result<bool> {
@@ -187,7 +187,7 @@ impl Pages {
     /// Display only: a company the directory cannot name is "Company
     /// unavailable", never a refusal.
     pub(super) async fn company_name(&self, scope: &Scope) -> String {
-        let Some(id) = scope.actor().organisation() else {
+        let Some(id) = scope.current_company() else {
             return "Company unavailable".into();
         };
         let Ok(c) = self.db.get().await else {

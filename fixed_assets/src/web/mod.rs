@@ -110,7 +110,7 @@ struct RecordPin<'a> {
     url: &'a str,
 }
 fn company(s: &Scope) -> Option<i64> {
-    s.actor().organisation().map(|p| p.get())
+    s.current_company().map(|p| p.get())
 }
 fn refusal(e: FixedAssetsError) -> String {
     use bilibi_finance_ledger::LedgerError;
@@ -306,7 +306,7 @@ impl Pages {
         Option<bilibi_finance_ledger::MinorUnits>,
         Vec<(i64, String, String, bool)>,
     )> {
-        let Some(company) = scope.actor().organisation().map(|c| c.get()) else {
+        let Some(company) = scope.current_company().map(|c| c.get()) else {
             return Ok((None, Vec::new()));
         };
         let mut input = serde_json::json!({"company_id":company});

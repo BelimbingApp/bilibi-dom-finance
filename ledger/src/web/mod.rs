@@ -6,6 +6,7 @@
 mod account;
 mod accounts;
 mod book;
+mod books;
 mod entries;
 mod entry;
 mod group;
@@ -73,6 +74,7 @@ route!(
     "opening"
 );
 route!("finance/ledger.book", "/finance/ledger/book", "book");
+route!("finance/ledger.books", "/finance/ledger/books", "books");
 route!(
     "finance/ledger.accounts",
     "/finance/ledger/accounts",
@@ -179,6 +181,12 @@ menu!(
     11
 );
 menu!("finance.ledger.book", "Book", "/finance/ledger/book", 12);
+menu!(
+    "finance.ledger.books",
+    "Company books",
+    "/finance/ledger/books",
+    13
+);
 
 // Every write these pages make is a ledger contract (ADR 01).
 inventory::submit! { Contribution::new(PAGE_WRITES, PAGES, Provenance { module: MODULE, source: file!(), line: line!() }, &PageWrites {
@@ -235,10 +243,11 @@ pub(crate) fn capability_for(event: &str) -> &'static str {
 }
 
 impl Pages {
-    /// The company the signed-in person works in: the one they are affiliated
-    /// with, as every Finance page reads it.
+    /// The company the signed-in person works in now: the session's current
+    /// company, as every Finance page reads it (Bilibi ADR 09). It chooses
+    /// where a page looks and grants nothing; the contract proves the reach.
     pub(crate) fn company(scope: &Scope) -> Option<i64> {
-        scope.actor().organisation().map(|id| id.get())
+        scope.current_company().map(|id| id.get())
     }
 
     pub(crate) async fn allowed(&self, scope: &Scope, capability: &str) -> Result<bool> {
@@ -253,7 +262,7 @@ impl Pages {
         let locale = self.locales.resolve(&**client, scope, None).await?.locale;
         match self
             .display
-            .display(&**client, scope, scope.actor().organisation(), locale)
+            .display(&**client, scope, scope.current_company(), locale)
             .await
         {
             // An archived company still shows its history; fall back to the
@@ -284,11 +293,24 @@ impl Pages {
         }
     }
 
-    /// A read contract, answered as a page reads it.
-    pub(crate) async fn read(&self, scope: &Scope, key: &str, mut input: Value) -> Result<Read> {
+    /// A read contract about the current company, answered as a page reads it.
+    pub(crate) async fn read(&self, scope: &Scope, key: &str, input: Value) -> Result<Read> {
         let Some(company) = Self::company(scope) else {
             return Ok(Read::NoCompany);
         };
+        self.read_in(scope, company, key, input).await
+    }
+
+    /// A read contract about a named company. The contract proves the reach
+    /// and the capability again, so a company the person cannot reach is
+    /// `Read::Denied`, never data.
+    pub(crate) async fn read_in(
+        &self,
+        scope: &Scope,
+        company: i64,
+        key: &str,
+        mut input: Value,
+    ) -> Result<Read> {
         input["company_id"] = json!(company);
         match self.contracts.read(scope, key, &input).await {
             Ok(value) => Ok(Read::Found(value["result"].clone())),
@@ -307,11 +329,24 @@ impl Pages {
         credential: &str,
         event: &str,
         contract: &'static str,
-        mut input: Value,
+        input: Value,
     ) -> Result<std::result::Result<Value, Failure>> {
         let Some(company) = Self::company(scope) else {
             return Ok(Err(Failure::Denied));
         };
+        self.submit_in(scope, company, credential, event, contract, input)
+            .await
+    }
+
+    pub(crate) async fn submit_in(
+        &self,
+        scope: &Scope,
+        company: i64,
+        credential: &str,
+        event: &str,
+        contract: &'static str,
+        mut input: Value,
+    ) -> Result<std::result::Result<Value, Failure>> {
         input["company_id"] = json!(company);
         let call = self.call(scope, credential, event, contract);
         match self.contracts.submit(&call, input).await {
@@ -328,11 +363,24 @@ impl Pages {
         credential: &str,
         event: &str,
         contract: &'static str,
-        mut input: Value,
+        input: Value,
     ) -> Result<std::result::Result<Review, Failure>> {
         let Some(company) = Self::company(scope) else {
             return Ok(Err(Failure::Denied));
         };
+        self.review_in(scope, company, credential, event, contract, input)
+            .await
+    }
+
+    pub(crate) async fn review_in(
+        &self,
+        scope: &Scope,
+        company: i64,
+        credential: &str,
+        event: &str,
+        contract: &'static str,
+        mut input: Value,
+    ) -> Result<std::result::Result<Review, Failure>> {
         input["company_id"] = json!(company);
         let call = self.call(scope, credential, event, contract);
         match self.contracts.preview(&call, input.clone()).await {
@@ -351,6 +399,43 @@ impl Pages {
             }
             Err(error) => Ok(Err(failure(error)?)),
         }
+    }
+
+    /// The current company's name, so a page can say whose book it shows.
+    /// Display only: a company the directory cannot name is "Company
+    /// unavailable", never a refusal.
+    pub(crate) async fn company_name(&self, scope: &Scope) -> Result<String> {
+        let Some(id) = scope.current_company() else {
+            return Ok(String::new());
+        };
+        let client = self.db.get().await?;
+        Ok(self
+            .parties
+            .organisation_name(&**client, scope, id)
+            .await?
+            .map(|company| company.name)
+            .unwrap_or_else(|| "Company unavailable".into()))
+    }
+
+    /// The companies the person may work in, by name: what the top bar's
+    /// switcher offers. Listing a company grants nothing; every read and
+    /// write below still proves its own target. Archived companies are left
+    /// out, as everywhere else.
+    pub(crate) async fn companies(&self, scope: &Scope) -> Result<Vec<Company>> {
+        let client = self.db.get().await?;
+        let mut list: Vec<Company> = self
+            .parties
+            .reachable_organisations(&**client, scope)
+            .await?
+            .into_iter()
+            .filter(|company| !company.archived)
+            .map(|company| Company {
+                id: company.id.get(),
+                name: company.name,
+            })
+            .collect();
+        list.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        Ok(list)
     }
 
     pub(crate) async fn commit(
@@ -431,9 +516,55 @@ impl Pages {
         &self,
         scope: &Scope,
     ) -> Result<std::result::Result<view::BookState, Read>> {
+        let Some(company) = Self::company(scope) else {
+            return Ok(Err(Read::NoCompany));
+        };
+        self.book_in(scope, company).await
+    }
+
+    /// Every fiscal year of a named company, oldest first: the contract pages
+    /// 100 at a time and the pages follow its cursor.
+    pub(crate) async fn years_in(
+        &self,
+        scope: &Scope,
+        company: i64,
+    ) -> Result<std::result::Result<Vec<view::Year>, Read>> {
+        let mut all = Vec::new();
+        let mut after: Option<String> = None;
+        for _ in 0..20 {
+            let mut input = json!({"page_size": 100});
+            if let Some(date) = &after {
+                input["after_start_date"] = json!(date);
+            }
+            match self
+                .read_in(scope, company, "finance.ledger.fiscal_year.list", input)
+                .await?
+            {
+                Read::Found(value) => {
+                    all.extend(
+                        view::parse::<Vec<view::Year>>(value["records"].clone())
+                            .unwrap_or_default(),
+                    );
+                    after = value["next_after_start_date"].as_str().map(str::to_owned);
+                    if after.is_none() {
+                        break;
+                    }
+                }
+                other => return Ok(Err(other)),
+            }
+        }
+        Ok(Ok(all))
+    }
+
+    /// The book of a named company; see [`Pages::read_in`].
+    pub(crate) async fn book_in(
+        &self,
+        scope: &Scope,
+        company: i64,
+    ) -> Result<std::result::Result<view::BookState, Read>> {
         Ok(
             match self
-                .read(scope, "finance.ledger.book.get", json!({}))
+                .read_in(scope, company, "finance.ledger.book.get", json!({}))
                 .await?
             {
                 Read::Found(value) => match view::parse(value) {
@@ -444,6 +575,13 @@ impl Pages {
             },
         )
     }
+}
+
+/// A company the person may work in, named for a choice.
+#[derive(Clone, Debug)]
+pub(crate) struct Company {
+    pub id: i64,
+    pub name: String,
 }
 
 /// What a read contract answered.
@@ -701,8 +839,8 @@ pub(crate) fn shell(
 pub(crate) fn no_company(id: &str) -> Result<Html> {
     render(
         EmptyState::missing(
-            "No company to show",
-            "Use an account that belongs to a company to see its ledger.",
+            "No current company",
+            "Choose a current company in the top bar to see its ledger.",
         )
         .id(id),
     )
@@ -949,6 +1087,7 @@ impl Page<Scope, Error> for Pages {
         Some(match operation {
             "opening" => "Opening balances",
             "book" => "Book",
+            "books" => "Company books",
             "accounts" => "Chart of accounts",
             "account" => "Account",
             "groups" => "Account groups",
@@ -993,6 +1132,7 @@ impl Pages {
         Ok(match r.operation {
             "opening" => Box::new(opening::Opening::new(pages, r.query)),
             "book" => Box::new(book::Book::new(pages)),
+            "books" => Box::new(books::Books::new(pages)),
             "accounts" => Box::new(accounts::Accounts::new(pages, r.query, r.framed)?),
             "account" => Box::new(account::Account::new(pages, id_param(r.path)?)),
             "groups" => Box::new(groups::Groups::new(pages, r.query, r.framed)?),
@@ -1001,7 +1141,7 @@ impl Pages {
             "entry" => Box::new(entry::Entry::new(pages, id_param(r.path)?)),
             "journals" => Box::new(journals::Journals::new(pages, r.query, r.framed)?),
             "journal" => Box::new(journal::Journal::new(pages, id_param(r.path)?)),
-            "years" => Box::new(years::Years::new(pages)),
+            "years" => Box::new(years::Years::new(pages, r.query)),
             "trial" => Box::new(trial::Trial::new(pages, r.query)),
             _ => return Err(Error::NotFound),
         })

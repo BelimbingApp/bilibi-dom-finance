@@ -1,6 +1,6 @@
 # Accountant access
 
-An External accountant can read and export one affiliated company's complete ledger and reports, and submit adjusting journals for an authorized company reviewer.
+An External accountant can read and export the complete ledger and reports of a company they work in (their current company), and submit adjusting journals for an authorized company reviewer.
 
 This is part of [Finance #61](https://github.com/BelimbingApp/bilibi-dom-finance/issues/61). It implements the [practitioner's draft/submit recommendation](https://github.com/BelimbingApp/bilibi-dom-finance/issues/61#issuecomment-6461497724), not the unresolved sales-only restriction. The agreed boundary permits posted payroll journal detail and denies the Payroll module and its per-employee source records.
 

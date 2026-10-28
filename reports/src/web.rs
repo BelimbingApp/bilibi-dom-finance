@@ -461,7 +461,7 @@ impl Pages {
         let client = self.reports.db.get().await?;
         let locale = self.locales.resolve(&**client, scope, None).await?.locale;
         self.display
-            .display(&**client, scope, scope.actor().organisation(), locale)
+            .display(&**client, scope, scope.current_company(), locale)
             .await
     }
 }
@@ -594,8 +594,7 @@ impl State {
 
 fn company(scope: &Scope) -> Result<i64> {
     scope
-        .actor()
-        .organisation()
+        .current_company()
         .map(|id| id.get())
         .ok_or(Error::Forbidden)
 }

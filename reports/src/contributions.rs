@@ -146,3 +146,21 @@ bilibi_menu::contribute!(
 inventory::submit! { Contribution::new(bilibi_module_registry::contributions::PAGE_WRITES, "finance/reports.section-pages", provenance!(), &bilibi_module_registry::contributions::PageWrites {
     service:"finance/reports.section-pages",contracts:&[("save_sections","finance.reports.sections.set")],pending:bilibi_module_registry::contributions::Pending::None,
 }) }
+
+// The Finance setup page: what the current company has set up and what remains.
+inventory::submit! { Contribution::new(ROUTES, "finance/reports.setup", provenance!(), &Route {
+    method: Method::Get, path: "/finance/setup", service: crate::setup_page::PAGES,
+    operation: "setup", access: Access::Capability(crate::VIEW), framed: true,
+}) }
+bilibi_menu::contribute!(
+    "finance/reports",
+    bilibi_menu::MenuItem::page("finance.reports.setup", "Finance setup", "/finance/setup")
+        .icon("gmdi-money-r")
+        .under("finance.group.bookkeeping")
+        .requires(bilibi_menu::Requirement::Capability(crate::VIEW))
+        .order(0)
+);
+// It reads through one contract and writes nothing.
+inventory::submit! { bilibi_module_registry::Contribution::new(bilibi_module_registry::contributions::PAGE_WRITES, crate::setup_page::PAGES, bilibi_module_registry::Provenance { module: MODULE, source: file!(), line: line!() }, &bilibi_module_registry::contributions::PageWrites {
+    service: crate::setup_page::PAGES, contracts: &[], pending: bilibi_module_registry::contributions::Pending::None,
+}) }

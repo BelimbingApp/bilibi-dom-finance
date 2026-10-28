@@ -120,6 +120,39 @@ async fn fence(
         .await?;
     Ok(())
 }
+/// The Finance setup of one company: which areas are set up and which remain.
+struct SetupRead;
+impl ReadHandler for SetupRead {
+    fn owner(&self) -> &'static str {
+        MODULE
+    }
+    fn call<'a>(
+        &'a self,
+        client: &'a dyn OperationClient,
+        scope: &'a Scope,
+        input: &'a Value,
+    ) -> OperationFuture<'a> {
+        Box::pin(async move {
+            let company = input["company_id"]
+                .as_i64()
+                .and_then(|id| OrganisationId::new(id).ok())
+                .ok_or_else(|| invalid("company_id", "Choose a company."))?;
+            PARTIES
+                .get()
+                .ok_or(Error::Internal)?
+                .organisation_target(client, scope, company, VIEW)
+                .await?;
+            // A read holds no company lock, so the facades' own connections are safe here.
+            let overview = OWNER
+                .get()
+                .ok_or(Error::Internal)?
+                .setup_overview(scope, company.get())
+                .await
+                .map_err(|_| Error::Internal)?;
+            Ok(json!(overview).into())
+        })
+    }
+}
 struct Layout;
 impl ReadHandler for Layout {
     fn owner(&self) -> &'static str {
@@ -192,6 +225,7 @@ fn output() -> Value {
 inventory::submit! { Contribution::new(DEFINITIONS,"finance/reports.layout-operations",Provenance {module:MODULE,source:file!(),line:line!()}, &Definitions {
     operations: &[
         Operation {key:"finance.reports.sections.get",title:"Read report sections",summary:"Read the company's headings and account choices.",keywords:&[],capability:VIEW,input:get_schema,output,handler:Handler::Read(&Layout),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.reports.setup.get",title:"Read the Finance setup",summary:"Read which Finance areas the company has set up and which remain, each with the page that sets it up. A step has a status only where its module can tell.",keywords:&["setup","onboarding","checklist"],capability:VIEW,input:get_schema,output,handler:Handler::Read(&SetupRead),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.reports.sections.set",title:"Arrange report sections",summary:"Replace the company's report headings and account choices in order.",keywords:&[],capability:MANAGE,input:set_schema,output,handler:Handler::SafeWrite(&Layout),channels:Channels::Every,step_up:&[]},
     ], guides:&[],
 }) }

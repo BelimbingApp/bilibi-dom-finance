@@ -14,7 +14,9 @@ exceptions are also available (NT3), alongside auditor-pack generation and downl
 
 ## Pages
 
-Both routes require `finance.ledger.view` and read the signed-in account's company through the facade. Reports has four addressable views (`view=overview`, `profit-and-loss`, `balance-sheet`, `cash-position`), the shared period filter (the latest month with entries by default, see First report and layout), and previous-period comparison (`compare=none` disables it except on Overview). Custom dates stay a draft until Apply range succeeds. The display policy and browser timezone decide the preset's calendar.
+**Finance setup** (`/finance/setup`, menu Finance, Bookkeeping, first) shows what the current company has set up and what remains, with a link to the page for each area. It is described under [Finance setup](#finance-setup) below; the two report routes follow.
+
+Both routes require `finance.ledger.view` and read the session's current company through the facade. Reports has four addressable views (`view=overview`, `profit-and-loss`, `balance-sheet`, `cash-position`), the shared period filter (the latest month with entries by default, see First report and layout), and previous-period comparison (`compare=none` disables it except on Overview). Custom dates stay a draft until Apply range succeeds. The display policy and browser timezone decide the preset's calendar.
 
 `Pin entry cutoff` puts the displayed positive entry number in `through`; `Show latest figures` removes it. This is not an issued snapshot. Every account-amount link carries its column's dates and the displayed cutoff, including `closing=excluded` for profit and loss. Account entries show whole-window debit and credit totals and 100 dated entries at a time; `Next entries` retains the cutoff and the `(after_date, after_id)` cursor. Activity does not subscribe to postings. Account entries keep that open from/to window: a figure's drill-down is one column's dates, not one of the shared period presets.
 
@@ -173,6 +175,14 @@ and the database's refusals.
 
 From the Platform root, with `DATABASE_URL` naming a disposable PostgreSQL 18 database, `cargo run -p bilibi-finance-walkthrough-fixture --bin reports-ui` exercises the mounted page contracts and prepares the browser fixture. It proves subscribe-before-read, a stale-click pin, pinned and unpinned notices, range draft/error retention, table compactness, four views, comparison off, unopened and forbidden ledgers, and account cursors at 99/100/101 entries with stable whole-window totals. Sign in as `manager@example.test` with the walkthrough password `bilibi-dev`, then open `/finance/reports`; running the same command with `-- post` commits a real later posting to demonstrate live refresh and pinned figures. These are executable fixture proofs, not unit tests or production seeds.
 
+## Finance setup
+
+`/finance/setup` is one page for the current company: the book, the chart of accounts and fiscal years ("Start here", the three a company needs before it can post), then the areas a company adds as it needs them (bookkeeping and approval controls, opening balances for a company converting from another system, receivables, payables, sales and service tax, e-invoicing, bank reconciliation, payroll postings, fixed assets, accountant access). It is the page of the contract `finance.reports.setup.get` (`Reports::setup_overview`), which an agent calls with a `company_id`; the page writes nothing.
+
+Reports owns it because it is the Finance module that already depends on every other, so no module learns of another. Each area asks its own module's facade and reports only what that module can tell: a setup record exists or it does not. The states are `set_up`, `not_set_up`, `incomplete` (e-invoicing lacks a credential; the chart has no retained-earnings account, which closing a fiscal year needs), `no_access` (the person works in the company but may not read that module's setup, so the page shows no status and no link), `unavailable` (the module could not answer) and `not_tracked` (opening balances and accountant access have nothing to measure and are links only). The count of required steps ("2 of 3") is shown only when all three could be read. Book currency and decimal places are chosen once and cannot be changed by a later default; this page does not propose a currency.
+
+A different company is set up by choosing it in the top bar; **Company books** (ledger) lists every company the person works in. The page's pin id is `nav-finance-reports-setup`.
+
 ## Bookkeeping and approval exceptions pages
 
 NT3 ports Bilimbi's `/finance/reports/bookkeeping` and `/finance/reports/approval-exceptions` pages. They use the ledger facade for controlled bookkeeping, fiscal years, late-recording reviews, separation of duties and independent exception reviews. Every write checks its capability when the event arrives and again inside the ledger's audited transaction.
@@ -183,7 +193,7 @@ Turning off controlled bookkeeping requires a reason and records an approval exc
 
 Run the page-service proof on a fresh disposable database with `DATABASE_URL=… cargo run -p bilibi-finance-walkthrough-fixture --bin report-controls`. It migrates and installs only walkthrough records, then exercises the actual page service and ledger: first fiscal year, invalid inputs, Unicode reasons, controlled overrides, date/review filters, independent reviews, stale grants, review races, archived-company refusals and PostgreSQL's append-only review guards. `-- --empty` installs the empty walkthrough state for comparison with the R1 reference captures before opening any book.
 
-The page's company is the sealed actor's affiliation, matching the other Finance pages. An account without an affiliation gets an explicit missing-company state. The page proof creates and binds the independent reviewer's Company 001 affiliation through the Core Affiliation and User facades; its administrator stays unaffiliated so this missing-context case remains covered.
+The page's company is the session's current company (`Scope::current_company()`), as on the other Finance pages. A scope with no current company gets an explicit missing-company state. The page proof creates and binds the independent reviewer's Company 001 affiliation through the Core Affiliation and User facades; its administrator stays unaffiliated so this missing-context case remains covered.
 
 Archived-company history remains readable. Until Base Settings accepts an archived company for display reads, these pages fall back to the user's tenant display clock, as the report facade already does for the unavailable company layout. The ledger still refuses every archived-company write; this display fallback only keeps that refusal visible on the live page.
 

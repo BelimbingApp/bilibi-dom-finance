@@ -754,8 +754,7 @@ impl State {
 
 fn company(scope: &Scope) -> Result<i64> {
     scope
-        .actor()
-        .organisation()
+        .current_company()
         .map(|id| id.get())
         .ok_or(Error::Forbidden)
 }
