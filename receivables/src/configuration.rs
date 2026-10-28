@@ -66,18 +66,17 @@ impl Receivables {
             AccountType::Asset,
         )?;
         v::account(&mut data, "income_account_id", &chart, AccountType::Income)?;
-        let control = data["receivable_account_id"].as_i64();
-        if control.is_some()
-            && old.as_ref().map(|o| o["receivable_account_id"].as_i64()) != Some(control)
+        let control = data["receivable_account_id"].as_i64().expect("validated account id");
+        let deposit = old.as_ref().map(|o| o["receivable_account_id"].as_i64()) != Some(Some(control))
             && client
-                .query_one(
+                .query(
                     "SELECT EXISTS (SELECT 1 FROM finance_receivables_payments WHERE tenant_id=$1 AND company_id=$2 AND deposit_account_id=$3)",
                     &[&tenant, &company, &control],
                 )
                 .await
-                .map_err(Error::from)?
-                .get::<_, bool>(0)
-        {
+                .map_err(Error::from)?[0]
+                .get::<_, bool>(0);
+        if deposit {
             return Err(crate::invalid(
                 "receivable_account_id",
                 "is an account receipts are paid into (a bank or cash account); choose the account that records amounts customers owe",
