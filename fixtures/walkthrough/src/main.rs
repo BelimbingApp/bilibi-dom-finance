@@ -1307,5 +1307,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     bilibi_finance_walkthrough_fixture::reconciliation_matching::run(&db, &services).await?;
     bilibi_finance_walkthrough_fixture::adopter_setup::reports(&db, &services).await?;
     bilibi_finance_walkthrough_fixture::charts::run(&db, &services).await?;
+    bilibi_finance_walkthrough_fixture::chart_templates::run(&db, &services).await?;
     Ok(())
 }

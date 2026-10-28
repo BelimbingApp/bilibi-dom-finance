@@ -1,6 +1,6 @@
 //! What the ledger adds to the shared catalogs (Bilimbi
 //! `Bilimbi.Finance.Ledger.Contributions`): the `finance` authorization
-//! domain, its verbs, the twelve capability keys verbatim, and the
+//! domain, its verbs, the ledger capability keys, and the
 //! `tenant_owner` role holding all of them. H1 agent operations are in
 //! `agent_operations.rs`; its pages and their menu items are in `web/`.
 use crate::MODULE;
@@ -10,6 +10,8 @@ use bilibi_module_registry::{Contribution, Provenance};
 /// The capability every ledger read asks for.
 pub const VIEW: &str = "finance.ledger.view";
 /// Opens a book and maintains the chart of accounts.
+pub const MANAGE_TEMPLATES: &str = "finance.ledger.templates.manage";
+/// Opens a book and maintains its chart.
 pub const MANAGE_ACCOUNTS: &str = "finance.ledger.accounts.manage";
 /// Posts and reverses journal entries.
 pub const POST_ENTRIES: &str = "finance.ledger.entries.post";
@@ -32,9 +34,10 @@ pub const APPROVE_JOURNALS: &str = "finance.ledger.journals.approve";
 /// Records an independent review of an approval exception.
 pub const REVIEW_EXCEPTIONS: &str = "finance.ledger.approval-exceptions.review";
 
-pub const CAPABILITIES: [&str; 12] = [
+pub const CAPABILITIES: [&str; 13] = [
     VIEW,
     MANAGE_ACCOUNTS,
+    MANAGE_TEMPLATES,
     POST_ENTRIES,
     MANAGE_PERIODS,
     REOPEN_PERIODS,
@@ -65,7 +68,7 @@ inventory::submit! { Contribution::new(VOCABULARY, "finance/ledger", provenance!
     domains: &["finance"],
     verbs: &["post", "reopen", "lock", "submit", "review"],
     capabilities: &[
-        C::tenant(VIEW), C::tenant(MANAGE_ACCOUNTS), C::tenant(POST_ENTRIES), C::tenant(MANAGE_PERIODS),
+        C::tenant(MANAGE_TEMPLATES), C::tenant(VIEW), C::tenant(MANAGE_ACCOUNTS), C::tenant(POST_ENTRIES), C::tenant(MANAGE_PERIODS),
         C::tenant(REOPEN_PERIODS), C::tenant(LOCK_PERIODS), C::tenant(MANAGE_DUTY_SEPARATION),
         C::tenant(MANAGE_CONTROLLED_BOOKKEEPING), C::tenant(REVIEW_LATE_RECORDINGS), C::tenant(SUBMIT_JOURNALS),
         C::tenant(APPROVE_JOURNALS), C::tenant(REVIEW_EXCEPTIONS),

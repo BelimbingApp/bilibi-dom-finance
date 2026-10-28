@@ -26,6 +26,8 @@ pub(crate) struct Change {
 
 #[derive(Clone, Debug, Deserialize)]
 pub(crate) struct BookState {
+    #[serde(default)]
+    pub starter_chart: Value,
     pub book: Option<BookRow>,
     /// Null until the book is opened.
     #[serde(default)]

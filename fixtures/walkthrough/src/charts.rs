@@ -49,7 +49,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
     let first_tenant_manager = sign_in(db, services, 1, 1).await?;
     let first_tenant_viewer = sign_in(db, services, 1, 2).await?;
 
-    for template in Ledger::chart_templates() {
+    for template in ledger.chart_templates(&manager, COMPANY).await? {
         let core: Vec<_> = template
             .rows
             .iter()
@@ -446,7 +446,9 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
     );
     println!(
         "the template's group 1100 is still named {:?}",
-        Ledger::chart_templates()
+        ledger
+            .chart_templates(&manager, COMPANY)
+            .await?
             .iter()
             .find(|t| t.key == TEMPLATE)
             .and_then(|t| t.rows.iter().find(|r| r.code == "1100"))

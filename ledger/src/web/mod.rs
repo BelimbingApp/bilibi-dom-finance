@@ -192,6 +192,10 @@ menu!(
 inventory::submit! { Contribution::new(PAGE_WRITES, PAGES, Provenance { module: MODULE, source: file!(), line: line!() }, &PageWrites {
     service: PAGES,
     contracts: &[
+        ("review_publication", "finance.ledger.chart_template.save"),
+        ("commit_publication", "finance.ledger.chart_template.save"),
+        ("review_publication", "finance.ledger.chart_template.propose"),
+        ("commit_publication", "finance.ledger.chart_template.propose"),
         ("review_open", "finance.ledger.book.open"),
         ("open_book", "finance.ledger.book.open"),
         ("create", "finance.ledger.account.create"),
@@ -248,6 +252,21 @@ impl Pages {
     /// where a page looks and grants nothing; the contract proves the reach.
     pub(crate) fn company(scope: &Scope) -> Option<i64> {
         scope.current_company().map(|id| id.get())
+    }
+
+    pub(crate) async fn company_name(&self, scope: &Scope) -> String {
+        let Some(id) = scope.current_company() else {
+            return "Company unavailable".into();
+        };
+        let Ok(client) = self.db.get().await else {
+            return "Company unavailable".into();
+        };
+        self.parties
+            .organisation_name(&**client, scope, id)
+            .await
+            .ok()
+            .flatten()
+            .map_or_else(|| "Company unavailable".into(), |o| o.name)
     }
 
     pub(crate) async fn allowed(&self, scope: &Scope, capability: &str) -> Result<bool> {
@@ -729,7 +748,7 @@ fn field_label(path: &str) -> String {
 fn failure(error: ContractError) -> Result<Failure> {
     Ok(match error {
         ContractError::Backend(error @ (Error::Unauthorized | Error::StepUpRequired { .. })) => {
-            return Err(error)
+            return Err(error);
         }
         ContractError::Forbidden | ContractError::Backend(Error::Forbidden) => Failure::Denied,
         ContractError::InvalidInput(fields) => Failure::Refused(Refusal {

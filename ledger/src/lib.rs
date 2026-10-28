@@ -66,6 +66,7 @@ mod accounts;
 mod agent_operations;
 mod bookkeeping;
 mod books;
+mod configuration;
 mod contributions;
 mod currency;
 mod duties;
@@ -79,18 +80,20 @@ mod opening;
 mod opening_csv;
 mod periods;
 mod postings;
+mod saved_templates;
 mod templates;
 mod totals;
 mod web;
 
 pub use contributions::{
     APPROVE_JOURNALS, CAPABILITIES, LOCK_PERIODS, MANAGE_ACCOUNTS, MANAGE_CONTROLLED_BOOKKEEPING,
-    MANAGE_DUTY_SEPARATION, MANAGE_PERIODS, POST_ENTRIES, REOPEN_PERIODS, REVIEW_EXCEPTIONS,
-    REVIEW_LATE_RECORDINGS, SUBMIT_JOURNALS, VIEW,
+    MANAGE_DUTY_SEPARATION, MANAGE_PERIODS, MANAGE_TEMPLATES, POST_ENTRIES, REOPEN_PERIODS,
+    REVIEW_EXCEPTIONS, REVIEW_LATE_RECORDINGS, SUBMIT_JOURNALS, VIEW,
 };
 pub use evidence::EvidencePage;
 pub use money::{MinorUnits, Money, MoneyError};
 pub use opening::OpeningBalances;
+pub use saved_templates::NewChartTemplate;
 
 use bilibi_company::WriteError;
 use bilibi_database::{Change, Db, Error, MutationBoundary, MutationTransaction};
@@ -120,9 +123,11 @@ inventory::submit! {
             ("finance-ledger-006-journal-withdrawal", include_str!("../migrations/006-journal-withdrawal.sql")),
             ("finance-ledger-007-opening-balances", include_str!("../migrations/007-opening-balances.sql")),
             ("finance-ledger-008-account-groups", include_str!("../migrations/008-account-groups.sql")),
+            ("finance-ledger-009-chart-templates", include_str!("../migrations/009-chart-templates.sql")),
         ],
         services: &[Service { id: SERVICE, factory: |services| {
             agent_operations::bind(services.get("base/tenancy.parties")?)?;
+            saved_templates::bind(services.get("base/settings.store")?)?;
             currency::bind(
                 services.get("core/currency.currencies")?,
                 services.get("base/settings.store")?,
@@ -230,7 +235,9 @@ pub enum LedgerError {
     NotOwned,
     /// The approver prepared the record, impersonated whoever did, or was
     /// impersonated by them, while the company requires separation of duties.
-    #[error("Someone else must approve this because the company requires separation of duties, including when impersonating. For a one-person company, change Separation of duties on Approval exceptions: /finance/reports/approval-exceptions")]
+    #[error(
+        "Someone else must approve this because the company requires separation of duties, including when impersonating. For a one-person company, change Separation of duties on Approval exceptions: /finance/reports/approval-exceptions"
+    )]
     SamePerson,
     #[error("Not found")]
     ExceptionNotFound,
@@ -418,8 +425,8 @@ pub struct AccountGroupChange {
 }
 
 /// A starter chart: groups and accounts a company can start from, as data
-/// (`templates/*.json`). `review` says how far an accountant has checked it.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+/// (bundled JSON or a saved company snapshot). `review` states its review status.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChartTemplate {
     pub key: String,
     pub name: String,
@@ -437,14 +444,14 @@ pub struct ChartTemplate {
 }
 /// An optional part of a starter chart. Its rows are created only when a
 /// request chooses its `key`; none is chosen by default.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChartTemplateSection {
     pub key: String,
     pub name: String,
     pub description: String,
 }
 /// One group or account a starter chart creates.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChartTemplateRow {
     pub code: String,
     pub name: String,
@@ -459,7 +466,7 @@ pub struct ChartTemplateRow {
 /// the chosen sections and the core create, how many rows the company's chart already has, and which of
 /// the template's codes those use. A chart that has any row is never changed:
 /// `applicable` is true only for an empty one.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChartTemplatePreview {
     pub template: ChartTemplate,
     pub chosen_sections: Vec<String>,
@@ -468,7 +475,7 @@ pub struct ChartTemplatePreview {
     pub applicable: bool,
 }
 /// What applying a starter chart created.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChartTemplateApplied {
     pub key: String,
     pub sections: Vec<String>,
@@ -1185,8 +1192,8 @@ pub(crate) async fn chart_template_preview(
     key: &str,
     sections: &[String],
 ) -> Result<ChartTemplatePreview> {
-    let template = templates::require(key)?;
-    let rows = templates::select(template, sections)?;
+    let template = saved_templates::require(client, tenant, key).await?;
+    let rows = templates::select(&template, sections)?;
     let (existing_rows, conflicting_codes) =
         templates::existing(client, tenant, company_id, &rows).await?;
     Ok(ChartTemplatePreview {
@@ -1570,8 +1577,14 @@ impl Ledger {
     }
 
     /// The starter charts a company may choose from, each with its rows.
-    pub fn chart_templates() -> &'static [ChartTemplate] {
-        templates::all()
+    pub async fn chart_templates(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+    ) -> Result<Vec<ChartTemplate>> {
+        let client = self.db.get().await.map_err(Error::from)?;
+        authorize(&**client, scope, company_id, VIEW).await?;
+        saved_templates::all(&**client, scope.tenant()).await
     }
 
     /// What applying the starter chart `key` with the optional `sections`
@@ -1636,8 +1649,8 @@ impl Ledger {
                 ),
             )]));
         }
-        let template = templates::require(key)?;
-        let rows = templates::select(template, sections)?;
+        let template = preview.template;
+        let rows = template.rows.clone();
         let chosen = preview.chosen_sections;
         let applied = tx
             .mutate(move |sql| {
@@ -1645,7 +1658,7 @@ impl Ledger {
                     let mut ids: std::collections::BTreeMap<&str, i64> = Default::default();
                     let mut changes = Vec::new();
                     let (mut groups, mut accounts_made) = (0, 0);
-                    for row in rows {
+                    for row in &rows {
                         let valid = accounts::ValidAccount {
                             code: row.code.clone(),
                             name: row.name.clone(),

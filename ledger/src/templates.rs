@@ -105,7 +105,7 @@ fn parse(source: &str) -> std::result::Result<ChartTemplate, String> {
                     return Err(format!(
                         "{}: parent {parent} is not an earlier group of its type and section",
                         row.code
-                    ))
+                    ));
                 }
             }
         }
@@ -147,16 +147,6 @@ fn parse(source: &str) -> std::result::Result<ChartTemplate, String> {
             })
             .collect(),
         rows,
-    })
-}
-
-/// The template a request names, or the refusal in the words a form shows.
-pub(crate) fn require(key: &str) -> std::result::Result<&'static ChartTemplate, LedgerError> {
-    find(key).ok_or_else(|| {
-        LedgerError::Invalid(vec![crate::FieldError::new(
-            "template",
-            "is not a starter chart",
-        )])
     })
 }
 

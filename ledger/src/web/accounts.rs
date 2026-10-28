@@ -2,6 +2,7 @@
 //! book with its balance or group total, a dialog to add an account, and the
 //! starter charts a company with an empty chart can preview and apply. Each
 //! account's page is `account.rs`; groups are managed on `groups.rs`.
+mod publishing;
 use super::{
     account_name, capability_for, dialog_actions, error_text, event_type, figure, no_company,
     render, shell, unavailable, view, Failure, Flash, Pages, Read, Refusal, Review,
@@ -154,6 +155,7 @@ pub(super) struct Accounts {
     draft: Option<Draft>,
     preview: Option<Preview>,
     framed: bool,
+    publication: Option<publishing::Publication>,
 }
 
 impl Accounts {
@@ -188,6 +190,7 @@ impl Accounts {
             draft: query.get("new").is_some().then(Draft::new),
             preview: None,
             framed,
+            publication: None,
         })
     }
 
@@ -210,6 +213,23 @@ impl Accounts {
                     chart = listed;
                     let book = self.pages.book(scope).await?.ok();
                     let book_open = book.as_ref().is_some_and(|b| b.book.is_some());
+                    if self.pages.allowed(scope, crate::MANAGE_TEMPLATES).await? {
+                        for (event, label) in [
+                            ("propose_chart", "Template proposal"),
+                            ("publish_chart", "Save reusable chart"),
+                        ] {
+                            if event == "publish_chart" && chart.is_empty() {
+                                continue;
+                            }
+                            actions.push(&render(Button {
+                                id: &format!("ledger-{event}"),
+                                event,
+                                button_type: "button",
+                                body: Html::text(label),
+                                ..Button::default()
+                            })?);
+                        }
+                    }
                     if can_manage && book_open {
                         actions.push(&render(Button {
                             id: "ledger-account-groups-link",
@@ -278,6 +298,7 @@ impl Accounts {
                 ..Modal::default()
             })?);
         }
+        page.push(&self.publication_dialog()?);
         let mut query = self.list.to_params();
         if self.draft.is_some() {
             query.insert("new".into(), "1".into());
@@ -487,7 +508,9 @@ impl Accounts {
         let mut parents = vec![Choice::new("No group", "")];
         parents.extend(eligible.iter().map(|a| view::account_choice(a)));
         let parent_hint = if eligible.is_empty() {
-            format!("Optional. This company has no {type_word} account group yet. Add one on Account groups.")
+            format!(
+                "Optional. This company has no {type_word} account group yet. Add one on Account groups."
+            )
         } else {
             format!("Optional. An account group of the same type ({type_word}).")
         };
@@ -636,6 +659,13 @@ impl LiveState<Scope, Error> for Accounts {
                     }
                 }
                 LiveInput::Event(value) => match event_type(value)? {
+                    event @ ("publish_chart"
+                    | "propose_chart"
+                    | "validate_publication"
+                    | "review_publication"
+                    | "commit_publication"
+                    | "close_publication"
+                    | "publication_grid") => self.publication_event(&r, value, event).await?,
                     "filters" => self
                         .list
                         .apply_filters(&params::form_values(value, FILTERS_FORM)),
@@ -666,10 +696,15 @@ impl LiveState<Scope, Error> for Accounts {
                     }
                     "choose_sections" => {
                         if let Some(key) = self.preview.as_ref().map(|p| p.key.clone()) {
-                            let chosen: Vec<String> = params::form_values(value, "sections")
+                            let chosen: Vec<String> = self
+                                .preview
+                                .as_ref()
                                 .into_iter()
-                                .filter(|(_, ticked)| ticked == "true")
-                                .map(|(section, _)| section)
+                                .flat_map(|p| &p.sections)
+                                .filter(|s| {
+                                    value[format!("sections[{}]", s.key)].as_str() == Some("true")
+                                })
+                                .map(|s| s.key.clone())
                                 .collect();
                             self.ask_template(&r, "choose_sections", &key, &chosen)
                                 .await?;
@@ -702,17 +737,18 @@ impl Accounts {
         if self.preview.is_some() {
             return self.preview_card();
         }
-        let listed = match self
+        let response = match self
             .pages
             .read(scope, "finance.ledger.chart_template.list", json!({}))
             .await?
         {
-            Read::Found(value) => {
-                view::parse::<Vec<view::TemplateSummary>>(value["records"].clone())
-                    .unwrap_or_default()
-            }
-            _ => Vec::new(),
+            Read::Found(value) => value,
+            _ => json!({}),
         };
+        let mut listed = view::parse::<Vec<view::TemplateSummary>>(response["records"].clone())
+            .unwrap_or_default();
+        let proposed = response["proposal"]["configured"].as_str();
+        listed.sort_by_key(|t| Some(t.key.as_str()) != proposed);
         let mut body = render(SectionHeading {
             id: "ledger-starters-heading",
             title: "Start your chart of accounts",
@@ -722,6 +758,9 @@ impl Accounts {
             id: "ledger-starters-intro",
             text: "The chart is empty. Preview a starter chart and apply it, or start empty and add account groups and accounts yourself. Nothing is added until you apply.",
         })?);
+        if proposed.is_some() && !listed.iter().any(|t| Some(t.key.as_str()) == proposed) {
+            body.push(&render(Alert {id:"ledger-starter-unavailable",kind:StatusKind::Warning,body:Html::text("The proposed starter chart is unavailable. Choose another template or ask an administrator to change the proposal."),..Alert::default()})?);
+        }
         let mut html = render(Card {
             id: "ledger-starters-card",
             inner_class: "p-5 sm:p-6",
@@ -730,22 +769,28 @@ impl Accounts {
             body,
             ..Card::default()
         })?;
-        for template in listed.iter().filter(|t| t.applicable) {
+        for (index, template) in listed.iter().filter(|t| t.applicable).enumerate() {
             let mut card = render(SectionHeading {
-                id: "ledger-starter-heading",
+                id: &format!("ledger-starter-{index}-heading"),
                 title: &template.name,
                 ..SectionHeading::default()
             })?;
+            if Some(template.key.as_str()) == proposed {
+                card.push(&render(Badge::status(
+                    BadgeKind::Neutral,
+                    "Proposed starter chart",
+                ))?);
+            }
             card.push(&render(Badge::status(
                 BadgeKind::Warning,
                 &template.review,
             ))?);
             card.push(&render(Note {
-                id: "ledger-starter-description",
+                id: &format!("ledger-starter-{index}-description"),
                 text: &template.description,
             })?);
             card.push(&render(Note {
-                id: "ledger-starter-counts",
+                id: &format!("ledger-starter-{index}-counts"),
                 text: &format!(
                     "Creates {} account groups and {} accounts.{} You can rename them afterwards.",
                     template.groups,
@@ -766,7 +811,7 @@ impl Accounts {
                 ),
             })?);
             card.push(&render(Button {
-                id: "ledger-starter-preview",
+                id: &format!("ledger-starter-{index}-preview"),
                 button_type: "button",
                 event: "ask_template",
                 name: "template",
@@ -777,10 +822,10 @@ impl Accounts {
                 ..Button::default()
             })?);
             html.push(&render(Card {
-                id: "ledger-starter-card",
+                id: &format!("ledger-starter-{index}-card"),
                 inner_class: "p-5 sm:p-6",
                 role: "region",
-                labelledby: "ledger-starter-heading",
+                labelledby: &format!("ledger-starter-{index}-heading"),
                 body: card,
                 ..Card::default()
             })?);
@@ -1016,9 +1061,9 @@ impl Accounts {
     source = r#"<p id="{{ id }}" class="mt-2 text-sm text-ink-muted">{{ text }}</p>"#,
     ext = "html"
 )]
-struct Note<'a> {
-    id: &'a str,
-    text: &'a str,
+pub(super) struct Note<'a> {
+    pub(super) id: &'a str,
+    pub(super) text: &'a str,
 }
 
 /// Actions at the end of the row, as dialogs end theirs.

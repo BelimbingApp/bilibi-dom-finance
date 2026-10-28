@@ -94,9 +94,13 @@ impl Book {
                     body.push(&unavailable("ledger-book-refused", "the book", &refused)?)
                 }
                 Ok(state) => match &state.book {
-                    Some(book) => body.push(&self.facts(&state, book)?),
+                    Some(book) => {
+                        body.push(&self.facts(&state, book)?);
+                        body.push(&self.starter_proposal(&state.starter_chart)?);
+                    }
                     None => {
                         self.load_options(scope).await?;
+                        body.push(&self.starter_proposal(&state.starter_chart)?);
                         body.push(&self.open_form(scope).await?)
                     }
                 },
@@ -135,6 +139,40 @@ impl Book {
             }
         }
         Ok(())
+    }
+
+    fn starter_proposal(&self, proposal: &serde_json::Value) -> Result<Html> {
+        let template = &proposal["proposed"];
+        let Some(name) = template["name"].as_str() else {
+            return if proposal["configured"].is_string() {
+                render(Alert {id:"ledger-book-starter-unavailable",kind:StatusKind::Warning,body:Html::text("The proposed starter chart is unavailable. Choose another on Chart of accounts or ask an administrator to change the proposal."),..Alert::default()})
+            } else {
+                Ok(Html::EMPTY)
+            };
+        };
+        let mut body = render(SectionHeading {
+            id: "ledger-book-starter-heading",
+            title: "Proposed starter chart",
+            description: name,
+            ..SectionHeading::default()
+        })?;
+        body.push(&render(Badge::status(
+            BadgeKind::Warning,
+            template["review"].as_str().unwrap_or_default(),
+        ))?);
+        body.push(&render(super::accounts::Note {id:"ledger-book-starter-note",text:"Opening the book creates no accounts. Review this proposal and its optional sections on Chart of accounts, choose another template, or start empty."})?);
+        body.push(&render(Button {
+            id: "ledger-book-chart",
+            href: super::accounts::INDEX,
+            body: Html::text("Chart of accounts"),
+            ..Button::default()
+        })?);
+        render(Card {
+            id: "ledger-book-starter-card",
+            class: "mt-4",
+            body,
+            ..Card::default()
+        })
     }
 
     fn facts(&self, state: &view::BookState, book: &view::BookRow) -> Result<Html> {

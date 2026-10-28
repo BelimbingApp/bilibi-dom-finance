@@ -148,9 +148,10 @@ they govern this code and are not copied here.
   account for posting or a setting only if `Account::postable()` (active and not
   a group), never `active` alone, and read group totals only through
   `Ledger::chart_balances`, never by adding up rows yourself. A starter chart is
-  data in `ledger/templates/*.json` that a person previews and applies to a chart
-  with no rows (`ledger/README.md#starter-charts`); never seed one at boot or
-  when a book opens, and never hard-code a chart in Rust.
+  bundled data in `ledger/templates/*.json` or an authorized saved company snapshot
+  (`ledger/README.md#starter-charts`), previewed and applied only to an empty chart.
+  A configured proposal creates no accounts when a book opens; never seed at boot
+  or hard-code a chart in Rust.
 - Post an entry only through `Ledger::post_entry` and read it through
   `get_entry`/`list_entries`; never insert into or select from
   `finance_ledger_entries`/`_entry_lines` from a sibling. Pass `owner` for an

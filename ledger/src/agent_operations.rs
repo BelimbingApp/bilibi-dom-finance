@@ -263,6 +263,8 @@ enum Write {
     CreateGroup,
     UpdateGroup,
     ApplyTemplate,
+    SaveTemplate,
+    ProposeTemplate,
     Submit,
     Opening,
     Approve,
@@ -281,6 +283,7 @@ enum Write {
 impl Write {
     fn capability(self) -> &'static str {
         match self {
+            Self::SaveTemplate | Self::ProposeTemplate => MANAGE_TEMPLATES,
             Self::OpenBook
             | Self::CreateAccount
             | Self::UpdateAccount
@@ -303,6 +306,8 @@ impl Write {
             Self::Opening => "Submit opening balances for approval; no entry posts yet. With replaces_journal_id, withdraw your waiting opening journal and submit this correction in its place. Open operational items and historical transactions are excluded.",
             Self::CreateGroup => "Create an account group; it takes no postings and shows the total of what is under it. Its code and account type are permanent.",
             Self::UpdateGroup => "Change the account group's name or the group it sits in; its code and account type are permanent.",
+            Self::SaveTemplate => "Publish an immutable snapshot of the current company chart for reuse within this tenant. No balances or settings are copied. Review every row before saving.",
+            Self::ProposeTemplate => "Set or clear the starter chart proposed for new books in this tenant. Existing books and accounts are unchanged; application always needs its own review.",
             Self::ApplyTemplate => "Create this starter chart's core groups and accounts, and those of the optional sections chosen, in an empty chart. Sections not chosen are not created. They become the company's own, with no link to the template. A chart that already has accounts is never changed.",
             Self::Submit => "Submit a manual journal for approval; no entry posts yet.",
             Self::Approve => "Approve the journal and post its immutable entry; separation of duties still applies.",
@@ -440,6 +445,16 @@ impl Write {
                     (json!(current), json!(after))
                 };
                 json!({"before":before,"after":after,"accounts":all})
+            }
+            Self::SaveTemplate => {
+                json!({"after": saved_templates::prepare(client, scope, company, &new_template(input)?).await?})
+            }
+            Self::ProposeTemplate => {
+                let after = match proposal_key(input)? {
+                    Some(key) => Some(saved_templates::require(client, tenant, key).await?),
+                    None => None,
+                };
+                json!({"before": saved_templates::proposal(client, scope).await?, "after":after})
             }
             Self::ApplyTemplate => {
                 let preview = chart_template_preview(
@@ -932,6 +947,22 @@ impl WriteHandler for Write {
                 )
                 .await
                 .map_err(invalid)?),
+                Self::SaveTemplate => json!(Ledger::save_chart_template_on(
+                    tx,
+                    scope,
+                    company,
+                    &new_template(input).map_err(invalid)?
+                )
+                .await
+                .map_err(invalid)?),
+                Self::ProposeTemplate => Ledger::propose_chart_template_on(
+                    tx,
+                    scope,
+                    company,
+                    proposal_key(input).map_err(invalid)?,
+                )
+                .await
+                .map_err(invalid)?,
                 Self::ApplyTemplate => json!(Ledger::apply_chart_template_on(
                     tx,
                     scope,
@@ -1128,7 +1159,7 @@ impl ReadHandler for Read {
                         }
                         None => Value::Null,
                     };
-                    json!({"book":book,"currency":currency,"controlled_bookkeeping":bookkeeping::latest(client,tenant,company).await?,"duty_separation":duties::latest_change(client,tenant,company).await?,"latest_entry_date":entries::latest_date(client,tenant,company).await?})
+                    json!({"starter_chart":saved_templates::proposal(client, scope).await.map_err(invalid)?,"book":book,"currency":currency,"controlled_bookkeeping":bookkeeping::latest(client,tenant,company).await?,"duty_separation":duties::latest_change(client,tenant,company).await?,"latest_entry_date":entries::latest_date(client,tenant,company).await?})
                 }
                 Self::Currencies => {
                     currency::options(
@@ -1238,7 +1269,10 @@ impl ReadHandler for Read {
                 .map_err(invalid)?),
                 Self::ChartTemplates => {
                     let mut records = Vec::new();
-                    for template in templates::all() {
+                    for template in saved_templates::all(client, tenant)
+                        .await
+                        .map_err(invalid)?
+                    {
                         let preview =
                             chart_template_preview(client, tenant, company, &template.key, &[])
                                 .await
@@ -1247,7 +1281,7 @@ impl ReadHandler for Read {
                         let groups = core.iter().filter(|r| r.is_group).count();
                         records.push(json!({"key":template.key,"name":template.name,"review":template.review,"description":template.description,"sections":template.sections,"groups":groups,"accounts":core.len() - groups,"applicable":preview.applicable}));
                     }
-                    json!({"records":records})
+                    json!({"records":records,"proposal":saved_templates::proposal(client, scope).await.map_err(invalid)?})
                 }
                 Self::ChartTemplate => json!(chart_template_preview(
                     client,
@@ -1324,6 +1358,49 @@ fn group_change_schema() -> Value {
     schema(
         &["account_id"],
         json!({"account_id":identifier(),"name":string(200),"parent_id":identifier(),"clear_parent":boolean()}),
+    )
+}
+fn new_template(input: &Value) -> Result<NewChartTemplate> {
+    Ok(NewChartTemplate {
+        key: text(input, "key")?.into(),
+        name: text(input, "name")?.into(),
+        description: text(input, "description")?.into(),
+        optional_group_codes: match &input["optional_group_codes"] {
+            Value::Null => Vec::new(),
+            value => {
+                serde_json::from_value(value.clone()).map_err(|_| LedgerError::InvalidOption)?
+            }
+        },
+    })
+}
+fn save_template_schema() -> Value {
+    schema(
+        &["key", "name", "description"],
+        json!({"key":string(64),"name":string(200),"description":string(1000),"optional_group_codes":{"type":"array","items":string(50)}}),
+    )
+}
+fn proposal_key(input: &Value) -> Result<Option<&str>> {
+    if input["clear"].as_bool() == Some(true) {
+        if input.get("template").is_some() {
+            return Err(LedgerError::Invalid(vec![FieldError::new(
+                "template",
+                "cannot be set with clear",
+            )]));
+        }
+        Ok(None)
+    } else {
+        input["template"].as_str().map(Some).ok_or_else(|| {
+            LedgerError::Invalid(vec![FieldError::new(
+                "template",
+                "choose a template, or set clear to true",
+            )])
+        })
+    }
+}
+fn propose_template_schema() -> Value {
+    schema(
+        &[],
+        json!({"template":string(100),"clear":{"type":"boolean"}}),
     )
 }
 fn template_schema() -> Value {
@@ -1501,6 +1578,8 @@ inventory::submit! { Contribution::new(DEFINITIONS,"finance/ledger.operations",P
         Operation {key:"finance.ledger.account.update",title:"Change an account",summary:"Change an account's name, group, active flag or retained-earnings designation; preserve code and type. Not for an account group.",keywords:&[],capability:MANAGE_ACCOUNTS,input:change_schema,output,handler:Handler::SafeWrite(&Write::UpdateAccount),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.account_group.create",title:"Create an account group",summary:"Create a group that takes no postings and shows the total of the accounts and groups under it; optionally inside another group of the same type.",keywords:&[],capability:MANAGE_ACCOUNTS,input:group_schema,output,handler:Handler::SafeWrite(&Write::CreateGroup),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.account_group.update",title:"Change an account group",summary:"Change a group's name or the group it sits in; preserve code and type. The account_id is the group's id.",keywords:&[],capability:MANAGE_ACCOUNTS,input:group_change_schema,output,handler:Handler::SafeWrite(&Write::UpdateGroup),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.ledger.chart_template.save",title:"Save a reusable chart",summary:"Publish the current company's active chart as an immutable template shared within this tenant. Review exact rows. optional_group_codes makes each named group and its descendants an optional section; nested optional roots are refused. No balances or other settings are copied. Keys are unique and saved templates cannot be overwritten.",keywords:&[],capability:MANAGE_TEMPLATES,input:save_template_schema,output,handler:Handler::SafeWrite(&Write::SaveTemplate),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.ledger.chart_template.propose",title:"Propose a starter chart",summary:"Set this tenant's default starter template, or clear it with clear:true. New books offer it for a separate preview and apply; existing charts are unchanged.",keywords:&[],capability:MANAGE_TEMPLATES,input:propose_template_schema,output,handler:Handler::SafeWrite(&Write::ProposeTemplate),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.chart_template.apply",title:"Apply a starter chart",summary:"Create a starter chart's core groups and accounts, and those of the optional `sections` chosen, in a company whose chart is empty. Optional `sections` choose the conditional parts, none by default; sections not chosen are not created. The review lists every row; a chart that already has accounts or groups is refused and never changed.",keywords:&[],capability:MANAGE_ACCOUNTS,input:template_schema,output,handler:Handler::SafeWrite(&Write::ApplyTemplate),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.opening_balances.submit",title:"Submit opening balances",summary:"Map a source closing trial balance CSV to existing accounts, preview balanced opening amounts and retain source evidence in one approval journal. Identical source retries return the recorded journal; replaces_journal_id corrects your waiting opening journal; open items and history are excluded.",keywords:&["conversion", "opening balances", "CSV"],capability:SUBMIT_JOURNALS,input:opening_schema,output,handler:Handler::SafeWrite(&Write::Opening),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.journal.submit",title:"Submit a journal",summary:"Keep balanced manual lines for approval without posting an entry.",keywords:&[],capability:SUBMIT_JOURNALS,input:submit_schema,output,handler:Handler::SafeWrite(&Write::Submit),channels:Channels::Every,step_up:&[]},

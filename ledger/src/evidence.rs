@@ -101,6 +101,18 @@ const DATASETS: &[(&str, &str, &[&str])] = &[
         ],
     ),
     (
+        "chart_template",
+        "finance_ledger_chart_templates",
+        &[
+            "id",
+            "tenant_id",
+            "company_id",
+            "key",
+            "template",
+            "inserted_at",
+        ],
+    ),
+    (
         "closing_event",
         "finance_ledger_closing_events",
         &[

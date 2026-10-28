@@ -38,7 +38,7 @@ records (`Book`, `Account`, `Entry`, `FiscalYear`, `Period`, `ClosingEvent`,
 | `update_account` | `finance.ledger.accounts.manage` | Changes `name`, `parent_id`, `active` or `retained_earnings`; `AccountNotFound` for an id of another company; refuses an account group (use `update_account_group`) |
 | `create_account_group`, `update_account_group` | `finance.ledger.accounts.manage` | An account group takes no postings and stands for the total of what is under it: `code`, `name`, `account_type`, optional `parent_id` (another group of the same type). Update changes `name` or the group it sits in; code and type never change |
 | `chart_balances` | `finance.ledger.view` | Each account's own `balance` and each group's `total` as of a date, at a pinned `through_entry_number` (see Account groups) |
-| `chart_templates`, `preview_chart_template`, `apply_chart_template` | none, `.view`, `.accounts.manage` | Starter charts: list them, preview the exact rows (with the optional `sections` chosen) against a company's chart, and create them in one transaction in a chart with no accounts or groups (see Starter charts) |
+| `chart_templates`, `preview_chart_template`, `apply_chart_template` | `.view`, `.view`, `.accounts.manage` | Starter charts: list them, preview the exact rows (with the optional `sections` chosen) against a company's chart, and create them in one transaction in a chart with no accounts or groups (see Starter charts) |
 | `post_entry` | `finance.ledger.entries.post` | Posts a balanced entry of at least two lines (see Entries); `BookNotOpen` before the book is opened |
 | `post_entry_in` | `finance.ledger.entries.post` | Same posting inside the owner's `MutationTransaction`; leaves commit/rollback to the owner |
 | `preview_post_entry_on`, `preview_reverse_owned_entry_on` | `finance.ledger.entries.post` | Validate an owned posting/correction on the handed `OperationClient`, without identities or writes; deterministic entry, referenced accounts and applicable posting controls for the owner's review fence |
@@ -518,7 +518,7 @@ optional sections and rows of code, name, type, group, retained-earnings mark,
 section), never a code identifier. One ships: `my-small-business`, a Malaysian small business chart
 marked **draft, awaiting accountant review**. A person previews it on the Chart
 of accounts page (or an agent reads `chart_template.get`) and applies it with a
-reviewed write; nothing is created at install, on boot or when a book opens.
+reviewed write; nothing is created at install, on boot or when a book opens. Saved company charts and setup proposals extend this flow below.
 Rows that only some businesses need belong to an optional **section**, each with a
 one-line description of when to tick it: `Registered for SST` (the sales and service tax
 payable group and its accounts), `Has employees` (net salaries payable, payroll
@@ -690,3 +690,33 @@ Opening a book through `finance.ledger.book.open` may include `separation_requir
 ## External accountant
 
 The ready-made **External accountant** role reads the complete ledger and reports, exports accounting records and submits proposed adjusting journals for approval. It cannot directly post, approve, close periods, change settings or read Payroll source records. Posted payroll journal lines remain visible. See [Accountant access](accountant-access.md) for the exact boundary, installation steps, evidence and unresolved responsibility restrictions.
+
+### Reuse a company's chart
+
+Save a reusable chart from **Chart of accounts → Save reusable chart** in the current company. Give it a unique key, name and description, choose any group branches that should be optional, then review every row before publishing. For example, a practice can make its payroll group optional so an adopter without employees leaves that section out.
+
+Publishing requires `finance.ledger.templates.manage` and ledger view access to the source company. This permission is separate from managing accounts: it shares the snapshot with ledger readers throughout the same tenant. A practice spanning separate tenants saves a template in each tenant; there is no cross-tenant chart access. The tenant owner receives the permission when roles are explicitly reconciled. Existing custom roles must be granted it deliberately.
+
+A saved template copies active accounts and groups, with their codes, names, types, hierarchy and retained-earnings designation. It includes no balances, entries, currency, tax mappings, report sections or other module settings. Each selected optional group and its descendants forms one optional section. Nested optional roots are refused, and at least one row must remain in the core chart. All optional sections start unselected when applying. Inactive accounts are omitted; the review shows the exact snapshot. A chart must contain 1–2,000 active rows to be saved.
+
+Saved templates are immutable and use the key `saved:<key>`. A repeated key is refused without overwriting; publish a revision under another key. Editing the source company or an adopter never changes the saved template. Companies using the same template customise their accounts independently. Applying still requires an empty chart, an exact preview and confirmation, with the existing company authorization and audited transaction. No separate accounting approval is required for chart maintenance; journals and opening balances retain their independent approval controls. Import and mapping remain conversion work under #57.
+
+### Propose a starter chart
+
+An operator can set **Ledger → Proposed starter chart** in Base Settings. The nullable key `finance.ledger.default_chart_template` accepts global and tenant values: use a bundled template key globally, and a bundled or `saved:<key>` template within its tenant. A tenant override takes precedence; an explicit null proposes none. An unavailable key is shown as unavailable and never causes accounts to be created.
+
+On Chart of accounts, **Template proposal** lets a person with `finance.ledger.templates.manage` choose or clear the tenant proposal through a reviewed operation. Opening a new book displays the proposal and its review status. **Opening creates no accounts.** The current company's empty chart offers the proposal first, alongside the other templates and the choice to start empty. Apply only after reviewing the exact rows and optional sections. Existing books are never reseeded, and changing a proposal changes no accounts.
+
+The same contracts serve pages, REST and MCP:
+
+| Operation | Input and result |
+| --- | --- |
+| `finance.ledger.chart_template.list` | `company_id`; bundled and same-tenant saved templates, plus `proposal.configured` and the full `proposal.proposed` snapshot (null if unavailable) |
+| `finance.ledger.book.get` | Includes the same proposal as `starter_chart` |
+| `finance.ledger.chart_template.save` | Reviewed write: `company_id`, `key` (lowercase slug, max 64), `name` (max 200), `description` (max 1,000), optional `optional_group_codes`; review `after` contains every row and section |
+| `finance.ledger.chart_template.propose` | Reviewed write: `company_id`, `template` (existing template key), or `clear: true` without `template`; changes only the tenant proposal |
+| `finance.ledger.chart_template.get` / `.apply` | Existing reviewed apply accepts saved keys too, with optional `sections`; existing charts are refused |
+
+The facade equivalents are `chart_templates(scope, company_id)`, `save_chart_template`, `chart_template_proposal` and `propose_chart_template`. The former static `Ledger::chart_templates()` is now an authorized asynchronous read because saved templates belong to a tenant. Saved snapshots are captured as `finance/ledger.chart_template` changes and exported in the source company's `chart_template` evidence dataset. A new migration, `finance-ledger-009-chart-templates`, installs append-only snapshot storage; earlier migrations are unchanged.
+
+The reusable-chart proof is part of `cargo run -p bilibi-finance-walkthrough-fixture`. For a focused disposable installation, run `cargo run -p bilibi-finance-walkthrough-fixture --bin chart-templates -- --serve` with `DATABASE_URL`, `APP_ORIGIN` and `BIND_ADDR` set. It exercises the real facades and reviewed contracts, then serves the composed app for browser validation. The bundled Malaysian chart still awaits row-by-row practitioner review (#100); saving a company's chart does not certify its accounting classifications.

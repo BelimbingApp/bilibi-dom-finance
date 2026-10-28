@@ -196,6 +196,7 @@ macro_rules! walkthrough_ledger_roles {
             roles: &[
                 $crate::authz::RoleDefinition { code: "manager", name: "manager", description: "Walkthrough fixture role", grant_all: false, capabilities: &[
                     "finance.ledger.view", "finance.ledger.accounts.manage", "finance.ledger.entries.post",
+                    "finance.ledger.templates.manage",
                     "finance.ledger.periods.manage", "finance.ledger.periods.reopen", "finance.ledger.periods.lock",
                     "finance.ledger.duty-separation.manage", "finance.ledger.controlled-bookkeeping.manage",
                     "finance.ledger.late-recordings.review", "finance.ledger.journals.submit",
@@ -483,3 +484,5 @@ pub mod adopter_setup;
 
 // Restricted accountant access: production role, scoped exports and live revocation.
 pub mod external_accountant;
+// Saved starter charts, configured proposals and cross-company reuse.
+pub mod chart_templates;
