@@ -523,7 +523,8 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
             company,
             &bilibi_finance_payables::NewPayment {
                 payment_date: date(2026, 7, 15),
-                party_key: config["vendor_key"].as_str().unwrap().into(),
+                vendor_id: config["vendor_id"].as_i64(),
+                supplier_key: None,
                 paid_from_account_id: config["bank"].as_i64().unwrap(),
                 reference: Some("Opening settlement proof".into()),
                 description: None,
