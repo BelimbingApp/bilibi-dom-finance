@@ -107,7 +107,7 @@ impl Receivables {
         scope: &Scope,
         id: i64,
     ) -> Result<Value> {
-        Ok(bilibi_finance_ledger::CompanyLinks::new(&self.parties)
+        bilibi_finance_ledger::CompanyLinks::new(&self.parties)
             .frozen_party(client, scope, id, "customer_id", true)
             .await
             .map_err(|error| match error {
@@ -124,7 +124,7 @@ impl Receivables {
                     )
                 }
                 other => other.into(),
-            })?)
+            })
     }
 
     /// Whether a new invoice may name this customer: linked, available for
