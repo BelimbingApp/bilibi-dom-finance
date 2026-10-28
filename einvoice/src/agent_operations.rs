@@ -353,7 +353,7 @@ impl ReadHandler for Read {
             let result = match self {
                 Self::PrefillParty => {
                     service
-                        .operation_company(client, scope, company, ISSUE)
+                        .operation_company(client, scope, company, VIEW)
                         .await
                         .map_err(failure)?;
                     json!(service
@@ -467,7 +467,7 @@ inventory::submit! { Contribution::new(DEFINITIONS,"finance/einvoice.operations"
         Operation {key:"finance.einvoice.document.issue",title:"Issue an e-invoice document",summary:"Record an immutable fiscal document linked to a Receivables or Payables entry. Requires ledger view too. Does not submit or post a second entry.",keywords:&["invoice","self-billed","tax document"],capability:ISSUE,input:issue,output,handler:Handler::SafeWrite(&Issue),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.einvoice.document.get",title:"Read an e-invoice document",summary:"Read immutable parties, lines and totals, status events, authority identifiers, source links and ledger follow-up flags.",keywords:&[],capability:VIEW,input:get,output,handler:Handler::Read(&Read::Get),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.einvoice.document.list",title:"List e-invoice documents",summary:"Read document summaries newest first with an exclusive before cursor; at most 100 per page, default 50.",keywords:&[],capability:VIEW,input:list,output,handler:Handler::Read(&Read::List),channels:Channels::Every,step_up:&[]},
-        Operation {key:"finance.einvoice.party.prefill",title:"Prefill an e-invoice party",summary:"Read visible Core company facts for a fiscal draft; restricted facts refuse the prefill.",keywords:&[],capability:ISSUE,input:prefill_party,output,handler:Handler::Read(&Read::PrefillParty),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.einvoice.party.prefill",title:"Prefill an e-invoice party",summary:"Read visible Core company facts for a fiscal draft; restricted facts refuse the prefill.",keywords:&[],capability:VIEW,input:prefill_party,output,handler:Handler::Read(&Read::PrefillParty),channels:Channels::Every,step_up:&[]},
     ],
     guides:&[Guide {key:"finance.einvoice",title:"Source-linked fiscal documents",summary:"Review and issue fiscal documents without duplicating source accounting; inspect documents and their clearance status.",keywords:&[],capability:VIEW,body:include_str!("../guide.md")}],
 }) }

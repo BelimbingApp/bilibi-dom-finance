@@ -100,7 +100,7 @@ impl crate::Einvoice {
             .await
             .map_err(|_| bilibi_database::Error::Internal)?
             .map_err(bilibi_database::Error::from)?;
-        crate::authorize(&**client, scope, company_id, crate::ISSUE).await?;
+        crate::authorize(&**client, scope, company_id, crate::VIEW).await?;
         let party = bilibi_finance_ledger::CompanyLinks::new(&self.parties)
             .frozen_party(&**client, scope, counterparty_id, "buyer", true)
             .await
