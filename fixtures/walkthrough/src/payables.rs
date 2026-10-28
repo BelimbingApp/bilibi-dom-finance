@@ -272,7 +272,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
     )?;
     let auth = services.get::<Authentication>("base/tenancy.authentication")?;
     let as_manager = auth
-        .authenticate_session(&**c, 1, 1, Some(4), String::new())
+        .authenticate_session(&**c, 1, 1, Some(4), None, String::new())
         .await?;
     refused(
         "impersonation approval",

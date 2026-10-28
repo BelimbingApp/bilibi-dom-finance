@@ -230,7 +230,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
     let as_manager = {
         let c = db.get().await?;
         authentication
-            .authenticate_session(&**c, 1, 1, Some(4), String::new())
+            .authenticate_session(&**c, 1, 1, Some(4), None, String::new())
             .await?
     };
     let impersonated = p.submit_payment(&as_manager, COMPANY, &input).await?;

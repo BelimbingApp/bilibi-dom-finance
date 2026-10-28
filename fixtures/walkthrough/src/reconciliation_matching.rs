@@ -211,7 +211,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         let authentication = services.get::<Authentication>("base/tenancy.authentication")?;
         let client = db.get().await?;
         authentication
-            .authenticate_session(&**client, 1, 1, Some(4), String::new())
+            .authenticate_session(&**client, 1, 1, Some(4), None, String::new())
             .await?
     };
     let raw_client = db.get().await?;
