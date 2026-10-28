@@ -279,23 +279,29 @@ impl BillForm {
         }
         if previous != d.vendor {
             if let Some(v) = self.suppliers.iter().find(|v| v.id.to_string() == d.vendor) {
+                let account = v
+                    .expense_account_id
+                    .filter(|id| self.accounts.iter().any(|a| a.id == *id))
+                    .map(|id| id.to_string());
+                let tax = v
+                    .tax_code_id
+                    .filter(|id| self.taxes.iter().any(|t| t.id == *id))
+                    .map(|id| id.to_string());
                 for line in &mut d.lines {
-                    line.account = v
-                        .expense_account_id
-                        .filter(|id| self.accounts.iter().any(|a| a.id == *id))
-                        .map(|id| id.to_string())
-                        .unwrap_or_default();
-                    line.tax = v
-                        .tax_code_id
-                        .filter(|id| self.taxes.iter().any(|t| t.id == *id))
-                        .map(|id| id.to_string())
-                        .unwrap_or_default();
+                    if line.account.is_empty() {
+                        line.account = account.clone().unwrap_or_default();
+                    }
+                    if line.tax.is_empty() {
+                        line.tax = tax.clone().unwrap_or_default();
+                    }
                 }
-                if let Ok(date) = d.date.parse::<jiff::civil::Date>() {
-                    d.due = date
-                        .checked_add(jiff::Span::new().days(i64::from(v.payment_terms_days)))
-                        .map(|d| d.to_string())
-                        .unwrap_or_default();
+                if d.due.is_empty() {
+                    if let Ok(date) = d.date.parse::<jiff::civil::Date>() {
+                        d.due = date
+                            .checked_add(jiff::Span::new().days(i64::from(v.payment_terms_days)))
+                            .map(|d| d.to_string())
+                            .unwrap_or_default();
+                    }
                 }
             }
         }
