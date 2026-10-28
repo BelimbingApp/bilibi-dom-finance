@@ -10,6 +10,7 @@ askama.workspace = true
 bilibi-agent-api.workspace = true
 bilibi-authz.workspace = true
 bilibi-company.workspace = true
+bilibi-currency.workspace = true
 bilibi-database.workspace = true
 bilibi-datetime.workspace = true
 bilibi-locale.workspace = true

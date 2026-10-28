@@ -9,6 +9,16 @@ balance and account totals (also by owner) at a pinned entry, and the evidence
 datasets of the auditor's pack. Other Finance modules and other Domains post
 and read through this module's facade; none of them reads its tables.
 
+## Book currency
+
+The currency list, names and decimal places come from Core Currency (`core/currency`, ISO 4217; its README owns the source, seeds and updates). The ledger keeps no list of its own and depends on Core only through `Currencies`.
+
+- **Proposal.** The Book page and `finance.ledger.book.currencies` propose the company's own base currency, else the tenant's, when it is enabled and not withdrawn, and say which. Nothing is hard-coded.
+- **Choice.** Opening accepts only an enabled, current currency. A code Core does not know, has withdrawn or the tenant has not enabled is refused with that reason.
+- **Decimal places.** They default to the currency's ISO 4217 value (`minor_units` may be omitted by an agent). A different value is allowed, since a company may keep finer or coarser books; the review and the page mark it *nonstandard* and name the standard. The review shows code, name and places (`changes.after.currency`: `currency_name`, `standard_minor_units`, `nonstandard_minor_units`, `reference`).
+- **List not available.** When no currency is enabled and the code is not in Core's list (the ISO seed has not been installed), a well-formed code is accepted *unchecked* and `minor_units` is required. The page shows a plain code field and says no currency is enabled and the code is not checked; the review says `reference: unchecked`. Once Core's list is enabled, this path closes.
+- Platform follow-up: Core has no "list installed" answer, so a tenant that installed the list but enabled nothing is treated as unavailable for an unknown code.
+
 ## Public API
 
 Resolve the `Ledger` service (`finance/ledger.ledger`) from the registry and
@@ -21,7 +31,7 @@ records (`Book`, `Account`, `Entry`, `FiscalYear`, `Period`, `ClosingEvent`,
 | Function | Capability | Does |
 | --- | --- | --- |
 | `get_book`, `get_book_on` | `finance.ledger.view` | The company's currency code and minor units, or `BookNotOpen`; `_on` uses the caller's connection |
-| `open_book` | `finance.ledger.accounts.manage` | Opens the book once with `currency_code` (three letters, trimmed and upcased) and `minor_units` (0 to 4); a second call is `BookAlreadyOpen`. A new company's book is controlled (see Controlled bookkeeping) |
+| `open_book` | `finance.ledger.accounts.manage` | Opens the book once with `currency_code` (three letters, trimmed and upcased; see [Book currency](#book-currency)) and `minor_units` (0 to 4); a second call is `BookAlreadyOpen`. A new company's book is controlled (see Controlled bookkeeping) |
 | `list_accounts`, `list_accounts_on` | `finance.ledger.view` | The chart of accounts by code; `_on` uses the caller's connection |
 | `create_account` | `finance.ledger.accounts.manage` | Adds an account: `code`, `name`, `account_type`, optional `parent_id`, `active`, `retained_earnings` |
 | `update_account` | `finance.ledger.accounts.manage` | Changes `name`, `parent_id`, `active` or `retained_earnings`; `AccountNotFound` for an id of another company |
@@ -85,12 +95,13 @@ H1 makes the facade-only writes reachable through the Platform's shared `/api/v1
 | Suffix under `finance.ledger.` | Contract |
 | --- | --- |
 | `book.get` | Book or null, controlled-bookkeeping and duty-separation changes |
+| `book.currencies` | The enabled currencies (code, name, ISO 4217 decimal places) matching an optional `search`, the proposed currency and its source, and whether the list is available |
 | `account.list` | Database-code-ordered chart; `after_code`, `next_after_code` |
 | `journal.get`, `journal.list` | Lines and decision; list by number with optional `status`, `after`, `next_after` |
 | `entry.get`, `entry.list` | Immutable lines and ownership/reversal identifiers; list filters `from`, `to`, `account_id`, `through_entry_number`, `exclude_closing`; cursor pair `after_date`, `after_id` in `next_after` |
 | `fiscal_year.list` | Years with periods/statuses; `after_start_date`, `next_after_start_date` |
 | `trial_balance.get` | Every account with a posting on or before `as_of`, with debit and credit balances, counted through a pinned `through_entry_number` |
-| `book.open`, `account.create`, `account.update` | Reviewed book/chart changes; account update preserves omitted fields and uses `clear_parent` to remove a grouping |
+| `book.open` (`minor_units` optional), `account.create`, `account.update` | Reviewed book/chart changes; account update preserves omitted fields and uses `clear_parent` to remove a grouping |
 | `journal.submit`, `journal.approve`, `journal.reject` | Submission does not post; approval posts once with separation of duties; rejection records a reason without posting |
 | `journal.withdraw`, `journal.replace` | Only the journal's submitter, while it waits: withdrawal records an optional `reason` and posts nothing; replacement takes the `journal.submit` fields plus `journal_id`, withdraws it and submits the correction, which needs its own approval |
 | `opening_balances.submit` | Reviewed CSV mapping to one opening journal; source reference and exact CSV are retained; optional `replaces_journal_id` withdraws the submitter's waiting opening journal and takes its place; approval is separate |
@@ -98,7 +109,7 @@ H1 makes the facade-only writes reachable through the Platform's shared `/api/v1
 | `fiscal_year.open`, `fiscal_year.close`, `fiscal_year.reopen`, `fiscal_year.lock` | Open monthly periods, close with computed entry, reopen with closing reversal, or atomically lock all remaining closed periods |
 | `period.close`, `period.reopen`, `period.lock` | Existing facade ordering, reason and permanent-lock rules |
 
-The eight reads return at most `page_size` records (1–100, default 100) on list operations. The seventeen writes require shared plan preview/commit; direct calls refuse writes. Preview validates normalized/defaulted values on the caller's connection, without business mutations, and shows exact proposed entry lines, current accounts/periods and consequential designation changes. Amounts are decimal strings, never binary floats. Commit reauthorizes and joins the shared audited transaction through private facade methods; all operations and audit rows roll back together on refusal. A successful record response has `path: null`: a write commits no page path.
+The nine reads return at most `page_size` records (1–100, default 100) on list operations. The seventeen writes require shared plan preview/commit; direct calls refuse writes. Preview validates normalized/defaulted values on the caller's connection, without business mutations, and shows exact proposed entry lines, current accounts/periods and consequential designation changes. Amounts are decimal strings, never binary floats. Commit reauthorizes and joins the shared audited transaction through private facade methods; all operations and audit rows roll back together on refusal. A successful record response has `path: null`: a write commits no page path.
 
 The pinned Platform previews every step before executing any. A transaction-local FIFO of review hashes rechecks each step immediately before mutation, so earlier steps cannot silently change later reviewed facts. Dependent steps need separate plans. Same-company account edits conservatively review the full chart, so even independent account edits need separate plans. Whole-year lock composes existing period locks in date order on the same transaction; it adds no year-lock event. No operation exposes direct posting, owner/settlement bypasses or disabling controls. See [guide.md](guide.md) for consent, staleness and safe ordering.
 
@@ -126,7 +137,7 @@ The ledger has pages so a person without an AI agent can do the same daily work.
 
 | Menu (Finance, under Bookkeeping) | Route | What a person does there |
 | --- | --- | --- |
-| Book | `/finance/ledger/book` | Reads the currency and decimal places. Opens the book once, asking who approves. Sees whether controlled bookkeeping and separation of duties are on. |
+| Book | `/finance/ledger/book` | Reads the currency and decimal places. Opens the book once: pick the currency from a searchable list (the company's base currency is proposed), review its decimal places, then confirm and choose who approves. Sees whether controlled bookkeeping and separation of duties are on. |
 | Chart of accounts | `/finance/ledger/accounts` | Searches and filters the chart, adds an account in a dialog. |
 | (account record) | `/finance/ledger/accounts/{id}` | Edits the name and group in place, deactivates or activates the account, marks the retained earnings account, reads today's balance. |
 | Journal entries | `/finance/ledger/entries` | Lists entries oldest first, 100 at a time. The shared period filter narrows by entry date; with no period, every date is listed ("All dates"). |

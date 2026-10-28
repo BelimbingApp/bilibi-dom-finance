@@ -67,6 +67,7 @@ mod agent_operations;
 mod bookkeeping;
 mod books;
 mod contributions;
+mod currency;
 mod duties;
 mod entries;
 mod evidence;
@@ -107,7 +108,7 @@ pub const SERVICE: &str = "finance/ledger.ledger";
 inventory::submit! {
     Module {
         id: MODULE, layer: Layer::Domains,
-        dependencies: &["base/agent_api", "base/authz", "base/database", "base/datetime", "base/locale", "base/menu", "base/party_ids", "base/tenancy", "base/ui", "core/company"],
+        dependencies: &["base/agent_api", "base/authz", "base/database", "base/datetime", "base/locale", "base/menu", "base/party_ids", "base/tenancy", "base/ui", "core/company", "core/currency"],
         migrations: &[
             ("finance-ledger-001-books-and-accounts", include_str!("../migrations/001-books-and-accounts.sql")),
             ("finance-ledger-002-entries", include_str!("../migrations/002-entries.sql")),
@@ -119,6 +120,10 @@ inventory::submit! {
         ],
         services: &[Service { id: SERVICE, factory: |services| {
             agent_operations::bind(services.get("base/tenancy.parties")?)?;
+            currency::bind(
+                services.get::<Db>("base/database.pool")?.as_ref().clone(),
+                services.get("core/currency.currencies")?,
+            )?;
             Ok(Arc::new(Ledger {
             db: services.get::<Db>("base/database.pool")?.as_ref().clone(),
             mutations: services.get("base/database.mutations")?,
@@ -1086,6 +1091,9 @@ impl Ledger {
             return Err(LedgerError::BookAlreadyOpen);
         }
         let valid = books::validate(new).map_err(LedgerError::Invalid)?;
+        if let Err(refused) = currency::choose_on(tx, scope, &valid.currency_code).await? {
+            return Err(LedgerError::Invalid(vec![refused]));
+        }
         let controlled = bookkeeping::controlled(tx.sql(), tenant, company_id).await?;
         let actor = scope.user();
         let impersonator = scope.impersonator().map(|operator| operator.user());

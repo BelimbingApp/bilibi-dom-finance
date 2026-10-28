@@ -2,19 +2,52 @@
 //! two controls kept beside it (the Bookkeeping page changes them).
 use super::{
     error_text, event_type, no_company, render, shell, unavailable, view, Failure, Flash, Pages,
-    Refusal,
+    Read, Refusal, Review,
 };
 use crate::MANAGE_ACCOUNTS;
 use bilibi_database::{Error, Result};
 use bilibi_tenancy::Scope;
 use bilibi_ui::{
     page::{LiveBody, LiveFuture, LiveInput, LiveRequest, LiveState},
-    params, Alert, Badge, BadgeKind, Button, ButtonVariant, Card, Choice, ConfirmDialog, Fact,
-    Facts, Field, Form, Header, Html, InputKind, PageVariant, SectionHeading, StatusKind,
+    params, Alert, Badge, BadgeKind, Button, ButtonVariant, Card, Choice, Combobox, ConfirmDialog,
+    Fact, Facts, Field, Form, Header, Html, InputKind, PageVariant, SectionHeading, StatusKind,
 };
+use serde::Deserialize;
 use serde_json::json;
 
 pub(super) const INDEX: &str = "/finance/ledger/book";
+
+/// What `finance.ledger.book.currencies` answers: the enabled currencies with
+/// their ISO 4217 decimal places and the proposed one.
+#[derive(Default, Deserialize)]
+struct Options {
+    #[serde(default)]
+    reference: String,
+    proposed: Option<Proposed>,
+    #[serde(default)]
+    currencies: Vec<Listed>,
+}
+#[derive(Deserialize)]
+struct Proposed {
+    code: String,
+    minor_units: u32,
+    source: String,
+}
+#[derive(Deserialize)]
+struct Listed {
+    code: String,
+    name: String,
+    minor_units: u32,
+}
+impl Options {
+    fn find(&self, code: &str) -> Option<&Listed> {
+        let code = code.trim().to_uppercase();
+        self.currencies.iter().find(|c| c.code == code)
+    }
+    fn listed(&self) -> bool {
+        self.reference == "iso4217"
+    }
+}
 
 pub(super) struct Book {
     pages: Pages,
@@ -24,7 +57,9 @@ pub(super) struct Book {
     approval_reason: String,
     refusal: Refusal,
     notice: String,
-    confirming: bool,
+    options: Options,
+    seeded: bool,
+    review: Option<Review>,
     flash: Flash,
 }
 
@@ -38,7 +73,9 @@ impl Book {
             approval_reason: String::new(),
             refusal: Refusal::default(),
             notice: String::new(),
-            confirming: false,
+            options: Options::default(),
+            seeded: false,
+            review: None,
             flash: Flash::default(),
         }
     }
@@ -52,10 +89,13 @@ impl Book {
                 Err(refused) => {
                     body.push(&unavailable("ledger-book-refused", "the book", &refused)?)
                 }
-                Ok(state) => match &state.book {
-                    Some(book) => body.push(&self.facts(&state, book)?),
-                    None => body.push(&self.open_form(scope).await?),
-                },
+                Ok(state) => {
+                    self.load_options(scope).await?;
+                    match &state.book {
+                        Some(book) => body.push(&self.facts(&state, book)?),
+                        None => body.push(&self.open_form(scope).await?),
+                    }
+                }
             }
         }
         let mut page = render(Header {
@@ -68,6 +108,27 @@ impl Book {
             html: shell("ledger-book", PageVariant::Detail, &self.flash, page)?,
             ..LiveBody::default()
         })
+    }
+
+    /// The currency list and the proposal, read through the same contract an
+    /// agent calls; the first read fills the form with the proposal.
+    async fn load_options(&mut self, scope: &Scope) -> Result<()> {
+        self.options = match self
+            .pages
+            .read(scope, "finance.ledger.book.currencies", json!({}))
+            .await?
+        {
+            Read::Found(value) => view::parse(value).unwrap_or_default(),
+            _ => Options::default(),
+        };
+        if !self.seeded {
+            self.seeded = true;
+            if let Some(proposed) = &self.options.proposed {
+                self.currency = proposed.code.clone();
+                self.units = proposed.minor_units.to_string();
+            }
+        }
+        Ok(())
     }
 
     fn facts(&self, state: &view::BookState, book: &view::BookRow) -> Result<Html> {
@@ -91,6 +152,7 @@ impl Book {
                 if on { yes } else { no },
             ))
         };
+        let listed = self.options.find(&book.currency_code);
         let mut body = render(SectionHeading {
             id: "ledger-book-heading",
             title: "Currency",
@@ -103,12 +165,23 @@ impl Book {
                 Fact {
                     title: "Currency",
                     id: "ledger-book-currency",
-                    value: Html::text(&book.currency_code),
+                    value: Html::text(&match listed {
+                        Some(currency) => format!("{} — {}", book.currency_code, currency.name),
+                        None => book.currency_code.clone(),
+                    }),
                 },
                 Fact {
                     title: "Decimal places",
                     id: "ledger-book-units",
-                    value: Html::text(&book.minor_units.to_string()),
+                    value: Html::text(&match listed {
+                        Some(currency) if u32::from(book.minor_units) != currency.minor_units => {
+                            format!(
+                                "{} (nonstandard; ISO 4217 uses {})",
+                                book.minor_units, currency.minor_units
+                            )
+                        }
+                        _ => book.minor_units.to_string(),
+                    }),
                 },
             ],
         })?);
@@ -189,25 +262,72 @@ impl Book {
                 ..Alert::default()
             })?);
         }
-        body.push(&render(
-            Field::in_form("book", "currency_code")
-                .id("ledger-book-currency-code")
-                .label("Currency code")
-                .value(&self.currency)
-                .required()
-                .hint("Three letters, like MYR or USD. You cannot change it later.")
-                .errors(errors("currency_code"))
-                .attr("maxlength", "3")
-                .attr("data-debounce", "300"),
-        )?);
+        let chosen = self.options.find(&self.currency);
+        if self.options.listed() {
+            let hint = match (&self.options.proposed, chosen) {
+                (Some(proposed), Some(c)) if proposed.code == c.code => format!(
+                    "Proposed from the {} base currency. You cannot change it later.",
+                    if proposed.source == "company" { "company's" } else { "tenant's" }
+                ),
+                (None, None) => "No base currency is set for this company or tenant. Search by code or name. You cannot change it later.".into(),
+                _ => "Search by code or name. You cannot change it later.".into(),
+            };
+            body.push(&render(
+                Combobox::new("ledger-book-currency-code", "book[currency_code]")
+                    .label("Currency")
+                    .value(self.currency.trim().to_uppercase())
+                    .options(
+                        self.options
+                            .currencies
+                            .iter()
+                            .map(|c| {
+                                Choice::new(format!("{} — {}", c.code, c.name), c.code.clone())
+                            })
+                            .collect(),
+                    )
+                    .placeholder("Search currencies")
+                    .hint(hint)
+                    .errors(errors("currency_code")),
+            )?);
+        } else {
+            body.push(&render(
+                Field::in_form("book", "currency_code")
+                    .id("ledger-book-currency-code")
+                    .label("Currency code")
+                    .value(&self.currency)
+                    .required()
+                    .hint("No currency is enabled, so this code is not checked against ISO 4217. Three letters, like MYR. You cannot change it later.")
+                    .errors(errors("currency_code"))
+                    .attr("maxlength", "3")
+                    .attr("data-debounce", "300"),
+            )?);
+        }
+        let units_hint = match chosen {
+            Some(c) if self.units.parse::<u32>().ok() != Some(c.minor_units) => format!(
+                "Nonstandard: ISO 4217 uses {} for {}. You cannot change it later.",
+                c.minor_units, c.code
+            ),
+            Some(c) => format!(
+                "ISO 4217 standard for {}. You cannot change it later.",
+                c.code
+            ),
+            None if self.options.listed() => {
+                "Choose a currency to see its standard decimal places.".into()
+            }
+            None => "How many digits follow the point in an amount: 2 for 12.50. You cannot change it later.".into(),
+        };
         body.push(&render(
             Field::in_form("book", "minor_units")
                 .id("ledger-book-minor-units")
                 .label("Decimal places")
                 .value(&self.units)
                 .kind(InputKind::Select)
-                .options((0..=4).map(|n| Choice::new(n.to_string(), n.to_string())).collect())
-                .hint("How many digits follow the point in an amount: 2 for 12.50. You cannot change it later.")
+                .options(
+                    (0..=4)
+                        .map(|n| Choice::new(n.to_string(), n.to_string()))
+                        .collect(),
+                )
+                .hint(units_hint)
                 .errors(errors("minor_units")),
         )?);
         body.push(&render(
@@ -261,15 +381,32 @@ impl Book {
             body: card,
             ..Card::default()
         })?;
-        if self.confirming {
+        if let Some(review) = &self.review {
+            let after = &review.facts["after"];
+            let currency = &after["currency"];
+            let code = after["currency_code"].as_str().unwrap_or_default();
+            let units = after["minor_units"].as_i64().unwrap_or_default();
+            let label = match currency["currency_name"].as_str() {
+                Some(name) => format!("{code} — {name}"),
+                None => code.to_owned(),
+            };
+            let mut detail = String::new();
+            if currency["nonstandard_minor_units"].as_bool() == Some(true) {
+                detail.push_str(&format!(
+                    "Nonstandard: ISO 4217 uses {} decimal places for {code}. ",
+                    currency["standard_minor_units"]
+                ));
+            }
+            if currency["reference"].as_str() == Some("unchecked") {
+                detail.push_str(&format!(
+                    "No currency is enabled, so {code} was not checked against ISO 4217. "
+                ));
+            }
+            detail.push_str(if self.approver == "one_person" { "The currency and decimal places are permanent. Approval is still required. An authorized person may approve their own work; this records an approval exception." } else { "The currency and decimal places are permanent. Someone else must approve your work." });
             html.push(&render(ConfirmDialog {
                 id: "ledger-book-confirm",
-                consequence: &format!(
-                    "Open the book in {} with {} decimal places?",
-                    self.currency.trim().to_uppercase(),
-                    self.units
-                ),
-                detail: if self.approver == "one_person" { "The currency and decimal places are permanent. Approval is still required. An authorized person may approve their own work; this records an approval exception." } else { "The currency and decimal places are permanent. Someone else must approve your work." },
+                consequence: &format!("Open the book in {label} with {units} decimal places?"),
+                detail: &detail,
                 confirm: "Open the book",
                 working: "Opening…",
                 confirm_event: "open_book",
@@ -287,11 +424,18 @@ impl LiveState<Scope, Error> for Book {
                 match event_type(value)? {
                     "validate" => {
                         let fields = params::form_values(value, "book");
+                        let before = self.currency.trim().to_uppercase();
                         self.currency = fields.get("currency_code").cloned().unwrap_or_default();
                         self.units = fields
                             .get("minor_units")
                             .cloned()
                             .unwrap_or_else(|| "2".into());
+                        // A new currency brings its own standard decimal places.
+                        if self.currency.trim().to_uppercase() != before {
+                            if let Some(listed) = self.options.find(&self.currency) {
+                                self.units = listed.minor_units.to_string();
+                            }
+                        }
                         self.approver = fields
                             .get("approver")
                             .cloned()
@@ -304,26 +448,41 @@ impl LiveState<Scope, Error> for Book {
                     }
                     "review_open" => {
                         self.refusal = Refusal::default();
-                        self.confirming = self.currency.trim().len() == 3 || {
-                            self.refusal.fields.insert(
-                                "currency_code".into(),
-                                vec!["must be three letters".into()],
-                            );
-                            false
-                        };
-                    }
-                    "cancel_open" => self.confirming = false,
-                    "open_book" => {
-                        self.confirming = false;
+                        self.notice.clear();
                         let units: i64 = self.units.parse().unwrap_or(-1);
                         match self
                             .pages
-                            .submit(
+                            .review(
+                                r.scope,
+                                r.credential,
+                                "review_open",
+                                "finance.ledger.book.open",
+                                json!({"currency_code": self.currency.trim().to_uppercase(), "minor_units": units,"separation_required":self.approver != "one_person","approval_reason": self.approval_reason}),
+                            )
+                            .await?
+                        {
+                            Ok(review) => self.review = Some(review),
+                            Err(Failure::Refused(refusal)) => self.refusal = refusal,
+                            Err(failure) => self.notice = failure.text("The book"),
+                        }
+                    }
+                    "cancel_open" => self.review = None,
+                    "open_book" => {
+                        let Some(review) = self.review.take() else {
+                            return self.view(r.scope).await;
+                        };
+                        if review.input["company_id"].as_i64() != Pages::company(r.scope) {
+                            self.notice = "The company changed. Review the book again.".into();
+                            return self.view(r.scope).await;
+                        }
+                        match self
+                            .pages
+                            .commit(
                                 r.scope,
                                 r.credential,
                                 "open_book",
                                 "finance.ledger.book.open",
-                                json!({"currency_code": self.currency.trim().to_uppercase(), "minor_units": units,"separation_required":self.approver != "one_person","approval_reason": self.approval_reason}),
+                                review,
                             )
                             .await?
                         {

@@ -60,6 +60,7 @@ they govern this code and are not copied here.
   Bilimbi's words, never as `Error::Forbidden`/`Error::Internal`: a mutate
   closure that returns no `Change` poisons the transaction, and the live
   transport treats those two errors as fatal.
+- Take a book's currency and its standard decimal places from Core Currency (`ledger/src/currency.rs`, `core/currency` README), never a free-text code or a list of your own; a page offers the `finance.ledger.book.currencies` contract's options in a `Combobox` and shows the review's `currency` facts, so a person and an agent see the same name, places and nonstandard flag.
 - Hold amounts as `Money` built with the book's `MinorUnits` (`Money::parse`,
   `Money::new`), never a bare `Decimal` from input: the columns are
   `numeric(20,4)`, and an amount finer than the book's minor units is refused
