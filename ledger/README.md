@@ -63,7 +63,7 @@ records (`Book`, `Account`, `Entry`, `FiscalYear`, `Period`, `ClosingEvent`,
 | `account_totals` | `finance.ledger.view` | Per-account debit and credit totals over entries dated `from` through `to`, optionally `through_entry_number` and `exclude_closing` (see Account totals) |
 | `account_totals_by_owner` | `finance.ledger.view` | The same totals, one row per account and owner module, for a control-account tie-out |
 | `evidence_page` | `finance.ledger.view` | One ID-ordered page of one of the ledger's tables for the auditor's pack (see Evidence) |
-| `Ledger::evidence_datasets` | none | The fifteen dataset names, sorted |
+| `Ledger::evidence_datasets` | none | The sixteen dataset names, sorted |
 | `Ledger::account_types`, `Ledger::late_recording_thresholds`, `Ledger::journal_statuses` | none | The five account types; the report's 45 and 60 days; `submitted`, `approved`, `rejected`, `withdrawn` |
 
 Every call authorizes the capability for the scope's actor and the target
@@ -438,13 +438,13 @@ or an option out of range is `InvalidOption`. The datasets are `account`,
 `approval_exception`, `approval_exception_review`, `book`,
 `bookkeeping_change`, `closing_event`, `duty_separation_change`, `entry`,
 `fiscal_year`, `journal`, `journal_event`, `journal_line`,
-`journal_replacement`, `late_recording_review`, `line` and `period`, with Bilimbi's field lists
-(`src/evidence.rs`), less the entry's `legacy`. Dates are `YYYY-MM-DD`,
+`journal_replacement`, `late_recording_review`, `line` and `period`, with
+Bilimbi's field lists (`src/evidence.rs`), less the entry's `legacy`. Dates are `YYYY-MM-DD`,
 instants ISO 8601 UTC with microseconds and amounts the column's exact text
 (`100.0000`). Each page is a live read on its own connection. The field lists
 are an export contract: freeze one once exported and never add a credential.
 
-## Schema (versions 001 to 005)
+## Schema (versions 001 to 006)
 
 `finance_ledger_books` (one per company; currency and minor units fixed for
 good), `finance_ledger_accounts` (code and type kept by a trigger, a

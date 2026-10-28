@@ -320,10 +320,9 @@ impl Journal {
                 });
             }
         }
-        if let (Some(old), Some(number)) = (
-            journal.replaces_journal_id,
-            journal.replaces_journal_number,
-        ) {
+        if let (Some(old), Some(number)) =
+            (journal.replaces_journal_id, journal.replaces_journal_number)
+        {
             facts.push(Fact {
                 title: "Replaces",
                 id: "ledger-journal-replaces",
