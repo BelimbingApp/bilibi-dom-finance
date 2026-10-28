@@ -13,6 +13,7 @@ use std::collections::BTreeSet;
 
 /// Source closing balances posted at the start of the conversion date. The
 /// accountant retains responsibility for the cut-off and reporting bridge.
+#[derive(Clone)]
 pub struct OpeningBalances {
     pub conversion_date: Date,
     pub currency_code: String,
@@ -20,6 +21,9 @@ pub struct OpeningBalances {
     pub source_reference: String,
     /// UTF-8 CSV: source_id,account_code,debit,credit. At most 500 source rows.
     pub csv: String,
+    /// The waiting opening journal this submission corrects: it is withdrawn and
+    /// this one takes its place as the book's opening, in one transaction.
+    pub replaces_journal_id: Option<i64>,
 }
 
 fn refused(field: &'static str, message: impl Into<String>) -> LedgerError {
@@ -35,10 +39,11 @@ pub(crate) struct Prepared {
 /// Called only after authorization; reads on the plan's own connection.
 pub(crate) async fn prepare(
     client: &dyn OperationClient,
-    tenant: i64,
+    scope: &Scope,
     company: i64,
     source: &OpeningBalances,
 ) -> Result<Prepared> {
+    let tenant = scope.tenant();
     let reference = source.source_reference.trim();
     if reference.is_empty() || reference.chars().count() > 100 || reference.contains('\0') {
         return Err(refused(
@@ -137,24 +142,38 @@ pub(crate) async fn prepare(
         reference: Some(reference.into()),
         lines,
     };
+    let mut replaced_number = None;
     let existing = if let Some(row) = existing_row {
         let journal = journals::find(client, tenant, company, row.get(1))
             .await?
             .ok_or(LedgerError::JournalNotFound)?;
-        if row.get::<_, String>(0) != source.csv || journal.entry_date != source.conversion_date {
+        if row.get::<_, String>(0) != source.csv
+            || journal.entry_date != source.conversion_date
+            || journal.replaces_journal_id != source.replaces_journal_id
+        {
             return Err(refused(
                 "source_reference",
                 "already identifies a different opening journal; use the recorded journal's correction controls",
             ));
         }
+        replaced_number = journal.replaces_journal_number;
         Some(journal)
     } else {
-        // A new source reference must never silently double a prior opening.
-        // Rejected submissions may be corrected with a new source reference.
-        if client.query_opt(
-            "SELECT o.id FROM finance_ledger_opening_balances o WHERE o.tenant_id=$1 AND o.company_id=$2 AND NOT EXISTS (SELECT 1 FROM finance_ledger_journal_events e WHERE e.journal_id=o.journal_id AND e.company_id=o.company_id AND e.event='rejected') LIMIT 1",
+        // A new source reference must never silently double a live opening. A
+        // rejected opening, or one withdrawn and not replaced, is dead; a
+        // waiting one is corrected by naming it in `replaces_journal_id`.
+        if let Some(replaced) = source.replaces_journal_id {
+            let waiting = crate::withdrawable_journal(client, scope, company, replaced).await?;
+            replaced_number = Some(waiting.journal_number);
+            if client.query_opt(
+                "SELECT id FROM finance_ledger_opening_balances WHERE tenant_id=$1 AND company_id=$2 AND journal_id=$3",
+                &[&tenant, &company, &replaced]).await?.is_none() {
+                return Err(refused("replaces_journal_id", "is not an opening balances journal"));
+            }
+        } else if client.query_opt(
+            "SELECT o.id FROM finance_ledger_opening_balances o WHERE o.tenant_id=$1 AND o.company_id=$2 AND NOT EXISTS (SELECT 1 FROM finance_ledger_journal_events e WHERE e.journal_id=o.journal_id AND e.company_id=o.company_id AND (e.event='rejected' OR (e.event='withdrawn' AND NOT EXISTS (SELECT 1 FROM finance_ledger_journal_replacements r WHERE r.replaced_journal_id=o.journal_id AND r.company_id=o.company_id)))) LIMIT 1",
             &[&tenant, &company]).await?.is_some() {
-            return Err(refused("source_reference", "the book already has an opening journal; approve or reject it, or reverse its entry and submit a correction journal"));
+            return Err(refused("source_reference", "the book already has an opening journal; approve it, withdraw or reject it and submit again, or correct it by submitting with the journal it replaces"));
         }
         if client.query_opt("SELECT id FROM finance_ledger_entries WHERE tenant_id=$1 AND company_id=$2 LIMIT 1", &[&tenant, &company]).await?.is_some() {
             return Err(refused("conversion_date", "opening balances require a book without posted entries"));
@@ -194,7 +213,7 @@ pub(crate) async fn prepare(
     let review = json!({"conversion_date":source.conversion_date.to_string(),
         "currency_code":book.currency_code,"minor_units":book.minor_units,"source_reference":reference,"rows":mapped,
         "debit":debit,"credit":credit,
-        "existing_journal":existing,"posts":false,
+        "existing_journal":existing,"replaces_journal_id":source.replaces_journal_id,"replaces_journal_number":replaced_number,"posts":false,
         "excluded":"Open invoices and bills, asset registers, bank reconciliation items, tax return detail and historical transactions are not migrated. Control-account balances remain differences until opening invoices and bills are supported. Income and expense balances appear on the conversion date; review the YTD reporting bridge with the accountant."});
     Ok(Prepared {
         entry,
@@ -234,7 +253,7 @@ impl Ledger {
         source: &OpeningBalances,
     ) -> Result<Journal> {
         crate::join(tx, scope, company, SUBMIT_JOURNALS).await?;
-        let prepared = prepare(tx.sql(), scope.tenant(), company, source).await?;
+        let prepared = prepare(tx.sql(), scope, company, source).await?;
         if let Some(journal) = prepared.existing {
             return Ok(journal);
         }
@@ -248,6 +267,43 @@ impl Ledger {
             Ok(((), vec![Change {kind:"finance.ledger.opening_balances".into(),id:row.get(0),old:Value::Null,
                 new:json!({"source_reference":reference,"source_csv":csv,"journal_id":journal_id})}]))
         })).await?;
-        Ok(journal)
+        if let Some(replaced) = source.replaces_journal_id {
+            let reason = format!(
+                "Corrected by opening balances source {}",
+                source.source_reference.trim()
+            );
+            Self::record_withdrawal(tx, scope, company, replaced, Some(reason)).await?;
+            tx.mutate(move |sql| {
+                Box::pin(async move {
+                    let change = journals::link(sql, tenant, company, journal_id, replaced).await?;
+                    Ok(((), vec![change]))
+                })
+            })
+            .await?;
+        }
+        Ok(journals::find(tx.sql(), tenant, company, journal_id)
+            .await?
+            .ok_or(bilibi_database::Error::Internal)?)
     }
+}
+
+/// An opening journal is corrected only by submitting opening balances again
+/// with `replaces_journal_id`, so its replacement keeps the opening's source
+/// reference and CSV; a manual replacement would leave the book with no
+/// opening record and let a second opening be submitted beside it.
+pub(crate) async fn refuse_manual_replacement(
+    client: &dyn OperationClient,
+    scope: &Scope,
+    company: i64,
+    journal_id: i64,
+) -> Result<()> {
+    if client.query_opt(
+        "SELECT id FROM finance_ledger_opening_balances WHERE tenant_id=$1 AND company_id=$2 AND journal_id=$3",
+        &[&scope.tenant(), &company, &journal_id]).await?.is_some() {
+        return Err(refused(
+            "journal_id",
+            format!("is an opening balances journal; correct it from Opening balances (/finance/ledger/opening-balances?correct={journal_id}) or by submitting opening balances again with replaces_journal_id"),
+        ));
+    }
+    Ok(())
 }

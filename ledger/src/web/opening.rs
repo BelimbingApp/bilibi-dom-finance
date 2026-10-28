@@ -13,6 +13,7 @@ use bilibi_ui::{
     StatusKind,
 };
 use serde_json::{json, Value};
+use std::collections::HashMap;
 
 const CONTRACT: &str = "finance.ledger.opening_balances.submit";
 const FIELDS: [&str; 4] = [
@@ -30,12 +31,15 @@ pub(super) struct Opening {
     review: Option<Review>,
     columns: ListColumns,
     destination: Option<String>,
+    /// The waiting opening journal the address names to correct.
+    replaces: Option<i64>,
 }
 
 impl Opening {
-    pub(super) fn new(pages: Pages) -> Self {
+    pub(super) fn new(pages: Pages, query: &HashMap<String, String>) -> Self {
         Self {
             pages,
+            replaces: query.get("correct").and_then(|v| v.parse().ok()),
             values: json!({}),
             refusal: Refusal::default(),
             flash: Flash::default(),
@@ -83,6 +87,16 @@ impl Opening {
                 ),
                 ..Alert::default()
             })?;
+            if self.replaces.is_some() {
+                body.push(&render(Alert {
+                    id: "opening-correcting",
+                    kind: StatusKind::Warning,
+                    body: Html::text(
+                        "You are correcting your waiting opening journal. Submitting withdraws it, so it can never post, and this correction takes its place as the opening; it needs its own approval. Use a new source reference.",
+                    ),
+                    ..Alert::default()
+                })?);
+            }
             let messages = self.refusal.alert(&FIELDS);
             if !messages.is_empty() {
                 body.push(&render(Alert {
@@ -109,7 +123,7 @@ impl Opening {
                     "source_reference",
                     "Source reference",
                     InputKind::Text,
-                    "A permanent export or batch identifier. Keep it unchanged when retrying.",
+                    "A permanent export or batch identifier. Keep it unchanged when retrying; a correction needs a new one.",
                 ),
                 (
                     "csv",
@@ -212,10 +226,13 @@ impl Opening {
                     facts["source_reference"].as_str().unwrap_or(""),
                     super::view::amount(facts["debit"].as_str().unwrap_or(""), units),
                     super::view::amount(facts["credit"].as_str().unwrap_or(""), units),
-                    if facts["existing_journal"].is_null() {
-                        "Submission posts nothing. Separate journal approval is required."
+                    if !facts["existing_journal"].is_null() {
+                        "This source is already recorded. Continue to its journal without creating another.".to_owned()
+                    } else if let Some(number) = facts["replaces_journal_number"].as_i64() {
+                        format!("Submission withdraws journal {number} and posts nothing. This correction becomes the opening and needs separate journal approval.")
                     } else {
-                        "This source is already recorded. Continue to its journal without creating another."
+                        "Submission posts nothing. Separate journal approval is required."
+                            .to_owned()
                     }
                 )),
                 ..Alert::default()
@@ -283,15 +300,13 @@ impl LiveState<Scope, Error> for Opening {
                         )
                         .map_err(Error::refused)?;
                         self.values = json!(fields);
+                        let mut input = self.values.clone();
+                        if let Some(journal) = self.replaces {
+                            input["replaces_journal_id"] = json!(journal);
+                        }
                         match self
                             .pages
-                            .review(
-                                r.scope,
-                                r.credential,
-                                "preview_opening",
-                                CONTRACT,
-                                self.values.clone(),
-                            )
+                            .review(r.scope, r.credential, "preview_opening", CONTRACT, input)
                             .await?
                         {
                             Ok(review) => {

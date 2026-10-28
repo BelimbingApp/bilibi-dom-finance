@@ -2307,6 +2307,7 @@ impl Ledger {
         join(tx, scope, company_id, SUBMIT_JOURNALS).await?;
         let tenant = scope.tenant();
         withdrawable_journal(tx.sql(), scope, company_id, journal_id).await?;
+        opening::refuse_manual_replacement(tx.sql(), scope, company_id, journal_id).await?;
         let reason = journals::validate_withdrawal_reason(reason).map_err(LedgerError::Invalid)?;
         // The replacement is checked and kept first, so a refusal of it
         // leaves nothing recorded; the withdrawal then names it.

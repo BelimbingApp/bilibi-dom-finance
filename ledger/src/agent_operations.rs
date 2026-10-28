@@ -211,7 +211,7 @@ impl Write {
             Self::OpenBook => "Open the book once; currency and minor units are permanent. Controlled bookkeeping starts on.",
             Self::CreateAccount => "Create an account; its code and account type are permanent.",
             Self::UpdateAccount => "Change the account; deactivation requires a zero balance. A new retained-earnings designation releases the previous one.",
-            Self::Opening => "Submit opening balances for approval; no entry posts yet. Open operational items and historical transactions are excluded.",
+            Self::Opening => "Submit opening balances for approval; no entry posts yet. With replaces_journal_id, withdraw your waiting opening journal and submit this correction in its place. Open operational items and historical transactions are excluded.",
             Self::Submit => "Submit a manual journal for approval; no entry posts yet.",
             Self::Approve => "Approve the journal and post its immutable entry; separation of duties still applies.",
             Self::Reject => "Reject the journal permanently with this reason; no entry posts.",
@@ -306,7 +306,7 @@ impl Write {
                 json!({"before":before,"after":after,"released_retained_earnings":released,"accounts":all})
             }
             Self::Opening => {
-                opening::prepare(client, tenant, company, &opening_input(input)?)
+                opening::prepare(client, scope, company, &opening_input(input)?)
                     .await?
                     .review
             }
@@ -324,6 +324,15 @@ impl Write {
                             .await?,
                     )
                 };
+                if matches!(self, Self::Replace) {
+                    opening::refuse_manual_replacement(
+                        client,
+                        scope,
+                        company,
+                        id(input, "journal_id")?,
+                    )
+                    .await?;
+                }
                 if matches!(self, Self::Withdraw | Self::Replace) {
                     journals::validate_withdrawal_reason(opt_text(input, "reason").as_deref())
                         .map_err(LedgerError::Invalid)?;
@@ -1080,6 +1089,11 @@ fn opening_input(input: &Value) -> Result<OpeningBalances> {
         currency_code: text(input, "currency_code")?.into(),
         source_reference: text(input, "source_reference")?.into(),
         csv: text(input, "csv")?.into(),
+        replaces_journal_id: input
+            .get("replaces_journal_id")
+            .filter(|value| !value.is_null())
+            .map(|_| id(input, "replaces_journal_id"))
+            .transpose()?,
     })
 }
 fn opening_schema() -> Value {
@@ -1094,6 +1108,7 @@ fn opening_schema() -> Value {
             "conversion_date":{"type":"string","format":"date","description":"First date Bilibi owns transaction processing; use the source closing trial balance immediately before it."},
             "currency_code":{"type":"string","maxLength":3,"description":"Must match the book currency exactly; no currency conversion."},
             "source_reference":{"type":"string","maxLength":100,"description":"Permanent source export/batch identifier. Identical retries return the recorded journal."},
+            "replaces_journal_id":{"type":"integer","minimum":1,"description":"Optional. The waiting opening journal you submitted, to correct: it is withdrawn and this submission becomes the book's opening, needing its own approval. Use a new source_reference. Omit for a first submission, or after the earlier opening was rejected or withdrawn."},
             "csv":{"type":"string","maxLength":131072,"description":"UTF-8 CSV with header source_id,account_code,debit,credit; 2–500 nonzero rows, unique source IDs, existing active account codes, one positive ungrouped amount per row. At most 128 KiB."}
         }),
     )
@@ -1196,7 +1211,7 @@ inventory::submit! { Contribution::new(DEFINITIONS,"finance/ledger.operations",P
         Operation {key:"finance.ledger.book.open",title:"Open the book",summary:"Permanently choose currency and minor units; enable controlled bookkeeping.",keywords:&[],capability:MANAGE_ACCOUNTS,input:book_schema,output,handler:Handler::SafeWrite(&Write::OpenBook),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.account.create",title:"Create an account",summary:"Create a chart account, optionally grouped or designated for retained earnings.",keywords:&[],capability:MANAGE_ACCOUNTS,input:account_schema,output,handler:Handler::SafeWrite(&Write::CreateAccount),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.account.update",title:"Change an account",summary:"Change name, grouping, active flag or retained-earnings designation; preserve code and type.",keywords:&[],capability:MANAGE_ACCOUNTS,input:change_schema,output,handler:Handler::SafeWrite(&Write::UpdateAccount),channels:Channels::Every,step_up:&[]},
-        Operation {key:"finance.ledger.opening_balances.submit",title:"Submit opening balances",summary:"Map a source closing trial balance CSV to existing accounts, preview balanced opening amounts and retain source evidence in one approval journal. Identical source retries return the recorded journal; open items and history are excluded.",keywords:&["conversion", "opening balances", "CSV"],capability:SUBMIT_JOURNALS,input:opening_schema,output,handler:Handler::SafeWrite(&Write::Opening),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.ledger.opening_balances.submit",title:"Submit opening balances",summary:"Map a source closing trial balance CSV to existing accounts, preview balanced opening amounts and retain source evidence in one approval journal. Identical source retries return the recorded journal; replaces_journal_id corrects your waiting opening journal; open items and history are excluded.",keywords:&["conversion", "opening balances", "CSV"],capability:SUBMIT_JOURNALS,input:opening_schema,output,handler:Handler::SafeWrite(&Write::Opening),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.journal.submit",title:"Submit a journal",summary:"Keep balanced manual lines for approval without posting an entry.",keywords:&[],capability:SUBMIT_JOURNALS,input:submit_schema,output,handler:Handler::SafeWrite(&Write::Submit),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.journal.approve",title:"Approve a journal",summary:"Approve and post atomically; recheck accounts, period and separation of duties.",keywords:&[],capability:APPROVE_JOURNALS,input:journal_schema,output,handler:Handler::SafeWrite(&Write::Approve),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.journal.withdraw",title:"Withdraw a journal",summary:"Take back your own submitted journal before approval; it stays on record and no entry posts.",keywords:&[],capability:SUBMIT_JOURNALS,input:withdraw_schema,output,handler:Handler::SafeWrite(&Write::Withdraw),channels:Channels::Every,step_up:&[]},

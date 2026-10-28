@@ -935,7 +935,7 @@ impl Pages {
     fn state(&self, r: &PageRequest<'_, Scope>) -> Result<Box<dyn LiveState<Scope, Error>>> {
         let pages = self.clone();
         Ok(match r.operation {
-            "opening" => Box::new(opening::Opening::new(pages)),
+            "opening" => Box::new(opening::Opening::new(pages, r.query)),
             "book" => Box::new(book::Book::new(pages)),
             "accounts" => Box::new(accounts::Accounts::new(pages, r.query, r.framed)?),
             "account" => Box::new(account::Account::new(pages, id_param(r.path)?)),

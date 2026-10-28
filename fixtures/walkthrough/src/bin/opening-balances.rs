@@ -29,6 +29,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut source = OpeningBalances {
         conversion_date: date(2026, 7, 1), currency_code: "MYR".into(),
         source_reference: "SOURCE-CLOSE-2026-06-30".into(),
+        replaces_journal_id: None,
         csv: "source_id,account_code,debit,credit\nbank,1000,10000,\nreceivables,1100,3000,\ncost,5000,2000,\npayables,2000,,1500\ncapital,3000,,8000\nsales,4000,,5500\n".into(),
     };
     let original = source.csv.clone();
@@ -52,7 +53,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ));
         invalids += 1;
     }
-    source.csv = original;
+    source.csv = original.clone();
     source.currency_code = "USD".into();
     assert!(matches!(
         ledger
@@ -111,10 +112,150 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .await?
             .id
     );
+    // A withdrawn opening with no replacement no longer blocks a new submission.
     source.source_reference.push_str("-REVISED");
+    let withdrawn = ledger
+        .submit_opening_balances(&manager, COMPANY, &source)
+        .await?;
+    ledger
+        .withdraw_journal(
+            &manager,
+            COMPANY,
+            withdrawn.id,
+            Some("Wrong export selected"),
+        )
+        .await?;
+    assert_eq!(
+        withdrawn.id,
+        ledger
+            .submit_opening_balances(&manager, COMPANY, &source)
+            .await?
+            .id
+    );
+    assert!(matches!(
+        ledger
+            .approve_journal(&reviewer, COMPANY, withdrawn.id)
+            .await,
+        Err(LedgerError::JournalDecided)
+    ));
+    let wrong = original
+        .replace("10000,", "10001,")
+        .replace(",8000\n", ",8001\n");
+    source.csv = wrong;
+    source.source_reference.push_str("-RESUBMITTED");
+    let resubmitted = ledger
+        .submit_opening_balances(&manager, COMPANY, &source)
+        .await?;
+
+    // One live opening: another source cannot sit beside it, and the generic
+    // manual correction would drop its source evidence, so both are refused.
+    let other = OpeningBalances {
+        conversion_date: source.conversion_date,
+        currency_code: "MYR".into(),
+        source_reference: "SOURCE-OTHER".into(),
+        csv: original.clone(),
+        replaces_journal_id: None,
+    };
+    assert!(matches!(
+        ledger
+            .submit_opening_balances(&manager, COMPANY, &other)
+            .await,
+        Err(LedgerError::Invalid(_))
+    ));
+    let units = ledger.get_book(&manager, COMPANY).await?.minor_units;
+    let chart = ledger.list_accounts(&manager, COMPANY).await?;
+    let account = |code: &str| chart.iter().find(|a| a.code == code).map(|a| a.id);
+    let manual = bilibi_finance_ledger::NewEntry {
+        entry_date: source.conversion_date,
+        description: "Opening correction typed as a manual journal".into(),
+        reference: None,
+        lines: vec![
+            bilibi_finance_ledger::NewLine {
+                account_id: account("1000").ok_or("bank")?,
+                debit: Money::parse("10000", units)?,
+                credit: Money::ZERO,
+                description: None,
+            },
+            bilibi_finance_ledger::NewLine {
+                account_id: account("3000").ok_or("capital")?,
+                debit: Money::ZERO,
+                credit: Money::parse("10000", units)?,
+                description: None,
+            },
+        ],
+    };
+    assert!(matches!(
+        ledger
+            .replace_journal(&manager, COMPANY, resubmitted.id, &manual, None)
+            .await,
+        Err(LedgerError::Invalid(_))
+    ));
+    let unrelated = ledger.submit_journal(&manager, COMPANY, &manual).await?;
+    let mut misdirected = OpeningBalances {
+        source_reference: "SOURCE-MISDIRECTED".into(),
+        replaces_journal_id: Some(unrelated.id),
+        ..other.clone()
+    };
+    assert!(matches!(
+        ledger
+            .submit_opening_balances(&manager, COMPANY, &misdirected)
+            .await,
+        Err(LedgerError::Invalid(_))
+    ));
+    ledger
+        .withdraw_journal(&manager, COMPANY, unrelated.id, None)
+        .await?;
+    misdirected.replaces_journal_id = Some(withdrawn.id);
+    assert!(matches!(
+        ledger
+            .submit_opening_balances(&manager, COMPANY, &misdirected)
+            .await,
+        Err(LedgerError::JournalDecided)
+    ));
+
+    // Correcting the waiting opening replaces it with one that carries the
+    // opening record; the original can never be approved.
+    source.csv = original.clone();
+    source.source_reference = "SOURCE-CLOSE-2026-06-30-CORRECTED".into();
+    source.replaces_journal_id = Some(resubmitted.id);
     let journal = ledger
         .submit_opening_balances(&manager, COMPANY, &source)
         .await?;
+    assert_eq!(journal.replaces_journal_id, Some(resubmitted.id));
+    assert_eq!(
+        ledger
+            .get_journal(&manager, COMPANY, resubmitted.id)
+            .await?
+            .replaced_by_journal_id,
+        Some(journal.id)
+    );
+    assert_eq!(
+        journal.id,
+        ledger
+            .submit_opening_balances(&manager, COMPANY, &source)
+            .await?
+            .id
+    );
+    assert!(matches!(
+        ledger
+            .approve_journal(&reviewer, COMPANY, resubmitted.id)
+            .await,
+        Err(LedgerError::JournalDecided)
+    ));
+    assert!(matches!(
+        ledger
+            .submit_opening_balances(&manager, COMPANY, &other)
+            .await,
+        Err(LedgerError::Invalid(_))
+    ));
+    source.replaces_journal_id = None;
+    assert!(matches!(
+        ledger
+            .submit_opening_balances(&manager, COMPANY, &source)
+            .await,
+        Err(LedgerError::Invalid(_))
+    ));
+    source.replaces_journal_id = Some(resubmitted.id);
     let posted = ledger
         .approve_journal(&reviewer, COMPANY, journal.id)
         .await?;
@@ -161,6 +302,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(LedgerError::Invalid(_))
     ));
     source.csv = source.csv.replace("10001", "10000");
+    source.replaces_journal_id = None;
     source.source_reference.push_str("-DUPLICATE");
     assert!(matches!(
         ledger
@@ -169,7 +311,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(LedgerError::Invalid(_))
     ));
     println!(
-        "opening: racing retries share a journal; same-person approval refused; rejected source replaced with a new reference; six account balances reconcile to 15000.00; posted retry creates no entry"
+        "opening: racing retries share a journal; same-person approval refused; rejected and withdrawn openings resubmitted with new references; a waiting opening corrected by replacement that carries the opening record; a second live opening, a manual replacement and a decided original all refused; six account balances reconcile to 15000.00; posted retry creates no entry"
     );
 
     ledger
@@ -278,16 +420,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let evidence = ledger
         .evidence_page(&manager, COMPANY, "opening_balances", Some(500), None)
         .await?;
-    assert_eq!(evidence.rows.len(), 2);
+    assert_eq!(evidence.rows.len(), 4);
     assert_eq!(
-        evidence.rows[1]["source_csv"].as_str(),
+        evidence.rows[3]["source_csv"].as_str(),
         Some(source.csv.as_str())
     );
     let client = db.get().await?;
     let audited: i64 = client.query_one("SELECT count(*) FROM base_audit_mutations WHERE auditable_type='finance.ledger.opening_balances'", &[]).await?.get(0);
-    assert_eq!(audited, 2);
+    assert_eq!(audited, 4);
     assert!(client.execute("UPDATE finance_ledger_opening_balances SET source_csv='overwritten' WHERE tenant_id=1 AND company_id=1", &[]).await.is_err());
-    println!("opening: reversal and independently approved correction reconcile revised balances to 15100.00; original pin reproduces 15000.00; two source evidence records and their audit changes retained; database refuses evidence overwrite");
+    println!("opening: reversal and independently approved correction reconcile revised balances to 15100.00; original pin reproduces 15000.00; four source evidence records (rejected, withdrawn, replaced and approved) and their audit changes retained; database refuses evidence overwrite");
     println!(
         "EXCLUDED: settleable open invoices/bills, aging and control tie-outs, bank reconciliation items, asset registers, tax return detail, historical/comparative migration; no complete conversion claim"
     );
