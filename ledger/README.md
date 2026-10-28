@@ -1,7 +1,7 @@
 # Ledger
 
 Module ID: `finance/ledger` (Bilimbi `Bilimbi.Finance.Ledger`). A company's
-general ledger: its book, chart of accounts, journal entries, posting
+general ledger: its book, chart of accounts (accounts, account groups and starter charts), journal entries, posting
 notices, fiscal years with period closing and the year-end close, controlled
 bookkeeping and late-recording reviews, reversals, the separation of duties
 with its approval exceptions and their reviews, manual journals, the trial

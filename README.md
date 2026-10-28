@@ -21,7 +21,7 @@ Bilibi checkout; it does not build on its own.
 Every other Finance module of Bilimbi (SST) lands beside
 the ledger as a sibling module folder, in later slices of the port.
 
-The ledger also contributes 25 agent operations through Bilibi's shared `/api/v1` and `/mcp`: eight reads and seventeen reviewed writes for books, accounts, journals, reversals, fiscal closing and the trial balance. The [ledger contract](ledger/README.md#agent-operations) and [agent guide](ledger/guide.md) describe their inputs and controls. Bilimbi's ledger has no pages. This port adds them, so a person without an AI agent can do the same daily work: the book, the chart of accounts, journal entries and reversals, manual journals, fiscal years and periods, and the trial balance ([ledger pages](ledger/README.md#pages)). Each page calls the same operation as an agent does. Every Finance operation (ledger, payables, receivables, e-invoice) serves every door (`channels: every`) and lists no step-up: Finance declares no Base Step-up operation, as Bilimbi has none.
+The ledger also contributes 31 agent operations through Bilibi's shared `/api/v1` and `/mcp`: eleven reads and twenty reviewed writes for books, accounts, account groups, starter charts, journals, reversals, fiscal closing and the trial balance. The [ledger contract](ledger/README.md#agent-operations) and [agent guide](ledger/guide.md) describe their inputs and controls. Bilimbi's ledger has no pages. This port adds them, so a person without an AI agent can do the same daily work: the book, the chart of accounts and its account groups, journal entries and reversals, manual journals, fiscal years and periods, and the trial balance ([ledger pages](ledger/README.md#pages)). Each page calls the same operation as an agent does. Every Finance operation (ledger, payables, receivables, e-invoice) serves every door (`channels: every`) and lists no step-up: Finance declares no Base Step-up operation, as Bilimbi has none.
 
 ## Mount
 
@@ -57,7 +57,7 @@ The settings key is an ephemeral 32-byte key for the encrypted e-invoice setting
 Its NR1 section first exercises Receivables setup and drafts through the real facade. Its NR2 section runs last: issue-time snapshots and numbering races, multi-control receipts, owned reversals, inactive-control settlements, closed-period and late audit rollback, dated/pinned aging and tax boundaries, unrounded received-tax shares, competing payments/reversals, control tie-out differences, both attachment sources, eleven evidence exports, live grants, archival, SQL guards and complete row audits. See the [Receivables contract](receivables/README.md) for inputs and parity adaptations.
 
 It migrates a fresh disposable database, installs the fixtures, and prints
-the facade's answers to accepted and refused books, accounts, entries (owners,
+the facade's answers to accepted and refused books, accounts and account groups, the starter charts (core-only and with optional sections, repeat and conflict refusals), entries (owners,
 settlement accounts, concurrent posts, paged reads), reach (grants,
 affiliation, tenancy, archival), money finer than the book allows, the
 database's own refusals (edits to posted entries, unbalanced or lineless
