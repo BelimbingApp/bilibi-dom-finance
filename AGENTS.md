@@ -102,11 +102,18 @@ they govern this code and are not copied here.
   of another type once the type changes, `Draft::reconcile` in
   `ledger/src/web/accounts.rs`) and offer only eligible choices, instead of a
   hint beside an option the ledger will refuse.
-- Name an account for a person name-first: `view::account_label` ("Cash ·
-  1000") for a select option or a sentence, `account_name` (`ledger/src/web/mod.rs`,
-  the code in muted italics) for HTML a page controls; never `code name`. A
-  `Choice` is plain text, so a select or `Combobox` option cannot carry the
-  muted code (a Platform follow-up), and no page styles its own option.
+- Offer an account as a choice with `bilibi_ui::Combobox` over
+  `view::account_choice` (`ledger/src/web/view.rs`; `Account::choice` in
+  Receivables, `Choice::new(name, id).detail(code)` elsewhere), never a native
+  select over `view::account_label` text: the box and list draw the name first
+  and the code muted and italic, and typing searches both. Keep
+  `view::account_label` ("Cash · 1000") for a sentence and `account_name`
+  (`ledger/src/web/mod.rs`) for HTML a page controls; never `code name`. An
+  inline editor passes the combobox as `InlineChoice`'s editor with an id of
+  `...-input` (the wrapper owns `...-editor`). Platform gaps: the combobox draws
+  no required mark (it sets `required` on its input only) and the filter
+  toolbar has no combobox, so the Journal entries account filter is a shared
+  `Form` on the `filters` event around one.
 - Declare every page or panel service's write events in its `PageWrites`
   (Bilibi `apps/base/agent_api/README.md`): the host refuses, as
   `Error::Internal` at run time, a live-event write its service has not

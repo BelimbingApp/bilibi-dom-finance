@@ -185,7 +185,7 @@ impl Setup {
             self.accounts
                 .iter()
                 .filter(|a| types.is_empty() || types.contains(&a.account_type))
-                .map(|a| Choice::new(format!("{} {}", a.code, a.name), a.id.to_string()))
+                .map(|a| Choice::new(&a.name, a.id.to_string()).detail(&a.code))
                 .collect()
         };
         // What is saved, read first.

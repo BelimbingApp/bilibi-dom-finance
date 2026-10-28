@@ -1,5 +1,6 @@
 //! What the pages read back from the ledger's read contracts. The contracts
 //! answer JSON; these are the pages' own typed copies of the fields they show.
+use bilibi_ui::Choice;
 use rust_decimal::Decimal;
 use serde::Deserialize;
 use serde_json::Value;
@@ -172,6 +173,12 @@ pub(crate) fn decimal(text: &str) -> Decimal {
 /// `super::account_name` is the same in HTML, with the code in muted italics.
 pub(crate) fn account_label(account: &Account) -> String {
     format!("{} · {}", account.name, account.code)
+}
+
+/// An account as a combobox choice: the name, with the code drawn muted and
+/// italic after it by the shared control.
+pub(crate) fn account_choice(account: &Account) -> Choice {
+    Choice::new(&account.name, account.id.to_string()).detail(&account.code)
 }
 
 /// Accounts in the order a name-first list reads: by name, then by code.

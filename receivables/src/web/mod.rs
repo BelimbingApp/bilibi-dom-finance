@@ -29,7 +29,7 @@ use bilibi_module_registry::{
 use bilibi_tenancy::Scope;
 use bilibi_ui::{
     page::{MountFuture, Page, PageBody, PageFuture, PageRequest},
-    FlashMap, Html, StatusKind, NO_FLASH,
+    Choice, FlashMap, Html, StatusKind, NO_FLASH,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
@@ -390,10 +390,16 @@ impl Account {
         format!("{} {}", self.code, self.name)
     }
 
-    /// The account name first, then its code, for a choice's text (a native
-    /// option cannot style its parts); `account_html` is the styled form.
+    /// The account name first, then its code in a sentence;
+    /// `account_html` is the styled form.
     pub(super) fn choice_label(&self) -> String {
         format!("{} ({})", self.name, self.code)
+    }
+
+    /// The account as a combobox choice: the name, with its code drawn
+    /// muted and italic after it.
+    pub(super) fn choice(&self) -> Choice {
+        Choice::new(&self.name, self.id.to_string()).detail(&self.code)
     }
 }
 

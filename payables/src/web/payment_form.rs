@@ -389,7 +389,7 @@ impl PaymentForm {
             .options(
                 self.accounts
                     .iter()
-                    .map(|a| Choice::new(format!("{} {}", a.code, a.name), a.id.to_string()))
+                    .map(|a| Choice::new(&a.name, a.id.to_string()).detail(&a.code))
                     .collect(),
             )
             .errors(self.errors_for("payables-pay-account"))

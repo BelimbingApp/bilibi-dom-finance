@@ -11,8 +11,8 @@ use bilibi_database::{Error, Result};
 use bilibi_tenancy::Scope;
 use bilibi_ui::{
     page::{LiveBody, LiveFuture, LiveInput, LiveRequest, LiveState},
-    BackLink, Badge, BadgeKind, Button, Card, Choice, CommitStates, CommitStatus, ConfirmDialog,
-    EmptyState, Fact, Facts, Field, Header, Html, InlineChoice, InlineEdit, InlineField, InputKind,
+    BackLink, Badge, BadgeKind, Button, Card, Choice, Combobox, CommitStates, CommitStatus,
+    ConfirmDialog, EmptyState, Fact, Facts, Header, Html, InlineChoice, InlineEdit, InlineField,
     PageVariant, SectionHeading,
 };
 use serde_json::{json, Value};
@@ -143,17 +143,12 @@ impl Account {
             None => Html::text("None"),
         };
         let mut options = vec![Choice::new("No group", "")];
-        options.extend(
-            groups
-                .iter()
-                .map(|a| Choice::new(view::account_label(a), a.id.to_string())),
-        );
+        options.extend(groups.iter().map(|a| view::account_choice(a)));
         let editor = render(
-            Field::named("parent")
-                .id("ledger-account-parent-select")
-                .label_class("sr-only")
-                .label("Group")
-                .kind(InputKind::Select)
+            Combobox::new("ledger-account-parent-select", "parent")
+                .aria_label("Group")
+                .placeholder("No group")
+                .wrapper_class("mb-0")
                 .value(account.parent_id.map(|p| p.to_string()).unwrap_or_default())
                 .options(options),
         )?;

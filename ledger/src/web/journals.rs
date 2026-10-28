@@ -11,10 +11,10 @@ use bilibi_tenancy::Scope;
 use bilibi_ui::{
     list_state::FILTERS_FORM,
     page::{LiveBody, LiveFuture, LiveInput, LiveRequest, LiveState},
-    params, Alert, Badge, BadgeKind, BuiltinColumn, Button, ButtonVariant, Card, Cell, Choice,
-    ColumnsOutcome, CreateButton, EmptyState, Field, Filter, FilterToolbar, FlexRow, FlexTable,
-    Form, Header, Html, InputKind, ListColumns, ListSpec, ListState, Modal, ModalWidth,
-    PageVariant, RecordLink, StatusKind, TableEmpty, ToolbarControl,
+    params, Alert, Attrs, Badge, BadgeKind, BuiltinColumn, Button, ButtonVariant, Card, Cell,
+    Choice, ColumnsOutcome, Combobox, CreateButton, EmptyState, Field, Filter, FilterToolbar,
+    FlexRow, FlexTable, Form, Header, Html, InputKind, ListColumns, ListSpec, ListState, Modal,
+    ModalWidth, PageVariant, RecordLink, StatusKind, TableEmpty, ToolbarControl,
 };
 use rust_decimal::Decimal;
 use serde_json::{json, Value};
@@ -549,7 +549,7 @@ impl Journals {
         };
         let choices: Vec<Choice> = view::by_name(accounts.iter().filter(|a| a.active))
             .iter()
-            .map(|a| Choice::new(view::account_label(a), a.id.to_string()))
+            .map(|a| view::account_choice(a))
             .collect();
         let mut body = Html::EMPTY;
         let mut messages = draft.refusal.alert(&[
@@ -617,13 +617,19 @@ impl Journals {
             };
             // Every line that is sent needs its account; the two amounts are
             // one choice between them, so neither is marked on its own.
+            let account_field = cell("account", "Account");
             let account = render(
-                cell("account", "Account")
-                    .kind(InputKind::Select)
-                    .prompt("Choose an account")
+                Combobox::new(account_field.id.clone(), account_field.name.clone())
+                    .label("Account")
+                    .placeholder("Choose an account")
+                    .wrapper_class("mb-0")
                     .options(choices.clone())
                     .value(&line.account)
-                    .required(),
+                    .errors(account_field.errors.clone())
+                    .attrs(Attrs {
+                        required: true,
+                        ..Attrs::default()
+                    }),
             )?;
             let amount = |side: Side, key: &str, label: &str, value: &str| {
                 let mut field = cell(key, label)
