@@ -299,12 +299,13 @@ impl Payables {
 /// original historical document date retained for aging.
 pub(crate) async fn settlement_date(
     c: &dyn OperationClient,
-    s: &Scope,
+    tenant: i64,
     company: i64,
     document: i64,
     date: jiff::civil::Date,
+    field: &str,
 ) -> Result<()> {
-    if c.query_opt("SELECT i.id FROM finance_payables_opening_items i JOIN finance_payables_opening_batches b ON b.id=i.batch_id AND b.tenant_id=$1 AND b.company_id=$2 WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=$3 AND b.conversion_date>$4::text::date",&[&s.tenant(),&company,&document,&date.to_string()]).await?.is_some() {return Err(invalid("document_id","cannot be settled before the conversion date"));}
+    if c.query_opt("SELECT i.id FROM finance_payables_opening_items i JOIN finance_payables_opening_batches b ON b.id=i.batch_id AND b.tenant_id=$1 AND b.company_id=$2 WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=$3 AND b.conversion_date>$4::text::date",&[&tenant,&company,&document,&date.to_string()]).await?.is_some() {return Err(invalid(field,"cannot be settled before the conversion date"));}
     Ok(())
 }
 

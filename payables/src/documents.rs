@@ -52,6 +52,7 @@ async fn note_capacity(
     let Some(bill) = bill else {
         return Ok(serde_json::Value::Null);
     };
+    crate::opening::settlement_date(c, tenant, company, bill, as_of, "document_date").await?;
     let lowest = balances::lowest(c, tenant, company, bill, as_of).await?;
     if amount > lowest {
         return Err(PayablesError::ExceedsOutstanding);

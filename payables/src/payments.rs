@@ -430,7 +430,15 @@ impl Payables {
                 if b.party.key != key {
                     return Err(invalid("document_id", "is another party's bill"));
                 }
-                crate::opening::settlement_date(c, s, company, b.id, input.payment_date).await?;
+                crate::opening::settlement_date(
+                    c,
+                    s.tenant(),
+                    company,
+                    b.id,
+                    input.payment_date,
+                    "document_id",
+                )
+                .await?;
                 if b.document_date > input.payment_date {
                     return Err(invalid("document_id", "is dated after the payment"));
                 }

@@ -6,7 +6,9 @@ use bilibi_finance_fixed_assets::{Assumptions, FixedAssets, Method, ReportPins, 
 use bilibi_finance_ledger::{
     AccountType, Ledger, Money, NewAccount, NewBook, NewFiscalYear, OpeningBalances, Reversal,
 };
-use bilibi_finance_payables::{Payables, Settings, SettingsInput};
+use bilibi_finance_payables::{
+    DocumentLineInput, NewDocument, Party, Payables, PayablesError, Settings, SettingsInput,
+};
 use bilibi_finance_receivables::{AgingOptions, Receivables};
 use bilibi_finance_walkthrough_fixture::{install, sign_in};
 use bilibi_module_registry::{Contribution, Provenance, Services};
@@ -174,7 +176,7 @@ async fn setup(db: &Db, services: &Services, company: i64) -> Outcome<Value> {
         "source_id,description,category_revision_id,acquisition_date,in_service_date,cost,accumulated_depreciation,remaining_life_months,residual_value\nasset-3,Source register asset,{revision},2024-06-01,2024-07-01,12000,1800,96,0\n"
     );
     Ok(
-        json!({"company_id":company,"customer_id":customer.id,"invoice_series":invoice.id,"payment_series":payment.id,"bank":account("1000"),"ar":AR,"ap":AP,"assets":asset_csv,"revision":revision}),
+        json!({"company_id":company,"customer_id":customer.id,"invoice_series":invoice.id,"payment_series":payment.id,"bank":account("1000"),"ar":AR,"ap":AP,"expense":account("5000"),"assets":asset_csv,"revision":revision}),
     )
 }
 async fn prove(db: &Db, services: &Services) -> Outcome<()> {
@@ -412,6 +414,53 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
             .tied_out
     );
     let bill = ap.list_documents(&s, company, &Default::default()).await?[0].id;
+    let note_on = |day| NewDocument {
+        party: Party {
+            key: "conversion-vendor".into(),
+            name: "Conversion vendor".into(),
+            tax_id: None,
+            registration_id: None,
+            address: None,
+        },
+        party_document_number: Some("DEBIT-PROOF".into()),
+        document_date: day,
+        due_date: None,
+        description: Some("Debit note conversion-date proof".into()),
+        lines: vec![DocumentLineInput {
+            description: "Supplier credit".into(),
+            account_id: config["expense"].as_i64().expect("expense account"),
+            amount: Money::parse("100", trial.minor_units).expect("fixture money"),
+            tax_code_id: None,
+            external_order_line_id: None,
+            order_line_id: None,
+            quantity: None,
+        }],
+        tax_lines: None,
+    };
+    match ap
+        .create_debit_note(&manager, company, bill, &note_on(date(2026, 6, 15)))
+        .await
+    {
+        Err(PayablesError::Invalid(fields)) => {
+            let text = format!("{fields:?}");
+            assert!(text.contains("document_date"), "{text}");
+            assert!(
+                text.contains("cannot be settled before the conversion date"),
+                "{text}"
+            );
+        }
+        other => panic!("debit note before conversion was not refused: {other:?}"),
+    }
+    assert!(matches!(
+        ap.create_debit_note(&manager, company, 0, &note_on(date(2026, 7, 15)))
+            .await,
+        Err(PayablesError::DocumentNotFound)
+    ));
+    let note = ap
+        .create_debit_note(&manager, company, bill, &note_on(date(2026, 7, 15)))
+        .await?;
+    ap.void_document(&manager, company, note.id, "Conversion-date proof only")
+        .await?;
     let amount = Money::parse("500", trial.minor_units)?;
     let request = ap
         .submit_payment(
