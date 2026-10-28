@@ -46,25 +46,22 @@ pub async fn prove(
         .rows[0]
         .asset
         .id;
-    // 600 source rows exceed the former complete-register limit. Each chunk
-    // is independently retained; none is settleable until final reconciliation.
+    // 10,000 source rows (the register limit) exceed one direct import. Each
+    // chunk is independently retained; none is settleable until reconciliation.
     let header="source_id,customer_code,document_reference,document_date,due_date,original_total,outstanding,control_account_code\n";
     let chunk = |start, end| {
         let mut csv = header.to_owned();
         for n in start..end {
             csv.push_str(&format!(
-                "corrected-{n},CONVERSION-CUSTOMER,CORRECTED-{n},2026-05-15,2026-06-30,5,5,1100\n"
+                "corrected-{n},CONVERSION-CUSTOMER,CORRECTED-{n},2026-05-15,2026-06-30,0.30,0.30,1100\n"
             ));
         }
         csv
     };
-    let common = json!({"source_reference":"AR-CORRECTED","currency_code":"MYR","series_id":config["invoice_series"],"replaces_batch_id":batches[0]["id"],"reason":"Replace incomplete source invoice detail","effective_date":"2026-08-01","part_count":2});
+    let common = json!({"source_reference":"AR-CORRECTED","currency_code":"MYR","series_id":config["invoice_series"],"replaces_batch_id":batches[0]["id"],"reason":"Replace incomplete source invoice detail","part_count":20});
     let mut part1 = common.clone();
     part1["part"] = json!(1);
-    part1["csv"] = json!(chunk(0, 300));
-    let mut part2 = common.clone();
-    part2["part"] = json!(2);
-    part2["csv"] = json!(chunk(300, 600));
+    part1["csv"] = json!(chunk(0, 500));
     assert_eq!(
         ar.stage_opening_import(&preparer, company, &part1).await?["state"],
         "committed"
@@ -81,29 +78,34 @@ pub async fn prove(
         .await
         .is_err());
     let mut changed = part1.clone();
-    changed["csv"] = json!(chunk(0, 299));
+    changed["csv"] = json!(chunk(0, 499));
     assert!(ar
         .stage_opening_import(&preparer, company, &changed)
         .await
         .is_err());
     changed = part1.clone();
-    changed["part_count"] = json!(3);
+    changed["part_count"] = json!(21);
     assert!(ar
         .stage_opening_import(&preparer, company, &changed)
         .await
         .is_err());
-    ar.stage_opening_import(&preparer, company, &part2).await?;
+    for part in 2..=20 {
+        let mut next = common.clone();
+        next["part"] = json!(part);
+        next["csv"] = json!(chunk((part - 1) * 500, part * 500));
+        ar.stage_opening_import(&preparer, company, &next).await?;
+    }
     assert!(ar
         .import_opening_invoices(&preparer, company, &finalize_ar)
         .await
         .is_err());
 
-    let mut part_ap = json!({"source_reference":"AP-CORRECTED","currency_code":"MYR","replaces_batch_id":batches[1]["id"],"reason":"Correct source bill original total","effective_date":"2026-08-01","part":1,"part_count":1,"csv":batches[1]["source_csv"].as_str().unwrap().replace(",2500,",",2600,")});
+    let mut part_ap = json!({"source_reference":"AP-CORRECTED","currency_code":"MYR","replaces_batch_id":batches[1]["id"],"reason":"Correct source bill original total","part":1,"part_count":1,"csv":batches[1]["source_csv"].as_str().unwrap().replace(",2500,",",2600,")});
     ap.stage_opening_import(&preparer, company, &part_ap)
         .await?;
     part_ap["staged"] = json!(true);
     part_ap["csv"] = json!("");
-    let mut part_assets = json!({"source_reference":"ASSETS-CORRECTED","currency_code":"MYR","replaces_batch_id":batches[2]["id"],"reason":"Correct remaining prospective life","effective_date":"2026-08-01","part":1,"part_count":1,"csv":batches[2]["source_csv"].as_str().unwrap().replace(",96,",",120,")});
+    let mut part_assets = json!({"source_reference":"ASSETS-CORRECTED","currency_code":"MYR","replaces_batch_id":batches[2]["id"],"reason":"Correct remaining prospective life","part":1,"part_count":1,"csv":batches[2]["source_csv"].as_str().unwrap().replace(",96,",",120,")});
     assets
         .stage_opening_import(&preparer, company, &part_assets)
         .await?;
@@ -214,7 +216,7 @@ pub async fn prove(
 
     // A late storage refusal after hundreds of inserted snapshots must roll
     // back the whole register, its recognition and all affected audit changes.
-    db.get().await?.batch_execute("CREATE FUNCTION walkthrough_opening_fault() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.description='Opening invoice CORRECTED-599' THEN RAISE EXCEPTION 'disposable late correction fault'; END IF; RETURN NEW; END $$; CREATE TRIGGER walkthrough_opening_fault BEFORE INSERT ON finance_receivables_documents FOR EACH ROW EXECUTE FUNCTION walkthrough_opening_fault();").await?;
+    db.get().await?.batch_execute("CREATE FUNCTION walkthrough_opening_fault() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.description='Opening invoice CORRECTED-9999' THEN RAISE EXCEPTION 'disposable late correction fault'; END IF; RETURN NEW; END $$; CREATE TRIGGER walkthrough_opening_fault BEFORE INSERT ON finance_receivables_documents FOR EACH ROW EXECUTE FUNCTION walkthrough_opening_fault();").await?;
     assert!(ar
         .import_opening_invoices(&approver, company, &finalize_ar)
         .await
@@ -253,7 +255,7 @@ pub async fn prove(
     let ar_after = ar
         .aged_receivables(&approver, company, day, &Default::default())
         .await?;
-    assert_eq!(ar_after.customers[0].documents.len(), 600);
+    assert_eq!(ar_after.customers[0].documents.len(), 10_000);
     assert_eq!(ar_after.total, ar_before.total);
     let old_ar_pins = ar_before.pins();
     // These pins preceded the extra payment/reversal proof too.
@@ -294,15 +296,6 @@ pub async fn prove(
         .await?;
     assert_eq!(asset_old.rows[0].asset.id, asset);
     assert_eq!(asset_old.reconciliation, asset_before.reconciliation);
-    assert_eq!(
-        assets
-            .register_report(&approver, company, date(2026, 7, 31), &Default::default())
-            .await?
-            .rows[0]
-            .asset
-            .id,
-        asset
-    );
     assert_ne!(
         assets
             .register_report(&approver, company, day, &Default::default())
@@ -366,6 +359,6 @@ pub async fn prove(
         .depreciate(&approver, company, date(2026, 8, 1))
         .await?;
     assert_eq!(run.total, money("170"));
-    println!("Opening lifecycle: interrupted two-batch/600-invoice correction resumed; identical/concurrent retries, changed-source and self-approval refusals, late correction rollback, dependent receipts/payments/depreciation/disposal and owner reversals, accounting-date and original report boundaries, unchanged opening postings and prospective catch-up passed.");
+    println!("Opening lifecycle: interrupted twenty-batch/10,000-invoice correction resumed; identical/concurrent retries, changed-source and self-approval refusals, late correction rollback, dependent receipts/payments/depreciation/disposal and owner reversals, accounting-date and original report boundaries, unchanged opening postings and prospective catch-up passed.");
     Ok(())
 }

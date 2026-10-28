@@ -52,12 +52,23 @@ impl FixedAssets {
         c: &dyn OperationClient,
         s: &Scope,
         company: i64,
+        input: &Value,
     ) -> Result<Value> {
         self.opening_authorize(c, s, company, VIEW).await?;
-        let items: Vec<Value> = c.query("SELECT to_jsonb(i) FROM finance_fixed_assets_opening_items i WHERE tenant_id=$1 AND company_id=$2 ORDER BY id", &[&s.tenant(), &company]).await?.iter().map(|row| row.get(0)).collect();
+        let after = input["items_after"].as_i64().unwrap_or(0);
+        let limit = input["limit"].as_i64().unwrap_or(200).clamp(1, 500);
+        let items: Vec<Value> = c.query("SELECT to_jsonb(i) FROM finance_fixed_assets_opening_items i WHERE tenant_id=$1 AND company_id=$2 AND id>$3 ORDER BY id LIMIT $4", &[&s.tenant(), &company, &after, &(limit + 1)]).await?.iter().map(|row| row.get(0)).collect();
+        let more = items.len() as i64 > limit;
+        let items: Vec<Value> = items.into_iter().take(limit as usize).collect();
+        let next = if more {
+            items.last().map(|i| i["id"].clone())
+        } else {
+            None
+        };
+        let total: i64 = c.query_opt("SELECT count(*) FROM finance_fixed_assets_opening_items WHERE tenant_id=$1 AND company_id=$2", &[&s.tenant(), &company]).await?.ok_or(Error::Internal)?.get(0);
         let categories:Vec<Value>=c.query("SELECT to_jsonb(r) || jsonb_build_object('category_name',g.name) FROM finance_fixed_assets_category_revisions r JOIN finance_fixed_assets_categories g ON g.id=r.category_id AND g.tenant_id=r.tenant_id AND g.company_id=r.company_id WHERE r.tenant_id=$1 AND r.company_id=$2 ORDER BY r.id",&[&s.tenant(),&company]).await?.iter().map(|r|r.get(0)).collect();
         Ok(
-            json!({"opening":self.ledger.opening_context_on(c,s,company).await?,"book":self.ledger.get_book_on(c,s,company).await?,"batch":c.query_opt("SELECT to_jsonb(b) || jsonb_build_object('state','reconciled') FROM finance_fixed_assets_opening_batches b WHERE tenant_id=$1 AND company_id=$2 ORDER BY id DESC LIMIT 1",&[&s.tenant(),&company]).await?.map(|r|r.get::<_,Value>(0)),"category_revisions":categories,"stages":c.query("SELECT to_jsonb(s) FROM finance_fixed_assets_opening_stages s WHERE tenant_id=$1 AND company_id=$2 ORDER BY id",&[&s.tenant(),&company]).await?.iter().map(|r|r.get::<_,Value>(0)).collect::<Vec<_>>(),"decisions":c.query("SELECT to_jsonb(d) FROM finance_fixed_assets_opening_decisions d WHERE tenant_id=$1 AND company_id=$2 ORDER BY id",&[&s.tenant(),&company]).await?.iter().map(|r|r.get::<_,Value>(0)).collect::<Vec<_>>(),"header":HEADER,"items":items}),
+            json!({"opening":self.ledger.opening_context_on(c,s,company).await?,"book":self.ledger.get_book_on(c,s,company).await?,"batch":c.query_opt("SELECT to_jsonb(b) || jsonb_build_object('state','reconciled') FROM finance_fixed_assets_opening_batches b WHERE tenant_id=$1 AND company_id=$2 ORDER BY id DESC LIMIT 1",&[&s.tenant(),&company]).await?.map(|r|r.get::<_,Value>(0)),"category_revisions":categories,"stages":c.query("SELECT to_jsonb(s)-'payload'||jsonb_build_object('part_count',payload->'part_count','csv_bytes',octet_length(payload->>'csv')) FROM finance_fixed_assets_opening_stages s WHERE tenant_id=$1 AND company_id=$2 ORDER BY id",&[&s.tenant(),&company]).await?.iter().map(|r|r.get::<_,Value>(0)).collect::<Vec<_>>(),"decisions":c.query("SELECT to_jsonb(d) FROM finance_fixed_assets_opening_decisions d WHERE tenant_id=$1 AND company_id=$2 ORDER BY id",&[&s.tenant(),&company]).await?.iter().map(|r|r.get::<_,Value>(0)).collect::<Vec<_>>(),"header":HEADER,"items":items,"item_count":total,"items_next":next}),
         )
     }
     pub(super) async fn prepare_opening(
@@ -91,7 +102,7 @@ impl FixedAssets {
             let batch:Value=row.get(0);
             if batch["source_reference"]!=reference || batch["source_csv"]!=csv {return Err(invalid("source_reference","the opening register has already been imported; the same source reference and exact CSV are required for a retry"));}
             let retained=c.query_opt("SELECT review FROM finance_fixed_assets_opening_decisions WHERE tenant_id=$1 AND company_id=$2 AND batch_id=$3",&[&s.tenant(),&company,&batch["id"].as_i64().ok_or(Error::Invalid)?]).await?;
-            if let Some(row)=retained {let review:Value=row.get(0);if review["replaces_batch_id"]!=input["replaces_batch_id"] || review["reason"]!=input["reason"] || review["effective_date"]!=input["effective_date"] {return Err(invalid("source_reference","already identifies different correction instructions"));}}
+            if let Some(row)=retained {let review:Value=row.get(0);if review["replaces_batch_id"]!=input["replaces_batch_id"] || review["reason"]!=input["reason"] {return Err(invalid("source_reference","already identifies different correction instructions"));}}
             return Ok(Prepared{review:json!({"state":"reconciled","batch":batch,"already_imported":true,"rows":[],"posts":false}),context,rows:vec![],balances:BTreeMap::new(),existing:Some(batch)});
         }
         let replacement = self.opening_replacement(c, s, company, input).await?;
@@ -101,15 +112,26 @@ impl FixedAssets {
             .first()
             .map(|r| r.iter().map(String::as_str).collect::<Vec<_>>())
             != Some(HEADER.to_vec())
-            || !(2..=100001).contains(&parsed.len())
+            || !(2..=10001).contains(&parsed.len())
             || (input["staged"] != true && (parsed.len() > 501 || csv.len() > 131072))
         {
             return Err(invalid(
                 "csv",
-                format!("requires header {} and 1 to 500 rows directly, or up to 100000 rows from staged batches", HEADER.join(",")),
+                format!("requires header {} and 1 to 500 rows directly, or up to 10000 rows from staged batches", HEADER.join(",")),
             ));
         }
         let chart = self.ledger.list_accounts_on(c, s, company).await?;
+        let wanted: Vec<i64> = parsed
+            .iter()
+            .skip(1)
+            .filter_map(|row| row.get(2).and_then(|id| id.trim().parse().ok()))
+            .collect();
+        let revisions: BTreeMap<i64, Value> = c
+            .query("SELECT id,to_jsonb(r) FROM finance_fixed_assets_category_revisions r WHERE tenant_id=$1 AND company_id=$2 AND id=ANY($3)", &[&s.tenant(), &company, &wanted])
+            .await?
+            .iter()
+            .map(|r| (r.get(0), r.get(1)))
+            .collect();
         let mut seen = BTreeSet::new();
         let mut rows = vec![];
         let mut balances = BTreeMap::new();
@@ -134,7 +156,9 @@ impl FixedAssets {
                     "category_revision_id must identify a category revision in the current company",
                 )
             })?;
-            let r:Value=c.query_opt("SELECT to_jsonb(r) FROM finance_fixed_assets_category_revisions r WHERE tenant_id=$1 AND company_id=$2 AND id=$3",&[&s.tenant(),&company,&revision]).await?.ok_or_else(||fail("category revision is not in the current company"))?.get(0);
+            let r = revisions
+                .get(&revision)
+                .ok_or_else(|| fail("category revision is not in the current company"))?;
             let acquisition: Date = row[3]
                 .parse()
                 .map_err(|_| fail("acquisition_date must be YYYY-MM-DD"))?;
@@ -267,7 +291,7 @@ impl FixedAssets {
             )
             .await?;
         Ok(Prepared {
-            review: json!({"state":"previewed","replaces_batch_id":input["replaces_batch_id"],"reason":input["reason"],"effective_date":input["effective_date"],"staged":input["staged"]==true,"conversion_date":context.entry.entry_date.to_string(),"entry_id":context.entry.id,"entry_number":context.entry.entry_number,"source_reference":reference,"currency_code":book.currency_code,"minor_units":book.minor_units,"rows":rows,"reconciliation":reconciliation,"posts":false,"approval":approval,"already_imported":false,"depreciation":"Prospective straight-line depreciation of source carrying value less residual value over the remaining useful life. A full first month is recognized at month-end, including a mid-month cut-off."}),
+            review: json!({"state":"previewed","replaces_batch_id":input["replaces_batch_id"],"reason":input["reason"],"staged":input["staged"]==true,"conversion_date":context.entry.entry_date.to_string(),"entry_id":context.entry.id,"entry_number":context.entry.entry_number,"source_reference":reference,"currency_code":book.currency_code,"minor_units":book.minor_units,"rows":rows,"reconciliation":reconciliation,"posts":false,"approval":approval,"already_imported":false,"depreciation":"Prospective straight-line depreciation of source carrying value less residual value over the remaining useful life. A full first month is recognized at month-end, including a mid-month cut-off."}),
             context,
             rows,
             balances,

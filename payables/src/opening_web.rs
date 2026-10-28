@@ -50,7 +50,6 @@ fn field_label(key: &str) -> &str {
         "part_count" => "Batch count",
         "replaces_batch_id" => "Register to replace",
         "reason" => "Correction reason",
-        "effective_date" => "Correction date",
         "csv" => "Source register CSV",
         "series_id" => "Opening invoice series",
         "source_reference" => "Source reference",
@@ -267,10 +266,7 @@ impl Opening {
                         .cell("source", Cell::text(reference))
                         .cell(
                             "batch",
-                            Cell::text(format!(
-                                "{} / {}",
-                                stage["part"], stage["payload"]["part_count"]
-                            )),
+                            Cell::text(format!("{} / {}", stage["part"], stage["part_count"])),
                         )
                         .cell(
                             "state",
@@ -363,7 +359,6 @@ impl Opening {
                     ("part","Batch number",InputKind::Number,false,"For staging: sequential batch number, starting at 1."),
                     ("part_count","Batch count",InputKind::Number,false,"For staging: total batches in this export, at most 200."),
                     ("replaces_batch_id","Register to replace",InputKind::Number,false,"For a correction: the current reconciled register ID. Keep the same ID for all source batches."),
-                    ("effective_date","Correction date",InputKind::Date,false,"For a correction: no earlier than the last dependent reversal. Reports before this date retain the prior register."),
                     ("reason","Correction reason",InputKind::Text,false,"Required for a correction. Preserve the prior export and explain the replacement."),
                 ] {
                     let mut field = Field::in_form("conversion", key)
@@ -478,7 +473,7 @@ impl Opening {
                 .map_err(|_| Error::Internal)?;
             body.push(&render(Alert{id:"conversion-review-context",body:Html::text(&format!("Conversion date {}. Source {}. {} records. Review every source identifier, date, amount and account mapping before approval.",facts["conversion_date"].as_str().or_else(||context["opening"]["entry"]["entry_date"].as_str()).unwrap_or(""),facts["source_reference"].as_str().unwrap_or(""),facts["rows"].as_array().map_or_else(||facts["rows"].as_u64().unwrap_or(0) as usize,Vec::len))),..Alert::default()})?);
             if !facts["replaces_batch_id"].is_null() {
-                body.push(&render(Alert{id:"conversion-correction-review",kind:StatusKind::Warning,body:Html::text(&format!("Replace register {} from {}. Reason: {}. Prior records and approvals remain available at their original report boundaries.",facts["replaces_batch_id"],facts["effective_date"].as_str().unwrap_or(""),facts["reason"].as_str().unwrap_or(""))),..Alert::default()})?);
+                body.push(&render(Alert{id:"conversion-correction-review",kind:StatusKind::Warning,body:Html::text(&format!("Replace register {} as of the conversion date {}. Reason: {}. Prior records and approvals remain available at their original report boundaries.",facts["replaces_batch_id"],facts["conversion_date"].as_str().unwrap_or(""),facts["reason"].as_str().unwrap_or(""))),..Alert::default()})?);
             }
             if let Some(reconciliation) = facts["reconciliation"].as_array() {
                 let rows = reconciliation
@@ -639,10 +634,8 @@ impl LiveState<Scope, Error> for Opening {
                                     object.insert(key.into(), json!(value));
                                 }
                             }
-                            for key in ["reason", "effective_date"] {
-                                if object.get(key).is_some_and(|v| v == "") {
-                                    object.remove(key);
-                                }
+                            if object.get("reason").is_some_and(|v| v == "") {
+                                object.remove("reason");
                             }
                             if staged {
                                 object.insert("staged".into(), json!(true));

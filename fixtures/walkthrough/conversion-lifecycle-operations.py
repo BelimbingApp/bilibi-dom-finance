@@ -133,7 +133,7 @@ before_trial=read(channel,"finance.ledger.trial_balance.get",company,"approver",
 for module,values in inputs.items():
     key=f"finance.{module}.opening"
     changed_csv=values["csv"].replace(",5000,3000",",5100,3000").replace(",2500,1500",",2600,1500").replace(",1800,96,",",1800,120,")
-    staged=values|{"source_reference":values["source_reference"]+"-CORRECTED","csv":changed_csv,"replaces_batch_id":original[module]["id"],"reason":"Correct source register detail","effective_date":"2026-08-01","part":1,"part_count":1}
+    staged=values|{"source_reference":values["source_reference"]+"-CORRECTED","csv":changed_csv,"replaces_batch_id":original[module]["id"],"reason":"Correct source register detail","part":1,"part_count":1}
     preview=plan(channel,[operation(key+".stage",company,**staged)],"manager")
     require(preview.get("valid") is True,"source staging review refused")
     facts=preview["results"][0]["preview"]["result"]["changes"]
@@ -153,11 +153,16 @@ for module,values in inputs.items():
     require(write(channel,key+".import",company,**finalize)["id"]==record["id"],"replacement retry duplicated")
     context=read(channel,key+".context",company,"approver")
     require(len(context["decisions"])==2 and len(context["stages"])==1,"source or approvals missing")
+    require(all("payload" not in stage and stage["part_count"]==1 for stage in context["stages"]),"context returned staged source payloads")
+    require(all("rows" not in decision["review"] and decision["review"]["row_count"]>=1 for decision in context["decisions"] if decision["replaces_batch_id"]),"decision review kept every source row")
+    page=read(channel,key+".context",company,"approver",limit=1)
+    rest=read(channel,key+".context",company,"approver",limit=1,items_after=page["items_next"])
+    require(len(page["items"])==1 and page["item_count"]==len(context["items"])>=2 and rest["items"] and rest["items"][0]["id"]>page["items"][0]["id"],"context item pages differ")
     require(write(channel,key+".import",company,**values)==original[module],"historical retry changed")
     ui=read(channel,key+".context",1,"approver")
     require(ui["batch"]["source_reference"]==record["source_reference"],"UI/MCP source references differ")
     ui_facts=ui["decisions"][-1]["review"]
-    for field in ["state","reason","effective_date","currency_code","minor_units","total","opening_balance","difference","posts","depreciation"]:
+    for field in ["state","reason","currency_code","minor_units","total","opening_balance","difference","posts","depreciation"]:
         require(ui_facts.get(field)==facts.get(field),f"UI/MCP reviewed facts differ: {module}/{field}")
 require(read(channel,"finance.ledger.trial_balance.get",company,"approver",as_of="2026-08-01")==before_trial,"corrections posted entries")
 for module in ["receivables","payables"]:

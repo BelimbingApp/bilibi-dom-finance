@@ -161,13 +161,7 @@ impl Payables {
             ));
         }
         // Finalize the retained manifest; callers cannot silently change its mapping.
-        for key in [
-            "currency_code",
-            "series_id",
-            "replaces_batch_id",
-            "reason",
-            "effective_date",
-        ] {
+        for key in ["currency_code", "series_id", "replaces_batch_id", "reason"] {
             if !input[key].is_null() && input[key] != first[key] {
                 return Err(invalid(
                     "source_reference",
@@ -235,11 +229,7 @@ impl Payables {
                 if input["staged"]!=true {return Err(invalid("source_reference","stage the correction for independent approval before reconciliation"));}
                 let reason=input["reason"].as_str().unwrap_or("").trim();
                 if reason.is_empty() || reason.chars().count()>500 || reason.contains('\0') {return Err(invalid("reason","must contain 1 to 500 characters without null characters"));}
-                let date: jiff::civil::Date=input["effective_date"].as_str().unwrap_or("").parse().map_err(|_|invalid("effective_date","must be YYYY-MM-DD for a correction"))?;
-                let conversion:jiff::civil::Date=batch["conversion_date"].as_str().unwrap_or("").parse().map_err(|_|Error::Invalid)?;
-                if date<conversion {return Err(invalid("effective_date","cannot precede the conversion date"));}
                 self.opening_dependents(c,s,company,id).await?;
-                self.opening_correction_date(c,s,company,id,date).await?;
                 Ok(Some(batch))
             },
             _=>Err(invalid("replaces_batch_id","must name the current register when correcting an import; retain the prior source and use a new source reference"))
@@ -260,11 +250,11 @@ impl Payables {
         let id = batch["id"].as_i64().ok_or(Error::Invalid)?;
         let replaces = input["replaces_batch_id"].as_i64();
         let reason = input["reason"].as_str().map(str::trim).map(str::to_owned);
-        let effective = input["effective_date"]
-            .as_str()
-            .unwrap_or(batch["conversion_date"].as_str().unwrap_or(""))
-            .to_owned();
-        let review = review.clone();
+        let effective = batch["conversion_date"].as_str().unwrap_or("").to_owned();
+        let mut review = review.clone();
+        if let Some(rows) = review.as_object_mut().and_then(|r| r.remove("rows")) {
+            review["row_count"] = json!(rows.as_array().map_or(0, Vec::len));
+        }
         let approval = review["approval"].clone();
         tx.mutate(move |sql|Box::pin(async move {
             let row=sql.query_one("INSERT INTO finance_payables_opening_decisions(tenant_id,company_id,batch_id,replaces_batch_id,reason,review,approval,recorded_by_user_id,recorded_by_impersonator_id,effective_date) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::text::date) RETURNING to_jsonb(finance_payables_opening_decisions)",&[&tenant,&company,&id,&replaces,&reason,&review,&approval,&actor,&imp,&effective]).await?;
@@ -285,7 +275,6 @@ fn stage_payload(input: &Value) -> Value {
                 "series_id",
                 "replaces_batch_id",
                 "reason",
-                "effective_date",
                 "part",
                 "part_count",
             ]
@@ -316,20 +305,6 @@ impl Payables {
  EXISTS(SELECT 1 FROM finance_payables_payment_allocations a JOIN finance_payables_payments p ON p.id=a.payment_id AND p.tenant_id=$1 AND p.company_id=$2 WHERE a.tenant_id=$1 AND a.company_id=$2 AND a.document_id=i.document_id AND NOT EXISTS(SELECT 1 FROM finance_payables_payments r WHERE r.tenant_id=$1 AND r.company_id=$2 AND r.reverses_payment_id=p.id))
  OR EXISTS(SELECT 1 FROM finance_payables_documents d WHERE d.tenant_id=$1 AND d.company_id=$2 AND d.corrects_document_id=i.document_id AND d.status<>'voided')
  OR EXISTS(SELECT 1 FROM finance_payables_payment_request_allocations l JOIN finance_payables_payment_requests r ON r.id=l.request_id AND r.tenant_id=$1 AND r.company_id=$2 WHERE l.tenant_id=$1 AND l.company_id=$2 AND l.document_id=i.document_id AND NOT EXISTS(SELECT 1 FROM finance_payables_payment_request_events e WHERE e.tenant_id=$1 AND e.company_id=$2 AND e.request_id=r.id))) LIMIT 1",&[&s.tenant(),&company,&batch]).await?.is_some() {return Err(invalid("replaces_batch_id","reverse dependent settlements, write-offs, depreciation and disposals, and cancel pending requests or notes before correcting the register"));}
-        Ok(())
-    }
-}
-
-impl Payables {
-    async fn opening_correction_date(
-        &self,
-        c: &dyn OperationClient,
-        s: &Scope,
-        company: i64,
-        batch: i64,
-        date: jiff::civil::Date,
-    ) -> Result<()> {
-        if c.query_opt("SELECT 1 FROM (SELECT r.payment_date AS correction_date FROM finance_payables_payments r JOIN finance_payables_payment_allocations a ON a.payment_id=r.reverses_payment_id AND a.tenant_id=$1 AND a.company_id=$2 JOIN finance_payables_opening_items i ON i.document_id=a.document_id AND i.tenant_id=$1 AND i.company_id=$2 AND i.batch_id=$3 WHERE r.tenant_id=$1 AND r.company_id=$2 UNION ALL SELECT effective_date FROM finance_payables_opening_decisions WHERE tenant_id=$1 AND company_id=$2 AND batch_id=$3) dates WHERE correction_date>$4::text::date LIMIT 1",&[&s.tenant(),&company,&batch,&date.to_string()]).await?.is_some() {return Err(invalid("effective_date","cannot precede a dependent reversal or the prior register's correction date"));}
         Ok(())
     }
 }

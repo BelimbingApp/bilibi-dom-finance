@@ -56,13 +56,24 @@ impl Receivables {
         c: &dyn OperationClient,
         s: &Scope,
         company: i64,
+        input: &Value,
     ) -> Result<Value> {
         self.authorize_on(c, s, company, VIEW).await?;
         let opening = self.ledger.opening_context_on(c, s, company).await?;
         let book = self.ledger.get_book_on(c, s, company).await?;
-        let items: Vec<Value> = c.query("SELECT to_jsonb(i) FROM finance_receivables_opening_items i WHERE tenant_id=$1 AND company_id=$2 ORDER BY id", &[&s.tenant(), &company]).await?.iter().map(|row| row.get(0)).collect();
+        let after = input["items_after"].as_i64().unwrap_or(0);
+        let limit = input["limit"].as_i64().unwrap_or(200).clamp(1, 500);
+        let items: Vec<Value> = c.query("SELECT to_jsonb(i) FROM finance_receivables_opening_items i WHERE tenant_id=$1 AND company_id=$2 AND id>$3 ORDER BY id LIMIT $4", &[&s.tenant(), &company, &after, &(limit + 1)]).await?.iter().map(|row| row.get(0)).collect();
+        let more = items.len() as i64 > limit;
+        let items: Vec<Value> = items.into_iter().take(limit as usize).collect();
+        let next = if more {
+            items.last().map(|i| i["id"].clone())
+        } else {
+            None
+        };
+        let total: i64 = c.query_opt("SELECT count(*) FROM finance_receivables_opening_items WHERE tenant_id=$1 AND company_id=$2", &[&s.tenant(), &company]).await?.ok_or(Error::Internal)?.get(0);
         Ok(
-            json!({"opening":opening,"book":book,"batch":c.query_opt("SELECT to_jsonb(b) || jsonb_build_object('state','reconciled') FROM finance_receivables_opening_batches b WHERE tenant_id=$1 AND company_id=$2 ORDER BY id DESC LIMIT 1",&[&s.tenant(),&company]).await?.map(|r|r.get::<_,Value>(0)),"stages":c.query("SELECT to_jsonb(s) FROM finance_receivables_opening_stages s WHERE tenant_id=$1 AND company_id=$2 ORDER BY id",&[&s.tenant(),&company]).await?.iter().map(|r|r.get::<_,Value>(0)).collect::<Vec<_>>(),"decisions":c.query("SELECT to_jsonb(d) FROM finance_receivables_opening_decisions d WHERE tenant_id=$1 AND company_id=$2 ORDER BY id",&[&s.tenant(),&company]).await?.iter().map(|r|r.get::<_,Value>(0)).collect::<Vec<_>>(),"header":HEADER,"items":items}),
+            json!({"opening":opening,"book":book,"batch":c.query_opt("SELECT to_jsonb(b) || jsonb_build_object('state','reconciled') FROM finance_receivables_opening_batches b WHERE tenant_id=$1 AND company_id=$2 ORDER BY id DESC LIMIT 1",&[&s.tenant(),&company]).await?.map(|r|r.get::<_,Value>(0)),"stages":c.query("SELECT to_jsonb(s)-'payload'||jsonb_build_object('part_count',payload->'part_count','csv_bytes',octet_length(payload->>'csv')) FROM finance_receivables_opening_stages s WHERE tenant_id=$1 AND company_id=$2 ORDER BY id",&[&s.tenant(),&company]).await?.iter().map(|r|r.get::<_,Value>(0)).collect::<Vec<_>>(),"decisions":c.query("SELECT to_jsonb(d) FROM finance_receivables_opening_decisions d WHERE tenant_id=$1 AND company_id=$2 ORDER BY id",&[&s.tenant(),&company]).await?.iter().map(|r|r.get::<_,Value>(0)).collect::<Vec<_>>(),"header":HEADER,"items":items,"item_count":total,"items_next":next}),
         )
     }
 
@@ -115,7 +126,6 @@ impl Receivables {
                 let review: Value = row.get(0);
                 if review["replaces_batch_id"] != input["replaces_batch_id"]
                     || review["reason"] != input["reason"]
-                    || review["effective_date"] != input["effective_date"]
                 {
                     return Err(invalid(
                         "source_reference",
@@ -146,12 +156,12 @@ impl Receivables {
             .first()
             .map(|r| r.iter().map(String::as_str).collect::<Vec<_>>())
             != Some(HEADER.to_vec())
-            || !(2..=100001).contains(&parsed.len())
+            || !(2..=10001).contains(&parsed.len())
             || (input["staged"] != true && (parsed.len() > 501 || csv.len() > 131072))
         {
             return Err(invalid(
                 "csv",
-                format!("requires header {} and 1 to 500 rows directly, or up to 100000 rows from staged batches", HEADER.join(",")),
+                format!("requires header {} and 1 to 500 rows directly, or up to 10000 rows from staged batches", HEADER.join(",")),
             ));
         }
         let setup = store::find(c, store::SETUPS, s.tenant(), company, None)
@@ -175,7 +185,8 @@ impl Receivables {
             .skip(1)
             .filter_map(|row| row.get(1).map(|code| code.trim().to_owned()))
             .collect();
-        let customers:Vec<Value>=c.query("SELECT to_jsonb(r) FROM finance_receivables_customers r WHERE tenant_id=$1 AND company_id=$2 AND code=ANY($3)",&[&s.tenant(),&company,&requested]).await?.iter().map(|r|r.get(0)).collect();
+        let customers:std::collections::HashMap<String,Value>=c.query("SELECT to_jsonb(r) FROM finance_receivables_customers r WHERE tenant_id=$1 AND company_id=$2 AND active AND code=ANY($3)",&[&s.tenant(),&company,&requested]).await?.iter().map(|r|{let v:Value=r.get(0);(v["code"].as_str().unwrap_or("").to_owned(),v)}).collect();
+        let mut names = std::collections::HashMap::new();
         let mut seen = BTreeSet::new();
         let mut documents = BTreeSet::new();
         let mut rows = vec![];
@@ -195,15 +206,15 @@ impl Receivables {
             if row[2].is_empty() || row[2].chars().count() > 100 {
                 return Err(fail("document_reference must contain 1 to 100 characters"));
             }
-            let customer = customers
-                .iter()
-                .find(|v| v["code"] == row[1] && v["active"] == true)
-                .ok_or_else(|| {
-                    fail("customer_code must identify an active customer in the current company")
-                })?;
+            let customer = customers.get(row[1]).ok_or_else(|| {
+                fail("customer_code must identify an active customer in the current company")
+            })?;
             let customer_id = customer["id"].as_i64().ok_or(Error::Internal)?;
             // A linked customer's name is Core's (#75); the row keeps none.
-            let customer_name = self.customer(c, s, customer.clone()).await?.name;
+            if let std::collections::hash_map::Entry::Vacant(e) = names.entry(customer_id) {
+                e.insert(self.customer(c, s, customer.clone()).await?.name);
+            }
+            let customer_name = &names[&customer_id];
             if !documents.insert((customer_id, row[2].to_owned())) {
                 return Err(fail("the customer document reference is duplicated"));
             }
@@ -275,7 +286,7 @@ impl Receivables {
             )
             .await?;
         Ok(Prepared {
-            review: json!({"state":"previewed","replaces_batch_id":input["replaces_batch_id"],"reason":input["reason"],"effective_date":input["effective_date"],"staged":input["staged"]==true,"conversion_date":context.entry.entry_date.to_string(),"entry_id":context.entry.id,"entry_number":context.entry.entry_number,"source_reference":reference,"currency_code":book.currency_code,"minor_units":book.minor_units,"rows":rows,"total":balance,"opening_balance":expected,"difference":Money::ZERO,"posts":false,"approval":approval,"already_imported":false}),
+            review: json!({"state":"previewed","replaces_batch_id":input["replaces_batch_id"],"reason":input["reason"],"staged":input["staged"]==true,"conversion_date":context.entry.entry_date.to_string(),"entry_id":context.entry.id,"entry_number":context.entry.entry_number,"source_reference":reference,"currency_code":book.currency_code,"minor_units":book.minor_units,"rows":rows,"total":balance,"opening_balance":expected,"difference":Money::ZERO,"posts":false,"approval":approval,"already_imported":false}),
             context,
             rows,
             balance,
@@ -396,7 +407,6 @@ pub(crate) async fn settlement_date(
     document: i64,
     date: jiff::civil::Date,
 ) -> Result<()> {
-    if c.query_opt("SELECT i.id FROM finance_receivables_opening_items i JOIN finance_receivables_opening_decisions d ON d.batch_id=i.batch_id AND d.tenant_id=$1 AND d.company_id=$2 WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=$3 AND d.replaces_batch_id IS NOT NULL AND d.effective_date>$4::text::date",&[&s.tenant(),&company,&document,&date.to_string()]).await?.is_some() {return Err(invalid("document_id","cannot be settled before the register's correction date"));}
     if c.query_opt("SELECT i.id FROM finance_receivables_opening_items i JOIN finance_receivables_opening_decisions d ON d.replaces_batch_id=i.batch_id AND d.tenant_id=$1 AND d.company_id=$2 WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=$3",&[&s.tenant(),&company,&document]).await?.is_some() {return Err(invalid("document_id","belongs to a replaced opening register; use the replacement record"));}
     if c.query_opt("SELECT i.id FROM finance_receivables_opening_items i JOIN finance_receivables_opening_batches b ON b.id=i.batch_id AND b.tenant_id=$1 AND b.company_id=$2 WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=$3 AND b.conversion_date>$4::text::date",&[&s.tenant(),&company,&document,&date.to_string()]).await?.is_some() {return Err(invalid("document_id","cannot be settled before the conversion date"));}
     Ok(())

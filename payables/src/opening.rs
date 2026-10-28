@@ -48,11 +48,22 @@ impl Payables {
         c: &dyn OperationClient,
         s: &Scope,
         company: i64,
+        input: &Value,
     ) -> Result<Value> {
         crate::agent_operations::authorize_on(c, s, company, VIEW).await?;
-        let items: Vec<Value> = c.query("SELECT to_jsonb(i) FROM finance_payables_opening_items i WHERE tenant_id=$1 AND company_id=$2 ORDER BY id", &[&s.tenant(), &company]).await?.iter().map(|row| row.get(0)).collect();
+        let after = input["items_after"].as_i64().unwrap_or(0);
+        let limit = input["limit"].as_i64().unwrap_or(200).clamp(1, 500);
+        let items: Vec<Value> = c.query("SELECT to_jsonb(i) FROM finance_payables_opening_items i WHERE tenant_id=$1 AND company_id=$2 AND id>$3 ORDER BY id LIMIT $4", &[&s.tenant(), &company, &after, &(limit + 1)]).await?.iter().map(|row| row.get(0)).collect();
+        let more = items.len() as i64 > limit;
+        let items: Vec<Value> = items.into_iter().take(limit as usize).collect();
+        let next = if more {
+            items.last().map(|i| i["id"].clone())
+        } else {
+            None
+        };
+        let total: i64 = c.query_opt("SELECT count(*) FROM finance_payables_opening_items WHERE tenant_id=$1 AND company_id=$2", &[&s.tenant(), &company]).await?.ok_or(Error::Internal)?.get(0);
         Ok(
-            json!({"opening":self.ledger.opening_context_on(c,s,company).await?,"book":self.ledger.get_book_on(c,s,company).await?,"batch":c.query_opt("SELECT to_jsonb(b) || jsonb_build_object('state','reconciled') FROM finance_payables_opening_batches b WHERE tenant_id=$1 AND company_id=$2 ORDER BY id DESC LIMIT 1",&[&s.tenant(),&company]).await?.map(|r|r.get::<_,Value>(0)),"stages":c.query("SELECT to_jsonb(s) FROM finance_payables_opening_stages s WHERE tenant_id=$1 AND company_id=$2 ORDER BY id",&[&s.tenant(),&company]).await?.iter().map(|r|r.get::<_,Value>(0)).collect::<Vec<_>>(),"decisions":c.query("SELECT to_jsonb(d) FROM finance_payables_opening_decisions d WHERE tenant_id=$1 AND company_id=$2 ORDER BY id",&[&s.tenant(),&company]).await?.iter().map(|r|r.get::<_,Value>(0)).collect::<Vec<_>>(),"header":HEADER,"items":items}),
+            json!({"opening":self.ledger.opening_context_on(c,s,company).await?,"book":self.ledger.get_book_on(c,s,company).await?,"batch":c.query_opt("SELECT to_jsonb(b) || jsonb_build_object('state','reconciled') FROM finance_payables_opening_batches b WHERE tenant_id=$1 AND company_id=$2 ORDER BY id DESC LIMIT 1",&[&s.tenant(),&company]).await?.map(|r|r.get::<_,Value>(0)),"stages":c.query("SELECT to_jsonb(s)-'payload'||jsonb_build_object('part_count',payload->'part_count','csv_bytes',octet_length(payload->>'csv')) FROM finance_payables_opening_stages s WHERE tenant_id=$1 AND company_id=$2 ORDER BY id",&[&s.tenant(),&company]).await?.iter().map(|r|r.get::<_,Value>(0)).collect::<Vec<_>>(),"decisions":c.query("SELECT to_jsonb(d) FROM finance_payables_opening_decisions d WHERE tenant_id=$1 AND company_id=$2 ORDER BY id",&[&s.tenant(),&company]).await?.iter().map(|r|r.get::<_,Value>(0)).collect::<Vec<_>>(),"header":HEADER,"items":items,"item_count":total,"items_next":next}),
         )
     }
     pub(super) async fn prepare_opening(
@@ -89,7 +100,7 @@ impl Payables {
             let batch:Value=row.get(0);
             if batch["source_reference"]!=reference || batch["source_csv"]!=csv {return Err(invalid("source_reference","opening bills have already been imported; the same source reference and exact CSV are required for a retry"));}
             let retained=c.query_opt("SELECT review FROM finance_payables_opening_decisions WHERE tenant_id=$1 AND company_id=$2 AND batch_id=$3",&[&s.tenant(),&company,&batch["id"].as_i64().ok_or(Error::Invalid)?]).await?;
-            if let Some(row)=retained {let review:Value=row.get(0);if review["replaces_batch_id"]!=input["replaces_batch_id"] || review["reason"]!=input["reason"] || review["effective_date"]!=input["effective_date"] {return Err(invalid("source_reference","already identifies different correction instructions"));}}
+            if let Some(row)=retained {let review:Value=row.get(0);if review["replaces_batch_id"]!=input["replaces_batch_id"] || review["reason"]!=input["reason"] {return Err(invalid("source_reference","already identifies different correction instructions"));}}
             return Ok(Prepared{review:json!({"state":"reconciled","batch":batch,"already_imported":true,"rows":[],"posts":false}),context,rows:vec![],balance:Money::ZERO,control:0,existing:Some(batch)});
         }
         let replacement = self.opening_replacement(c, s, company, input).await?;
@@ -99,12 +110,12 @@ impl Payables {
             .first()
             .map(|r| r.iter().map(String::as_str).collect::<Vec<_>>())
             != Some(HEADER.to_vec())
-            || !(2..=100001).contains(&parsed.len())
+            || !(2..=10001).contains(&parsed.len())
             || (input["staged"] != true && (parsed.len() > 501 || csv.len() > 131072))
         {
             return Err(invalid(
                 "csv",
-                format!("requires header {} and 1 to 500 rows directly, or up to 100000 rows from staged batches", HEADER.join(",")),
+                format!("requires header {} and 1 to 500 rows directly, or up to 10000 rows from staged batches", HEADER.join(",")),
             ));
         }
         let (_, setup) = store::settings(c, s.tenant(), company)
@@ -124,6 +135,19 @@ impl Payables {
         let mut seen = BTreeSet::new();
         let mut docs = BTreeSet::new();
         let mut vendors = std::collections::BTreeMap::new();
+        let codes: Vec<String> = parsed
+            .iter()
+            .skip(1)
+            .filter_map(|row| row.get(1).map(|code| code.trim().to_owned()))
+            .collect();
+        let vendor_ids: std::collections::HashMap<String, i64> = c
+            .query("SELECT code,id FROM finance_payables_vendors WHERE tenant_id=$1 AND company_id=$2 AND code=ANY($3)", &[&s.tenant(), &company, &codes])
+            .await?
+            .iter()
+            .map(|r| (r.get(0), r.get(1)))
+            .collect();
+        let mut loaded = std::collections::HashMap::new();
+        let mut recorded: Vec<(i64, String, String, i32)> = vec![];
         let mut rows = vec![];
         let mut balance = Money::ZERO;
         for (index, row) in parsed.into_iter().enumerate().skip(1) {
@@ -161,13 +185,21 @@ impl Payables {
                     "document_reference must contain 1 to 100 characters and be unique for the vendor",
                 ));
             }
-            let vendor_id = c.query_opt("SELECT id FROM finance_payables_vendors WHERE tenant_id=$1 AND company_id=$2 AND code=$3", &[&s.tenant(), &company, &row[1]]).await?
-                .ok_or_else(|| fail("vendor_code must identify an existing vendor of the current company"))?.get(0);
-            let vendor = self.vendor_on(c, s, company, vendor_id).await?;
-            Self::billable(&vendor)
-                .map_err(|e| vendor_refusal(e, &format!("row {}", index + 1)))?;
+            let vendor_id = *vendor_ids.get(row[1]).ok_or_else(|| {
+                fail("vendor_code must identify an existing vendor of the current company")
+            })?;
+            if let std::collections::hash_map::Entry::Vacant(e) = loaded.entry(vendor_id) {
+                e.insert(self.vendor_on(c, s, company, vendor_id).await?);
+            }
+            let vendor = &loaded[&vendor_id];
+            Self::billable(vendor).map_err(|e| vendor_refusal(e, &format!("row {}", index + 1)))?;
             let party_key = vendors::key(vendor_id);
-            if c.query_opt("SELECT id FROM finance_payables_documents WHERE tenant_id=$1 AND company_id=$2 AND (party_key=$3 OR party_key IN (SELECT supplier_key FROM finance_payables_vendor_keys WHERE tenant_id=$1 AND company_id=$2 AND vendor_id=$5)) AND party_document_number=$4 AND status<>'voided' AND NOT EXISTS(SELECT 1 FROM finance_payables_opening_items i WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=finance_payables_documents.id AND (i.batch_id=$6 OR EXISTS(SELECT 1 FROM finance_payables_opening_decisions x WHERE x.tenant_id=$1 AND x.company_id=$2 AND x.replaces_batch_id=i.batch_id)))",&[&s.tenant(),&company,&party_key,&row[3],&vendor_id,&input["replaces_batch_id"].as_i64()]).await?.is_some() {return Err(fail("the vendor document is already recorded"));}
+            recorded.push((
+                vendor_id,
+                party_key.clone(),
+                row[3].to_owned(),
+                index as i32 + 1,
+            ));
             let date: Date = row[4]
                 .parse()
                 .map_err(|_| fail("document_date must be YYYY-MM-DD"))?;
@@ -199,6 +231,22 @@ impl Payables {
             balance = Money::new((balance + residual).amount(), book.minor_units)
                 .map_err(|e| fail(&e.to_string()))?;
             rows.push(json!({"source_id":row[0],"vendor_code":row[1],"vendor_name":row[2],"vendor_id":vendor_id,"vendor":vendor,"party_key":party_key,"document_reference":row[3],"document_date":date.to_string(),"due_date":due.to_string(),"original_total":original,"outstanding":residual,"settled_before_conversion":original-residual,"account_id":control,"account_code":account.code}));
+        }
+        if !recorded.is_empty() {
+            let (ids, keys, numbers, rows_at): (Vec<i64>, Vec<String>, Vec<String>, Vec<i32>) =
+                recorded.into_iter().fold(
+                    (vec![], vec![], vec![], vec![]),
+                    |mut acc, (a, b, c, d)| {
+                        acc.0.push(a);
+                        acc.1.push(b);
+                        acc.2.push(c);
+                        acc.3.push(d);
+                        acc
+                    },
+                );
+            if let Some(row) = c.query_opt("SELECT u.pos FROM unnest($3::bigint[],$4::text[],$5::text[],$6::int[]) AS u(vendor_id,party_key,doc,pos) JOIN finance_payables_documents d ON d.tenant_id=$1 AND d.company_id=$2 AND d.party_document_number=u.doc AND d.status<>'voided' AND (d.party_key=u.party_key OR d.party_key IN (SELECT supplier_key FROM finance_payables_vendor_keys WHERE tenant_id=$1 AND company_id=$2 AND vendor_id=u.vendor_id)) WHERE NOT EXISTS(SELECT 1 FROM finance_payables_opening_items i WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=d.id AND (i.batch_id=$7 OR EXISTS(SELECT 1 FROM finance_payables_opening_decisions x WHERE x.tenant_id=$1 AND x.company_id=$2 AND x.replaces_batch_id=i.batch_id))) ORDER BY u.pos LIMIT 1", &[&s.tenant(), &company, &ids, &keys, &numbers, &rows_at, &input["replaces_batch_id"].as_i64()]).await? {
+                return Err(invalid("csv", format!("row {}: the vendor document is already recorded", row.get::<_, i32>(0))));
+            }
         }
         let expected = Money::ZERO
             - context
@@ -237,7 +285,7 @@ impl Payables {
             )
             .await?;
         Ok(Prepared {
-            review: json!({"state":"previewed","replaces_batch_id":input["replaces_batch_id"],"reason":input["reason"],"effective_date":input["effective_date"],"staged":input["staged"]==true,"conversion_date":context.entry.entry_date.to_string(),"entry_id":context.entry.id,"entry_number":context.entry.entry_number,"source_reference":reference,"currency_code":book.currency_code,"minor_units":book.minor_units,"rows":rows,"total":balance,"opening_balance":expected,"difference":Money::ZERO,"posts":false,"approval":approval,"already_imported":false}),
+            review: json!({"state":"previewed","replaces_batch_id":input["replaces_batch_id"],"reason":input["reason"],"staged":input["staged"]==true,"conversion_date":context.entry.entry_date.to_string(),"entry_id":context.entry.id,"entry_number":context.entry.entry_number,"source_reference":reference,"currency_code":book.currency_code,"minor_units":book.minor_units,"rows":rows,"total":balance,"opening_balance":expected,"difference":Money::ZERO,"posts":false,"approval":approval,"already_imported":false}),
             context,
             rows,
             balance,
@@ -367,7 +415,6 @@ pub(crate) async fn settlement_date(
     date: jiff::civil::Date,
     field: &'static str,
 ) -> Result<()> {
-    if c.query_opt("SELECT i.id FROM finance_payables_opening_items i JOIN finance_payables_opening_decisions d ON d.batch_id=i.batch_id AND d.tenant_id=$1 AND d.company_id=$2 WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=$3 AND d.replaces_batch_id IS NOT NULL AND d.effective_date>$4::text::date",&[&tenant,&company,&document,&date.to_string()]).await?.is_some() {return Err(invalid(field,"cannot be settled before the register's correction date"));}
     if c.query_opt("SELECT i.id FROM finance_payables_opening_items i JOIN finance_payables_opening_decisions d ON d.replaces_batch_id=i.batch_id AND d.tenant_id=$1 AND d.company_id=$2 WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=$3",&[&tenant,&company,&document]).await?.is_some() {return Err(invalid(field,"belongs to a replaced opening register; use the replacement record"));}
     if c.query_opt("SELECT i.id FROM finance_payables_opening_items i JOIN finance_payables_opening_batches b ON b.id=i.batch_id AND b.tenant_id=$1 AND b.company_id=$2 WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=$3 AND b.conversion_date>$4::text::date",&[&tenant,&company,&document,&date.to_string()]).await?.is_some() {return Err(invalid(field,"cannot be settled before the conversion date"));}
     Ok(())
