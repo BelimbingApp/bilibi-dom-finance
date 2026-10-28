@@ -57,13 +57,14 @@ records (`Book`, `Account`, `Entry`, `FiscalYear`, `Period`, `ClosingEvent`,
 | `submit_journal` | `finance.ledger.journals.submit` | Keeps a manual journal for approval (see Manual journals) |
 | `approve_journal` | `finance.ledger.journals.approve` | Posts a submitted journal as an entry by its approver |
 | `reject_journal` | `finance.ledger.journals.approve` | Rejects a submitted journal with a `reason` |
+| `withdraw_journal`, `replace_journal` | `finance.ledger.journals.submit` | The submitter takes back a journal that is still waiting, or corrects it: withdraws it and submits the corrected journal in one transaction (see Manual journals) |
 | `get_journal`, `list_journals` | `finance.ledger.view` | Journals with their lines, status and decision; `JournalNotFound` |
 | `trial_balance` | `finance.ledger.view` | Every account's totals and one-sided balance as of a date, optionally `through_entry_number` (see Trial balance) |
 | `account_totals` | `finance.ledger.view` | Per-account debit and credit totals over entries dated `from` through `to`, optionally `through_entry_number` and `exclude_closing` (see Account totals) |
 | `account_totals_by_owner` | `finance.ledger.view` | The same totals, one row per account and owner module, for a control-account tie-out |
 | `evidence_page` | `finance.ledger.view` | One ID-ordered page of one of the ledger's tables for the auditor's pack (see Evidence) |
 | `Ledger::evidence_datasets` | none | The fifteen dataset names, sorted |
-| `Ledger::account_types`, `Ledger::late_recording_thresholds`, `Ledger::journal_statuses` | none | The five account types; the report's 45 and 60 days; `submitted`, `approved`, `rejected` |
+| `Ledger::account_types`, `Ledger::late_recording_thresholds`, `Ledger::journal_statuses` | none | The five account types; the report's 45 and 60 days; `submitted`, `approved`, `rejected`, `withdrawn` |
 
 Every call authorizes the capability for the scope's actor and the target
 company at the moment it runs (Core Company's `authorize_target`): a missing
@@ -90,11 +91,12 @@ H1 makes the facade-only writes reachable through the Platform's shared `/api/v1
 | `trial_balance.get` | Every account with a posting on or before `as_of`, with debit and credit balances, counted through a pinned `through_entry_number` |
 | `book.open`, `account.create`, `account.update` | Reviewed book/chart changes; account update preserves omitted fields and uses `clear_parent` to remove a grouping |
 | `journal.submit`, `journal.approve`, `journal.reject` | Submission does not post; approval posts once with separation of duties; rejection records a reason without posting |
+| `journal.withdraw`, `journal.replace` | Only the journal's submitter, while it waits: withdrawal records an optional `reason` and posts nothing; replacement takes the `journal.submit` fields plus `journal_id`, withdraws it and submits the correction, which needs its own approval |
 | `entry.reverse` | Mirror a manual entry once, never an owned or closing entry |
 | `fiscal_year.open`, `fiscal_year.close`, `fiscal_year.reopen`, `fiscal_year.lock` | Open monthly periods, close with computed entry, reopen with closing reversal, or atomically lock all remaining closed periods |
 | `period.close`, `period.reopen`, `period.lock` | Existing facade ordering, reason and permanent-lock rules |
 
-The eight reads return at most `page_size` records (1–100, default 100) on list operations. The fourteen writes require shared plan preview/commit; direct calls refuse writes. Preview validates normalized/defaulted values on the caller's connection, without business mutations, and shows exact proposed entry lines, current accounts/periods and consequential designation changes. Amounts are decimal strings, never binary floats. Commit reauthorizes and joins the shared audited transaction through private facade methods; all operations and audit rows roll back together on refusal. A successful record response has `path: null`: a write commits no page path.
+The eight reads return at most `page_size` records (1–100, default 100) on list operations. The sixteen writes require shared plan preview/commit; direct calls refuse writes. Preview validates normalized/defaulted values on the caller's connection, without business mutations, and shows exact proposed entry lines, current accounts/periods and consequential designation changes. Amounts are decimal strings, never binary floats. Commit reauthorizes and joins the shared audited transaction through private facade methods; all operations and audit rows roll back together on refusal. A successful record response has `path: null`: a write commits no page path.
 
 The pinned Platform previews every step before executing any. A transaction-local FIFO of review hashes rechecks each step immediately before mutation, so earlier steps cannot silently change later reviewed facts. Dependent steps need separate plans. Same-company account edits conservatively review the full chart, so even independent account edits need separate plans. Whole-year lock composes existing period locks in date order on the same transaction; it adds no year-lock event. No operation exposes direct posting, owner/settlement bypasses or disabling controls. See [guide.md](guide.md) for consent, staleness and safe ordering.
 
@@ -127,8 +129,8 @@ The ledger has pages so a person without an AI agent can do the same daily work.
 | (account record) | `/finance/ledger/accounts/{id}` | Edits the name and group in place, deactivates or activates the account, marks the retained earnings account, reads today's balance. |
 | Journal entries | `/finance/ledger/entries` | Lists entries oldest first, 100 at a time. The shared period filter narrows by entry date; with no period, every date is listed ("All dates"). |
 | (entry record) | `/finance/ledger/entries/{id}` | Reads the lines. Reverses a manual entry in a dialog. |
-| Manual journals | `/finance/ledger/journals` | Lists journals by status. Submits one with its lines in a dialog. |
-| (journal record) | `/finance/ledger/journals/{id}` | Approves it (it posts) or rejects it with a reason. The ledger refuses the person who submitted it while the company separates duties. |
+| Manual journals | `/finance/ledger/journals` | Lists journals by status. Submits one with its lines in a dialog. `?correct={id}` opens the dialog prefilled from the person's own waiting journal, and `?copy={id}` from a rejected or withdrawn one. |
+| (journal record) | `/finance/ledger/journals/{id}` | Approves it (it posts) or rejects it with a reason. The ledger refuses the person who submitted it while the company separates duties. Its submitter corrects it (Correct) or withdraws it (Withdraw) while it waits, and starts again from a rejected or withdrawn one. |
 | Fiscal years | `/finance/ledger/fiscal-years` | Opens a year after a review that names the company and shows the calculated last day. Closes, reopens and locks periods. Closes, reopens and locks a year. |
 | Trial balance | `/finance/ledger/trial-balance` | Reads the balances as of a date at a pinned entry number, and follows an account to its entries. The as-of day is one date, not a range, so it keeps its own date control rather than the period filter. |
 
@@ -278,6 +280,24 @@ recorded as a same-person exception (`journal_approval`, subject `Journal
 is `JournalDecided`. `list_journals` filters by `status` and pages like the
 exceptions.
 
+A submitted journal is never edited. Its submitter (the same user; a person
+with `finance.ledger.journals.submit`, else `Unauthorized`; anyone else is
+`NotSubmitter`) may take it back before anyone decides it:
+`withdraw_journal(.., reason)` appends the journal's one decision, `withdrawn`,
+with an optional reason, who and when, and posts nothing; the submission stays
+on record and can no longer be approved. `replace_journal(.., &NewEntry,
+reason)` withdraws it and submits the corrected journal in the same
+transaction, checked and numbered as a submission, and names it in
+`replaces_journal_id` (and the old one in `replaced_by_journal_id`). Either
+refusal rolls both back, so a refused correction leaves the journal waiting.
+The correction is a new journal that needs its own approval, by the same
+separation of duties. An approval racing a withdrawal or replacement is
+serialized by the company lock and by the one decision per journal: exactly
+one wins, and the loser is `JournalDecided`, so a withdrawn journal's content
+never posts. Posted entries are untouched; they are only reversed. The
+rejection route stays: an approver rejects with a reason, and the submitter
+starts a new journal from the rejected one (`?copy={id}` prefills it).
+
 ## Posting notices
 
 `subscribe_postings` returns a `PostingSubscription` once its listening
@@ -417,7 +437,7 @@ or an option out of range is `InvalidOption`. The datasets are `account`,
 `approval_exception`, `approval_exception_review`, `book`,
 `bookkeeping_change`, `closing_event`, `duty_separation_change`, `entry`,
 `fiscal_year`, `journal`, `journal_event`, `journal_line`,
-`late_recording_review`, `line` and `period`, with Bilimbi's field lists
+`journal_replacement`, `late_recording_review`, `line` and `period`, with Bilimbi's field lists
 (`src/evidence.rs`), less the entry's `legacy`. Dates are `YYYY-MM-DD`,
 instants ISO 8601 UTC with microseconds and amounts the column's exact text
 (`100.0000`). Each page is a live read on its own connection. The field lists
@@ -467,6 +487,13 @@ deferred to commit, a journal with no lines or out of balance; a journal is
 decided once, an approval names its entry and a rejection its reason, and an
 approval by its submitter (or anyone overlapping them) is refused unless the
 same transaction recorded its same-person exception.
+
+006 (a port addition, no Bilimbi counterpart) lets the event be `withdrawn`,
+which the database allows only to whoever submitted the journal, and adds the
+append-only `finance_ledger_journal_replacements`: a correction names the
+journal it replaces, and a deferred trigger refuses the link unless the same
+transaction withdrew that journal for the same submitter. The link is its own
+table because the journal and event evidence field lists are frozen.
 
 ## Standards addressed
 

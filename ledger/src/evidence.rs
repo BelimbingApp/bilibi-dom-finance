@@ -216,6 +216,17 @@ const DATASETS: &[(&str, &str, &[&str])] = &[
         ],
     ),
     (
+        "journal_replacement",
+        "finance_ledger_journal_replacements",
+        &[
+            "id",
+            "tenant_id",
+            "company_id",
+            "journal_id",
+            "replaced_journal_id",
+        ],
+    ),
+    (
         "late_recording_review",
         "finance_ledger_late_recording_reviews",
         &[

@@ -28,11 +28,14 @@ fn columns() -> String {
     format!(
         "j.id,j.journal_number,j.entry_date::text,j.description,j.reference,j.currency_code,\
          j.submitted_by_user_id,j.submitted_by_impersonator_id,to_char(j.submitted_at,{STAMP}),\
-         e.event,e.reason,e.entry_id,e.actor_user_id,e.actor_impersonator_id,to_char(e.occurred_at,{STAMP})"
+         e.event,e.reason,e.entry_id,e.actor_user_id,e.actor_impersonator_id,to_char(e.occurred_at,{STAMP}),\
+         r.replaced_journal_id,b.journal_id"
     )
 }
 const FROM: &str = "FROM finance_ledger_journals j \
-     LEFT JOIN finance_ledger_journal_events e ON e.journal_id = j.id AND e.company_id = j.company_id";
+     LEFT JOIN finance_ledger_journal_events e ON e.journal_id = j.id AND e.company_id = j.company_id \
+     LEFT JOIN finance_ledger_journal_replacements r ON r.journal_id = j.id AND r.company_id = j.company_id \
+     LEFT JOIN finance_ledger_journal_replacements b ON b.replaced_journal_id = j.id AND b.company_id = j.company_id";
 
 /// Inserts the journal and its lines; the database numbers and stamps it.
 pub(crate) async fn insert(
@@ -162,6 +165,44 @@ pub(crate) fn validate_reason(reason: &str) -> std::result::Result<String, Vec<F
     } else {
         Ok(reason.to_owned())
     }
+}
+
+/// The optional reason a submitter gives for withdrawing a journal: trimmed,
+/// at most 500 characters, absent when blank.
+pub(crate) fn validate_withdrawal_reason(
+    reason: Option<&str>,
+) -> std::result::Result<Option<String>, Vec<FieldError>> {
+    match reason.map(str::trim).filter(|reason| !reason.is_empty()) {
+        Some(reason) if reason.chars().count() > REASON_LIMIT => Err(vec![FieldError::new(
+            "reason",
+            format!("should be at most {REASON_LIMIT} character(s)"),
+        )]),
+        other => Ok(other.map(str::to_owned)),
+    }
+}
+
+/// Records that `journal_id` was submitted to replace the withdrawn
+/// `replaced_id`; the database refuses it unless this transaction withdrew it.
+pub(crate) async fn link(
+    client: &impl GenericClient,
+    tenant: i64,
+    company_id: i64,
+    journal_id: i64,
+    replaced_id: i64,
+) -> Result<Change> {
+    let row = client
+        .query_one(
+            "INSERT INTO finance_ledger_journal_replacements(tenant_id,company_id,journal_id,replaced_journal_id) \
+             VALUES($1,$2,$3,$4) RETURNING id",
+            &[&tenant, &company_id, &journal_id, &replaced_id],
+        )
+        .await?;
+    Ok(Change {
+        kind: "finance.ledger.journal_replacement".into(),
+        id: row.get(0),
+        old: Value::Null,
+        new: json!({"journal_id": journal_id, "replaced_journal_id": replaced_id}),
+    })
 }
 
 /// The approval `check_approval` decides for the journal: its submitter
@@ -311,6 +352,8 @@ async fn hydrate(
                     .as_ref()
                     .map_or(JournalStatus::Submitted, |decision| decision.event),
                 decision,
+                replaces_journal_id: row.get(15),
+                replaced_by_journal_id: row.get(16),
                 lines: lines.remove(&id).unwrap_or_default(),
             })
         })

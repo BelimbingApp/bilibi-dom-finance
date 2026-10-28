@@ -51,7 +51,9 @@
 //! records what an independent reviewer reads: a same-person approval while
 //! separation is off, and an override of a control. A manual journal is
 //! submitted and posts only once someone approves it
-//! ([`Ledger::submit_journal`], [`Ledger::approve_journal`]).
+//! ([`Ledger::submit_journal`], [`Ledger::approve_journal`]); its submitter may
+//! withdraw or correct it while it waits ([`Ledger::withdraw_journal`],
+//! [`Ledger::replace_journal`]).
 //!
 //! Figures are summed by PostgreSQL ([`Ledger::trial_balance`],
 //! [`Ledger::account_totals`], [`Ledger::account_totals_by_owner`]) and name
@@ -109,6 +111,7 @@ inventory::submit! {
             ("finance-ledger-003-posting-notices", include_str!("../migrations/003-posting-notices.sql")),
             ("finance-ledger-004-periods", include_str!("../migrations/004-periods.sql")),
             ("finance-ledger-005-journals", include_str!("../migrations/005-journals.sql")),
+            ("finance-ledger-006-journal-withdrawal", include_str!("../migrations/006-journal-withdrawal.sql")),
         ],
         services: &[Service { id: SERVICE, factory: |services| {
             agent_operations::bind(services.get("base/tenancy.parties")?)?;
@@ -221,9 +224,12 @@ pub enum LedgerError {
     ExceptionNotFound,
     #[error("Not found")]
     JournalNotFound,
-    /// Anything but a submitted journal.
-    #[error("The journal is already decided")]
+    /// Anything but a submitted journal: approved, rejected or withdrawn.
+    #[error("The journal is no longer waiting for approval")]
     JournalDecided,
+    /// A journal is withdrawn only by the person who submitted it.
+    #[error("Only the person who submitted this journal can withdraw it")]
+    NotSubmitter,
     /// An option the call does not accept: an `owner` or settlement account
     /// of another shape, or a limit, cursor or bound out of range.
     #[error("Invalid option")]
@@ -783,20 +789,28 @@ pub struct ApprovalExceptionQuery {
 }
 
 /// The statuses a journal moves through: submitted until its one decision.
+/// `Withdrawn` is the submitter taking it back before anyone decided it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum JournalStatus {
     Submitted,
     Approved,
     Rejected,
+    Withdrawn,
 }
 impl JournalStatus {
-    pub const ALL: [JournalStatus; 3] = [Self::Submitted, Self::Approved, Self::Rejected];
+    pub const ALL: [JournalStatus; 4] = [
+        Self::Submitted,
+        Self::Approved,
+        Self::Rejected,
+        Self::Withdrawn,
+    ];
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Submitted => "submitted",
             Self::Approved => "approved",
             Self::Rejected => "rejected",
+            Self::Withdrawn => "withdrawn",
         }
     }
     pub fn parse(value: &str) -> Option<Self> {
@@ -805,7 +819,7 @@ impl JournalStatus {
             .find(|status| status.as_str() == value)
     }
 }
-/// A journal's decision: who approved or rejected it and when, any `reason`,
+/// A journal's decision: who approved, rejected or withdrew it and when, any `reason`,
 /// and the `entry_id` an approval posted.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct JournalDecision {
@@ -833,6 +847,10 @@ pub struct Journal {
     pub submitted_at: Timestamp,
     pub status: JournalStatus,
     pub decision: Option<JournalDecision>,
+    /// The withdrawn journal this one corrects, when it was submitted as its replacement.
+    pub replaces_journal_id: Option<i64>,
+    /// The journal that corrects this one once it is withdrawn and replaced.
+    pub replaced_by_journal_id: Option<i64>,
     pub lines: Vec<EntryLine>,
 }
 /// Bounds of [`Ledger::list_journals`]; `Default` lists the first 100 of
@@ -2162,6 +2180,143 @@ impl Ledger {
         Ok(journal)
     }
 
+    /// Takes back a submitted journal its submitter no longer wants approved
+    /// (`finance.ledger.journals.submit`), with an optional `reason`. Nothing
+    /// posts; the journal stays on record, `withdrawn`, with who withdrew it
+    /// and when, and cannot be approved. Only the person who submitted it can
+    /// withdraw it (`NotSubmitter`); anything but a submitted journal is
+    /// `JournalDecided`. To correct it, use [`Ledger::replace_journal`].
+    pub async fn withdraw_journal(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        journal_id: i64,
+        reason: Option<&str>,
+    ) -> Result<Journal> {
+        let mut client = self.db.get().await.map_err(Error::from)?;
+        let mut tx = self
+            .write(
+                &mut client,
+                scope,
+                company_id,
+                &[SUBMIT_JOURNALS],
+                "finance.ledger.withdraw_journal",
+            )
+            .await?;
+        let journal =
+            Self::withdraw_journal_on(&mut tx, scope, company_id, journal_id, reason).await?;
+        tx.commit().await?;
+        Ok(journal)
+    }
+
+    async fn withdraw_journal_on(
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company_id: i64,
+        journal_id: i64,
+        reason: Option<&str>,
+    ) -> Result<Journal> {
+        join(tx, scope, company_id, SUBMIT_JOURNALS).await?;
+        let tenant = scope.tenant();
+        withdrawable_journal(tx.sql(), scope, company_id, journal_id).await?;
+        let reason = journals::validate_withdrawal_reason(reason).map_err(LedgerError::Invalid)?;
+        Self::record_withdrawal(tx, scope, company_id, journal_id, reason).await?;
+        let journal = journals::find(tx.sql(), tenant, company_id, journal_id)
+            .await?
+            .ok_or(Error::Internal)?;
+        Ok(journal)
+    }
+
+    async fn record_withdrawal(
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company_id: i64,
+        journal_id: i64,
+        reason: Option<String>,
+    ) -> Result<()> {
+        let tenant = scope.tenant();
+        let actor = people(scope);
+        tx.mutate(move |sql| {
+            Box::pin(async move {
+                let change = journals::decide(
+                    sql,
+                    tenant,
+                    company_id,
+                    journal_id,
+                    actor,
+                    JournalStatus::Withdrawn,
+                    reason.as_deref(),
+                    None,
+                )
+                .await?;
+                Ok(((), vec![change]))
+            })
+        })
+        .await?;
+        Ok(())
+    }
+
+    /// Corrects a submitted journal (`finance.ledger.journals.submit`): withdraws
+    /// it and submits `new` in its place, in one transaction, so a refusal of
+    /// either leaves the journal waiting as it was. The replacement is checked
+    /// and numbered as [`Ledger::submit_journal`] does and names the journal it
+    /// replaces; it needs its own approval, and the withdrawn one can never
+    /// post. The same rules as [`Ledger::withdraw_journal`] apply.
+    pub async fn replace_journal(
+        &self,
+        scope: &Scope,
+        company_id: i64,
+        journal_id: i64,
+        new: &NewEntry,
+        reason: Option<&str>,
+    ) -> Result<Journal> {
+        let mut client = self.db.get().await.map_err(Error::from)?;
+        let mut tx = self
+            .write(
+                &mut client,
+                scope,
+                company_id,
+                &[SUBMIT_JOURNALS],
+                "finance.ledger.replace_journal",
+            )
+            .await?;
+        let journal =
+            Self::replace_journal_on(&mut tx, scope, company_id, journal_id, new, reason).await?;
+        tx.commit().await?;
+        Ok(journal)
+    }
+
+    async fn replace_journal_on(
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company_id: i64,
+        journal_id: i64,
+        new: &NewEntry,
+        reason: Option<&str>,
+    ) -> Result<Journal> {
+        join(tx, scope, company_id, SUBMIT_JOURNALS).await?;
+        let tenant = scope.tenant();
+        withdrawable_journal(tx.sql(), scope, company_id, journal_id).await?;
+        let reason = journals::validate_withdrawal_reason(reason).map_err(LedgerError::Invalid)?;
+        // The replacement is checked and kept first, so a refusal of it
+        // leaves nothing recorded; the withdrawal then names it.
+        let replacement = Self::submit_journal_on(tx, scope, company_id, new).await?;
+        Self::record_withdrawal(tx, scope, company_id, journal_id, reason).await?;
+        let replacement_id = replacement.id;
+        tx.mutate(move |sql| {
+            Box::pin(async move {
+                let change =
+                    journals::link(sql, tenant, company_id, replacement_id, journal_id).await?;
+                Ok(((), vec![change]))
+            })
+        })
+        .await?;
+        let journal = journals::find(tx.sql(), tenant, company_id, replacement_id)
+            .await?
+            .ok_or(Error::Internal)?;
+        Ok(journal)
+    }
+
     /// One journal with its lines, status and decision
     /// (`finance.ledger.view`), or `JournalNotFound`.
     pub async fn get_journal(
@@ -3277,6 +3432,20 @@ async fn submitted_journal(
         .ok_or(LedgerError::JournalNotFound)?;
     if journal.status != JournalStatus::Submitted {
         return Err(LedgerError::JournalDecided);
+    }
+    Ok(journal)
+}
+
+/// A submitted journal the signed-in person submitted, so may take back.
+async fn withdrawable_journal(
+    client: &dyn bilibi_agent_api::OperationClient,
+    scope: &Scope,
+    company_id: i64,
+    journal_id: i64,
+) -> Result<Journal> {
+    let journal = submitted_journal(client, scope.tenant(), company_id, journal_id).await?;
+    if journal.submitted_by_user_id != scope.user() {
+        return Err(LedgerError::NotSubmitter);
     }
     Ok(journal)
 }

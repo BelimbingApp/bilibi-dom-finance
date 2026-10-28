@@ -90,6 +90,8 @@ pub(crate) struct Journal {
     pub submitted_at: String,
     pub status: String,
     pub decision: Option<Decision>,
+    pub replaces_journal_id: Option<i64>,
+    pub replaced_by_journal_id: Option<i64>,
     pub lines: Vec<Line>,
 }
 

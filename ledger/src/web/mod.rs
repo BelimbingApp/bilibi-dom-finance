@@ -167,6 +167,8 @@ inventory::submit! { Contribution::new(PAGE_WRITES, PAGES, Provenance { module: 
         ("ask_approve", "finance.ledger.journal.approve"),
         ("approve", "finance.ledger.journal.approve"),
         ("reject", "finance.ledger.journal.reject"),
+        ("withdraw", "finance.ledger.journal.withdraw"),
+        ("replace_journal", "finance.ledger.journal.replace"),
         ("open_year", "finance.ledger.fiscal_year.open"),
         ("confirm_open_year", "finance.ledger.fiscal_year.open"),
         ("choose", "finance.ledger.period.close"),
@@ -815,6 +817,17 @@ pub(crate) fn account_name(account: &view::Account) -> Result<Html> {
     ext = "html"
 )]
 pub(crate) struct AccountLink<'a> {
+    pub id: i64,
+    pub label: &'a str,
+}
+
+/// A plain link to a manual journal's page.
+#[derive(Template)]
+#[template(
+    source = r#"<a href="/finance/ledger/journals/{{ id }}" class="text-link hover:underline">{{ label }}</a>"#,
+    ext = "html"
+)]
+pub(crate) struct JournalLink<'a> {
     pub id: i64,
     pub label: &'a str,
 }

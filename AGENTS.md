@@ -131,6 +131,7 @@ they govern this code and are not copied here.
 - Show a money amount with the book's minor units through `Money::display` (`ledger/src/money.rs`), never `Money`/`Decimal` `to_string`: it groups thousands and keeps the book's decimal places. Keep `Money::shown` for editable, ungrouped values; a bare `Decimal` (a unit price, a report total) goes through `Money::display_decimal`, never a formatter of a page's own.
 - Agent writes join the shared plan's audited transaction through the ledger's private `*_on` methods, never the pool-owning public wrappers: nested commits would escape plan rollback. Preview on the handed `OperationClient`; retain the transaction-local review fence because the pinned engine previews every step before executing any.
 
+- Correct a submitted manual journal with `Ledger::replace_journal` (or `withdraw_journal` to only take it back), never `reject_journal` then `submit_journal` or an edit: only its submitter can, and it withdraws the journal and submits the correction in one transaction, so a refusal leaves it waiting and an approval racing it can never post the old content. The link is in `finance_ledger_journal_replacements`, not a column, because the journal and event evidence field lists are frozen. A page prefills its dialog from the journal's contract read (`?correct={id}`, `ledger/src/web/journals.rs`).
 - Post an entry only through `Ledger::post_entry` and read it through
   `get_entry`/`list_entries`; never insert into or select from
   `finance_ledger_entries`/`_entry_lines` from a sibling. Pass `owner` for an

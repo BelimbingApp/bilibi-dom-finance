@@ -182,6 +182,8 @@ enum Write {
     Submit,
     Approve,
     Reject,
+    Withdraw,
+    Replace,
     Reverse,
     OpenYear,
     ClosePeriod,
@@ -195,7 +197,7 @@ impl Write {
     fn capability(self) -> &'static str {
         match self {
             Self::OpenBook | Self::CreateAccount | Self::UpdateAccount => MANAGE_ACCOUNTS,
-            Self::Submit => SUBMIT_JOURNALS,
+            Self::Submit | Self::Withdraw | Self::Replace => SUBMIT_JOURNALS,
             Self::Approve | Self::Reject => APPROVE_JOURNALS,
             Self::Reverse => POST_ENTRIES,
             Self::OpenYear | Self::ClosePeriod | Self::CloseYear => MANAGE_PERIODS,
@@ -211,6 +213,8 @@ impl Write {
             Self::Submit => "Submit a manual journal for approval; no entry posts yet.",
             Self::Approve => "Approve the journal and post its immutable entry; separation of duties still applies.",
             Self::Reject => "Reject the journal permanently with this reason; no entry posts.",
+            Self::Withdraw => "Withdraw your submitted journal before it is approved; it stays on record, can no longer be approved, and no entry posts.",
+            Self::Replace => "Withdraw your submitted journal and submit the corrected one in its place; the correction needs its own approval and no entry posts.",
             Self::Reverse => "Post one mirror entry on the chosen date; the original remains. Owned and closing entries cannot use this action.",
             Self::OpenYear => "Open the next fiscal year and its monthly periods; dates must be contiguous with the previous year.",
             Self::ClosePeriod => "Close the period to posting until a privileged reopening.",
@@ -299,38 +303,50 @@ impl Write {
                 });
                 json!({"before":before,"after":after,"released_retained_earnings":released,"accounts":all})
             }
-            Self::Submit | Self::Approve | Self::Reject => {
+            Self::Submit | Self::Approve | Self::Reject | Self::Withdraw | Self::Replace => {
                 let current = if matches!(self, Self::Submit) {
                     None
+                } else if matches!(self, Self::Withdraw | Self::Replace) {
+                    Some(
+                        withdrawable_journal(client, scope, company, id(input, "journal_id")?)
+                            .await?,
+                    )
                 } else {
                     Some(
                         submitted_journal(client, tenant, company, id(input, "journal_id")?)
                             .await?,
                     )
                 };
+                if matches!(self, Self::Withdraw | Self::Replace) {
+                    journals::validate_withdrawal_reason(opt_text(input, "reason").as_deref())
+                        .map_err(LedgerError::Invalid)?;
+                }
                 if matches!(self, Self::Reject) {
                     let reason = journals::validate_reason(text(input, "reason")?)
                         .map_err(LedgerError::Invalid)?;
                     json!({"before":current,"status":"rejected","reason":reason})
+                } else if matches!(self, Self::Withdraw) {
+                    json!({"before":current,"status":"withdrawn","reason":opt_text(input, "reason"),"posts":false})
                 } else {
                     let book = book.as_ref().ok_or(LedgerError::BookNotOpen)?;
-                    let exception = if let Some(journal) = &current {
-                        duties::decide(
-                            client,
-                            tenant,
-                            company,
-                            people(scope),
-                            &journals::approval(journal),
-                        )
-                        .await?
-                        .is_some()
-                    } else {
-                        false
+                    let exception =
+                        if let (Some(journal), true) = (&current, matches!(self, Self::Approve)) {
+                            duties::decide(
+                                client,
+                                tenant,
+                                company,
+                                people(scope),
+                                &journals::approval(journal),
+                            )
+                            .await?
+                            .is_some()
+                        } else {
+                            false
+                        };
+                    let new = match &current {
+                        Some(journal) if matches!(self, Self::Approve) => journals::entry(journal),
+                        _ => new_entry(input, book.minor_units)?,
                     };
-                    let new = current.as_ref().map_or_else(
-                        || new_entry(input, book.minor_units),
-                        |j| Ok(journals::entry(j)),
-                    )?;
                     let valid = entries::validate(
                         client,
                         tenant,
@@ -342,7 +358,7 @@ impl Write {
                     )
                     .await?
                     .map_err(LedgerError::Invalid)?;
-                    json!({"before":current,"entry":valid,"posts":matches!(self,Self::Approve),"approval_exception":exception,"accounts":accounts::list(client,tenant,company).await?,"periods":periods::state(client,tenant,company).await?.years,"duty_separation":duties::latest_change(client,tenant,company).await?})
+                    json!({"before":current,"entry":valid,"posts":matches!(self,Self::Approve),"withdraws":matches!(self,Self::Replace),"approval_exception":exception,"accounts":accounts::list(client,tenant,company).await?,"periods":periods::state(client,tenant,company).await?.years,"duty_separation":duties::latest_change(client,tenant,company).await?})
                 }
             }
             Self::Reverse => {
@@ -726,6 +742,30 @@ impl WriteHandler for Write {
                 )
                 .await
                 .map_err(invalid)?),
+                Self::Withdraw => json!(Ledger::withdraw_journal_on(
+                    tx,
+                    scope,
+                    company,
+                    id(input, "journal_id").map_err(invalid)?,
+                    opt_text(input, "reason").as_deref()
+                )
+                .await
+                .map_err(invalid)?),
+                Self::Replace => {
+                    let book = books::find(tx.sql(), scope.tenant(), company)
+                        .await?
+                        .ok_or(Error::Internal)?;
+                    json!(Ledger::replace_journal_on(
+                        tx,
+                        scope,
+                        company,
+                        id(input, "journal_id").map_err(invalid)?,
+                        &new_entry(input, book.minor_units).map_err(invalid)?,
+                        opt_text(input, "reason").as_deref()
+                    )
+                    .await
+                    .map_err(invalid)?)
+                }
                 Self::Reject => json!(Ledger::reject_journal_on(
                     tx,
                     scope,
@@ -1002,6 +1042,18 @@ fn submit_schema() -> Value {
         json!({"entry_date":day(),"description":string(500),"reference":string(100),"lines":{"type":"array","items":{"type":"object","required":["account_id"],"properties":{"account_id":identifier(),"debit":string(25),"credit":string(25),"description":string(500)}}}}),
     )
 }
+fn withdraw_schema() -> Value {
+    schema(
+        &["journal_id"],
+        json!({"journal_id":identifier(),"reason":string(500)}),
+    )
+}
+fn replace_schema() -> Value {
+    schema(
+        &["journal_id", "entry_date", "description", "lines"],
+        json!({"journal_id":identifier(),"reason":string(500),"entry_date":day(),"description":string(500),"reference":string(100),"lines":{"type":"array","items":{"type":"object","required":["account_id"],"properties":{"account_id":identifier(),"debit":string(25),"credit":string(25),"description":string(500)}}}}),
+    )
+}
 fn journal_schema() -> Value {
     schema(&["journal_id"], json!({"journal_id":identifier()}))
 }
@@ -1062,7 +1114,7 @@ fn accounts_schema() -> Value {
 fn journals_schema() -> Value {
     schema(
         &[],
-        json!({"status":{"type":"string","enum":["submitted","approved","rejected"]},"after":{"type":"integer","minimum":0},"page_size":{"type":"integer","minimum":1,"maximum":100}}),
+        json!({"status":{"type":"string","enum":["submitted","approved","rejected","withdrawn"]},"after":{"type":"integer","minimum":0},"page_size":{"type":"integer","minimum":1,"maximum":100}}),
     )
 }
 fn entry_schema() -> Value {
@@ -1102,6 +1154,8 @@ inventory::submit! { Contribution::new(DEFINITIONS,"finance/ledger.operations",P
         Operation {key:"finance.ledger.account.update",title:"Change an account",summary:"Change name, grouping, active flag or retained-earnings designation; preserve code and type.",keywords:&[],capability:MANAGE_ACCOUNTS,input:change_schema,output,handler:Handler::SafeWrite(&Write::UpdateAccount),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.journal.submit",title:"Submit a journal",summary:"Keep balanced manual lines for approval without posting an entry.",keywords:&[],capability:SUBMIT_JOURNALS,input:submit_schema,output,handler:Handler::SafeWrite(&Write::Submit),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.journal.approve",title:"Approve a journal",summary:"Approve and post atomically; recheck accounts, period and separation of duties.",keywords:&[],capability:APPROVE_JOURNALS,input:journal_schema,output,handler:Handler::SafeWrite(&Write::Approve),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.ledger.journal.withdraw",title:"Withdraw a journal",summary:"Take back your own submitted journal before approval; it stays on record and no entry posts.",keywords:&[],capability:SUBMIT_JOURNALS,input:withdraw_schema,output,handler:Handler::SafeWrite(&Write::Withdraw),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.ledger.journal.replace",title:"Replace a journal",summary:"Withdraw your submitted journal and submit its correction, which needs its own approval.",keywords:&[],capability:SUBMIT_JOURNALS,input:replace_schema,output,handler:Handler::SafeWrite(&Write::Replace),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.journal.reject",title:"Reject a journal",summary:"Record a permanent rejection with a reason and no posting.",keywords:&[],capability:APPROVE_JOURNALS,input:reject_schema,output,handler:Handler::SafeWrite(&Write::Reject),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.entry.reverse",title:"Reverse a manual entry",summary:"Post the mirror once, never reverse an owned entry or a year-end closing entry here.",keywords:&[],capability:POST_ENTRIES,input:reverse_schema,output,handler:Handler::SafeWrite(&Write::Reverse),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.fiscal_year.open",title:"Open a fiscal year",summary:"Open the next year and calendar-month periods; the first start date is explicit.",keywords:&[],capability:MANAGE_PERIODS,input:open_year_schema,output,handler:Handler::SafeWrite(&Write::OpenYear),channels:Channels::Every,step_up:&[]},
