@@ -411,6 +411,12 @@ impl Receivables {
                 }
             }
         };
+        // The newly created company must pass the same Base Records proof
+        // as a selected company, on this transaction before storing its link.
+        self.records
+            .check(tx.sql(), scope, KIND, &target.to_string())
+            .await?
+            .map_err(|refusal| invalid("core_company_id", refusal.message()))?;
         let role = self.customer_role(tx.sql(), scope).await?;
         if self
             .current_customer_relationship(tx.sql(), scope, source, target, &role)
