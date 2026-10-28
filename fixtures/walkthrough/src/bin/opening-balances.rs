@@ -23,7 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let services = services(&db, &modules)?;
     install(&db, &services).await?;
     let manager = sign_in(&db, &services, 1, 1).await?;
-    let reviewer = sign_in(&db, &services, 1, 7).await?;
+    let reviewer = sign_in(&db, &services, 1, 4).await?;
     let viewer = sign_in(&db, &services, 1, 2).await?;
     let ledger = services.get::<Ledger>(bilibi_finance_ledger::SERVICE)?;
     let mut source = OpeningBalances {

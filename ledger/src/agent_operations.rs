@@ -1090,7 +1090,12 @@ fn opening_schema() -> Value {
             "source_reference",
             "csv",
         ],
-        json!({"conversion_date":day(),"currency_code":string(3),"source_reference":string(100),"csv":string(131072)}),
+        json!({
+            "conversion_date":{"type":"string","format":"date","description":"First date Bilibi owns transaction processing; use the source closing trial balance immediately before it."},
+            "currency_code":{"type":"string","maxLength":3,"description":"Must match the book currency exactly; no currency conversion."},
+            "source_reference":{"type":"string","maxLength":100,"description":"Permanent source export/batch identifier. Identical retries return the recorded journal."},
+            "csv":{"type":"string","maxLength":131072,"description":"UTF-8 CSV with header source_id,account_code,debit,credit; 2–500 nonzero rows, unique source IDs, existing active account codes, one positive ungrouped amount per row. At most 128 KiB."}
+        }),
     )
 }
 fn journal_schema() -> Value {

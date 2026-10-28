@@ -525,6 +525,7 @@ fn field_label(path: &str) -> String {
     let last = path.rsplit('.').next().unwrap_or(path);
     match last {
         "entry_date" => "Date".into(),
+        "csv" => "Opening balances CSV".into(),
         "account_id" => "Account".into(),
         "currency_code" => "Currency".into(),
         "minor_units" => "Decimal places".into(),

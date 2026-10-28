@@ -195,7 +195,7 @@ impl Opening {
             let mut body = render(Alert {
                 id: "opening-review-summary",
                 kind: StatusKind::Info,
-                body: Html::text(format!(
+                body: Html::text(&format!(
                     "Conversion date {}. Currency {}. Source {}. Debits {}. Credits {}. {}",
                     facts["conversion_date"].as_str().unwrap_or(""),
                     facts["currency_code"].as_str().unwrap_or(""),
