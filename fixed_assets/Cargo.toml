@@ -27,3 +27,5 @@ thiserror.workspace = true
 tokio-postgres.workspace = true
 
 bilibi-agent-api.workspace = true
+
+bilibi-party-ids.workspace = true

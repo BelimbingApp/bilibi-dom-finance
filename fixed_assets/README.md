@@ -21,7 +21,7 @@ Resolve `FixedAssets` at `finance/fixed_assets.fixed_assets`. Every data call ta
 | `void_acquisition(scope, company, asset_id, EventInput)` | `finance.fixed-assets.finance-asset-void` | Permanently retire a reversed acquisition and mirror only its live depreciation. |
 | `list_runs(scope, company)` / `list_events(scope, company, asset_id)` | `finance.fixed-assets.view` | Runs newest month first with items, exceptions and reversal state; asset events in event-number order. |
 | `register_report(scope, company, date, ReportPins)` / `depreciation_schedule_report(...)` | `finance.fixed-assets.view` | Same dated register, projected schedule and ledger reconciliation, at four immutable boundaries. |
-| `evidence_page(scope, company, dataset, limit, after)` | `finance.fixed-assets.view` | Explicit frozen fields, exact decimal text, UTC timestamps; ID cursor and limit 1–500. Datasets: `asset`, `category`, `category_revision`, `event`, `run`, `run_exception`, `run_item`. |
+| `evidence_page(scope, company, dataset, limit, after)` | `finance.fixed-assets.view` | Explicit frozen fields, exact decimal text, UTC timestamps; ID cursor and limit 1–500. Datasets: `opening_batch`, `opening_item`, `asset`, `category`, `category_revision`, `event`, `run`, `run_exception`, `run_item`. |
 
 All seven reference capability keys and six `finance-asset-*` verbs are declared and granted to `tenant_owner`. Reads that need ledger context also require Ledger view; nonempty postings and reversals independently require Ledger post authority.
 
@@ -92,7 +92,7 @@ On a second fresh disposable database, run NX2:
 DATABASE_URL=postgres://…/disposable cargo run -p bilibi-finance-walkthrough-fixture --bin fixed-assets-runs
 ```
 
-This proves concurrent first-run creation/retries, posting-authority rollback, asymmetric 100/50 charges, void/partial/whole reversals and catch-up, gain/loss/break-even/write-off disposal, unrelated standing-disposal dependencies, historical reproduction, year-end closing/reopening reconciliation, skipped-only/empty consumed months, closed-period entryless void refusal, scope/archive refusals, all seven evidence datasets, audited business rows and SQL immutability/sealing/aggregate guards. It exits with `NX2: runs, corrections, reports, evidence, audit and database fences passed`.
+This proves concurrent first-run creation/retries, posting-authority rollback, asymmetric 100/50 charges, void/partial/whole reversals and catch-up, gain/loss/break-even/write-off disposal, unrelated standing-disposal dependencies, historical reproduction, year-end closing/reopening reconciliation, skipped-only/empty consumed months, closed-period entryless void refusal, scope/archive refusals, all nine evidence datasets, audited business rows and SQL immutability/sealing/aggregate guards. It exits with `NX2: runs, corrections, reports, evidence, audit and database fences passed`.
 
 
 ## Pages
@@ -118,3 +118,25 @@ It drives the actual mounted Page/LiveState adapters against facade records: cre
 Page flashes survive background refresh and table changes. The shared `clear-flash` event clears only the message kind it names, so a delayed success timeout cannot erase a newer refusal. The combined `finance-ui` walkthrough checks this through both the mounted category and asset pages and supplies records for Chrome checks across Finance.
 
 Asset categories and disposal forms choose accounts from the ledger's account-list contract. Page money uses `Money::display` with the book's decimal places.
+
+## Opening asset register at conversion
+
+Import the source asset register after the opening trial balance is approved, before registering ordinary acquisitions. Open **Fixed assets → Opening asset register** (`/finance/fixed-assets/opening`) for the current company. Create category revisions with the approved cost, accumulated depreciation, expense and disposal accounts first.
+
+Use this UTF-8 CSV header:
+
+```csv
+source_id,description,category_revision_id,acquisition_date,in_service_date,cost,accumulated_depreciation,remaining_life_months,residual_value
+```
+
+The import preserves source cost, accumulated depreciation, carrying value, acquisition and in-service dates. It uses **prospective straight-line depreciation over the remaining useful life from cut-off**, regardless of the category's lifetime projection. This is an explicit opening estimate: past accumulation need not equal Bilibi's historical projection, and no historical catch-up is posted. Review the method and remaining life with the accountant. The category method is retained in source facts; the asset's frozen method is straight line and its `life_months` is remaining life at conversion.
+
+For example, cost 12,000, accumulated depreciation 1,800, zero residual and 96 remaining months give a carrying value of 10,200 and monthly future depreciation of 106.25. The initial accumulated figure stays 1,800. It does not become a new depreciation-expense posting. A full first conversion month is recognized at month-end, including a mid-month conversion, following the existing full-month convention. Acquisition must precede conversion and in-service date must fall between acquisition and conversion. Remaining life is 1–1200 months; residual and source accumulation must be nonnegative and together no greater than cost.
+
+**Preview import** compares total cost and total accumulated depreciation by mapped account with the approved opening balances. Every difference refuses the import. Accounts cannot be used for both cost and accumulation within the imported register. **Approve import** retains the source and creates the register in one audited transaction; it posts no acquisition or depreciation entry. The reviewer must be independent of the opening source preparer, with exceptions decided and recorded through existing Ledger controls. The source opening journal is protected against reversal once records depend on it.
+
+UI and MCP use `finance.fixed_assets.opening.context` and reviewed `finance.fixed_assets.opening.import`. Input is `company_id`, `source_reference`, `currency_code`, `csv`, and optional `override_reason`. The facade is `FixedAssets::import_opening_register`; agent commits join the plan's transaction. Normal acquisitions still freeze one whole source debit line. An opening asset has no acquisition line (`Asset::entry_line_number` is `None`); its aggregate opening entry is not an individual acquisition debit. Read opening source facts on `AssetDetail::opening` and through the `opening_batch`/`opening_item` evidence datasets.
+
+The existing register report includes opening cost and accumulation from conversion onward, then subsequent depreciation, disposals and corrections at its normal four report pins. Depreciation-expense reconciliation counts subsequent charges separately from source accumulated depreciation. Retained source-period expense/YTD and comparative detail is not reconstructed by this import and must be reviewed with the source reporting bridge. The asset page shows source IDs, source reference, carrying value and the prospective basis.
+
+Each company can import one complete register of 1–500 assets, at most 128 KiB. Identical source-reference/CSV retries return the retained batch; changed retries are refused. **Correction or replacement of a committed opening register is not yet supported.** Non-straight-line prospective methods, zero remaining-life records, impairment/disposal history, capital allowances, staged larger registers and source-period depreciation detail remain follow-up work. The accountant approves source figures and future estimates; conversion does not replace the source archive.

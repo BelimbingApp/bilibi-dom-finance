@@ -27,7 +27,12 @@ fn owner() -> Result<&'static Payables> {
         .map(|(p, _)| p.as_ref())
         .ok_or_else(|| Error::Internal.into())
 }
-async fn authorize_on(c: &dyn OperationClient, s: &Scope, company: i64, cap: &str) -> Result<()> {
+pub(super) async fn authorize_on(
+    c: &dyn OperationClient,
+    s: &Scope,
+    company: i64,
+    cap: &str,
+) -> Result<()> {
     OWNER
         .get()
         .ok_or(Error::Internal)?
@@ -53,7 +58,7 @@ fn fields(errors: Vec<FieldError>, array: &str) -> bilibi_agent_api::Error {
     }
     bilibi_agent_api::Error::InvalidInput(result)
 }
-fn error(e: PayablesError, array: &str) -> bilibi_agent_api::Error {
+pub(super) fn error(e: PayablesError, array: &str) -> bilibi_agent_api::Error {
     use bilibi_agent_api::Error as E;
     match e {
         PayablesError::Unauthorized | PayablesError::Ledger(LedgerError::Unauthorized) => {
@@ -717,6 +722,7 @@ impl WriteHandler for Write {
 }
 
 enum Read {
+    Aging,
     Settings,
     Taxes,
     Document,
@@ -758,6 +764,13 @@ impl ReadHandler for Read {
                 let after=v["after_id"].as_i64().filter(|n|!newest||*n>0).unwrap_or(if newest {i64::MAX} else {0});
                 let (cmp,order)=if newest {("<","DESC")} else {(">","")};
                 let result=match self {
+                    Self::Aging=>{
+                        let as_of=v["as_of"].as_str().ok_or(PayablesError::InvalidOption)?.parse().map_err(|_|invalid("as_of","must be YYYY-MM-DD"))?;
+                        let mut options=AgingQuery{through_entry_number:v["through_entry_number"].as_i64(),..Default::default()};
+                        if let Some(days)=v["bucket_days"].as_array(){options.bucket_days=days.iter().map(|n|n.as_i64().and_then(|n|i32::try_from(n).ok()).ok_or(PayablesError::InvalidOption)).collect::<Result<Vec<_>>>()?;}
+                        // A read has no company write lock; use the same report facade as the page.
+                        json!(owner()?.aged_payables(s,company,as_of,&options).await?)
+                    },
                     Self::Settings=>json!({"settings":store::settings(c,tenant,company).await?.map(|(_,s)|s)}),
                     Self::Document=>document_value(store::document_record(c,tenant,company,id(v,"document_id")?).await?.ok_or(PayablesError::DocumentNotFound)?),
                     Self::Request=>json!(payments::request(c,tenant,company,id(v,"request_id")?).await?),
@@ -934,6 +947,7 @@ fn list_schema(kind: &str) -> Value {
 
 inventory::submit! {Contribution::new(DEFINITIONS,"finance/payables.operations",Provenance {module:MODULE,source:file!(),line:line!()},&Definitions {
     operations:&[
+        Operation {key:"finance.payables.aging.get",title:"Read payables aging",summary:"Read supplier residuals at a date and posting pin, aged by their original due dates. Opening bills are excluded before conversion.",keywords:&["conversion"],capability:VIEW,input:||schema(&["as_of"],json!({"as_of":day(),"through_entry_number":{"type":"integer","minimum":0},"bucket_days":{"type":"array","items":{"type":"integer","minimum":1,"maximum":36500}}})),output,handler:Handler::Read(&Read::Aging),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.payables.settings.get",title:"Read payables settings",summary:"Read the control account and matching tolerances; null before configuration.",keywords:&[],capability:VIEW,input:||schema(&[],json!({})),output,handler:Handler::Read(&Read::Settings),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.payables.tax_code.list",title:"List payables tax codes",summary:"Read configured tax codes by ID with a bounded cursor.",keywords:&[],capability:VIEW,input:||list_schema("tax"),output,handler:Handler::Read(&Read::Taxes),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.payables.document.get",title:"Read a payable document",summary:"Read a bill or debit note, immutable line and tax snapshots, status and outstanding.",keywords:&[],capability:VIEW,input:document_id,output,handler:Handler::Read(&Read::Document),channels:Channels::Every,step_up:&[]},

@@ -5,6 +5,10 @@ mod acquisitions;
 mod activity;
 mod categories;
 mod contributions;
+mod opening;
+mod opening_csv;
+mod opening_operations;
+mod opening_web;
 mod reports;
 mod schedule;
 mod store;
@@ -31,16 +35,18 @@ pub const MODULE: &str = "finance/fixed_assets";
 pub const SERVICE: &str = "finance/fixed_assets.fixed_assets";
 inventory::submit! { Module {
     id: MODULE, layer: Layer::Domains,
-    dependencies: &["base/agent_api", "base/authz", "base/database", "base/tenancy", "base/datetime", "base/locale", "base/menu", "base/ui", "core/company", "finance/ledger", "finance/payables"],
+    dependencies: &["base/agent_api", "base/authz", "base/database", "base/tenancy", "base/datetime", "base/locale", "base/menu", "base/party_ids", "base/ui", "core/company", "finance/ledger", "finance/payables"],
     migrations: &[
         ("finance-fixed-assets-001-acquisitions", include_str!("../migrations/001-acquisitions.sql")),
         ("finance-fixed-assets-002-runs-corrections", include_str!("../migrations/002-runs-corrections.sql")),
+        ("finance-fixed-assets-003-opening-items", include_str!("../migrations/003-opening-items.sql")),
     ],
-    services: &[Service { id: SERVICE, factory: |s| Ok(Arc::new(FixedAssets {
+    services: &[Service {id:opening_web::PAGES,factory:|services| Ok(Arc::new(bilibi_ui::page::PageService::<Scope,Error>(Arc::new(opening_web::Pages {db:services.get::<Db>("base/database.pool")?.as_ref().clone(),contracts:services.get(bilibi_agent_api::page::SERVICE)?,plans:services.get("base/agent_api.plans")?}))))},Service { id: SERVICE, factory: |s| { let assets = Arc::new(FixedAssets {
         db: s.get::<Db>("base/database.pool")?.as_ref().clone(),
         ledger: s.get(bilibi_finance_ledger::SERVICE)?,
         payables: s.get(bilibi_finance_payables::SERVICE)?,
-    })) }, Service { id: web::PAGES, factory: |s| Ok(Arc::new(bilibi_ui::page::PageService::<Scope, Error>(Arc::new(web::Pages {
+        parties: s.get("base/tenancy.parties")?,
+    }); opening_operations::bind(assets.clone())?; Ok(assets) } }, Service { id: web::PAGES, factory: |s| Ok(Arc::new(bilibi_ui::page::PageService::<Scope, Error>(Arc::new(web::Pages {
         contracts: s.get(bilibi_agent_api::page::SERVICE)?,
         db: s.get::<Db>("base/database.pool")?.as_ref().clone(),
         assets: s.get(SERVICE)?,
@@ -190,7 +196,9 @@ pub struct Asset {
     pub assumptions: Assumptions,
     pub entry_id: i64,
     pub entry_number: i64,
-    pub entry_line_number: i32,
+    pub entry_line_number: Option<i32>,
+    pub opening_date: Option<Date>,
+    pub opening_accumulated: Money,
     pub bill_id: Option<i64>,
     pub bill_line_number: Option<i32>,
     pub recorded_by_user_id: i64,
@@ -218,6 +226,7 @@ pub struct AssetCharge {
 }
 #[derive(Clone, Debug)]
 pub struct AssetDetail {
+    pub opening: Option<serde_json::Value>,
     pub asset: Asset,
     pub revision: CategoryRevision,
     pub schedule: Vec<ScheduleRow>,
@@ -229,11 +238,16 @@ impl AssetDetail {
     /// Scheduled (not posted) depreciation effective at month-end. A mid-month
     /// date excludes that month's full charge.
     pub fn scheduled_depreciation(&self, as_of: Date) -> Money {
-        self.schedule
-            .iter()
-            .filter(|r| r.period.last_of_month() <= as_of)
-            .map(|r| r.amount)
-            .sum()
+        if self.asset.opening_date.is_some_and(|date| as_of < date) {
+            return Money::ZERO;
+        }
+        self.asset.opening_accumulated
+            + self
+                .schedule
+                .iter()
+                .filter(|r| r.period.last_of_month() <= as_of)
+                .map(|r| r.amount)
+                .sum()
     }
 }
 
@@ -241,6 +255,7 @@ pub struct FixedAssets {
     db: Db,
     ledger: Arc<Ledger>,
     payables: Arc<Payables>,
+    parties: Arc<bilibi_tenancy::PartyProofs>,
 }
 impl FixedAssets {
     async fn write<'c>(

@@ -583,7 +583,7 @@ async fn run(db: &Db, services: &Services) -> Outcome<()> {
     refused(f.depreciate(&admin, 3, date(2026, 1, 1)).await, |e| {
         matches!(e, F::CompanyArchived)
     });
-    assert_eq!(f.evidence_datasets().len(), 7);
+    assert_eq!(f.evidence_datasets().len(), 9);
     for dataset in f.evidence_datasets() {
         let mut after = None;
         let mut last = 0;
@@ -606,7 +606,10 @@ async fn run(db: &Db, services: &Services) -> Outcome<()> {
                 break;
             }
         }
-        assert!(count > 0, "empty evidence {dataset}");
+        assert!(
+            count > 0 || matches!(dataset, "opening_batch" | "opening_item"),
+            "empty evidence {dataset}"
+        );
         println!("{dataset}: {count} scoped ordered rows");
     }
     refused(
@@ -625,7 +628,17 @@ async fn run(db: &Db, services: &Services) -> Outcome<()> {
     ] {
         let missing:i64=c.query_one(&format!("SELECT count(*) FROM finance_fixed_assets_{table} r WHERE r.tenant_id=1 AND r.company_id=$1 AND (SELECT count(*) FROM base_audit_mutations a WHERE a.auditable_type=$2 AND a.auditable_id=r.id::text AND a.tenant_id=r.tenant_id AND a.new_values->>'company_id'=r.company_id::text)<>1"),&[&COMPANY,&format!("finance.fixed-assets.{kind}")]).await?.get(0);
         assert_eq!(missing, 0, "audit {table}");
-        for sql in [format!("UPDATE finance_fixed_assets_{table} SET recorded_by_user_id=1 WHERE tenant_id=1 AND company_id={COMPANY}"),format!("DELETE FROM finance_fixed_assets_{table} WHERE tenant_id=1 AND company_id={COMPANY}"),format!("TRUNCATE finance_fixed_assets_{table} CASCADE")] { sql_refuses(&c,&sql,"fixed assets retain every record permanently").await?; }
+        for sql in [
+            format!(
+                "UPDATE finance_fixed_assets_{table} SET recorded_by_user_id=1 WHERE tenant_id=1 AND company_id={COMPANY}"
+            ),
+            format!(
+                "DELETE FROM finance_fixed_assets_{table} WHERE tenant_id=1 AND company_id={COMPANY}"
+            ),
+            format!("TRUNCATE finance_fixed_assets_{table} CASCADE"),
+        ] {
+            sql_refuses(&c, &sql, "fixed assets retain every record permanently").await?;
+        }
     }
     for table in ["run_items", "run_exceptions"] {
         sql_refuses(&c,&format!("INSERT INTO finance_fixed_assets_{table} SELECT (jsonb_populate_record(NULL::finance_fixed_assets_{table},(SELECT to_jsonb(r)||jsonb_build_object('id',999999) FROM finance_fixed_assets_{table} r WHERE tenant_id=1 AND company_id={COMPANY} LIMIT 1))).*"),"fixed asset run already recorded").await?;

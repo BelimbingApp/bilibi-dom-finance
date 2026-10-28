@@ -1,0 +1,9 @@
+# Opening invoices
+
+Read finance.receivables.opening.context for the current company's approved conversion entry, book precision, exact CSV header, retained batch and imported item identifiers. Prepare setup and mapping in separate reviewed writes; plans preview dependent steps before executing earlier steps.
+
+Use finance.receivables.opening.import with company_id, source_reference, currency_code and csv plus an active invoice series_id. Preview the complete register and inspect each source ID, date, amount and account mapping, then commit the exact reviewed input once. The register must reconcile exactly to the approved opening accounts. Import creates no ledger entry or source-period tax lines. The reviewer must be independent of the opening journal's source preparer. An override_reason invokes the existing duty-separation controls and records an exception; it is not a bypass.
+
+At most 500 rows and 128 KiB are accepted. Preserve source_reference and exact CSV for safe retry after a lost response, using a new plan code. Changed retries are refused. Committed register replacement/correction and staged larger imports are not yet supported. Source opening reversal is refused while imported records depend on it. Never recreate these balances as ordinary invoices, bills or acquisitions.
+
+Import positive residuals, retaining original gross totals, document/due dates and source references. Receivables links customer_code to an active customer; Payables links vendor_key to its stable party key. Opening credits, multiple historical controls and currency translation are not yet supported. Settle through the normal reviewed receipt/payment operations after conversion. Aging excludes these records before conversion. Source-period tax and prior allocations remain external evidence.

@@ -212,7 +212,7 @@ pub(crate) async fn prepare(
         "currency_code":book.currency_code,"minor_units":book.minor_units,"source_reference":reference,"rows":mapped,
         "debit":debit,"credit":credit,
         "existing_journal":existing,"replaces_journal_id":source.replaces_journal_id,"replaces_journal_number":replaced_number,"posts":false,
-        "excluded":"Open invoices and bills, asset registers, bank reconciliation items, tax return detail and historical transactions are not migrated. Control-account balances remain differences until opening invoices and bills are supported. Income and expense balances appear on the conversion date; review the YTD reporting bridge with the accountant."});
+        "excluded":"This journal creates ledger balances only. After approval, import opening invoices, bills and the asset register through their own reconciled opening operations. Bank reconciliation items, source-period tax detail and historical transactions remain outside these imports. Income and expense balances appear on the conversion date; review the YTD reporting bridge with the accountant."});
     Ok(Prepared {
         entry,
         existing,
@@ -310,7 +310,9 @@ pub(crate) async fn refuse_manual_replacement(
     if is_opening(client, scope.tenant(), company, journal_id).await? {
         return Err(refused(
             "journal_id",
-            format!("is an opening balances journal; correct it from Opening balances (/finance/ledger/opening-balances?correct={journal_id}) or by submitting opening balances again with replaces_journal_id"),
+            format!(
+                "is an opening balances journal; correct it from Opening balances (/finance/ledger/opening-balances?correct={journal_id}) or by submitting opening balances again with replaces_journal_id"
+            ),
         ));
     }
     Ok(())

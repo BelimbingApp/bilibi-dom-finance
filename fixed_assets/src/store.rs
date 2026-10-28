@@ -6,6 +6,8 @@ use serde_json::{json, Value};
 
 #[derive(Clone, Copy)]
 pub(crate) enum Table {
+    OpeningBatch,
+    OpeningItem,
     Category,
     Revision,
     Asset,
@@ -17,6 +19,8 @@ pub(crate) enum Table {
 impl Table {
     fn name(self) -> &'static str {
         match self {
+            Self::OpeningBatch => "finance_fixed_assets_opening_batches",
+            Self::OpeningItem => "finance_fixed_assets_opening_items",
             Self::Category => "finance_fixed_assets_categories",
             Self::Revision => "finance_fixed_assets_category_revisions",
             Self::Asset => "finance_fixed_assets_assets",
@@ -28,6 +32,8 @@ impl Table {
     }
     fn kind(self) -> &'static str {
         match self {
+            Self::OpeningBatch => "finance.fixed-assets.opening_batch",
+            Self::OpeningItem => "finance.fixed-assets.opening_item",
             Self::Category => "finance.fixed-assets.category",
             Self::Revision => "finance.fixed-assets.category_revision",
             Self::Asset => "finance.fixed-assets.asset",
@@ -39,6 +45,29 @@ impl Table {
     }
     fn fields(self) -> &'static [&'static str] {
         match self {
+            Self::OpeningBatch => &[
+                "id",
+                "tenant_id",
+                "company_id",
+                "source_reference",
+                "source_csv",
+                "currency_code",
+                "conversion_date",
+                "entry_id",
+                "entry_number",
+                "recorded_by_user_id",
+                "recorded_by_impersonator_id",
+                "recorded_at",
+            ],
+            Self::OpeningItem => &[
+                "id",
+                "tenant_id",
+                "company_id",
+                "batch_id",
+                "source_id",
+                "asset_id",
+                "source_facts",
+            ],
             Self::Category => &[
                 "id",
                 "tenant_id",
@@ -257,8 +286,21 @@ pub(crate) fn asset(v: &Value, units: MinorUnits) -> DbResult<Asset> {
         assumptions: assumptions(v)?,
         entry_id: int(v, "entry_id")?,
         entry_number: int(v, "entry_number")?,
-        entry_line_number: i32::try_from(int(v, "entry_line_number")?)
+        entry_line_number: v["entry_line_number"]
+            .as_i64()
+            .map(i32::try_from)
+            .transpose()
             .map_err(|_| Error::Invalid)?,
+        opening_date: v["opening_date"]
+            .as_str()
+            .map(str::parse)
+            .transpose()
+            .map_err(|_| Error::Invalid)?,
+        opening_accumulated: if v["opening_accumulated"].is_null() {
+            Money::ZERO
+        } else {
+            money("opening_accumulated")?
+        },
         bill_id: v["bill_id"].as_i64(),
         bill_line_number: v["bill_line_number"]
             .as_i64()
@@ -309,6 +351,8 @@ pub struct EvidencePage {
 }
 pub(crate) fn datasets() -> Vec<&'static str> {
     vec![
+        "opening_batch",
+        "opening_item",
         "asset",
         "category",
         "category_revision",
@@ -327,6 +371,8 @@ pub(crate) async fn page(
     after: Option<i64>,
 ) -> Result<EvidencePage> {
     let t = match dataset {
+        "opening_batch" => Table::OpeningBatch,
+        "opening_item" => Table::OpeningItem,
         "asset" => Table::Asset,
         "category" => Table::Category,
         "category_revision" => Table::Revision,

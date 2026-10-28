@@ -250,7 +250,7 @@ they govern this code and are not copied here.
   `list_accounts_on`, `get_entry_on` and `Payables::get_document_on`, not pooled
   methods: another connection while holding the company lock can exhaust the pool.
 - Register assets through `FixedAssets`, never by posting or claiming their
-  acquisition entry: it freezes one whole source debit and its revision;
+  acquisition entry: ordinary acquisitions freeze one whole source debit and its revision; opening registers use `import_opening_register` against approved aggregate balances, preserving source accumulation and prospective remaining life;
   projected schedules are not posted depreciation (see `fixed_assets/README.md`).
 - A customer (and, when ported, a vendor) is a Finance record linked to a
   Core company through Base Records (`record_kind`/`record_id`, checked with

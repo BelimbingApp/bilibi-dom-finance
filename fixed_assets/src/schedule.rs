@@ -31,9 +31,12 @@ pub(crate) fn assumptions(mut a: Assumptions) -> Result<Assumptions> {
     Ok(a)
 }
 pub(crate) fn rows(asset: &Asset, units: MinorUnits) -> Result<Vec<ScheduleRow>> {
-    let depreciable = (asset.cost - asset.residual_value).amount();
+    let depreciable = (asset.cost - asset.opening_accumulated - asset.residual_value).amount();
     let mut accumulated = Decimal::ZERO;
-    let first = asset.in_service_date.first_of_month();
+    let first = asset
+        .opening_date
+        .unwrap_or(asset.in_service_date)
+        .first_of_month();
     (0..asset.assumptions.life_months)
         .map(|month| {
             let remaining = depreciable - accumulated;
@@ -42,7 +45,7 @@ pub(crate) fn rows(asset: &Asset, units: MinorUnits) -> Result<Vec<ScheduleRow>>
             } else if asset.assumptions.method == Method::StraightLine {
                 depreciable / Decimal::from(asset.assumptions.life_months)
             } else {
-                (asset.cost.amount() - accumulated)
+                (asset.cost.amount() - asset.opening_accumulated.amount() - accumulated)
                     * asset.assumptions.annual_rate.ok_or(Error::Invalid)?
                     / Decimal::from(1200)
             };
@@ -61,8 +64,10 @@ pub(crate) fn rows(asset: &Asset, units: MinorUnits) -> Result<Vec<ScheduleRow>>
                     .checked_add(month.months())
                     .map_err(|_| invalid("in_service_date", "is invalid"))?,
                 amount: money(amount)?,
-                accumulated: money(accumulated)?,
-                carrying_value: money(asset.cost.amount() - accumulated)?,
+                accumulated: money(asset.opening_accumulated.amount() + accumulated)?,
+                carrying_value: money(
+                    asset.cost.amount() - asset.opening_accumulated.amount() - accumulated,
+                )?,
             })
         })
         .collect()

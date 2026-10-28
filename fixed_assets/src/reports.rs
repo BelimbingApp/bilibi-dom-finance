@@ -181,7 +181,11 @@ impl FixedAssets {
         let mut rows = Vec::new();
         for v in assets {
             let a = store::asset(&v, totals.minor_units)?;
-            if a.asset_number > asset_pin || a.entry_number > through || a.acquisition_date > date {
+            if a.asset_number > asset_pin
+                || a.entry_number > through
+                || a.acquisition_date > date
+                || a.opening_date.is_some_and(|opening| opening > date)
+            {
                 continue;
             }
             let Some(revision) = revision_map.get(&a.category_revision_id) else {
@@ -192,14 +196,15 @@ impl FixedAssets {
             let accumulated = if voided {
                 Money::ZERO
             } else {
-                activity
-                    .runs
-                    .iter()
-                    .filter(|r| !r.reversed)
-                    .flat_map(|r| &r.items)
-                    .filter(|i| i.asset_id == a.id)
-                    .map(|i| i.amount)
-                    .sum()
+                a.opening_accumulated
+                    + activity
+                        .runs
+                        .iter()
+                        .filter(|r| !r.reversed)
+                        .flat_map(|r| &r.items)
+                        .filter(|i| i.asset_id == a.id)
+                        .map(|i| i.amount)
+                        .sum()
             };
             let schedule = schedule::rows(&a, totals.minor_units)?;
             let scheduled_depreciation = if voided {
@@ -209,7 +214,8 @@ impl FixedAssets {
                     .iter()
                     .filter(|r| r.period.last_of_month() <= date)
                     .map(|r| r.amount)
-                    .sum()
+                    .sum::<Money>()
+                    + a.opening_accumulated
             };
             let carrying_value = if voided || disposal.is_some() {
                 Money::ZERO
@@ -263,7 +269,10 @@ fn reconcile<'a>(
     };
     for row in rows.iter().filter(|r| !r.voided) {
         let r = &row.revision.defaults;
-        add(r.expense_account_id, row.accumulated);
+        add(
+            r.expense_account_id,
+            row.accumulated - row.asset.opening_accumulated,
+        );
         if row.disposed {
             if row.disposal_gain.is_positive() {
                 add(r.gain_account_id, Money::ZERO - row.disposal_gain);

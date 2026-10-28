@@ -274,7 +274,9 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
             .await,
         Err(R::NotADraft)
     ));
-    println!("issue: party/terms frozen at issue, saved lines/tax preserved; concurrent issue exactly once; live grants and attachment finality");
+    println!(
+        "issue: party/terms frozen at issue, saved lines/tax preserved; concurrent issue exactly once; live grants and attachment finality"
+    );
 
     ar.configure(&admin, 1, &json!({"receivable_account_id":control2}))
         .await?;
@@ -738,7 +740,9 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         )
         .await?;
     assert!(!outside.iter().any(|r| r.tax_code_id == tax.id));
-    println!("reports: dated aging 330→165→330→275→264→242→297; old pin reproduces 330; calendar-month tax received 50/5, unpaid 50/5 + 200/20, prior-period credit 20/2");
+    println!(
+        "reports: dated aging 330→165→330→275→264→242→297; old pin reproduces 330; calendar-month tax received 50/5, unpaid 50/5 + 200/20, prior-period credit 20/2"
+    );
     let settled = ar
         .record_payment(
             &admin,
@@ -822,7 +826,9 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         .iter()
         .filter(|a| [control1, control2].contains(&a.account_id))
         .all(|a| a.difference.is_zero() && a.subledger_balance.is_zero()));
-    println!("settlement: inactive original control retained at zero; multi-control receipts; per-account ±7 differences exposed despite zero net");
+    println!(
+        "settlement: inactive original control retained at zero; multi-control receipts; per-account ±7 differences exposed despite zero net"
+    );
 
     let mut cursor = None;
     let mut issued = Vec::new();
@@ -1049,9 +1055,11 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         .tax_amount
         .to_string()
         .starts_with("0.000909090909090909"));
-    println!("boundaries: due-today bucket zero; tax entry pins; competing settlements/reversals serialize; received-tax fractions stay unrounded");
+    println!(
+        "boundaries: due-today bucket zero; tax entry pins; competing settlements/reversals serialize; received-tax fractions stay unrounded"
+    );
     let datasets = Receivables::evidence_datasets();
-    assert_eq!(datasets.len(), 13);
+    assert_eq!(datasets.len(), 15);
     for dataset in datasets {
         let mut after = None;
         let mut count = 0;
@@ -1081,7 +1089,11 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
             }
         }
         assert!(
-            count > 0 || matches!(dataset, "write_off" | "write_off_event"),
+            count > 0
+                || matches!(
+                    dataset,
+                    "write_off" | "write_off_event" | "opening_batch" | "opening_item"
+                ),
             "empty evidence {dataset}"
         );
         println!("evidence {dataset}: {count} rows, exclusive one-row pages");
@@ -1124,9 +1136,16 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
             "description",
         ),
     ] {
-        for statement in [format!("UPDATE {table} SET {column}={column} WHERE tenant_id=1 AND company_id=1 AND {predicate}"),format!("DELETE FROM {table} WHERE tenant_id=1 AND company_id=1 AND {predicate}")] {
-            let tx=raw.transaction().await?; let result=tx.batch_execute(&statement).await; tx.rollback().await?;
-            assert!(result.is_err(),"SQL guard missing: {statement}");
+        for statement in [
+            format!(
+                "UPDATE {table} SET {column}={column} WHERE tenant_id=1 AND company_id=1 AND {predicate}"
+            ),
+            format!("DELETE FROM {table} WHERE tenant_id=1 AND company_id=1 AND {predicate}"),
+        ] {
+            let tx = raw.transaction().await?;
+            let result = tx.batch_execute(&statement).await;
+            tx.rollback().await?;
+            assert!(result.is_err(), "SQL guard missing: {statement}");
         }
     }
     // Row-for-row audit coverage, not merely a nonzero aggregate count.

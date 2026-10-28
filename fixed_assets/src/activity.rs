@@ -482,6 +482,12 @@ impl FixedAssets {
             return Err(invalid("proceeds", "must be greater than or equal to 0"));
         }
         let date = input.event.effective_date;
+        if a.opening_date.is_some_and(|opening| date < opening) {
+            return Err(invalid(
+                "effective_date",
+                "cannot precede the conversion date",
+            ));
+        }
         if date < a.acquisition_date {
             return Err(FixedAssetsError::BeforeAcquisition);
         }

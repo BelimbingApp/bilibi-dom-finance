@@ -84,7 +84,7 @@ impl Opening {
                 id: "opening-boundary",
                 kind: StatusKind::Info,
                 body: Html::text(
-                    "The conversion date is the first day of processing in Bilibi. Use the source closing trial balance from immediately before that date. Open invoices, bills, asset registers and historical transactions are excluded. Review control-account differences and the YTD reporting bridge with the accountant.",
+                    "The conversion date is the first day of processing in Bilibi. Use the source closing trial balance from immediately before that date. After approval, import opening invoices, bills and the asset register from their own opening pages. Review control-account reconciliation and the YTD reporting bridge with the accountant.",
                 ),
                 ..Alert::default()
             })?;
@@ -230,7 +230,9 @@ impl Opening {
                     if !facts["existing_journal"].is_null() {
                         "This source is already recorded. Continue to its journal without creating another.".to_owned()
                     } else if let Some(number) = facts["replaces_journal_number"].as_i64() {
-                        format!("Submission withdraws journal {number} and posts nothing. This correction becomes the opening and needs separate journal approval.")
+                        format!(
+                            "Submission withdraws journal {number} and posts nothing. This correction becomes the opening and needs separate journal approval."
+                        )
                     } else {
                         "Submission posts nothing. Separate journal approval is required."
                             .to_owned()

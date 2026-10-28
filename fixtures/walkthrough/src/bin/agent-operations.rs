@@ -75,6 +75,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             grants.set_direct(&admin, user, key, Some(true)).await?;
         }
     }
+    for user in [1, 7] {
+        for key in bilibi_finance_fixed_assets::CAPABILITIES {
+            grants.set_direct(&admin, user, key, Some(true)).await?;
+        }
+    }
     let manager = sign_in(&db, &services, 1, 1).await?;
     let settings = services.get::<Settings>("base/settings.store")?;
     let boundary = services.get::<MutationBoundary>("base/database.mutations")?;
@@ -167,7 +172,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .mode(0o600)
         .open(path)?;
     file.write_all(serde_json::to_string(&credentials)?.as_bytes())?;
-    println!("Disposable fixture ready: empty ledgers; real manager, independent approver and other-tenant OAuth credentials saved privately.");
+    println!(
+        "Disposable fixture ready: empty ledgers; real manager, independent approver and other-tenant OAuth credentials saved privately."
+    );
     Ok(())
 }
 

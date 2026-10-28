@@ -134,7 +134,10 @@ impl Bill {
             }
         }
         let Some(d) = &self.document else {
-            let mut missing = EmptyState::missing("Document not found", "There is no such document for this company, or it cannot be read with your current access.");
+            let mut missing = EmptyState::missing(
+                "Document not found",
+                "There is no such document for this company, or it cannot be read with your current access.",
+            );
             missing.id = "payables-bill-missing".into();
             missing.action = render(AllBills)?;
             return Missing {
@@ -234,6 +237,29 @@ impl Bill {
                 value,
                 ..Fact::default()
             });
+        }
+        if let Some(opening) = &d.opening {
+            items.push(f::fact(
+                "Opening source",
+                opening["source_reference"].as_str().unwrap_or(""),
+            ));
+            items.push(f::fact(
+                "Conversion date",
+                opening["conversion_date"].as_str().unwrap_or(""),
+            ));
+            if let Some(amount) = opening["original_total"]
+                .as_str()
+                .and_then(|v| v.parse::<rust_decimal::Decimal>().ok())
+            {
+                items.push(f::fact(
+                    "Source original total",
+                    &bilibi_finance_ledger::Money::display_decimal(amount, units),
+                ));
+            }
+            items.push(f::fact(
+                "Opening amounts",
+                "Residual only; source-period tax detail was not migrated.",
+            ));
         }
         let facts = render(Facts {
             id: "payables-bill-document-facts",
@@ -615,11 +641,14 @@ impl Bill {
             ),
             Written::Changed => (
                 StatusKind::Error,
-                format!("{verb} did not go through because the document changed. Review it and try again."),
+                format!(
+                    "{verb} did not go through because the document changed. Review it and try again."
+                ),
             ),
-            Written::Fields(fields) if action == "void" && fields.contains_key("void_reason") => {
-                (StatusKind::Error, "Give a reason of 1 to 500 characters.".into())
-            }
+            Written::Fields(fields) if action == "void" && fields.contains_key("void_reason") => (
+                StatusKind::Error,
+                "Give a reason of 1 to 500 characters.".into(),
+            ),
             Written::Fields(fields) => (StatusKind::Error, f::refused(verb, &fields)),
         });
         Ok(reload)

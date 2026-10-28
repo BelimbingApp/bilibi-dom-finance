@@ -119,7 +119,7 @@ For the running bills pages, use a fresh disposable database with `DATABASE_URL=
 
 `tie_out_control_accounts` first reads `Ledger::account_totals_by_owner`, then reads the subledger at that exact posting number. It includes every historical/configured payable account, shows credits less debits, and lists other owners' postings as differences. No ledger table is read. Pass its `through_entry_number` to other report columns.
 
-The `finance/payables/payment` attachment source describes a payment request from submission onward, so pre-approval remittance evidence stays linked to its posted payment. Its attachments can be replaced or removed while submitted and become final when posted or rejected. `evidence_datasets` and authorized `evidence_page` export all seventeen owned tables, the match records and the order source copy included, through frozen field lists, ID-ordered pages of 1–500, with exact numeric text and UTC timestamps. The NP3 walkthrough exercises the workflow, refusals, temporal balances, pinned reports, tie-out, evidence, attachments and database immutability.
+The `finance/payables/payment` attachment source describes a payment request from submission onward, so pre-approval remittance evidence stays linked to its posted payment. Its attachments can be replaced or removed while submitted and become final when posted or rejected. `evidence_datasets` and authorized `evidence_page` export all nineteen owned tables, the match records and the order source copy included, through frozen field lists, ID-ordered pages of 1–500, with exact numeric text and UTC timestamps. The NP3 walkthrough exercises the workflow, refusals, temporal balances, pinned reports, tie-out, evidence, attachments and database immutability.
 
 ## Reviewed agent operations (H3)
 
@@ -148,3 +148,25 @@ The bootstrap creates real OAuth API and resource-bound PKCE MCP credentials in 
 `evidence_page_on` is the same authorized evidence contract on a caller-supplied PostgreSQL client or transaction. Use it for every page of one repeatable-read export (Reports auditor pack); the pooled `evidence_page` wrapper is a live read per page. Schema helpers remain private.
 
 Bills show account codes and names from the ledger account-list contract, and money with thousands separators and the book's decimal places. A separation-of-duties refusal links to Approval exceptions so a one-person company can review its approval control.
+
+## Opening bills at accounting system conversion
+
+Import the complete supplier outstanding register against an approved opening trial balance, before posting ordinary bills. Configure the payables control account first, then open **Payables → Opening bills** (`/finance/payables/opening`) for the current company.
+
+The UTF-8 CSV header is:
+
+```csv
+source_id,vendor_key,vendor_name,document_reference,document_date,due_date,original_total,outstanding,control_account_code
+```
+
+`vendor_key` is Payables' existing stable party key, used by bills, payments and aging; Payables has no separate vendor master. Keep the same key for all bills and later payments belonging to that vendor. A key cannot identify different names within one export. The source document reference must be unique for that vendor and cannot duplicate a recorded bill. Use original gross totals and the positive residual at cut-off, including partially settled bills. Preserve historical document and due dates; document dates precede the conversion date, which is the first day Bilibi owns processing.
+
+**Preview import** shows the source items and exact reconciliation to the configured opening control balance. **Approve import** records the complete register and source evidence in one audited transaction without posting purchases, tax or the control balance again. Approval uses Ledger's impersonation-aware duty separation against the opening journal's source preparer; an authorized exception requires its reason. The import and its source opening entry are permanent dependencies, so the opening entry cannot subsequently be reversed.
+
+UI and MCP call the same `finance.payables.opening.import` contract. Read `finance.payables.opening.context` for the book, approved opening entry, CSV header and retained batch. Write input is `company_id`, `source_reference`, `currency_code`, `csv`, and optional `override_reason`. The public facade is `Payables::import_opening_bills`; agent commits use its private transaction-joining implementation.
+
+Imported bills use the normal payment-request, independent payment approval and reversal operations, retaining their original control account. Aging uses historical due dates from conversion onward and excludes opening bills before conversion. Settlement before conversion is refused. Original gross totals, residuals and settlements before conversion remain source facts; no historical payment or source-period tax lines are fabricated. Control-account tie-outs include the residuals and retain the original source journal's owner, with separate opening-recognition evidence.
+
+One company imports one complete register of 1–500 positive residual bills, at most 128 KiB. Byte-identical retries with the same reference return the recorded batch, including after settlement; changed retries and duplicate source IDs are refused. Previewed differences can be corrected before approval. **Correction or replacement of a committed opening import is not yet supported.** Opening supplier credits, multiple historical controls, currency translation and larger staged imports remain follow-up work. Never re-enter these balances as ordinary new purchases.
+
+The `opening_batch` and `opening_item` evidence datasets retain the exact CSV, recorded identity and source facts. The accountant reviews completeness, vendor mapping, source and target control reconciliation, cut-off, tax and retained historical evidence.

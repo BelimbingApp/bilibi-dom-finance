@@ -579,7 +579,7 @@ async fn run(db: &Db, services: &Services) -> Outcome<()> {
     assert_eq!(from_bill.cost, money("27"));
     assert_eq!(from_bill.bill_id, Some(bill.id));
     assert_eq!(from_bill.bill_line_number, Some(2));
-    assert_eq!(from_bill.entry_line_number, 2);
+    assert_eq!(from_bill.entry_line_number, Some(2));
     assert_eq!(
         l.get_entry(&manager, COMPANY, from_bill.entry_id)
             .await?
@@ -831,6 +831,8 @@ async fn four_place_proof(
     let exported = f.evidence_page(s, 2, "asset", Some(1), None).await?;
     assert_eq!(exported.rows[0]["cost"], "9999999999999999.9999");
     assert_eq!(exported.rows[0]["residual_value"], "0.0001");
-    println!("four-place numeric limit: acquisition, schedule, residual and evidence preserve exact decimals");
+    println!(
+        "four-place numeric limit: acquisition, schedule, residual and evidence preserve exact decimals"
+    );
     Ok(())
 }

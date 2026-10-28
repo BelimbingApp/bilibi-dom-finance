@@ -1,0 +1,9 @@
+# Opening asset register
+
+Read finance.fixed_assets.opening.context for the current company's approved conversion entry, book precision, exact CSV header, retained batch and imported item identifiers. Prepare setup and mapping in separate reviewed writes; plans preview dependent steps before executing earlier steps.
+
+Use finance.fixed_assets.opening.import with company_id, source_reference, currency_code and csv. Preview the complete register and inspect each source ID, date, amount and account mapping, then commit the exact reviewed input once. The register must reconcile exactly to the approved opening accounts. Import creates no ledger entry or source-period tax lines. The reviewer must be independent of the opening journal's source preparer. An override_reason invokes the existing duty-separation controls and records an exception; it is not a bypass.
+
+At most 500 rows and 128 KiB are accepted. Preserve source_reference and exact CSV for safe retry after a lost response, using a new plan code. Changed retries are refused. Committed register replacement/correction and staged larger imports are not yet supported. Source opening reversal is refused while imported records depend on it. Never recreate these balances as ordinary invoices, bills or acquisitions.
+
+Preserve source cost and actual accumulated depreciation even when past figures differ from Bilibi's lifetime projection. Review prospective straight-line depreciation of source carrying value less residual over the remaining 1–1200 months from cut-off. The existing full first-month convention applies. Preserve original dates and category mapping; no historical catch-up is posted. Depreciation runs and disposal still use the existing FixedAssets facade/UI; this import does not add missing general asset agent operations.

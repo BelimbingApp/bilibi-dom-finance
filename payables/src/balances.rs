@@ -107,6 +107,7 @@ SELECT b.id,b.total
 - COALESCE((SELECT sum(n.total) FROM finance_payables_documents n WHERE n.tenant_id=b.tenant_id AND n.company_id=b.company_id AND n.corrects_document_id=b.id AND n.status='posted' AND n.document_date<=$3::text::date AND n.entry_number<=$4),0)
 - COALESCE((SELECT sum(a.amount) FROM finance_payables_payment_allocations a JOIN finance_payables_payments p ON p.tenant_id=a.tenant_id AND p.company_id=a.company_id AND p.id=a.payment_id WHERE a.tenant_id=b.tenant_id AND a.company_id=b.company_id AND a.document_id=b.id AND p.payment_date<=$3::text::date AND p.entry_number<=$4 AND NOT EXISTS(SELECT 1 FROM finance_payables_payments r WHERE r.tenant_id=p.tenant_id AND r.company_id=p.company_id AND r.reverses_payment_id=p.id AND r.payment_date<=$3::text::date AND r.entry_number<=$4)),0) AS owed
 FROM finance_payables_documents b WHERE b.tenant_id=$1 AND b.company_id=$2 AND b.document_type='bill' AND b.status='posted' AND b.document_date<=$3::text::date AND b.entry_number<=$4
+AND NOT EXISTS(SELECT 1 FROM finance_payables_opening_items i JOIN finance_payables_opening_batches o ON o.id=i.batch_id AND o.tenant_id=$1 AND o.company_id=$2 WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=b.id AND o.conversion_date>$3::text::date)
 "#;
 pub(crate) async fn owed(
     c: &dyn OperationClient,

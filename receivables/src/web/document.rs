@@ -388,6 +388,33 @@ impl Document {
                     .with_currency_opt(d.outstanding, &d.currency_code),
             ));
         }
+        if let Some(opening) = &d.opening {
+            items.push(f::fact(
+                "Opening source",
+                opening["source_reference"].as_str().unwrap_or(""),
+            ));
+            items.push(f::fact(
+                "Source document",
+                opening["document_reference"].as_str().unwrap_or(""),
+            ));
+            items.push(f::fact(
+                "Conversion date",
+                opening["conversion_date"].as_str().unwrap_or(""),
+            ));
+            if let Some(value) = opening["original_total"]
+                .as_str()
+                .and_then(|v| v.parse::<rust_decimal::Decimal>().ok())
+            {
+                items.push(f::fact(
+                    "Source original total",
+                    &self.figures.decimal(value),
+                ));
+            }
+            items.push(f::fact(
+                "Opening amounts",
+                "Residual only; source-period tax detail was not migrated.",
+            ));
+        }
         let document = render(Facts {
             id: "receivables-invoice-facts",
             items,

@@ -6,6 +6,10 @@
 mod agent_operations;
 mod contributions;
 mod documents;
+mod opening;
+mod opening_csv;
+mod opening_operations;
+mod opening_web;
 mod payments;
 pub use payments::{
     Allocation, AllocationInput, NewPayment, Payment, PaymentDecision, PaymentQuery,
@@ -53,12 +57,13 @@ inventory::submit! { Module {
         ("finance-payables-001-documents", include_str!("../migrations/001-documents.sql")),
         ("finance-payables-002-payments", include_str!("../migrations/002-payments.sql")),
         ("finance-payables-003-matching", include_str!("../migrations/003-matching.sql")),
+        ("finance-payables-004-opening-items", include_str!("../migrations/004-opening-items.sql")),
     ],
-    services: &[Service { id: SERVICE, factory: |s| { let payables = Arc::new(Payables {
+    services: &[Service {id:opening_web::PAGES,factory:|services| Ok(Arc::new(bilibi_ui::page::PageService::<Scope,Error>(Arc::new(opening_web::Pages {db:services.get::<Db>("base/database.pool")?.as_ref().clone(),contracts:services.get(bilibi_agent_api::page::SERVICE)?,plans:services.get("base/agent_api.plans")?}))))},Service { id: SERVICE, factory: |s| { let payables = Arc::new(Payables {
         db: s.get::<Db>("base/database.pool")?.as_ref().clone(),
         ledger: s.get(bilibi_finance_ledger::SERVICE)?,
         order_source: orders::available(&*s.get::<bilibi_events::Events>(bilibi_events::SERVICE)?),
-    }); agent_operations::bind(payables.clone(), s.get("base/tenancy.parties")?)?; Ok(payables) } }, Service { id: web::PAGES, factory: |s| Ok(Arc::new(bilibi_ui::page::PageService::<Scope, Error>(Arc::new(web::Pages {
+    }); opening_operations::bind(payables.clone())?; agent_operations::bind(payables.clone(), s.get("base/tenancy.parties")?)?; Ok(payables) } }, Service { id: web::PAGES, factory: |s| Ok(Arc::new(bilibi_ui::page::PageService::<Scope, Error>(Arc::new(web::Pages {
         contracts: s.get(bilibi_agent_api::page::SERVICE)?,
         db: s.get::<Db>("base/database.pool")?.as_ref().clone(),
         payables: s.get(SERVICE)?,
@@ -240,6 +245,7 @@ pub struct TaxLine {
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct Document {
+    pub opening: Option<serde_json::Value>,
     pub id: i64,
     pub document_type: String,
     pub status: String,

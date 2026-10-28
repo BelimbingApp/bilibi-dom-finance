@@ -68,6 +68,7 @@ mod bookkeeping;
 mod books;
 mod configuration;
 mod contributions;
+mod conversion;
 mod currency;
 mod duties;
 mod entries;
@@ -90,6 +91,7 @@ pub use contributions::{
     MANAGE_DUTY_SEPARATION, MANAGE_PERIODS, MANAGE_TEMPLATES, POST_ENTRIES, REOPEN_PERIODS,
     REVIEW_EXCEPTIONS, REVIEW_LATE_RECORDINGS, SUBMIT_JOURNALS, VIEW,
 };
+pub use conversion::OpeningContext;
 pub use evidence::EvidencePage;
 pub use money::{MinorUnits, Money, MoneyError};
 pub use opening::OpeningBalances;
@@ -124,6 +126,7 @@ inventory::submit! {
             ("finance-ledger-007-opening-balances", include_str!("../migrations/007-opening-balances.sql")),
             ("finance-ledger-008-account-groups", include_str!("../migrations/008-account-groups.sql")),
             ("finance-ledger-009-chart-templates", include_str!("../migrations/009-chart-templates.sql")),
+            ("finance-ledger-010-opening-recognitions", include_str!("../migrations/010-opening-recognitions.sql")),
         ],
         services: &[Service { id: SERVICE, factory: |services| {
             agent_operations::bind(services.get("base/tenancy.parties")?)?;
@@ -3841,6 +3844,7 @@ async fn prepare_reverse(
     if original.reversed_by_entry_id.is_some() {
         return Err(LedgerError::AlreadyReversed);
     }
+    conversion::refuse_recognized_reversal(client, tenant, company_id, original.id).await?;
     if periods::closing_entry(client, company_id, original.id).await? {
         return Err(LedgerError::ClosingEntry);
     }

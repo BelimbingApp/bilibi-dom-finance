@@ -23,6 +23,7 @@ pub(super) struct Prepared {
 
 // A single statement gives headers and children the same MVCC snapshot.
 pub(crate) const READ: &str = "SELECT to_jsonb(d) || jsonb_build_object(
+ 'opening',(SELECT i.source_facts || jsonb_build_object('source_reference',b.source_reference,'conversion_date',b.conversion_date::text) FROM finance_receivables_opening_items i JOIN finance_receivables_opening_batches b ON b.id=i.batch_id AND b.tenant_id=$1 AND b.company_id=$2 WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=d.id),
  'write_offs',COALESCE((SELECT jsonb_agg(to_jsonb(w) || jsonb_build_object('events',COALESCE((SELECT jsonb_agg(to_jsonb(e) ORDER BY e.id) FROM finance_receivables_write_off_events e WHERE e.write_off_id=w.id AND e.tenant_id=$1 AND e.company_id=$2),'[]'::jsonb)) ORDER BY w.id) FROM finance_receivables_write_offs w WHERE w.document_id=d.id AND w.tenant_id=$1 AND w.company_id=$2),'[]'::jsonb),
  'outstanding',CASE WHEN d.kind='invoice' AND d.status='issued' THEN finance_receivables_outstanding(d.id) ELSE NULL END,
  'lines',COALESCE((SELECT jsonb_agg(to_jsonb(l) ORDER BY line_number) FROM finance_receivables_document_lines l WHERE l.tenant_id=$1 AND l.company_id=$2 AND l.document_id=d.id),'[]'::jsonb),
@@ -123,7 +124,9 @@ impl Receivables {
         {
             return Err(R::InvalidOption);
         }
-        let sql = format!("{READ} AND d.id>$3 AND ($4::text IS NULL OR d.kind=$4) AND ($5::text IS NULL OR d.status=$5) AND ($6::bigint IS NULL OR d.customer_id=$6) ORDER BY d.id LIMIT $7");
+        let sql = format!(
+            "{READ} AND d.id>$3 AND ($4::text IS NULL OR d.kind=$4) AND ($5::text IS NULL OR d.status=$5) AND ($6::bigint IS NULL OR d.customer_id=$6) ORDER BY d.id LIMIT $7"
+        );
         client
             .query(
                 &sql,

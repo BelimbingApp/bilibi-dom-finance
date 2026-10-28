@@ -79,6 +79,14 @@ impl FixedAssets {
             .ledger
             .get_entry_on(tx.sql(), s, company, entry_id)
             .await?;
+        if let Ok(opening) = self.ledger.opening_context_on(tx.sql(), s, company).await {
+            if entry.id == opening.entry.id {
+                return Err(invalid(
+                    "entry_id",
+                    "is an opening balance; import the opening asset register instead of registering its aggregate debit",
+                ));
+            }
+        }
         let revision =
             store::revision(tx.sql(), s.tenant(), company, input.category_revision_id).await?;
         let book = self.ledger.get_book_on(tx.sql(), s, company).await?;
@@ -185,8 +193,10 @@ impl FixedAssets {
                 });
             }
         }
+        let opening=tx.query_opt("SELECT i.source_facts || jsonb_build_object('source_reference',b.source_reference) FROM finance_fixed_assets_opening_items i JOIN finance_fixed_assets_opening_batches b ON b.id=i.batch_id AND b.tenant_id=$1 AND b.company_id=$2 WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.asset_id=$3",&[&s.tenant(),&company,&id]).await?.map(|r|r.get(0));
         tx.commit().await?;
         Ok(AssetDetail {
+            opening,
             asset,
             revision,
             schedule,

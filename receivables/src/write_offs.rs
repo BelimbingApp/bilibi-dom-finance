@@ -104,7 +104,10 @@ fn owner(id: i64) -> EntryOwner {
     }
 }
 fn independent_reviewer() -> crate::ReceivableError {
-    invalid("base", "Someone else must review this bad-debt journal, including when acting through an agent or impersonating. The book's separation setting does not waive this requirement.")
+    invalid(
+        "base",
+        "Someone else must review this bad-debt journal, including when acting through an agent or impersonating. The book's separation setting does not waive this requirement.",
+    )
 }
 fn approval(w: &WriteOff, action: &str) -> Approval {
     Approval {
@@ -139,6 +142,7 @@ pub(super) async fn settlement_date(
     day: Date,
     field: &str,
 ) -> Result<()> {
+    crate::opening::settlement_date(client, scope, company, document, day).await?;
     if client.query_opt("SELECT EXISTS(SELECT 1 FROM finance_receivables_write_offs w JOIN finance_receivables_write_off_events e ON e.write_off_id=w.id AND e.tenant_id=$1 AND e.company_id=$2 WHERE w.tenant_id=$1 AND w.company_id=$2 AND w.document_id=$3 AND e.event IN ('approved','reversed') AND e.effective_date>$4::text::date)", &[&scope.tenant(),&company,&document,&day.to_string()]).await?.ok_or(Error::Internal)?.get(0) {
         return Err(invalid(field,"cannot precede a write-off or its reversal; use a later settlement date"));
     }
@@ -218,7 +222,10 @@ async fn validate(
         .iter()
         .any(|a| a.id == offset)
     {
-        return Err(invalid("offset_account_id","must be an active allowance asset or bad-debt expense account, not a receivables control or an account receipts are paid into (a bank or cash account)"));
+        return Err(invalid(
+            "offset_account_id",
+            "must be an active allowance asset or bad-debt expense account, not a receivables control or an account receipts are paid into (a bank or cash account)",
+        ));
     }
     let mut data = v::merge(
         None,
