@@ -57,7 +57,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // A second real Person/Company affiliation, not an actor passed to a write.
     for key in bilibi_finance_ledger::CAPABILITIES
         .into_iter()
-        .chain(["admin.company.tenant-wide.manage", bilibi_company::VIEW])
+        .chain(["admin.company.tenant-wide.manage"])
     {
         grants.set_direct(&admin, 7, key, Some(true)).await?;
     }
@@ -126,9 +126,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok_or("registered client ID")?;
     let resource = format!("{}/mcp", origin.trim_end_matches('/'));
     let mut credentials = serde_json::Map::new();
+    // Conversion compares the browser reviewer's actual access with MCP. The
+    // default contractor keeps its Core masks for the other wire walkthroughs.
+    let reviewer = if std::env::args().nth(1).as_deref() == Some("conversion-credentials") {
+        4
+    } else {
+        7
+    };
     for (name, scope) in [
         ("manager", manager),
-        ("approver", sign_in(&db, &services, 1, 7).await?),
+        ("approver", sign_in(&db, &services, 1, reviewer).await?),
         ("other", sign_in(&db, &services, 2, 5).await?),
     ] {
         let expiry = SystemTime::now() + Duration::from_secs(3600);
