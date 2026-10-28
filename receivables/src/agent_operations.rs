@@ -547,6 +547,10 @@ fn schema(required: &[&str], properties: Value) -> Value {
         .collect();
     object(&required, Value::Object(properties))
 }
+fn strict(mut schema: Value) -> Value {
+    schema["additionalProperties"] = json!(false);
+    schema
+}
 fn output() -> Value {
     json!({"type":"object","description":"Receivables record, cursor page, or deterministic review facts. Exact decimals are strings; dates are ISO. Committed path is the page of the record written, or the settings page for setup, series and tax codes."})
 }
@@ -595,7 +599,7 @@ fn customer_create() -> Value {
     let mut p = customer_own_fields();
     p["code"] = string(50);
     p[LINK_FIELD] = json!({"type":"integer","minimum":1,"description":"The Core company this customer is (core.company.list, core.company.get); never the company invoicing it."});
-    schema(&["code", LINK_FIELD], p)
+    strict(schema(&["code", LINK_FIELD], p))
 }
 fn customer_update() -> Value {
     let mut p = customer_own_fields();
@@ -603,7 +607,7 @@ fn customer_update() -> Value {
         p[field] = schema.clone();
     }
     p["customer_id"] = identifier();
-    schema(&["customer_id"], p)
+    strict(schema(&["customer_id"], p))
 }
 fn customer_link() -> Value {
     schema(

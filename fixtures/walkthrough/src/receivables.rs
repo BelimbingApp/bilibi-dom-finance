@@ -302,6 +302,15 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         "country_iso",
         "has invalid format",
     );
+    let still_legacy = ar
+        .update_customer(
+            &manager,
+            1,
+            legacy.id,
+            &json!({"record_kind":"company","record_id":"10"}),
+        )
+        .await?;
+    assert!(still_legacy.company.is_none());
     ar.update_customer(&manager, 1, customer.id, &json!({"active":false}))
         .await?;
     let defaults = ar

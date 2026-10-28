@@ -465,7 +465,9 @@ impl Receivables {
             .iter()
             .copied()
             .filter(|f| {
-                id.is_none() || !matches!(*f, "code" | "kind" | "prefix" | "number_width" | "rate")
+                !matches!(*f, "record_kind" | "record_id")
+                    && (id.is_none()
+                        || !matches!(*f, "code" | "kind" | "prefix" | "number_width" | "rate"))
             })
             .collect();
         let defaults = if customer {
