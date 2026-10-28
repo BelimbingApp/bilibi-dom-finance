@@ -431,7 +431,7 @@ impl WriteHandler for Write {
     }
 }
 impl FixedAssets {
-    async fn lifecycle_preview_lock(
+    pub(super) async fn lifecycle_preview_lock(
         &self,
         c: &dyn OperationClient,
         s: &Scope,
@@ -439,7 +439,27 @@ impl FixedAssets {
     ) -> Result<()> {
         // PartyProofs proves reach first. This owned company lock serializes
         // previews with facade writers without consuming a new pool slot.
-        let row=c.query_opt("SELECT status FROM companies WHERE tenant_id=$1 AND id=$2 AND deleted_at IS NULL FOR UPDATE NOWAIT",&[&s.tenant(),&company]).await?.ok_or(FixedAssetsError::CompanyNotFound)?;
+        let Some(row) = c
+            .query_opt(
+                "SELECT status FROM companies WHERE tenant_id=$1 AND id=$2 AND deleted_at IS NULL FOR UPDATE SKIP LOCKED",
+                &[&s.tenant(), &company],
+            )
+            .await?
+        else {
+            return Err(
+                if c.query_opt(
+                    "SELECT 1 FROM companies WHERE tenant_id=$1 AND id=$2 AND deleted_at IS NULL",
+                    &[&s.tenant(), &company],
+                )
+                .await?
+                .is_some()
+                {
+                    FixedAssetsError::Failed(Error::Conflict)
+                } else {
+                    FixedAssetsError::CompanyNotFound
+                },
+            );
+        };
         if row.get::<_, String>(0) == "archived" {
             return Err(FixedAssetsError::CompanyArchived);
         }

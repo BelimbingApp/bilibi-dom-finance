@@ -8,6 +8,7 @@ import json
 from decimal import Decimal
 import os
 import subprocess
+import time
 import urllib.error
 import urllib.request
 import urllib.parse
@@ -19,7 +20,7 @@ CREDS = json.load(open(os.environ["BILIBI_AGENT_CREDENTIALS"]))
 DB = os.environ["DATABASE_URL"]
 
 
-def sql(query):
+def psql(query):
     # Keep credentials in the subprocess environment, never its arguments or
     # a CalledProcessError's printed command line.
     address = urllib.parse.urlsplit(DB)
@@ -30,9 +31,12 @@ def sql(query):
         "PGPASSWORD": urllib.parse.unquote(address.password or ""),
         "PGDATABASE": urllib.parse.unquote(address.path.lstrip("/")),
     }
-    return subprocess.check_output(
-        ["psql", "-XAt", "-v", "ON_ERROR_STOP=1", "-c", query], text=True, env=environment
-    ).strip()
+    return ["psql", "-XAt", "-v", "ON_ERROR_STOP=1", "-c", query], environment
+
+
+def sql(query):
+    command, environment = psql(query)
+    return subprocess.check_output(command, text=True, env=environment).strip()
 
 
 def require(condition, message):
@@ -137,6 +141,29 @@ require(Decimal(initial["rows"][0]["schedule"][0]["amount"]) == Decimal("106.25"
 tied(initial)
 # The source aggregate is not an ordinary acquisition debit.
 refused(channel, prefix + "asset.acquire", company, "opening", who="approver", source="entry", source_id=asset["entry_id"], line_number=1, category_revision_id=revision["id"], description="Refused aggregate", in_service_date="2026-07-01")
+# Another transaction holding the company row is a retryable refusal, never an infrastructure failure or a write.
+def counts():
+    return sql("SELECT (SELECT count(*) FROM finance_fixed_assets_runs WHERE company_id=2)||'/'||(SELECT count(*) FROM finance_ledger_entries WHERE company_id=2)||'/'||(SELECT count(*) FROM base_audit_mutations WHERE auditable_type LIKE 'finance.%')")
+
+before = counts()
+command, environment = psql("BEGIN; SELECT 1 FROM companies WHERE tenant_id=1 AND id=2 FOR UPDATE; SELECT pg_sleep(60); ROLLBACK")
+holder = subprocess.Popen(command, env=environment, stdout=subprocess.DEVNULL)
+try:
+    for _ in range(100):
+        if sql("SELECT count(*) FROM pg_stat_activity WHERE state='active' AND query LIKE '%pg_sleep(60)%' AND pid<>pg_backend_pid()") == "1":
+            break
+        time.sleep(0.1)
+    else:
+        raise RuntimeError("company row holder did not start")
+    for key, args in [(prefix + "run.post", dict(period="2026-07-01")), (prefix + "category.save", category | {"name": "Locked category"}), (prefix + "opening.import", dict(source_reference="LOCKED", currency_code="MYR", csv=csv))]:
+        body = plan(channel, [operation(key, company, **args)], "approver")
+        require(body.get("valid") is False and "plan_code" not in body and "record_changed" in json.dumps(body) and "error" not in body, f"{key}: lock contention must be a nonfatal retryable refusal: {body}")
+finally:
+    holder.kill()
+    holder.wait()
+    sql("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE query LIKE '%pg_sleep(60)%' AND pid<>pg_backend_pid()")
+require(counts() == before, "lock contention wrote business or audit rows")
+require(plan(channel, [operation(prefix + "run.post", company, period="2026-07-01")], "approver").get("valid") is True, "preview did not recover after the lock was released")
 # Preview-all-before-execute must refuse the dependent second run and roll back the first.
 ops = [operation(prefix + "run.post", company, period="2026-07-01")] * 2
 review = plan(channel, ops, "approver")

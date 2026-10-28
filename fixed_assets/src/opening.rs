@@ -68,10 +68,7 @@ impl FixedAssets {
         input: &Value,
     ) -> Result<Prepared> {
         self.opening_authorize(c, s, company, ACQUIRE).await?;
-        let company_row=c.query_opt("SELECT status FROM companies WHERE tenant_id=$1 AND id=$2 AND deleted_at IS NULL FOR UPDATE NOWAIT",&[&s.tenant(),&company]).await?.ok_or(FixedAssetsError::CompanyNotFound)?;
-        if company_row.get::<_, String>(0) == "archived" {
-            return Err(FixedAssetsError::CompanyArchived);
-        }
+        self.lifecycle_preview_lock(c, s, company).await?;
         let context = self.ledger.opening_context_on(c, s, company).await?;
         let book = self.ledger.get_book_on(c, s, company).await?;
         let reference = input["source_reference"].as_str().unwrap_or("").trim();
