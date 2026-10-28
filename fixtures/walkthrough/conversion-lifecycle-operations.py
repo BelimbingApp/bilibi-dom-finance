@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Live opening-balance MCP walkthrough, not a unit-test runner. Use only the disposable
+"""Live opening-register correction MCP walkthrough, not a unit-test runner. Use only the disposable
 database and private credentials provisioned by the agent-operations binary.
 Every mutation goes through the real wire edge; SQL observes its effects.
 Tokens and plan codes never appear in output. See the ledger README.
