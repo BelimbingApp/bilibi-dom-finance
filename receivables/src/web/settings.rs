@@ -854,7 +854,7 @@ impl Settings {
                     .options(self.account_choices("liability"))
                     .errors(account.errors.clone())
                     .attrs(Attrs { required: true, ..Attrs::default() })
-                    .hint("The liability account tax on a document is posted to when it is issued. It records tax on the document, not that the customer has paid, that tax is due or that it was remitted: timing depends on the tax regime. Review the tax code and return before filing."),
+                    .hint("Records tax payable to the tax authority. Tax timing depends on the tax type and applicable basis. Choosing an account does not determine your tax treatment."),
             )?);
         }
         body.push(&render(

@@ -1,8 +1,8 @@
 # Accountant access
 
-An External accountant can read and export the complete ledger and reports of a company they work in (their current company), and submit adjusting journals for an authorized company reviewer.
+An outsourced accountant or bookkeeper assigned External accountant can read and export the complete ledger and reports of a company they work in (their current company), and submit adjusting journals for an authorized company reviewer.
 
-This is part of [Finance #61](https://github.com/BelimbingApp/bilibi-dom-finance/issues/61). It implements the [practitioner's draft/submit recommendation](https://github.com/BelimbingApp/bilibi-dom-finance/issues/61#issuecomment-6461497724), not the unresolved sales-only restriction. The agreed boundary permits posted payroll journal detail and denies the Payroll module and its per-employee source records.
+This addresses [Finance #61](https://github.com/BelimbingApp/bilibi-dom-finance/issues/61). It implements the [practitioner's draft/submit recommendation](https://github.com/BelimbingApp/bilibi-dom-finance/issues/61#issuecomment-6461497724), not the unresolved sales-only restriction. The agreed boundary permits posted payroll journal detail and denies the Payroll module and its per-employee source records.
 
 ## Install and assign
 
@@ -51,7 +51,7 @@ The existing MCP operation reads return ledger, chart, journal and trial-balance
 
 **Client-specific advice:** confirm the engagement, lawful access, confidentiality, retention, payroll source access and any independent auditor's appointment with the company's practitioners. An External accountant is not an independent-auditor role. The practitioner's legal references are context, not new statutory access implemented by Finance.
 
-Sales-only access still requires a decision on workflow, account, transaction, customer and source-document boundaries. Existing field masks and tenant-wide capabilities do not provide record isolation. Mixed entries, indirect disclosures through totals, account labels, journals, reports, exports, search and notifications must be addressed together. Restricted totals must never be presented as complete financial statements. Supervisors and duly appointed auditors need explicit oversight grants, not a role-name bypass. Optional posting delegation, bounded adjustment accounts/periods, engagement metadata/expiry, export purpose and fine-grained source evidence remain follow-ups to #61 and Platform context work.
+Sales-only access still requires a decision on workflow, account, transaction, customer and source-document boundaries. Existing field masks and tenant-wide capabilities do not provide record isolation. Mixed entries, indirect disclosures through totals, account labels, journals, reports, exports, search and notifications must be addressed together. Restricted totals must never be presented as complete financial statements. Supervisors and duly appointed auditors need explicit oversight grants, not a role-name bypass. Optional posting delegation, bounded adjustment accounts/periods, engagement metadata/expiry, export purpose and fine-grained source evidence remain follow-ups tracked in [Finance #95](https://github.com/BelimbingApp/bilibi-dom-finance/issues/95) and Platform context work. A duly appointed auditor needs access to the required company records and evidence; this limited pack alone does not provide it.
 
 ## Running proof
 
