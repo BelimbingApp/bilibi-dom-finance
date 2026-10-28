@@ -21,7 +21,7 @@ Resolve `FixedAssets` at `finance/fixed_assets.fixed_assets`. Every data call ta
 | `void_acquisition(scope, company, asset_id, EventInput)` | `finance.fixed-assets.finance-asset-void` | Permanently retire a reversed acquisition and mirror only its live depreciation. |
 | `list_runs(scope, company)` / `list_events(scope, company, asset_id)` | `finance.fixed-assets.view` | Runs newest month first with items, exceptions and reversal state; asset events in event-number order. |
 | `register_report(scope, company, date, ReportPins)` / `depreciation_schedule_report(...)` | `finance.fixed-assets.view` | Same dated register, projected schedule and ledger reconciliation, at four immutable boundaries. |
-| `evidence_page(scope, company, dataset, limit, after)` | `finance.fixed-assets.view` | Explicit frozen fields, exact decimal text, UTC timestamps; ID cursor and limit 1–500. Datasets: `opening_batch`, `opening_item`, `asset`, `category`, `category_revision`, `event`, `run`, `run_exception`, `run_item`. |
+| `evidence_page(scope, company, dataset, limit, after)` | `finance.fixed-assets.view` | Explicit frozen fields, exact decimal text, UTC timestamps; ID cursor and limit 1–500. Datasets: `opening_stage`, `opening_decision`, `opening_batch`, `opening_item`, `asset`, `category`, `category_revision`, `event`, `run`, `run_exception`, `run_item`. |
 
 All seven reference capability keys and six `finance-asset-*` verbs are declared and granted to `tenant_owner`. Reads that need ledger context also require Ledger view; nonempty postings and reversals independently require Ledger post authority.
 
@@ -135,7 +135,7 @@ For example, cost 12,000, accumulated depreciation 1,800, zero residual and 96 r
 
 **Preview import** compares total cost and total accumulated depreciation by mapped account with the approved opening balances. Every difference refuses the import. Accounts cannot be used for both cost and accumulation within the imported register. **Approve import** retains the source and creates the register in one audited transaction; it posts no acquisition or depreciation entry. The reviewer must be independent of the opening source preparer, with exceptions decided and recorded through existing Ledger controls. The source opening journal is protected against reversal once records depend on it.
 
-UI and MCP use `finance.fixed_assets.opening.context` and reviewed `finance.fixed_assets.opening.import`. Input is `company_id`, `source_reference`, `currency_code`, `csv`, and optional `override_reason`. The facade is `FixedAssets::import_opening_register`; agent commits join the plan's transaction. Normal acquisitions still freeze one whole source debit line. An opening asset has no acquisition line (`Asset::entry_line_number` is `None`); its aggregate opening entry is not an individual acquisition debit. Read opening source facts on `AssetDetail::opening` and through the `opening_batch`/`opening_item` evidence datasets.
+UI and MCP use `finance.fixed_assets.opening.context` and reviewed `finance.fixed_assets.opening.stage` and `opening.import`. Input is `company_id`, `source_reference`, `currency_code`, `csv`, and optional `override_reason`; staged batches and corrections add the fields in the [opening guide](opening-guide.md). The facade is `FixedAssets::import_opening_register`; agent commits join the plan's transaction. Normal acquisitions still freeze one whole source debit line. An opening asset has no acquisition line (`Asset::entry_line_number` is `None`); its aggregate opening entry is not an individual acquisition debit. Read opening source facts on `AssetDetail::opening` and through the `opening_batch`/`opening_item` evidence datasets.
 
 The existing register report includes opening cost and accumulation from conversion onward, then subsequent depreciation, disposals and corrections at its normal four report pins. Depreciation-expense reconciliation counts subsequent charges separately from source accumulated depreciation. Retained source-period expense/YTD and comparative detail is not reconstructed by this import and must be reviewed with the source reporting bridge. The asset page shows source IDs, source reference, carrying value and the prospective basis.
 
@@ -144,7 +144,6 @@ A direct import accepts 1–500 assets, at most 128 KiB. Identical source-refere
 ## Opening register corrections
 
 Stage a replacement export, then approve the complete reconciliation independently. Source batches, original records and approvals remain immutable. The [opening guide](opening-guide.md) describes batch limits, the conversion-date effect, dependent reversals and historical report pins. `fixtures/walkthrough/src/bin/conversion.rs` proves the lifecycle on a disposable composed database.
-
 
 For browser/MCP parity, serve the disposable `conversion` fixture, provision credentials with `agent-operations conversion-credentials`, then run `fixtures/walkthrough/conversion-lifecycle-operations.py`. This mode uses the same independent reviewer for both doors; the default contractor fixture retains its Core fact masks.
 

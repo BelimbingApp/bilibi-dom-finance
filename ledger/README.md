@@ -79,7 +79,7 @@ records (`Book`, `Account`, `Entry`, `FiscalYear`, `Period`, `ClosingEvent`,
 | `account_totals` | `finance.ledger.view` | Per-account debit and credit totals over entries dated `from` through `to`, optionally `through_entry_number` and `exclude_closing` (see Account totals) |
 | `account_totals_by_owner` | `finance.ledger.view` | The same totals, one row per account and owner module, for a control-account tie-out |
 | `evidence_page` | `finance.ledger.view` | One ID-ordered page of one of the ledger's tables for the auditor's pack (see Evidence) |
-| `Ledger::evidence_datasets` | none | The nineteen dataset names, sorted |
+| `Ledger::evidence_datasets` | none | The twenty dataset names, sorted |
 | `Ledger::account_types`, `Ledger::late_recording_thresholds`, `Ledger::journal_statuses` | none | The five account types; the report's 45 and 60 days; `submitted`, `approved`, `rejected`, `withdrawn` |
 
 Every call authorizes the capability for the scope's actor and the target
@@ -609,7 +609,7 @@ or an option out of range is `InvalidOption`. The datasets are `account`,
 `approval_exception`, `approval_exception_review`, `book`,
 `bookkeeping_change`, `chart_template`, `closing_event`, `duty_separation_change`, `entry`,
 `fiscal_year`, `journal`, `journal_event`, `journal_line`,
-`journal_replacement`, `late_recording_review`, `line`, `opening_balances`, `opening_recognition` and `period`. Existing datasets mirror Bilimbi's field lists (`src/evidence.rs`), less the entry's `legacy` and plus the account's `is_group`; `opening_balances` exports the retained source reference, CSV and journal link; `opening_recognition` exports each owner's recognition of an opening account. Dates are `YYYY-MM-DD`,
+`journal_replacement`, `late_recording_review`, `line`, `opening_balances`, `opening_recognition`, `opening_recognition_replacement` and `period`. Existing datasets mirror Bilimbi's field lists (`src/evidence.rs`), less the entry's `legacy` and plus the account's `is_group`; `opening_balances` exports the retained source reference, CSV and journal link; `opening_recognition` exports each owner's recognition of an opening account; `opening_recognition_replacement` links a recognition to the one it replaces. Dates are `YYYY-MM-DD`,
 instants ISO 8601 UTC with microseconds and amounts the column's exact text
 (`100.0000`). Each page is a live read on its own connection. The field lists
 are an export contract: freeze one once exported and never add a credential.
@@ -742,7 +742,7 @@ Approve and reconcile the opening journal before importing residual registers. I
 
 `Ledger::opening_context_on` returns the approved, live source opening entry and account balances summed by SQL on the caller's connection. An owner recognizes a complete account through `recognize_opening_on` in its audited transaction. This records `opening_recognition` evidence and protects the source entry against reversal. It does not change the journal's owner or erase unrelated postings from owner-based control tie-outs. An aggregate opening debit must not be registered as an ordinary individual asset acquisition.
 
-The initial bounded imports have explicit follow-ups: [committed-register correction and staging](https://github.com/BelimbingApp/bilibi-dom-finance/issues/105), [credits and historical controls](https://github.com/BelimbingApp/bilibi-dom-finance/issues/106), [opening bank bridge](https://github.com/BelimbingApp/bilibi-dom-finance/issues/107), [source-period tax, payroll and comparatives](https://github.com/BelimbingApp/bilibi-dom-finance/issues/108), [consolidated reconciliation and sign-off](https://github.com/BelimbingApp/bilibi-dom-finance/issues/109), [broader asset estimates and history](https://github.com/BelimbingApp/bilibi-dom-finance/issues/110), and [general asset lifecycle operations for MCP](https://github.com/BelimbingApp/bilibi-dom-finance/issues/111). Opening bills resolve existing [Core-linked Finance vendors](../payables/README.md#vendors) by vendor code and retain source names as evidence. These boundaries do not imply full historical transaction migration.
+The initial bounded imports have explicit follow-ups: [credits and historical controls](https://github.com/BelimbingApp/bilibi-dom-finance/issues/106), [opening bank bridge](https://github.com/BelimbingApp/bilibi-dom-finance/issues/107), [source-period tax, payroll and comparatives](https://github.com/BelimbingApp/bilibi-dom-finance/issues/108), [consolidated reconciliation and sign-off](https://github.com/BelimbingApp/bilibi-dom-finance/issues/109), [broader asset estimates and history](https://github.com/BelimbingApp/bilibi-dom-finance/issues/110), and [general asset lifecycle operations for MCP](https://github.com/BelimbingApp/bilibi-dom-finance/issues/111). Opening bills resolve existing [Core-linked Finance vendors](../payables/README.md#vendors) by vendor code and retain source names as evidence. These boundaries do not imply full historical transaction migration.
 
 ## Shared company controls
 
