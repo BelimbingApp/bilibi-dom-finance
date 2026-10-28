@@ -187,6 +187,8 @@ impl Receivables {
                     fail("customer_code must identify an active customer in the current company")
                 })?;
             let customer_id = customer["id"].as_i64().ok_or(Error::Internal)?;
+            // A linked customer's name is Core's (#75); the row keeps none.
+            let customer_name = self.customer(c, s, customer.clone()).await?.name;
             if !documents.insert((customer_id, row[2].to_owned())) {
                 return Err(fail("the customer document reference is duplicated"));
             }
@@ -220,7 +222,7 @@ impl Receivables {
             }
             balance = Money::new((balance + residual).amount(), book.minor_units)
                 .map_err(|e| fail(&e.to_string()))?;
-            rows.push(json!({"source_id":row[0],"customer_id":customer_id,"customer_code":row[1],"customer_name":customer["name"],"customer":customer,"document_reference":row[2],"document_date":date.to_string(),"due_date":due.to_string(),"original_total":original,"outstanding":residual,"settled_before_conversion":original-residual,"account_id":control,"account_code":account.code}));
+            rows.push(json!({"source_id":row[0],"customer_id":customer_id,"customer_code":row[1],"customer_name":customer_name,"customer":customer,"document_reference":row[2],"document_date":date.to_string(),"due_date":due.to_string(),"original_total":original,"outstanding":residual,"settled_before_conversion":original-residual,"account_id":control,"account_code":account.code}));
         }
         let expected = context
             .balances
@@ -318,14 +320,13 @@ impl Receivables {
             let mut changes=vec![];
             let batch=store::save(sql,BATCH,tenant,company,None,json!({"source_reference":source,"source_csv":csv,"currency_code":entry.currency_code,"conversion_date":entry.entry_date.to_string(),"entry_id":entry.id,"entry_number":entry.entry_number,"series_id":series["id"],"recorded_by_user_id":actor,"recorded_by_impersonator_id":imp}),&mut changes).await?;
             for facts in rows {
-                let customer=&facts["customer"];
                 let total=&facts["outstanding"];
                 let old=store::save(sql,store::DOCUMENTS,tenant,company,None,json!({"kind":"invoice","status":"draft","series_id":series["id"],"customer_id":facts["customer_id"],"currency_code":entry.currency_code,"issue_date":facts["document_date"],"due_date":facts["due_date"],"description":format!("Opening invoice {}",facts["document_reference"].as_str().unwrap_or("")),"subtotal":total,"tax_total":"0","total":total}),&mut changes).await?;
                 let id=old["id"].as_i64().ok_or(Error::Invalid)?;
                 store::save(sql,store::LINES,tenant,company,None,json!({"document_id":id,"line_number":1,"description":"Opening outstanding balance; no new supply","quantity":"1","unit_price":total,"amount":total,"account_id":control,"tax_amount":"0"}),&mut changes).await?;
                 let number:i64=sql.query_one("SELECT COALESCE(max(document_number),0)+1 FROM finance_receivables_documents WHERE tenant_id=$1 AND company_id=$2 AND series_id=$3",&[&tenant,&company,&series["id"].as_i64().ok_or(Error::Invalid)?]).await?.get(0);
                 let reference=format!("{}{:0width$}",series["prefix"].as_str().unwrap_or(""),number,width=series["number_width"].as_u64().unwrap_or(1) as usize);
-                let name=customer["name"].as_str().ok_or(Error::Invalid)?;
+                let name=facts["customer_name"].as_str().ok_or(Error::Invalid)?;
                 let row=sql.query_one("UPDATE finance_receivables_documents d SET status='issued',document_number=$4,document_reference=$5,receivable_account_id=$6,party_name=$7,issued_by_user_id=$8,issued_by_impersonator_id=$9,ledger_entry_id=$10,ledger_entry_number=$11 WHERE tenant_id=$1 AND company_id=$2 AND id=$3 RETURNING to_jsonb(d)",&[&tenant,&company,&id,&number,&reference,&control,&name,&actor,&imp,&entry.id,&entry.entry_number]).await?;
                 let new:Value=row.get(0);changes.push(Change{kind:store::DOCUMENTS.kind.into(),id,old,new});
                 store::save(sql,ITEM,tenant,company,None,json!({"batch_id":batch["id"],"source_id":facts["source_id"],"document_id":id,"source_facts":facts}),&mut changes).await?;

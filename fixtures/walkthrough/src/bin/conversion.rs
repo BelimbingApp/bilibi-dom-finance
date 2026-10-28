@@ -112,7 +112,7 @@ async fn setup(db: &Db, services: &Services, company: i64) -> Outcome<Value> {
     let customer = if let Some(c) = customers.iter().find(|c| c.code == "CONVERSION-CUSTOMER") {
         c.clone()
     } else {
-        ar.create_customer(&admin,company,&json!({"code":"CONVERSION-CUSTOMER","name":"Conversion customer","payment_terms_days":30})).await?
+        ar.create_customer(&admin,company,&json!({"code":"CONVERSION-CUSTOMER","core_company_id":10,"payment_terms_days":30})).await?
     };
     ap.put_settings(
         &admin,
