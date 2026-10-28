@@ -146,6 +146,7 @@ impl Book {
             .as_ref()
             .and_then(|c| c.required)
             .unwrap_or(true);
+        let currency = state.currency.clone().unwrap_or_default();
         let yes_no = |on: bool, yes: &str, no: &str| -> Result<Html> {
             render(Badge::status(
                 if on {
@@ -168,7 +169,7 @@ impl Book {
                 Fact {
                     title: "Currency",
                     id: "ledger-book-currency",
-                    value: Html::text(&match &state.currency.currency_name {
+                    value: Html::text(&match &currency.currency_name {
                         Some(name) => format!("{} — {}", book.currency_code, name),
                         None => book.currency_code.clone(),
                     }),
@@ -176,7 +177,7 @@ impl Book {
                 Fact {
                     title: "Decimal places",
                     id: "ledger-book-units",
-                    value: Html::text(&match state.currency.standard_minor_units {
+                    value: Html::text(&match currency.standard_minor_units {
                         Some(standard) if u32::from(book.minor_units) != standard => {
                             format!(
                                 "{} (nonstandard; ISO 4217 uses {})",

@@ -27,8 +27,9 @@ pub(crate) struct Change {
 #[derive(Clone, Debug, Deserialize)]
 pub(crate) struct BookState {
     pub book: Option<BookRow>,
+    /// Null until the book is opened.
     #[serde(default)]
-    pub currency: BookCurrency,
+    pub currency: Option<BookCurrency>,
     pub controlled_bookkeeping: Option<Change>,
     pub duty_separation: Option<Change>,
 }
