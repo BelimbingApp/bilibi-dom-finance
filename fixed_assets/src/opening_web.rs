@@ -43,6 +43,17 @@ bilibi_menu::contribute!(
     .requires(bilibi_menu::Requirement::Capability(VIEW))
     .order(60)
 );
+fn field_label(key: &str) -> &str {
+    match key {
+        "csv" => "Source register CSV",
+        "series_id" => "Opening invoice series",
+        "source_reference" => "Source reference",
+        "currency_code" => "Book currency",
+        "override_reason" => "Approval exception reason",
+        _ => key,
+    }
+}
+
 fn render(t: impl Template) -> Result<Html> {
     Html::render(&t).map_err(|_| Error::Internal)
 }
@@ -111,7 +122,7 @@ impl Opening {
             .cloned()
             .unwrap_or_default()
             .into_iter()
-            .map(|e| bilibi_ui::error_sentence(key, &e))
+            .map(|e| bilibi_ui::error_sentence(field_label(key), &e))
             .collect()
     }
     fn fail(&mut self, error: ContractError) {
@@ -223,7 +234,7 @@ impl Opening {
                 ..Alert::default()
             })?);
             if !context["batch"].is_null() {
-                page.push(&render(Alert{id:"conversion-recorded",kind:StatusKind::Info,body:Html::text(&format!("Imported source {}. The source evidence is retained. Use the normal settlement and reporting pages for these opening records.",context["batch"]["source_reference"].as_str().unwrap_or(""))),..Alert::default()})?);
+                page.push(&render(Alert{id:"conversion-recorded",kind:StatusKind::Info,body:Html::text(&format!("Imported source {}. The source evidence is retained. Use the asset register and depreciation pages for these opening assets.",context["batch"]["source_reference"].as_str().unwrap_or(""))),..Alert::default()})?);
             } else if allowed {
                 if self.values["currency_code"].is_null() {
                     self.values["currency_code"] = json!(currency);
@@ -241,7 +252,7 @@ impl Opening {
                     for message in messages {
                         summary.push(
                             format!("conversion-{key}"),
-                            bilibi_ui::error_sentence(key, message),
+                            bilibi_ui::error_sentence(field_label(key), message),
                         );
                     }
                 }

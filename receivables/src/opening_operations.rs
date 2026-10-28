@@ -101,7 +101,7 @@ impl WriteHandler for Import {
                 .await
                 .map_err(failure)?;
             fence(c, &json!({"input":input,"review":prepared.review}), false).await?;
-            Ok(prepared.review.into())
+            Ok(json!({"changes":prepared.review}).into())
         })
     }
     fn commit<'a>(

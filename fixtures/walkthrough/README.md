@@ -11,3 +11,38 @@ cargo run -p bilibi-finance-walkthrough-fixture --bin finance-ui
 Sign in as `manager@other.example.test`, `reviewer@other.example.test` or `viewer@other.example.test`, using the Platform walkthrough password. Tenant 2 is not the Platform operator. The startup output gives each record's URL and the acquisition/account IDs. Add `serve` to reopen the app after a code change while keeping browser-created records; retain the same storage directory and settings key. The local authority is restarted and existing e-invoices are kept.
 
 No fixture is a production seed. The module-specific binaries remain the detailed accounting proofs; `scripts/domain-ci.sh` in the Platform is the repository gate.
+
+## Accounting system conversion
+
+On a fresh disposable PostgreSQL 18 database, run the composed fixture with the
+same private settings key and loopback origin throughout:
+
+```sh
+cargo run -p bilibi-finance-walkthrough-fixture --bin conversion -- serve
+```
+
+It prepares source opening balances and setup through the owning facades, leaving
+both opening registers empty. Company 001 is the browser company; Company 002 is
+the separate MCP company. Sign in as `admin@example.test` for the independent
+reviewer. Import the printed customer, supplier and asset CSVs through their
+opening pages, inspect aging and the asset schedule, record a 1,000 customer
+receipt dated 2026-07-15, and submit a 500 supplier payment as
+`manager@example.test`, approving it as the reviewer. The conversion date is
+2026-07-01. Do not run depreciation in these two companies before comparing them.
+
+Provision private disposable OAuth credentials with the `agent-operations` binary
+(`BILIBI_AGENT_PROOF=disposable`, `BILIBI_AGENT_CREDENTIALS` naming a new private
+file), then run `conversion-operations.py` with that environment and
+`BILIBI_AGENT_URL` pointing to the fixture. It discovers the import contracts and
+guides, exercises mismatch refusals, dependent-plan rollback and exact retries,
+and repeats the imports and settlements in Company 002 through MCP. It compares
+the final account balances with Company 001 and checks that imports add no ledger
+entry or historical tax lines. Source setup is fixture preparation, including the
+asset category; it is not evidence of general asset lifecycle MCP operations.
+
+Run `conversion` without `serve` afterward for Company 003's facade proof:
+source accumulation differing from lifetime projection, prospective depreciation,
+settlement reversals, report reproduction across entryless imports, independent
+approval, unauthorized-write refusal and permanent source evidence. Each
+binary refuses ordinary production setup; these are accounting walkthroughs, not
+production seeds or a historical transaction migration tool.

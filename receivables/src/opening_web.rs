@@ -43,6 +43,17 @@ bilibi_menu::contribute!(
     .requires(bilibi_menu::Requirement::Capability(VIEW))
     .order(60)
 );
+fn field_label(key: &str) -> &str {
+    match key {
+        "csv" => "Source register CSV",
+        "series_id" => "Opening invoice series",
+        "source_reference" => "Source reference",
+        "currency_code" => "Book currency",
+        "override_reason" => "Approval exception reason",
+        _ => key,
+    }
+}
+
 fn render(t: impl Template) -> Result<Html> {
     Html::render(&t).map_err(|_| Error::Internal)
 }
@@ -107,7 +118,7 @@ impl Opening {
             .cloned()
             .unwrap_or_default()
             .into_iter()
-            .map(|e| bilibi_ui::error_sentence(key, &e))
+            .map(|e| bilibi_ui::error_sentence(field_label(key), &e))
             .collect()
     }
     fn fail(&mut self, error: ContractError) {
@@ -237,7 +248,7 @@ impl Opening {
                     for message in messages {
                         summary.push(
                             format!("conversion-{key}"),
-                            bilibi_ui::error_sentence(key, message),
+                            bilibi_ui::error_sentence(field_label(key), message),
                         );
                     }
                 }
