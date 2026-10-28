@@ -548,7 +548,7 @@ fn field_label(path: &str) -> String {
 fn failure(error: ContractError) -> Result<Failure> {
     Ok(match error {
         ContractError::Backend(error @ (Error::Unauthorized | Error::StepUpRequired { .. })) => {
-            return Err(error);
+            return Err(error)
         }
         ContractError::Forbidden | ContractError::Backend(Error::Forbidden) => Failure::Denied,
         ContractError::InvalidInput(fields) => Failure::Refused(Refusal {

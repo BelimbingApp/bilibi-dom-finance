@@ -285,10 +285,7 @@ impl Ledger {
     }
 }
 
-/// An opening journal is corrected only by submitting opening balances again
-/// with `replaces_journal_id`, so its replacement keeps the opening's source
-/// reference and CSV; a manual replacement would leave the book with no
-/// opening record and let a second opening be submitted beside it.
+/// Whether the journal is one a source reference and CSV were retained for.
 pub(crate) async fn is_opening(
     client: &dyn OperationClient,
     tenant: i64,
@@ -300,6 +297,10 @@ pub(crate) async fn is_opening(
         &[&tenant, &company, &journal_id]).await?.is_some())
 }
 
+/// An opening journal is corrected only by submitting opening balances again
+/// with `replaces_journal_id`, so its replacement keeps the opening's source
+/// reference and CSV; a manual replacement would leave the book with no
+/// opening record and let a second opening be submitted beside it.
 pub(crate) async fn refuse_manual_replacement(
     client: &dyn OperationClient,
     scope: &Scope,

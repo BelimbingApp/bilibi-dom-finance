@@ -222,9 +222,7 @@ pub enum LedgerError {
     NotOwned,
     /// The approver prepared the record, impersonated whoever did, or was
     /// impersonated by them, while the company requires separation of duties.
-    #[error(
-        "Someone else must approve this because the company requires separation of duties, including when impersonating. For a one-person company, change Separation of duties on Approval exceptions: /finance/reports/approval-exceptions"
-    )]
+    #[error("Someone else must approve this because the company requires separation of duties, including when impersonating. For a one-person company, change Separation of duties on Approval exceptions: /finance/reports/approval-exceptions")]
     SamePerson,
     #[error("Not found")]
     ExceptionNotFound,
