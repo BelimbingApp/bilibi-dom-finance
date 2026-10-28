@@ -171,6 +171,11 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
     grants
         .set_direct(&admin, admin.user(), bilibi_company::VIEW, Some(false))
         .await?;
+    assert!(matches!(
+        einvoice.prefill_party(&admin, 1, party.id).await,
+        Err(bilibi_finance_einvoice::EinvoiceError::Invalid(fields))
+            if fields.iter().any(|f| f.field == "buyer" && f.message.contains("Companies view permission"))
+    ));
     field(
         ar.issue_document(&admin, 1, draft.id).await,
         "customer_id",
