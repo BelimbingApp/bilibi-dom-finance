@@ -231,7 +231,7 @@ they govern this code and are not copied here.
 - Register assets through `FixedAssets`, never by posting or claiming their
   acquisition entry: it freezes one whole source debit and its revision;
   projected schedules are not posted depreciation (see `fixed_assets/README.md`).
-- Never offer or accept an account receipts were paid into (`finance_receivables_payments.deposit_account_id`) as the receivable control account: `prepare_setup` (`receivables/src/configuration.rs`) refuses it for a person and an agent alike, and the settings page leaves it out of its choices. Receivables knows no account as "bank" beyond its own receipts.
+- Never offer or accept an account receipts were paid into (`finance_receivables_payments.deposit_account_id`) as the receivable control account, nor the current control account as a receipt's deposit: `prepare_setup` (`receivables/src/configuration.rs`) and `record_payment` (`receivables/src/posting.rs`) refuse them for a person and an agent alike, and the settings page and receipt dialog leave them out of their choices. Receivables knows no account as "bank" beyond its own receipts.
 - Change receivable drafts through `Receivables`, not its tables: null/missing
   lines preserve snapshots, an array replaces them atomically, and discard
   keeps them. Issue through `issue_document` and settle through `record_payment`

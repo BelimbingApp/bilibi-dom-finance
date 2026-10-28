@@ -375,7 +375,7 @@ impl Receivables {
         self.join(client, scope, company, POST_PAYMENTS).await?;
         let tenant = scope.tenant();
         let book = self.ledger.get_book_on(client, scope, company).await?;
-        store::find(client, SETUPS, tenant, company, None)
+        let setup = store::find(client, SETUPS, tenant, company, None)
             .await?
             .ok_or(R::NotConfigured)?;
         let chart = self.ledger.list_accounts_on(client, scope, company).await?;
@@ -400,6 +400,12 @@ impl Receivables {
         v::text(&mut data, "reference", false, 100)?;
         v::text(&mut data, "description", false, 500)?;
         v::account(&mut data, "deposit_account_id", &chart, AccountType::Asset)?;
+        if data["deposit_account_id"] == setup["receivable_account_id"] {
+            return Err(invalid(
+                "deposit_account_id",
+                "is the account that records amounts customers owe; choose the bank or cash account receipts are paid into",
+            ));
+        }
         let customer = store::find(
             client,
             CUSTOMERS,

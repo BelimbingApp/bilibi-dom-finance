@@ -84,6 +84,7 @@ pub(super) struct Payments {
     customers: Vec<Customer>,
     series: Vec<Series>,
     accounts: Vec<Account>,
+    control: Option<i64>,
     figures: f::Figures,
     cut: bool,
     can_record: bool,
@@ -114,6 +115,7 @@ impl Payments {
             customers: vec![],
             series: vec![],
             accounts: vec![],
+            control: None,
             figures: f::Figures::default(),
             cut: false,
             can_record: false,
@@ -159,6 +161,12 @@ impl Payments {
             .await?
             .0;
         self.accounts = self.pages.accounts(scope).await;
+        self.control = self
+            .pages
+            .read(scope, "finance.receivables.setup.get", json!({}))
+            .await
+            .ok()
+            .and_then(|v| v["setup"]["receivable_account_id"].as_i64());
         self.figures = self.pages.figures(scope).await;
         self.can_record = self.pages.allowed(scope, POST_PAYMENTS).await?;
         Ok(())
@@ -413,7 +421,7 @@ impl Payments {
         let deposits: Vec<Choice> = self
             .accounts
             .iter()
-            .filter(|a| a.active && a.account_type == "asset")
+            .filter(|a| a.active && a.account_type == "asset" && Some(a.id) != self.control)
             .map(|a| Choice::new(a.label(), a.id.to_string()))
             .collect();
         let mut who = Html::EMPTY;
