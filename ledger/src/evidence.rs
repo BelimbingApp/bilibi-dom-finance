@@ -28,6 +28,7 @@ const DATASETS: &[(&str, &str, &[&str])] = &[
             "name",
             "account_type",
             "parent_id",
+            "is_group",
             "active",
             "retained_earnings",
             "inserted_at",

@@ -1275,7 +1275,7 @@ fn account_choices(accounts: &[Account], liability: bool) -> Vec<Choice> {
     accounts
         .iter()
         .filter(|a| {
-            a.active
+            a.postable()
                 && if liability {
                     a.account_type == AccountType::Liability
                 } else {

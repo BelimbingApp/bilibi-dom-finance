@@ -143,6 +143,14 @@ they govern this code and are not copied here.
 - Agent writes join the shared plan's audited transaction through the ledger's private `*_on` methods, never the pool-owning public wrappers: nested commits would escape plan rollback. Preview on the handed `OperationClient`; retain the transaction-local review fence because the pinned engine previews every step before executing any.
 
 - Correct a submitted manual journal with `Ledger::replace_journal` (or `withdraw_journal` to only take it back), never `reject_journal` then `submit_journal` or an edit: only its submitter can, and it withdraws the journal and submits the correction in one transaction, so a refusal leaves it waiting and an approval racing it can never post the old content. The link is in `finance_ledger_journal_replacements`, not a column, because the journal and event evidence field lists are frozen. A page prefills its dialog from the journal's contract read (`?correct={id}`, `ledger/src/web/journals.rs`).
+- A chart row is an account (takes postings, no children) or an account group
+  (`is_group`: no postings, the total of what is under it). Offer or accept an
+  account for posting or a setting only if `Account::postable()` (active and not
+  a group), never `active` alone, and read group totals only through
+  `Ledger::chart_balances`, never by adding up rows yourself. A starter chart is
+  data in `ledger/templates/*.json` that a person previews and applies to a chart
+  with no rows (`ledger/README.md#starter-charts`); never seed one at boot or
+  when a book opens, and never hard-code a chart in Rust.
 - Post an entry only through `Ledger::post_entry` and read it through
   `get_entry`/`list_entries`; never insert into or select from
   `finance_ledger_entries`/`_entry_lines` from a sibling. Pass `owner` for an

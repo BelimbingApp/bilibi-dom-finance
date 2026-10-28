@@ -152,7 +152,7 @@ impl Index {
         let choice = |kind| {
             chart
                 .iter()
-                .filter(|a| a.active && a.account_type == kind)
+                .filter(|a| a.postable() && a.account_type == kind)
                 .map(|a| Choice::new(format!("{} {}", a.code, a.name), a.id.to_string()))
                 .collect()
         };

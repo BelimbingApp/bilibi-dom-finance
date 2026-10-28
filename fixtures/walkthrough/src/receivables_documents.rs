@@ -1012,7 +1012,7 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         .starts_with("0.000909090909090909"));
     println!("boundaries: due-today bucket zero; tax entry pins; competing settlements/reversals serialize; received-tax fractions stay unrounded");
     let datasets = Receivables::evidence_datasets();
-    assert_eq!(datasets.len(), 11);
+    assert_eq!(datasets.len(), 13);
     for dataset in datasets {
         let mut after = None;
         let mut count = 0;
@@ -1041,7 +1041,10 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
                 None => break,
             }
         }
-        assert!(count > 0, "empty evidence {dataset}");
+        assert!(
+            count > 0 || matches!(dataset, "write_off" | "write_off_event"),
+            "empty evidence {dataset}"
+        );
         println!("evidence {dataset}: {count} rows, exclusive one-row pages");
     }
     for (dataset, limit, after) in [
@@ -1115,6 +1118,6 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         .await?;
     assert!(matches!(refused, Err(R::CompanyArchived)));
     assert!(readable.is_ok());
-    println!("NR2 proof passed: numbering and rollback, immutable owned postings, dated/pinned reports, all 11 exports, SQL guards, row audits, tenant isolation, archive read-only (company restored active)");
+    println!("NR2 proof passed: numbering and rollback, immutable owned postings, dated/pinned reports, all 13 exports, SQL guards, row audits, tenant isolation, archive read-only (company restored active)");
     Ok(())
 }

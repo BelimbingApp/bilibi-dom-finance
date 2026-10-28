@@ -98,9 +98,10 @@ pub(crate) fn cash_position(
     membership: &BTreeMap<i64, usize>,
     columns: &[Column],
 ) -> (Vec<Section>, Vec<Money>) {
+    // A group listed in a section gathers its accounts; it is never a row.
     let mut covered: Vec<&Account> = accounts
         .iter()
-        .filter(|a| membership.contains_key(&a.id))
+        .filter(|a| !a.is_group && membership.contains_key(&a.id))
         .collect();
     covered.sort_by(|a, b| a.code.cmp(&b.code));
     let rows: Vec<(usize, Row)> = covered

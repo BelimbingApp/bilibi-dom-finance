@@ -360,9 +360,11 @@ impl Einvoice {
             .map_err(ledger_refusal)?;
         let mut ids = [0; 3];
         let mut unknown = Vec::new();
+        let mut groups = Vec::new();
         for (index, (account, code)) in needed.iter().zip(&codes).enumerate() {
             let code = code.as_deref().unwrap_or_default();
             match chart.iter().find(|entry| entry.code == code) {
+                Some(found) if found.is_group => groups.push(format!("{} {code}", account.field())),
                 Some(found) => ids[index] = found.id,
                 None => unknown.push(format!("{} {code}", account.field())),
             }
@@ -371,6 +373,12 @@ impl Einvoice {
             return Err(Refused::Final(format!(
                 "accounts not in the chart: {}",
                 unknown.join(", ")
+            )));
+        }
+        if !groups.is_empty() {
+            return Err(Refused::Final(format!(
+                "accounts that are account groups, not posting accounts: {}",
+                groups.join(", ")
             )));
         }
         Ok(ids)

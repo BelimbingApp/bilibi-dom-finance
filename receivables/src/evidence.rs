@@ -9,6 +9,42 @@ use serde_json::Value;
 const ISO: &str = "YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"";
 const DATASETS: &[(&str, &str, &[&str])] = &[
     (
+        "write_off",
+        "finance_receivables_write_offs",
+        &[
+            "id",
+            "tenant_id",
+            "company_id",
+            "document_id",
+            "entry_date",
+            "amount",
+            "offset_account_id",
+            "reason",
+            "evidence",
+            "submitted_by_user_id",
+            "submitted_by_impersonator_id",
+            "submitted_at",
+        ],
+    ),
+    (
+        "write_off_event",
+        "finance_receivables_write_off_events",
+        &[
+            "id",
+            "tenant_id",
+            "company_id",
+            "write_off_id",
+            "event",
+            "effective_date",
+            "reason",
+            "ledger_entry_id",
+            "ledger_entry_number",
+            "actor_user_id",
+            "actor_impersonator_id",
+            "occurred_at",
+        ],
+    ),
+    (
         "allocation",
         "finance_receivables_allocations",
         &[
@@ -269,7 +305,9 @@ fn column(field: &str) -> String {
 impl Receivables {
     /// Every owned evidence dataset, sorted by name.
     pub fn evidence_datasets() -> Vec<&'static str> {
-        DATASETS.iter().map(|(name, _, _)| *name).collect()
+        let mut names: Vec<_> = DATASETS.iter().map(|(name, _, _)| *name).collect();
+        names.sort_unstable();
+        names
     }
 
     /// A live, ID-ordered page requiring receivables VIEW. Separate pages do

@@ -216,7 +216,7 @@ impl Settings {
     fn account_choices(&self, kind: &str) -> Vec<Choice> {
         self.accounts
             .iter()
-            .filter(|a| a.active && a.account_type == kind)
+            .filter(|a| a.postable() && a.account_type == kind)
             .map(Account::choice)
             .collect()
     }
@@ -229,7 +229,7 @@ impl Settings {
         self.accounts
             .iter()
             .filter(|a| {
-                a.active
+                a.postable()
                     && a.account_type == "asset"
                     && (!self.receipts_into.contains(&a.id)
                         || self.setup.as_ref().map(|s| s.receivable_account_id) == Some(a.id))
@@ -335,7 +335,7 @@ impl Settings {
                     !self
                         .accounts
                         .iter()
-                        .any(|a| a.active && a.account_type == *kind)
+                        .any(|a| a.postable() && a.account_type == *kind)
                 })
                 .map(|(_, word)| word)
                 .collect();

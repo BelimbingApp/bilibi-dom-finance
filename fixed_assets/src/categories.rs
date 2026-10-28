@@ -79,7 +79,7 @@ impl FixedAssets {
         ] {
             if !accounts
                 .iter()
-                .any(|a| a.id == id && a.active && a.account_type == kind)
+                .any(|a| a.id == id && a.postable() && a.account_type == kind)
             {
                 return Err(invalid(
                     field,

@@ -108,7 +108,7 @@ async fn sums(
                    AND ($5::text IS NULL OR e.entry_date <= $5::text::date) \
                    AND (NOT $6 OR ({not_closing})) \
                    GROUP BY 1, 2) \
-                 SELECT pin.through, a.id, a.code, a.name, a.account_type, a.parent_id, a.active, \
+                 SELECT pin.through, a.id, a.code, a.name, a.account_type, a.parent_id, a.is_group, a.active, \
                    a.retained_earnings, t.owner_module, t.debits, t.credits \
                  FROM pin LEFT JOIN (totals t JOIN finance_ledger_accounts a ON a.id = t.account_id) ON true \
                  ORDER BY a.code, {order}",

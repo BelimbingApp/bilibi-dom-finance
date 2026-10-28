@@ -37,7 +37,13 @@ impl State {
                 if let (Some(code), Some(name)) =
                     (account["code"].as_str(), account["name"].as_str())
                 {
-                    accounts.push(Choice::new(format!("{code} {name}"), code));
+                    // A section may list a group: it gathers everything under it.
+                    let group = if account["is_group"].as_bool() == Some(true) {
+                        " (group)"
+                    } else {
+                        ""
+                    };
+                    accounts.push(Choice::new(format!("{code} {name}{group}"), code));
                 }
             }
             match page["result"]["next_after_code"].as_str() {

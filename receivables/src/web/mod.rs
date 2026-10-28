@@ -12,6 +12,7 @@ mod format;
 mod payment;
 mod payments;
 mod settings;
+mod write_offs;
 
 use crate::{MODULE, VIEW};
 use askama::Template;
@@ -147,6 +148,10 @@ route!("finance/receivables.settings", SETTINGS, "settings");
 inventory::submit! { Contribution::new(PAGE_WRITES, PAGES, Provenance { module: MODULE, source: file!(), line: line!() }, &PageWrites {
     service: PAGES,
     contracts: &[
+        ("save_write_off", "finance.receivables.write_off.submit"),
+        ("save_write_off", "finance.receivables.write_off.approve"),
+        ("save_write_off", "finance.receivables.write_off.reject"),
+        ("save_write_off", "finance.receivables.write_off.reverse"),
         ("create_customer", "finance.receivables.customer.create"),
         ("save_customer", "finance.receivables.customer.update"),
         ("create_draft", "finance.receivables.draft.create"),
@@ -383,9 +388,16 @@ pub(super) struct Account {
     pub name: String,
     pub account_type: String,
     pub active: bool,
+    #[serde(default)]
+    pub is_group: bool,
 }
 
 impl Account {
+    /// An active account, never an account group: what a picker may offer.
+    pub(super) fn postable(&self) -> bool {
+        self.active && !self.is_group
+    }
+
     pub(super) fn label(&self) -> String {
         format!("{} {}", self.code, self.name)
     }

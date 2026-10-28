@@ -447,7 +447,12 @@ impl Pages {
                 ) => return Ok((units, Vec::new())),
                 Err(_) => return Err(Error::Internal),
             };
-            for a in page["result"]["records"].as_array().into_iter().flatten() {
+            for a in page["result"]["records"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|a| a["is_group"].as_bool() != Some(true))
+            {
                 if let (Some(id), Some(code), Some(name), Some(kind)) = (
                     a["id"].as_i64(),
                     a["code"].as_str(),

@@ -1,7 +1,7 @@
 # Ledger
 
 Module ID: `finance/ledger` (Bilimbi `Bilimbi.Finance.Ledger`). A company's
-general ledger: its book, chart of accounts, journal entries, posting
+general ledger: its book, chart of accounts (accounts, account groups and starter charts), journal entries, posting
 notices, fiscal years with period closing and the year-end close, controlled
 bookkeeping and late-recording reviews, reversals, the separation of duties
 with its approval exceptions and their reviews, manual journals, the trial
@@ -34,8 +34,11 @@ records (`Book`, `Account`, `Entry`, `FiscalYear`, `Period`, `ClosingEvent`,
 | `get_book`, `get_book_on` | `finance.ledger.view` | The company's currency code and minor units, or `BookNotOpen`; `_on` uses the caller's connection |
 | `open_book` | `finance.ledger.accounts.manage` | Opens the book once with `currency_code` (three letters, trimmed and upcased; see [Book currency](#book-currency)) and `minor_units` (0 to 4); a second call is `BookAlreadyOpen`. A new company's book is controlled (see Controlled bookkeeping) |
 | `list_accounts`, `list_accounts_on` | `finance.ledger.view` | The chart of accounts by code; `_on` uses the caller's connection |
-| `create_account` | `finance.ledger.accounts.manage` | Adds an account: `code`, `name`, `account_type`, optional `parent_id`, `active`, `retained_earnings` |
-| `update_account` | `finance.ledger.accounts.manage` | Changes `name`, `parent_id`, `active` or `retained_earnings`; `AccountNotFound` for an id of another company |
+| `create_account` | `finance.ledger.accounts.manage` | Adds an account that takes postings: `code`, `name`, `account_type`, optional `parent_id` (an account group of the same type), `active`, `retained_earnings` |
+| `update_account` | `finance.ledger.accounts.manage` | Changes `name`, `parent_id`, `active` or `retained_earnings`; `AccountNotFound` for an id of another company; refuses an account group (use `update_account_group`) |
+| `create_account_group`, `update_account_group` | `finance.ledger.accounts.manage` | An account group takes no postings and stands for the total of what is under it: `code`, `name`, `account_type`, optional `parent_id` (another group of the same type). Update changes `name` or the group it sits in; code and type never change |
+| `chart_balances` | `finance.ledger.view` | Each account's own `balance` and each group's `total` as of a date, at a pinned `through_entry_number` (see Account groups) |
+| `chart_templates`, `preview_chart_template`, `apply_chart_template` | none, `.view`, `.accounts.manage` | Starter charts: list them, preview the exact rows (with the optional `sections` chosen) against a company's chart, and create them in one transaction in a chart with no accounts or groups (see Starter charts) |
 | `post_entry` | `finance.ledger.entries.post` | Posts a balanced entry of at least two lines (see Entries); `BookNotOpen` before the book is opened |
 | `post_entry_in` | `finance.ledger.entries.post` | Same posting inside the owner's `MutationTransaction`; leaves commit/rollback to the owner |
 | `preview_post_entry_on`, `preview_reverse_owned_entry_on` | `finance.ledger.entries.post` | Validate an owned posting/correction on the handed `OperationClient`, without identities or writes; deterministic entry, referenced accounts and applicable posting controls for the owner's review fence |
@@ -97,12 +100,16 @@ H1 makes the facade-only writes reachable through the Platform's shared `/api/v1
 | --- | --- |
 | `book.get` | Book or null, the currency's name and standard decimal places (read by code, even if no longer enabled), controlled-bookkeeping and duty-separation changes |
 | `book.currencies` | The enabled currencies (code, name, ISO 4217 decimal places) matching an optional `search`, the proposed currency and its source, and `reference`: `iso4217` (currencies listed), `none_enabled` (list installed, nothing enabled) or `unavailable` (list not installed) |
-| `account.list` | Database-code-ordered chart; `after_code`, `next_after_code` |
+| `account.list` | Database-code-ordered chart of accounts and account groups (`is_group`); `after_code`, `next_after_code` |
+| `chart_balance.get` | Every account's own balance and every group's total as of `as_of`, counted through a pinned `through_entry_number` |
+| `chart_template.list`, `chart_template.get` | The starter charts, their optional sections, review state and whether each can be applied now; the exact rows one would create for the chosen `sections` and any code the chart already uses |
 | `journal.get`, `journal.list` | Lines and decision; list by number with optional `status`, `after`, `next_after` |
 | `entry.get`, `entry.list` | Immutable lines and ownership/reversal identifiers; list filters `from`, `to`, `account_id`, `through_entry_number`, `exclude_closing`; cursor pair `after_date`, `after_id` in `next_after` |
 | `fiscal_year.list` | Years with periods/statuses; `after_start_date`, `next_after_start_date` |
 | `trial_balance.get` | Every account with a posting on or before `as_of`, with debit and credit balances, counted through a pinned `through_entry_number` |
 | `book.open` (`minor_units` optional), `account.create`, `account.update` | Reviewed book/chart changes; account update preserves omitted fields and uses `clear_parent` to remove a grouping |
+| `account_group.create`, `account_group.update` | Reviewed changes to account groups; update takes the group's id as `account_id` |
+| `chart_template.apply` | `sections` names the optional parts to include (none by default). The review lists every group and account to be created; a chart that already has any is refused and never changed |
 | `journal.submit`, `journal.approve`, `journal.reject` | Submission does not post; approval posts once with separation of duties; rejection records a reason without posting |
 | `journal.withdraw`, `journal.replace` | Only the journal's submitter, while it waits: withdrawal records an optional `reason` and posts nothing; replacement takes the `journal.submit` fields plus `journal_id`, withdraws it and submits the correction, which needs its own approval |
 | `opening_balances.submit` | Reviewed CSV mapping to one opening journal; source reference and exact CSV are retained; optional `replaces_journal_id` withdraws the submitter's waiting opening journal and takes its place; approval is separate |
@@ -110,7 +117,7 @@ H1 makes the facade-only writes reachable through the Platform's shared `/api/v1
 | `fiscal_year.open`, `fiscal_year.close`, `fiscal_year.reopen`, `fiscal_year.lock` | Open monthly periods, close with computed entry, reopen with closing reversal, or atomically lock all remaining closed periods |
 | `period.close`, `period.reopen`, `period.lock` | Existing facade ordering, reason and permanent-lock rules |
 
-The nine reads return at most `page_size` records (1–100, default 100) on list operations. The seventeen writes require shared plan preview/commit; direct calls refuse writes. Preview validates normalized/defaulted values on the caller's connection, without business mutations, and shows exact proposed entry lines, current accounts/periods and consequential designation changes. Amounts are decimal strings, never binary floats. Commit reauthorizes and joins the shared audited transaction through private facade methods; all operations and audit rows roll back together on refusal. A successful record response has `path: null`: a write commits no page path.
+The twelve reads return at most `page_size` records (1–100, default 100) on list operations. The twenty writes require shared plan preview/commit; direct calls refuse writes. Preview validates normalized/defaulted values on the caller's connection, without business mutations, and shows exact proposed entry lines, current accounts/periods and consequential designation changes. Amounts are decimal strings, never binary floats. Commit reauthorizes and joins the shared audited transaction through private facade methods; all operations and audit rows roll back together on refusal. A successful record response has `path: null`: a write commits no page path.
 
 The pinned Platform previews every step before executing any. A transaction-local FIFO of review hashes rechecks each step immediately before mutation, so earlier steps cannot silently change later reviewed facts. Dependent steps need separate plans. Same-company account edits conservatively review the full chart, so even independent account edits need separate plans. Whole-year lock composes existing period locks in date order on the same transaction; it adds no year-lock event. No operation exposes direct posting, owner/settlement bypasses or disabling controls. See [guide.md](guide.md) for consent, staleness and safe ordering.
 
@@ -139,8 +146,10 @@ The ledger has pages so a person without an AI agent can do the same daily work.
 | Menu (Finance, under Bookkeeping) | Route | What a person does there |
 | --- | --- | --- |
 | Book | `/finance/ledger/book` | Reads the currency and decimal places. Opens the book once: pick the currency from a searchable list (the company's base currency is proposed), review its decimal places, then confirm and choose who approves. Sees whether controlled bookkeeping and separation of duties are on. |
-| Chart of accounts | `/finance/ledger/accounts` | Searches and filters the chart, adds an account in a dialog. |
+| Chart of accounts | `/finance/ledger/accounts` | Searches and filters the chart (accounts and groups) with each account's balance and each group's total, adds an account in a dialog. With an empty chart it offers the starter charts: preview, tick the optional sections that apply, then apply, or start empty. |
+| Account groups | `/finance/ledger/account-groups` | Lists the groups with what each holds and its total, adds a group in a dialog. |
 | (account record) | `/finance/ledger/accounts/{id}` | Edits the name and group in place, deactivates or activates the account, marks the retained earnings account, reads today's balance. |
+| (group record) | `/finance/ledger/account-groups/{id}` | Edits the name and the group it sits in, reads its total and what it holds. |
 | Journal entries | `/finance/ledger/entries` | Lists entries oldest first, 100 at a time. The shared period filter narrows by entry date; with no period, every date is listed ("All dates"). |
 | (entry record) | `/finance/ledger/entries/{id}` | Reads the lines. Reverses a manual entry in a dialog. |
 | Opening balances | `/finance/ledger/opening-balances` | Paste source closing balances, preview every mapped row and totals, then submit one journal for approval. |
@@ -149,7 +158,7 @@ The ledger has pages so a person without an AI agent can do the same daily work.
 | Fiscal years | `/finance/ledger/fiscal-years` | Opens a year after a review that names the company and shows the calculated last day. Closes, reopens and locks periods. Closes, reopens and locks a year. |
 | Trial balance | `/finance/ledger/trial-balance` | Reads the balances as of a date at a pinned entry number, and follows an account to its entries. The as-of day is one date, not a range, so it keeps its own date control rather than the period filter. |
 
-Every read goes through `PageContracts::read` and every write through its `submit` (a dialog the person just filled in) or `preview` then `commit` (a confirmation), so a page and an agent get the same checks, the same refusals and the same audit trail. The pages add one contract, `finance.ledger.trial_balance.get`, because the trial balance had none. A control the person may not use is not drawn. The ledger's own words explain a refusal.
+Every read goes through `PageContracts::read` and every write through its `submit` (a dialog the person just filled in) or `preview` then `commit` (a confirmation), so a page and an agent get the same checks, the same refusals and the same audit trail. The pages add three contracts: `finance.ledger.trial_balance.get`, because the trial balance had none, and `finance.ledger.chart_balance.get` and the `chart_template` operations for the group totals and starter charts. A control the person may not use is not drawn. The ledger's own words explain a refusal.
 
 Two limits come from the contracts. The entry and journal lists are oldest first and show a "Later entries" link at 100 rows, because the contracts page by a cursor. The chart loads whole (up to 5,000 accounts) and the page searches and sorts it.
 
@@ -465,13 +474,72 @@ for another company's or a closing entry), a second time (`AlreadyReviewed`),
 and for a reviewer who posted the entry or impersonated (or was impersonated
 by) its poster (`ReviewerNotIndependent`); its `reason` is required.
 
+## Account groups
+
+The chart is a tree whose leaves are accounts and whose inner rows are account
+groups. An account takes postings and has no children. A group takes none and
+stands for the total of every account under it; it has no balance of its own,
+cannot be deactivated and cannot be the retained-earnings account. `parent_id`
+names the enclosing group: an account or group sits only in a group of its own
+type, in its own company, never in itself or in something it holds. A row is an
+account or a group for good, like its code and type. Posting to a group is
+refused by the facade (`account_id is an account group and takes no postings`)
+and by the database (trigger on entry lines). Version 008 turned any account
+that already had children into a group and stops with the rows named if one
+held postings; the old rule that any account could parent another is gone.
+
+`chart_balances(scope, company_id, as_of, through_entry_number)` reads every row
+by code at one pinned entry number: an account's `balance` and a group's
+`total`, on the type's natural side (debits less credits for asset and expense,
+credits less debits for the others), negative on the other side. PostgreSQL sums
+the lines per account for the trial balance; the group rolls those sums up the
+tree, so no posting is counted twice. The trial balance, account totals and
+every report list posting accounts only, so a group is never a row there.
+
+Reports: a section lists account codes, and a listed group gathers every account
+under it unless a nearer listed row claims it (`reports/src/layout.rs`). A group
+is never a report row, and the section's total is the sum of its accounts.
+
+## Starter charts
+
+A starter chart is data (`templates/*.json`: key, name, review state, notes,
+optional sections and rows of code, name, type, group, retained-earnings mark,
+section), never a code identifier. One ships: `my-small-business`, a Malaysian small business chart
+marked **draft, awaiting accountant review**. A person previews it on the Chart
+of accounts page (or an agent reads `chart_template.get`) and applies it with a
+reviewed write; nothing is created at install, on boot or when a book opens.
+Rows that only some businesses need belong to an optional **section**, each with a
+one-line description of when to tick it: `Registered for SST` (the sales and service tax
+payable group and its accounts), `Has employees` (net salaries payable, payroll
+deductions and employer contributions payable, the employer EPF, SOCSO and EIS
+expenses), `Holds inventory`, `Has intangible assets` (at cost, accumulated
+amortisation, amortisation expense), `Has tax recoverable or advances`, `Takes
+customer deposits`, `Gives sales returns or allowances` and `Earns finance income`.
+No section is chosen by default: the
+preview shows a tickbox for each, the page and `chart_template.get` / `.apply`
+take the chosen keys as `sections` (the same input for a person and an agent),
+and the review lists exactly the rows that will be created. Rows of a section
+that was not chosen are never created; a section's rows sit only under a group
+of the same section or a core group (the file is refused otherwise). A group
+cannot be deactivated once created, so omitting happens when applying. Which
+tax basis applies to a business needs client-specific advice and is a separate
+note on the chart. Applying creates its core groups and the chosen sections' accounts in one transaction under the company
+lock, each audited, and refuses any chart that already has an account or a
+group: a book that has accounts is never changed, and applying twice is refused
+the second time. The created rows are the company's own with no link back, so
+two companies that start from the same template customise their charts
+independently and a later edit of the template never reaches a book. The
+template carries no opening balance and no rate; conversion work (#57) is
+separate. Corrections from an accounting practitioner are a data edit of the
+JSON file.
+
 ## Trial balance
 
 `trial_balance(scope, company_id, as_of, through_entry_number)` lists every
 account with a posting dated on or before `as_of`, by code, with its `debits`
 and `credits` and its balance on one side (`debit_balance` or
 `credit_balance`, the other zero). Each account reports its own postings
-only; `parent_id` lets a reader group rows without counting a parent twice.
+only, and a group never has a row: its total is `chart_balances`.
 `total_debit` equals `total_credit` because every entry balances. Closing
 entries count, so as of a closed year's last day every income and expense
 account is at zero and the year's result is in retained earnings.
@@ -518,12 +586,12 @@ or an option out of range is `InvalidOption`. The datasets are `account`,
 `approval_exception`, `approval_exception_review`, `book`,
 `bookkeeping_change`, `closing_event`, `duty_separation_change`, `entry`,
 `fiscal_year`, `journal`, `journal_event`, `journal_line`,
-`journal_replacement`, `late_recording_review`, `line`, `opening_balances` and `period`. Existing datasets mirror Bilimbi's field lists (`src/evidence.rs`), less the entry's `legacy`; `opening_balances` exports the retained source reference, CSV and journal link. Dates are `YYYY-MM-DD`,
+`journal_replacement`, `late_recording_review`, `line`, `opening_balances` and `period`. Existing datasets mirror Bilimbi's field lists (`src/evidence.rs`), less the entry's `legacy` and plus the account's `is_group`; `opening_balances` exports the retained source reference, CSV and journal link. Dates are `YYYY-MM-DD`,
 instants ISO 8601 UTC with microseconds and amounts the column's exact text
 (`100.0000`). Each page is a live read on its own connection. The field lists
 are an export contract: freeze one once exported and never add a credential.
 
-## Schema (versions 001 to 007)
+## Schema (versions 001 to 008)
 
 `finance_ledger_books` (one per company; currency and minor units fixed for
 good), `finance_ledger_accounts` (code and type kept by a trigger, a
@@ -578,6 +646,11 @@ table because the journal and event evidence field lists are frozen.
 007 (a port addition) adds the append-only `finance_ledger_opening_balances`: the
 source reference and exact CSV of an opening-balances submission, linked to its
 ordinary approval journal, one per source reference and one per journal.
+
+008 adds `is_group` to `finance_ledger_accounts`: a group is always active and
+never retained earnings (checks), keeps its group-ness for good (the identity
+trigger), a row sits only in a group of its own type (trigger on `parent_id`),
+and a posting line on a group is refused (trigger on entry lines).
 
 ## Standards addressed
 

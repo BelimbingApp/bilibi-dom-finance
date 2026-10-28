@@ -70,6 +70,24 @@ impl Account {
                 )
             }
         };
+        if let Some(group) = chart.iter().find(|a| a.id == self.id && a.is_group) {
+            return self.page(
+                "Account",
+                render(
+                    EmptyState::missing(
+                        "This is an account group",
+                        "A group takes no postings. Its page shows what it holds and its total.",
+                    )
+                    .id("ledger-account-is-group")
+                    .action(render(Button {
+                        id: "ledger-account-group-link",
+                        href: &format!("{}/{}", super::groups::INDEX, group.id),
+                        body: Html::text("Open the group"),
+                        ..Button::default()
+                    })?),
+                )?,
+            );
+        }
         let Some(account) = chart.iter().find(|a| a.id == self.id).cloned() else {
             return self.page(
                 "Account",
@@ -128,13 +146,12 @@ impl Account {
         };
 
         let editable = can_manage;
-        // A group is an active account of the same type; the current group
-        // stays listed even once deactivated, so the editor shows what is set.
-        let groups = view::by_name(chart.iter().filter(|a| {
-            a.id != account.id
-                && a.account_type == account.account_type
-                && (a.active || Some(a.id) == account.parent_id)
-        }));
+        // An account sits in an account group of its own type.
+        let groups = view::by_name(
+            chart
+                .iter()
+                .filter(|a| a.is_group && a.account_type == account.account_type),
+        );
         let parent_display = match account
             .parent_id
             .and_then(|id| chart.iter().find(|a| a.id == id))

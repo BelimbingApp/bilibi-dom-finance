@@ -311,7 +311,7 @@ impl Entries {
         let form = self.list.filters_form();
         let mut options = vec![Choice::new("All accounts", "")];
         options.extend(
-            view::by_name(chart.iter())
+            view::by_name(chart.iter().filter(|a| !a.is_group))
                 .iter()
                 .map(|a| view::account_choice(a)),
         );

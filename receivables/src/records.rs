@@ -128,6 +128,8 @@ pub struct Document {
     pub discarded_at: Option<String>,
     pub lines: Vec<DocumentLine>,
     pub tax_lines: Vec<TaxLine>,
+    #[serde(default)]
+    pub write_offs: Vec<crate::WriteOff>,
     /// Present only on issue: `queued`, `none`, or `error: unauthorized`
     /// when the issuer cannot view the source (issuance still succeeds).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -175,7 +177,9 @@ pub struct Payment {
 
 // Storage has already enforced numeric(20,4); arithmetic uses the actual
 // book's minor units before persistence, not this storage-scale conversion.
-fn money<'de, D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Money, D::Error> {
+pub(crate) fn money<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Money, D::Error> {
     let amount = <Decimal as Deserialize>::deserialize(deserializer)?;
     Money::new(amount, MinorUnits::new(4).expect("storage scale")).map_err(serde::de::Error::custom)
 }

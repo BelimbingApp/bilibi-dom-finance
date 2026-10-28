@@ -8,9 +8,10 @@
 //! ```
 //!
 //! Headings and account codes are the company's own data. A listed account
-//! brings its descendants in the chart with it, unless a descendant is listed
-//! itself; the nearest listed account decides, and within one report the
-//! first section that lists a code keeps it.
+//! group brings everything under it in the chart with it, unless a descendant
+//! is listed itself; the nearest listed row decides, and within one report the
+//! first section that lists a code keeps it. A group is never a report row: it
+//! takes no postings, so its figure is the sum of the accounts it gathers.
 use bilibi_finance_ledger::Account;
 use serde::Serialize;
 use serde_json::Value;

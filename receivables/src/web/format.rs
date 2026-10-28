@@ -412,6 +412,12 @@ impl Figures {
         Money::display_decimal(value, self.units)
     }
 
+    pub(super) fn shown(&self, value: Money) -> String {
+        self.units
+            .map(|units| value.shown(units))
+            .unwrap_or_default()
+    }
+
     pub(super) fn money(&self, value: Money) -> String {
         value.display(self.units)
     }

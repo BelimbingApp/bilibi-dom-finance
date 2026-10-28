@@ -74,6 +74,7 @@ enum Write {
     Issue,
     Payment,
     Reverse,
+    BadDebt(&'static str),
 }
 impl Write {
     fn capability(self) -> &'static str {
@@ -89,10 +90,16 @@ impl Write {
             Self::Draft(_) | Self::Discard => MANAGE_DOCUMENTS,
             Self::Issue => ISSUE,
             Self::Payment | Self::Reverse => POST_PAYMENTS,
+            Self::BadDebt("submit") => SUBMIT_WRITE_OFFS,
+            Self::BadDebt(_) => APPROVE_WRITE_OFFS,
         }
     }
     fn summary(self) -> &'static str {
         match self {
+            Self::BadDebt("submit") => "Propose an invoice-linked bad-debt journal; nothing posts until approval. No tax relief is inferred.",
+            Self::BadDebt("approve") => "Approve and post the bad-debt journal atomically with the invoice write-off. Revenue and tax remain unchanged.",
+            Self::BadDebt("reverse") => "Reverse the owned write-off journal and restore the invoice balance before recording any recovery receipt.",
+            Self::BadDebt(_) => "Reject the proposed bad-debt journal without posting; retain its evidence and decision.",
             Self::Configure => "Change future document defaults; issued invoices keep their original control account.",
             Self::Code(t,None) if t.name==SERIES.name => "Create a numbering series; code, kind, prefix and width are permanent.",
             Self::Code(t,Some(_)) if t.name==SERIES.name => "Change the series name or active flag; preserve its numbering definition.",
@@ -130,6 +137,11 @@ impl Write {
             .join(client, scope, company, self.capability())
             .await?;
         let changes = match self {
+            Self::BadDebt(action) => {
+                service
+                    .review_write_off(client, scope, company, action, input)
+                    .await?
+            }
             Self::Configure | Self::Code(_, _) => {
                 let p = match self {
                     Self::Configure => service.prepare_setup(client, scope, company, input).await?,
@@ -278,6 +290,7 @@ impl Write {
         use crate::web::{CUSTOMERS as CUSTOMER_PAGES, INVOICES, RECEIPTS, SETTINGS};
         let record_page = |base: &str| json!(format!("{base}/{}", record["id"]));
         match self {
+            Self::BadDebt(_) => json!(format!("{INVOICES}/{}", record["document_id"])),
             Self::Configure => json!(SETTINGS),
             Self::Code(table, _) if table.name == CUSTOMERS.name => record_page(CUSTOMER_PAGES),
             Self::Code(..) => json!(SETTINGS),
@@ -331,6 +344,11 @@ impl WriteHandler for Write {
             .await?;
             let record: Result<Value> = async {
                 Ok(match *self {
+                    Self::BadDebt(action) => json!(
+                        service
+                            .write_off_on(tx, scope, company, action, input)
+                            .await?
+                    ),
                     Self::Configure => {
                         json!(service.configure_on(tx, scope, company, input).await?)
                     }
@@ -405,6 +423,7 @@ enum Read {
     Payment,
     Payments,
     Aging,
+    WriteOffAccounts,
 }
 impl ReadHandler for Read {
     fn owner(&self) -> &'static str {
@@ -428,6 +447,7 @@ impl ReadHandler for Read {
             let after = input["after"].as_i64().unwrap_or(0);
             let result:Result<Value> = async {
                 Ok(match *self {
+                    Self::WriteOffAccounts => json!({"accounts":write_offs::eligible_offsets(client,service,scope,company).await?}),
                     Self::Setup => json!({"setup":store::find(client,SETUPS,tenant,company,None).await?.map(store::decode::<Setup>).transpose()?}),
                     Self::Codes(table) => {
                         let cursor = input["after_code"].as_str();
@@ -596,6 +616,31 @@ fn payment_reverse() -> Value {
         json!({"payment_id":identifier(),"reversal_date":day(),"reason":string(500)}),
     )
 }
+fn write_off_submit() -> Value {
+    schema(
+        &[
+            "document_id",
+            "entry_date",
+            "amount",
+            "offset_account_id",
+            "reason",
+            "evidence",
+        ],
+        json!({"document_id":identifier(),"entry_date":day(),"amount":string(40),"offset_account_id":identifier(),"reason":string(500),"evidence":string(500)}),
+    )
+}
+fn write_off_decide() -> Value {
+    schema(
+        &["write_off_id", "reason"],
+        json!({"write_off_id":identifier(),"reason":string(500)}),
+    )
+}
+fn write_off_reverse() -> Value {
+    schema(
+        &["write_off_id", "reason", "reversal_date"],
+        json!({"write_off_id":identifier(),"reason":string(500),"reversal_date":day()}),
+    )
+}
 fn codes() -> Value {
     schema(
         &[],
@@ -629,6 +674,11 @@ fn payments() -> Value {
 
 inventory::submit! { Contribution::new(DEFINITIONS,"finance/receivables.operations",Provenance {module:MODULE,source:file!(),line:line!()},&Definitions {
     operations:&[
+        Operation {key:"finance.receivables.write_off.accounts",title:"Read bad-debt journal accounts",summary:"Active allowance assets and expense accounts, excluding every current or historical receivables control and every account receipts are paid into.",keywords:&[],capability:VIEW,input:target,output,handler:Handler::Read(&Read::WriteOffAccounts),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.receivables.write_off.submit",title:"Propose a bad-debt journal",summary:"Propose a dated invoice write-off against the book's allowance or expense account, with reason and evidence. No posting until approval.",keywords:&[],capability:SUBMIT_WRITE_OFFS,input:write_off_submit,output,handler:Handler::SafeWrite(&Write::BadDebt("submit")),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.receivables.write_off.approve",title:"Approve a bad-debt journal",summary:"Require a different reviewer, then post the owned journal and reduce the invoice balance atomically. No tax relief or filing.",keywords:&[],capability:APPROVE_WRITE_OFFS,input:write_off_decide,output,handler:Handler::SafeWrite(&Write::BadDebt("approve")),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.receivables.write_off.reject",title:"Reject a bad-debt journal",summary:"Keep the proposed journal and rejection reason without posting.",keywords:&[],capability:APPROVE_WRITE_OFFS,input:write_off_decide,output,handler:Handler::SafeWrite(&Write::BadDebt("reject")),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.receivables.write_off.reverse",title:"Reverse a bad-debt journal",summary:"Restore the invoice balance with an owned mirror journal before recording any recovery receipt. Also requires a different reviewer.",keywords:&[],capability:APPROVE_WRITE_OFFS,input:write_off_reverse,output,handler:Handler::SafeWrite(&Write::BadDebt("reverse")),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.setup.get",title:"Read receivables setup",summary:"Read default control and income accounts; setup is null until configured.",keywords:&[],capability:VIEW,input:target,output,handler:Handler::Read(&Read::Setup),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.setup.changes",title:"Read setup history",summary:"Read account-default changes in ascending identifier order.",keywords:&[],capability:VIEW,input:history,output,handler:Handler::Read(&Read::History),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.series.list",title:"List numbering series",summary:"Read active and inactive series in code order with a bounded cursor.",keywords:&[],capability:VIEW,input:codes,output,handler:Handler::Read(&Read::Codes(SERIES)),channels:Channels::Every,step_up:&[]},

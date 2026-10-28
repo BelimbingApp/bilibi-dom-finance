@@ -129,7 +129,7 @@ impl Setup {
             .await
             .unwrap_or_default()
             .into_iter()
-            .filter(|a| a.active)
+            .filter(|a| a.postable())
             .collect();
         if !self.started {
             if let Some(s) = &self.settings {

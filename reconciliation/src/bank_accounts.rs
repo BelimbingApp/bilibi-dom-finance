@@ -531,6 +531,10 @@ fn account(
             field,
             "is not a ledger account of this company",
         )),
+        Some(account) if account.is_group => errors.push(FieldError::new(
+            field,
+            "is a ledger account group; choose an account under it",
+        )),
         Some(account) if !account.active => {
             errors.push(FieldError::new(field, "is an inactive ledger account"))
         }

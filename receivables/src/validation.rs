@@ -231,6 +231,12 @@ pub(crate) fn account(
     let Some(account) = chart.iter().find(|a| a.id == id) else {
         return Err(invalid(field, "is not a ledger account of this company"));
     };
+    if account.is_group {
+        return Err(invalid(
+            field,
+            "is a ledger account group; choose an account under it",
+        ));
+    }
     if !account.active {
         return Err(invalid(field, "is an inactive ledger account"));
     }

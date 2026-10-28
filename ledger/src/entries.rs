@@ -272,9 +272,9 @@ async fn validate_values(
         }
     }
 
-    // Every line names an account of this company; a new posting also needs
-    // it active, except the accounts the settlement exception lists. The
-    // company lock serializes this with deactivation.
+    // Every line names an account of this company, never an account group; a
+    // new posting also needs it active, except the accounts the settlement
+    // exception lists. The company lock serializes this with deactivation.
     let ids: Vec<i64> = lines
         .iter()
         .map(|line| line.account_id)
@@ -283,18 +283,25 @@ async fn validate_values(
         .collect();
     let rows = client
         .query(
-            "SELECT id,active FROM finance_ledger_accounts WHERE tenant_id=$1 AND company_id=$2 AND id = ANY($3)",
+            "SELECT id,active,is_group FROM finance_ledger_accounts WHERE tenant_id=$1 AND company_id=$2 AND id = ANY($3)",
             &[&tenant, &company_id, &ids],
         )
         .await?;
-    let accounts: BTreeMap<i64, bool> = rows.iter().map(|r| (r.get(0), r.get(1))).collect();
+    let accounts: BTreeMap<i64, (bool, bool)> = rows
+        .iter()
+        .map(|r| (r.get(0), (r.get(1), r.get(2))))
+        .collect();
     for (index, line) in lines.iter().enumerate() {
         match accounts.get(&line.account_id) {
             None => errors.push(
                 FieldError::new("account_id", "is not an account of this company")
                     .on_line(index + 1),
             ),
-            Some(false) if matches!(inactive, Inactive::Listed(ids) if !ids.contains(&line.account_id)) => {
+            Some((_, true)) => errors.push(
+                FieldError::new("account_id", "is an account group and takes no postings")
+                    .on_line(index + 1),
+            ),
+            Some((false, _)) if matches!(inactive, Inactive::Listed(ids) if !ids.contains(&line.account_id)) => {
                 errors.push(FieldError::new("account_id", "is inactive").on_line(index + 1))
             }
             Some(_) => {}

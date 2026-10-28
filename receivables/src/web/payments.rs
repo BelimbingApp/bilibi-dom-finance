@@ -421,7 +421,7 @@ impl Payments {
         let deposits: Vec<Choice> = self
             .accounts
             .iter()
-            .filter(|a| a.active && a.account_type == "asset" && Some(a.id) != self.control)
+            .filter(|a| a.postable() && a.account_type == "asset" && Some(a.id) != self.control)
             .map(|a| Choice::new(a.label(), a.id.to_string()))
             .collect();
         let mut who = Html::EMPTY;

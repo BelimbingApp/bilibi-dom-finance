@@ -41,8 +41,64 @@ pub(crate) struct Account {
     pub name: String,
     pub account_type: String,
     pub parent_id: Option<i64>,
+    pub is_group: bool,
     pub active: bool,
     pub retained_earnings: bool,
+}
+impl Account {
+    /// Whether an entry may name it: an active account, never a group.
+    pub(crate) fn postable(&self) -> bool {
+        self.active && !self.is_group
+    }
+}
+
+/// One row of the chart's figures: an account's own `balance`, or a group's
+/// `total` over the accounts under it, never both.
+#[derive(Clone, Debug, Deserialize)]
+pub(crate) struct ChartRow {
+    pub id: i64,
+    pub balance: Option<String>,
+    pub total: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub(crate) struct ChartBalances {
+    pub minor_units: u8,
+    pub rows: Vec<ChartRow>,
+}
+
+/// What applying a starter chart would create, as the contract previews it.
+#[derive(Clone, Debug, Deserialize)]
+pub(crate) struct TemplateRow {
+    pub code: String,
+    pub name: String,
+    pub account_type: String,
+    pub is_group: bool,
+    pub parent_code: Option<String>,
+    pub retained_earnings: bool,
+}
+
+/// An optional part of a starter chart; `chosen` is whether the review being
+/// shown includes its rows.
+#[derive(Clone, Debug, Deserialize)]
+pub(crate) struct TemplateSection {
+    pub key: String,
+    pub name: String,
+    pub description: String,
+    #[serde(default)]
+    pub chosen: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub(crate) struct TemplateSummary {
+    pub key: String,
+    pub name: String,
+    pub review: String,
+    pub description: String,
+    pub sections: Vec<TemplateSection>,
+    pub groups: usize,
+    pub accounts: usize,
+    pub applicable: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]

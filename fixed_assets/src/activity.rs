@@ -515,7 +515,7 @@ impl FixedAssets {
                 .list_accounts_on(tx.sql(), s, company)
                 .await?
                 .iter()
-                .any(|a| a.id == account && a.active && a.account_type == AccountType::Asset)
+                .any(|a| a.id == account && a.postable() && a.account_type == AccountType::Asset)
             {
                 return Err(FixedAssetsError::InvalidSettlementAccount);
             }

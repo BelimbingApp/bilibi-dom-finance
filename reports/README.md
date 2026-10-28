@@ -75,8 +75,8 @@ even a pinned live cash total. `account_activity` given the report's window,
 number and `exclude_closing` lists exactly the entries the figure counted, and
 its debits and credits equal the figure.
 
-Each account reports its own postings, so a parent account is never counted
-twice.
+Each posting account reports its own postings and a group is never a row, so
+nothing is counted twice.
 
 ## Grouping and signs
 
@@ -118,7 +118,7 @@ only these keys.
 ]
 ```
 
-A listed account brings its sub-accounts in the chart, unless a sub-account is
+A listed account or account group brings everything under it in the chart, unless a row under it is
 listed itself: the nearest listed account decides, and within one report the
 first section that lists a code keeps it. Headings (at most 100 characters) and
 codes (at most 50) are trimmed. The setting's validator refuses any other shape
