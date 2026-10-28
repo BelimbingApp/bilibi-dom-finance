@@ -78,7 +78,7 @@ for who in ["first", "second"]:
     for company in [2, 100]:
         require(refused(invoke("read", op("finance.ledger.book.get", company), who)), "company isolation failed")
     denied = invoke("read", op("finance.payables.settings.get"), who)
-    require(denied.get("error") == "missing_capability", "source read did not enforce its capability")
+    require(denied.get("error") == "forbidden" and denied.get("reason") == "missing_capability", "source read did not enforce its capability")
     accounts = {row["code"]: row["id"] for row in chart["records"]}
     adjustment = op("finance.ledger.journal.submit", entry_date="2026-03-15", description=f"MCP {who} adjusting journal", lines=[{"account_id": accounts["1000"], "debit": "2.00"}, {"account_id": accounts["4000"], "credit": "2.00"}])
     review = plan([adjustment], who)
