@@ -4,8 +4,8 @@ use crate::{Document, APPROVE_WRITE_OFFS, SUBMIT_WRITE_OFFS};
 use bilibi_database::{Error, Result};
 use bilibi_tenancy::Scope;
 use bilibi_ui::{
-    params, Alert, Attrs, Button, ButtonVariant, Card, Cell, Combobox, Facts, Field, FlexRow, Fold, Form,
-    Html, InputKind, ListColumns, ModalWidth, SectionHeading, StatusKind,
+    params, Alert, Attrs, Button, ButtonVariant, Card, Cell, Combobox, Facts, Field, FlexRow, Fold,
+    Form, Html, InputKind, ListColumns, ModalWidth, SectionHeading, StatusKind,
 };
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
