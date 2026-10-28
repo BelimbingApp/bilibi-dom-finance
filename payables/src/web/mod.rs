@@ -9,6 +9,7 @@ mod payment;
 mod payment_form;
 mod payments;
 mod setup;
+mod vendors;
 
 use crate::{Payables, CREATE_DOCUMENTS, MODULE, SUBMIT_PAYMENTS, VIEW};
 use askama::Template;
@@ -43,6 +44,8 @@ const SETUP: &str = "/finance/payables/setup";
 
 #[derive(Clone)]
 pub(crate) struct Pages {
+    pub records: Arc<bilibi_records::Records>,
+    pub parties: Arc<bilibi_tenancy::PartyProofs>,
     pub db: Db,
     pub payables: Arc<Payables>,
     pub ledger: Arc<Ledger>,
@@ -114,6 +117,20 @@ macro_rules! route {
         }) }
     };
 }
+route!(
+    "finance/payables.vendors",
+    "/finance/payables/vendors",
+    "vendors",
+    VIEW
+);
+menu!(
+    "finance.payables.vendors",
+    "Vendors",
+    "/finance/payables/vendors",
+    "iconoir-send-dollars",
+    0,
+    VIEW
+);
 route!("finance/payables.bills", INDEX, "bills", VIEW);
 route!(
     "finance/payables.bill",
@@ -169,6 +186,21 @@ impl Pages {
     async fn allowed(&self, scope: &Scope, capability: &str) -> Result<bool> {
         let c = self.db.get().await?;
         Ok(bilibi_authz::decide(&**c, scope, capability).await?.allowed)
+    }
+
+    async fn company_name(&self, scope: &Scope) -> String {
+        let Some(company) = scope.current_company() else {
+            return "Company unavailable".into();
+        };
+        let Ok(client) = self.db.get().await else {
+            return "Company unavailable".into();
+        };
+        self.parties
+            .organisation_name(&**client, scope, company)
+            .await
+            .ok()
+            .flatten()
+            .map_or_else(|| "Company unavailable".into(), |company| company.name)
     }
 
     async fn display(&self, scope: &Scope) -> Result<DisplayContext> {
@@ -240,6 +272,7 @@ impl Pages {
 impl Page<Scope, Error> for Pages {
     fn title(&self, operation: &str) -> Option<&'static str> {
         match operation {
+            "vendors" => Some("Vendors"),
             "bills" => Some("Bills"),
             "bill" => Some("Bill"),
             "bill_new" => Some("Record a bill"),
@@ -257,6 +290,11 @@ impl Page<Scope, Error> for Pages {
         Box::pin(async move {
             let scope = r.scope.ok_or(Error::Unauthorized)?;
             let (html, title) = match r.operation {
+                "vendors" => {
+                    let mut state = vendors::Vendors::new(self.clone(), r.query)?;
+                    state.reload(scope).await?;
+                    (state.body(scope).await?, None)
+                }
                 "bills" => {
                     let mut state = bills::Bills::new(self.clone(), r.query, r.framed)?;
                     state.reload(scope).await?;
@@ -311,6 +349,7 @@ impl Page<Scope, Error> for Pages {
     fn mount<'a>(&'a self, r: PageRequest<'a, Scope>) -> MountFuture<'a, Scope, Error> {
         Box::pin(async move {
             let state: Box<dyn bilibi_ui::page::LiveState<Scope, Error>> = match r.operation {
+                "vendors" => Box::new(vendors::Vendors::new(self.clone(), r.query)?),
                 "bills" => Box::new(bills::Bills::new(self.clone(), r.query, r.framed)?),
                 "bill" => Box::new(bill::Bill::new(self.clone(), r.path)?),
                 "bill_new" | "note_new" => Box::new(bill_form::BillForm::new(
@@ -380,6 +419,12 @@ struct RecordPin<'a> {
 inventory::submit! { bilibi_module_registry::Contribution::new(bilibi_module_registry::contributions::PAGE_WRITES, PAGES, bilibi_module_registry::Provenance { module: MODULE, source: file!(), line: line!() }, &bilibi_module_registry::contributions::PageWrites {
     service: PAGES,
     contracts: &[
+        ("create_vendor", "finance.payables.vendor.create"),
+        ("create_vendor", "core.company.create"),
+        ("create_vendor", "core.company.relationship.assign"),
+        ("save_vendor", "finance.payables.vendor.update"),
+        ("confirm_vendor_mapping", "finance.payables.vendor.map_supplier_key"),
+        ("record_vendor_relationship", "core.company.relationship.assign"),
         ("approve", "finance.payables.document.approve"),
         ("post", "finance.payables.document.post"),
         ("void", "finance.payables.document.void"),

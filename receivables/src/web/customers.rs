@@ -388,7 +388,10 @@ impl Customers {
             }
         }
         if create.chooser.read(&form) {
-            create.chooser.search(&pages, scope).await?;
+            create
+                .chooser
+                .search(&pages.company_picker(), scope)
+                .await?;
         }
         Ok(())
     }
@@ -426,7 +429,12 @@ impl Customers {
         }
         let company = match create
             .chooser
-            .company(&pages, scope, credential, "create_customer")
+            .company(
+                &pages.company_picker(),
+                scope,
+                credential,
+                "create_customer",
+            )
             .await?
         {
             Chosen::Company(id) => id,
@@ -526,7 +534,10 @@ impl Customers {
             "pick_company" => {
                 let record = v["record"].as_str().ok_or(Error::Invalid)?;
                 if let Some(create) = self.create.as_mut() {
-                    create.chooser.pick(&pages, scope, record).await?;
+                    create
+                        .chooser
+                        .pick(&pages.company_picker(), scope, record)
+                        .await?;
                     create.errors.0.remove("company");
                 }
             }
@@ -538,7 +549,10 @@ impl Customers {
             "use_candidate" => {
                 let id = v["company"].as_str().ok_or(Error::Invalid)?;
                 if let Some(create) = self.create.as_mut() {
-                    create.chooser.use_candidate(&pages, scope, id).await?;
+                    create
+                        .chooser
+                        .use_candidate(&pages.company_picker(), scope, id)
+                        .await?;
                 }
             }
             "create_customer" => {

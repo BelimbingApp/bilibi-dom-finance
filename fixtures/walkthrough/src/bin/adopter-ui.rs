@@ -3,9 +3,7 @@
 //! otherwise it prepares a draft bill and a bank account, using install defaults.
 use bilibi_database::{pool, Error};
 use bilibi_finance_ledger::{Ledger, Money, NewEntry, NewLine, PostOptions};
-use bilibi_finance_payables::{
-    DocumentLineInput, NewDocument, Party, Payables, Settings, SettingsInput,
-};
+use bilibi_finance_payables::{DocumentLineInput, NewDocument, Payables, Settings, SettingsInput};
 use bilibi_finance_reconciliation::{NewBankAccount, Reconciliation};
 use bilibi_finance_walkthrough_fixture::{install, sign_in, COMPANY};
 use bilibi_module_registry::{Contribution, Provenance};
@@ -103,11 +101,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &manager,
                 COMPANY,
                 &NewDocument {
-                    party: Party {
-                        key: "supplier-001".into(),
-                        name: "Example supplier".into(),
-                        ..Party::default()
-                    },
+                    vendor_id: Some(
+                        bilibi_finance_walkthrough_fixture::vendors::vendor(
+                            &db,
+                            &app.services,
+                            &manager,
+                            1,
+                            "supplier-001",
+                            "Example supplier",
+                        )
+                        .await?,
+                    ),
                     party_document_number: Some("INV-2026-0042".into()),
                     document_date: date(2026, 9, 5),
                     due_date: Some(date(2026, 10, 5)),

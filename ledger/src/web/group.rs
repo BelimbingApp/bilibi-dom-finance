@@ -23,16 +23,18 @@ use std::collections::HashSet;
 pub(super) struct Group {
     pages: Pages,
     id: i64,
+    company: Option<i64>,
     flash: Flash,
     statuses: CommitStates,
     columns: Option<ListColumns>,
 }
 
 impl Group {
-    pub(super) fn new(pages: Pages, id: i64) -> Self {
+    pub(super) fn new(pages: Pages, id: i64, company: Option<i64>) -> Self {
         Self {
             pages,
             id,
+            company,
             flash: Flash::default(),
             statuses: CommitStates::default(),
             columns: None,
@@ -56,16 +58,17 @@ impl Group {
     }
 
     async fn view(&mut self, scope: &Scope) -> Result<LiveBody> {
-        if Pages::company(scope).is_none() {
+        if self.company.is_none() {
             return self.page("Account group", no_company("ledger-group-no-company")?);
         }
-        let chart = match self.pages.chart(scope).await? {
+        let company = self.company.ok_or(Error::Invalid)?;
+        let chart = match self.pages.chart_in(scope, company).await? {
             Ok(chart) => chart,
             Err(refused) => {
                 return self.page(
                     "Account group",
                     unavailable("ledger-group-refused", "this account group", &refused)?,
-                )
+                );
             }
         };
         let Some(group) = chart
@@ -76,7 +79,7 @@ impl Group {
             return self.page("Account group", super::groups::missing()?);
         };
         let editable = self.pages.allowed(scope, MANAGE_ACCOUNTS).await?;
-        let figures = self.pages.chart_figures(scope).await?;
+        let figures = self.pages.chart_figures_in(scope, company).await?;
         let units = figures.as_ref().map(|f| f.minor_units);
         let figure_of = |id: i64| {
             figures
@@ -212,17 +215,22 @@ impl Group {
                 FlexRow::new(member.id.to_string())
                     .slot(
                         "code",
-                        if member.is_group {
-                            render(super::GroupLink {
-                                id: member.id,
-                                label: &member.code,
-                            })?
-                        } else {
-                            render(super::AccountLink {
-                                id: member.id,
-                                label: &member.code,
-                            })?
-                        },
+                        render(bilibi_ui::RecordLink {
+                            kind: crate::MODULE,
+                            record_id: &member.id.to_string(),
+                            href: &format!(
+                                "{}/{}?company={company}",
+                                if member.is_group {
+                                    INDEX
+                                } else {
+                                    super::accounts::INDEX
+                                },
+                                member.id
+                            ),
+                            workspace: false,
+                            class: "text-link hover:underline",
+                            body: Html::text(&member.code),
+                        })?,
                     )
                     .cell("name", Cell::text(&member.name))
                     .cell(
@@ -264,18 +272,19 @@ impl Group {
 
         let mut actions = Html::EMPTY;
         actions.push(&render(BackLink {
-            href: INDEX,
+            href: &format!("{INDEX}?company={company}"),
             id: "ledger-group-back",
             title: "Back to the account groups",
             ..BackLink::default()
         })?);
-        let name = format!("{} {}", group.code, group.name);
-        let url = format!("{INDEX}/{}", group.id);
+        let company_name = self.pages.company_name_in(scope, company).await?;
+        let name = format!("{} · {} · {}", group.name, group.code, company_name);
+        let url = format!("{INDEX}/{}?company={company}", group.id);
         let mut page = render(Header {
             title: account_name(&group)?,
+            subtitle: &company_name,
             title_actions: super::record_pin("ledger-group-pin", "account group", &name, &url)?,
             actions,
-            ..Header::default()
         })?;
         page.push(&render(super::Announce {
             kind: crate::MODULE,
@@ -284,6 +293,10 @@ impl Group {
         page.push(&content);
         Ok(LiveBody {
             html: shell("ledger-group-page", PageVariant::Detail, &self.flash, page)?,
+            query: self
+                .company
+                .map(|id| std::collections::HashMap::from([("company".into(), id.to_string())]))
+                .unwrap_or_default(),
             ..LiveBody::default()
         })
     }
@@ -296,6 +309,10 @@ impl Group {
         page.push(&body);
         Ok(LiveBody {
             html: shell("ledger-group-page", PageVariant::Detail, &self.flash, page)?,
+            query: self
+                .company
+                .map(|id| std::collections::HashMap::from([("company".into(), id.to_string())]))
+                .unwrap_or_default(),
             ..LiveBody::default()
         })
     }
@@ -319,8 +336,9 @@ impl Group {
         let label = if field == "name" { "Name" } else { "Group" };
         let status = match self
             .pages
-            .submit(
+            .submit_in(
                 r.scope,
+                self.company.ok_or(Error::Invalid)?,
                 r.credential,
                 "save_group_field",
                 "finance.ledger.account_group.update",
@@ -350,6 +368,13 @@ impl Group {
 impl LiveState<Scope, Error> for Group {
     fn update<'a>(&'a mut self, r: LiveRequest<'a, Scope>) -> LiveFuture<'a, Error> {
         Box::pin(async move {
+            if let LiveInput::Params(query) = r.input {
+                let company = super::target_company(query, Some(r.scope))?;
+                if company != self.company {
+                    self.company = company;
+                    self.statuses = CommitStates::default();
+                }
+            }
             if let LiveInput::Event(value) = r.input {
                 match event_type(value)? {
                     "save_group_field" => self.save_field(&r, value).await?,

@@ -10,6 +10,8 @@ mod opening;
 mod opening_csv;
 mod opening_operations;
 mod opening_web;
+mod vendors;
+pub use vendors::{SupplierHistory, Vendor, VendorInput};
 mod payments;
 pub use payments::{
     Allocation, AllocationInput, NewPayment, Payment, PaymentDecision, PaymentQuery,
@@ -52,18 +54,24 @@ pub const DOCUMENT_SOURCE: &str = "finance/payables/document";
 
 inventory::submit! { Module {
     id: MODULE, layer: Layer::Domains,
-    dependencies: &["base/agent_api", "base/authz", "base/database", "base/datetime", "base/events", "base/locale", "base/menu", "base/party_ids", "base/tenancy", "base/ui", "core/company", "finance/attachments", "finance/ledger"],
+    dependencies: &["base/agent_api", "base/authz", "base/database", "base/datetime", "base/events", "base/locale", "base/menu", "base/party_ids", "base/records", "base/tenancy", "base/ui", "core/company", "finance/attachments", "finance/ledger"],
     migrations: &[
         ("finance-payables-001-documents", include_str!("../migrations/001-documents.sql")),
         ("finance-payables-002-payments", include_str!("../migrations/002-payments.sql")),
         ("finance-payables-003-matching", include_str!("../migrations/003-matching.sql")),
-        ("finance-payables-004-opening-items", include_str!("../migrations/004-opening-items.sql")),
+        ("finance-payables-004-vendors", include_str!("../migrations/004-vendors.sql")),
+        ("finance-payables-005-vendor-company-scope", include_str!("../migrations/005-vendor-company-scope.sql")),
+        ("finance-payables-006-opening-items", include_str!("../migrations/006-opening-items.sql")),
     ],
     services: &[Service {id:opening_web::PAGES,factory:|services| Ok(Arc::new(bilibi_ui::page::PageService::<Scope,Error>(Arc::new(opening_web::Pages {db:services.get::<Db>("base/database.pool")?.as_ref().clone(),contracts:services.get(bilibi_agent_api::page::SERVICE)?,plans:services.get("base/agent_api.plans")?}))))},Service { id: SERVICE, factory: |s| { let payables = Arc::new(Payables {
         db: s.get::<Db>("base/database.pool")?.as_ref().clone(),
         ledger: s.get(bilibi_finance_ledger::SERVICE)?,
+        parties: s.get("base/tenancy.parties")?,
+        records: s.get(bilibi_records::SERVICE)?,
         order_source: orders::available(&*s.get::<bilibi_events::Events>(bilibi_events::SERVICE)?),
     }); opening_operations::bind(payables.clone())?; agent_operations::bind(payables.clone(), s.get("base/tenancy.parties")?)?; Ok(payables) } }, Service { id: web::PAGES, factory: |s| Ok(Arc::new(bilibi_ui::page::PageService::<Scope, Error>(Arc::new(web::Pages {
+        records: s.get(bilibi_records::SERVICE)?,
+        parties: s.get("base/tenancy.parties")?,
         contracts: s.get(bilibi_agent_api::page::SERVICE)?,
         db: s.get::<Db>("base/database.pool")?.as_ref().clone(),
         payables: s.get(SERVICE)?,
@@ -196,7 +204,8 @@ pub struct Party {
 }
 #[derive(Clone, Debug)]
 pub struct NewDocument {
-    pub party: Party,
+    /// Required for a new bill; a debit note retains its original bill.
+    pub vendor_id: Option<i64>,
     pub party_document_number: Option<String>,
     pub document_date: Date,
     pub due_date: Option<Date>,
@@ -247,6 +256,7 @@ pub struct TaxLine {
 pub struct Document {
     pub opening: Option<serde_json::Value>,
     pub id: i64,
+    pub vendor_id: Option<i64>,
     pub document_type: String,
     pub status: String,
     pub document_number: Option<i64>,
@@ -398,6 +408,8 @@ pub struct DocumentPage {
 pub struct Payables {
     db: Db,
     ledger: Arc<Ledger>,
+    parties: Arc<bilibi_tenancy::PartyProofs>,
+    records: Arc<bilibi_records::Records>,
     /// Whether every order-source event the copy reads is mounted.
     order_source: bool,
 }

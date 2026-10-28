@@ -486,3 +486,5 @@ pub mod adopter_setup;
 pub mod external_accountant;
 // Saved starter charts, configured proposals and cross-company reuse.
 pub mod chart_templates;
+
+pub mod vendors;

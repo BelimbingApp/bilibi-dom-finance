@@ -11,6 +11,53 @@ use jiff::civil::Date;
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 
+/// The most recent opening submission and its current posting state. This
+/// measures opening balances only, never completion of an accounting conversion.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct OpeningProgress {
+    pub journal_id: i64,
+    pub journal_number: i64,
+    #[serde(serialize_with = "crate::as_text")]
+    pub conversion_date: Date,
+    pub status: crate::JournalStatus,
+    pub entry_id: Option<i64>,
+    pub reversed_by_entry_id: Option<i64>,
+}
+
+pub(crate) async fn progress(
+    client: &dyn OperationClient,
+    scope: &Scope,
+    company: i64,
+) -> Result<Option<OpeningProgress>> {
+    let Some(row) = client.query_opt(
+        "SELECT journal_id FROM finance_ledger_opening_balances WHERE tenant_id=$1 AND company_id=$2 ORDER BY id DESC LIMIT 1",
+        &[&scope.tenant(), &company],
+    ).await? else {
+        return Ok(None);
+    };
+    let journal = journals::find(client, scope.tenant(), company, row.get(0))
+        .await?
+        .ok_or(bilibi_database::Error::Internal)?;
+    let entry_id = journal.decision.as_ref().and_then(|d| d.entry_id);
+    let reversed_by_entry_id = match entry_id {
+        Some(id) => {
+            entries::find(client, scope.tenant(), company, id)
+                .await?
+                .ok_or(bilibi_database::Error::Internal)?
+                .reversed_by_entry_id
+        }
+        None => None,
+    };
+    Ok(Some(OpeningProgress {
+        journal_id: journal.id,
+        journal_number: journal.journal_number,
+        conversion_date: journal.entry_date,
+        status: journal.status,
+        entry_id,
+        reversed_by_entry_id,
+    }))
+}
+
 /// Source closing balances posted at the start of the conversion date. The
 /// accountant retains responsibility for the cut-off and reporting bridge.
 #[derive(Clone)]
@@ -221,6 +268,18 @@ pub(crate) async fn prepare(
 }
 
 impl Ledger {
+    /// Read opening-balance progress (`finance.ledger.view`), or `None`
+    /// before the first submission. Ordinary manual journals do not count.
+    pub async fn opening_progress(
+        &self,
+        scope: &Scope,
+        company: i64,
+    ) -> Result<Option<OpeningProgress>> {
+        let client = self.db.get().await.map_err(bilibi_database::Error::from)?;
+        crate::authorize(&**client, scope, company, crate::VIEW).await?;
+        progress(&**client, scope, company).await
+    }
+
     /// Submit one opening journal, or return the identical recorded submission.
     /// Approval is a separate call, with the ordinary separation of duties.
     pub async fn submit_opening_balances(

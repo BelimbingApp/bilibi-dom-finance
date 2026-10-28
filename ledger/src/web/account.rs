@@ -11,9 +11,9 @@ use bilibi_database::{Error, Result};
 use bilibi_tenancy::Scope;
 use bilibi_ui::{
     page::{LiveBody, LiveFuture, LiveInput, LiveRequest, LiveState},
-    BackLink, Badge, BadgeKind, Button, Card, Choice, Combobox, CommitStates, CommitStatus,
+    Alert, BackLink, Badge, BadgeKind, Button, Card, Choice, Combobox, CommitStates, CommitStatus,
     ConfirmDialog, EmptyState, Fact, Facts, Header, Html, InlineChoice, InlineEdit, InlineField,
-    PageVariant, SectionHeading,
+    PageVariant, SectionHeading, StatusKind,
 };
 use serde_json::{json, Value};
 
@@ -26,16 +26,18 @@ enum Ask {
 pub(super) struct Account {
     pages: Pages,
     id: i64,
+    company: Option<i64>,
     flash: Flash,
     statuses: CommitStates,
     asking: Option<(Ask, Review)>,
 }
 
 impl Account {
-    pub(super) fn new(pages: Pages, id: i64) -> Self {
+    pub(super) fn new(pages: Pages, id: i64, company: Option<i64>) -> Self {
         Self {
             pages,
             id,
+            company,
             flash: Flash::default(),
             statuses: CommitStates::default(),
             asking: None,
@@ -58,16 +60,17 @@ impl Account {
     }
 
     async fn view(&mut self, scope: &Scope) -> Result<LiveBody> {
-        if Pages::company(scope).is_none() {
+        if self.company.is_none() {
             return self.page("Account", no_company("ledger-account-no-company")?);
         }
-        let chart = match self.pages.chart(scope).await? {
+        let company = self.company.ok_or(Error::Invalid)?;
+        let chart = match self.pages.chart_in(scope, company).await? {
             Ok(chart) => chart,
             Err(refused) => {
                 return self.page(
                     "Account",
                     unavailable("ledger-account-refused", "this account", &refused)?,
-                )
+                );
             }
         };
         if let Some(group) = chart.iter().find(|a| a.id == self.id && a.is_group) {
@@ -81,7 +84,7 @@ impl Account {
                     .id("ledger-account-is-group")
                     .action(render(Button {
                         id: "ledger-account-group-link",
-                        href: &format!("{}/{}", super::groups::INDEX, group.id),
+                        href: &format!("{}/{}?company={company}", super::groups::INDEX, group.id),
                         body: Html::text("Open the group"),
                         ..Button::default()
                     })?),
@@ -100,10 +103,11 @@ impl Account {
                 )?,
             );
         };
+        let company_name = self.pages.company_name_in(scope, company).await?;
         let can_manage = self.pages.allowed(scope, MANAGE_ACCOUNTS).await?;
         let units = self
             .pages
-            .book(scope)
+            .book_in(scope, company)
             .await?
             .ok()
             .and_then(|b| b.book)
@@ -115,8 +119,9 @@ impl Account {
                 let today = self.pages.today(scope).await?;
                 match self
                     .pages
-                    .read(
+                    .read_in(
                         scope,
+                        company,
                         "finance.ledger.trial_balance.get",
                         json!({"as_of": today.to_string()}),
                     )
@@ -238,13 +243,26 @@ impl Account {
             body: card,
             ..Card::default()
         })?;
-        content.push(&render(Button {
-            id: "ledger-account-entries",
-            href: &format!("/finance/ledger/entries?account={}", account.id),
-            class: "mt-4",
-            body: Html::text("See this account's entries"),
-            ..Button::default()
-        })?);
+        // The entries list follows the session's current company. Never send
+        // a cross-company account there with only its account filter.
+        if Some(company) == Pages::company(scope) {
+            content.push(&render(Button {
+                id: "ledger-account-entries",
+                href: &format!("/finance/ledger/entries?account={}", account.id),
+                class: "mt-4",
+                body: Html::text("See this account's entries"),
+                ..Button::default()
+            })?);
+        } else {
+            content.push(&render(Alert {
+                id: "ledger-account-entries-company",
+                kind: StatusKind::Info,
+                body: Html::text(&format!(
+                    "To see this account's entries, choose {company_name} in the top bar."
+                )),
+                ..Alert::default()
+            })?);
+        }
 
         let mut actions = Html::EMPTY;
         if can_manage {
@@ -277,18 +295,18 @@ impl Account {
             }
         }
         actions.push(&render(BackLink {
-            href: INDEX,
+            href: &format!("{INDEX}?company={company}"),
             id: "ledger-account-back",
             title: "Back to the chart of accounts",
             ..BackLink::default()
         })?);
-        let name = format!("{} {}", account.code, account.name);
-        let url = format!("/finance/ledger/accounts/{}", account.id);
+        let name = format!("{} · {} · {}", account.name, account.code, company_name);
+        let url = format!("/finance/ledger/accounts/{}?company={company}", account.id);
         let mut page = render(Header {
             title: account_name(&account)?,
+            subtitle: &company_name,
             title_actions: super::record_pin("ledger-account-pin", "account", &name, &url)?,
             actions,
-            ..Header::default()
         })?;
         page.push(&render(super::Announce {
             kind: crate::MODULE,
@@ -318,7 +336,7 @@ impl Account {
             page.push(&render(ConfirmDialog {
                 id: "ledger-account-confirm",
                 consequence: &consequence,
-                detail: &detail,
+                detail: &format!("{company_name}. {detail}"),
                 confirm,
                 working,
                 confirm_event: event,
@@ -332,6 +350,10 @@ impl Account {
                 &self.flash,
                 page,
             )?,
+            query: self
+                .company
+                .map(|id| std::collections::HashMap::from([("company".into(), id.to_string())]))
+                .unwrap_or_default(),
             ..LiveBody::default()
         })
     }
@@ -349,6 +371,10 @@ impl Account {
                 &self.flash,
                 page,
             )?,
+            query: self
+                .company
+                .map(|id| std::collections::HashMap::from([("company".into(), id.to_string())]))
+                .unwrap_or_default(),
             ..LiveBody::default()
         })
     }
@@ -372,8 +398,9 @@ impl Account {
         let label = if field == "name" { "Name" } else { "Group" };
         let status = match self
             .pages
-            .submit(
+            .submit_in(
                 r.scope,
+                self.company.ok_or(Error::Invalid)?,
                 r.credential,
                 "save_field",
                 "finance.ledger.account.update",
@@ -410,8 +437,9 @@ impl Account {
         };
         match self
             .pages
-            .review(
+            .review_in(
                 r.scope,
+                self.company.ok_or(Error::Invalid)?,
                 r.credential,
                 event,
                 "finance.ledger.account.update",
@@ -456,8 +484,9 @@ impl Account {
     async fn activate(&mut self, r: &LiveRequest<'_, Scope>) -> Result<()> {
         match self
             .pages
-            .submit(
+            .submit_in(
                 r.scope,
+                self.company.ok_or(Error::Invalid)?,
                 r.credential,
                 "activate",
                 "finance.ledger.account.update",
@@ -485,6 +514,14 @@ fn designate_detail(changes: &Value) -> String {
 impl LiveState<Scope, Error> for Account {
     fn update<'a>(&'a mut self, r: LiveRequest<'a, Scope>) -> LiveFuture<'a, Error> {
         Box::pin(async move {
+            if let LiveInput::Params(query) = r.input {
+                let company = super::target_company(query, Some(r.scope))?;
+                if company != self.company {
+                    self.company = company;
+                    self.statuses = CommitStates::default();
+                    self.asking = None;
+                }
+            }
             if let LiveInput::Event(value) = r.input {
                 match event_type(value)? {
                     "save_field" => self.save_field(&r, value).await?,

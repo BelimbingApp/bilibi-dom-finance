@@ -8,7 +8,7 @@ use bilibi_database::{pool, Error};
 use bilibi_finance_attachments::{Attachments, NewFile};
 use bilibi_finance_ledger::Money;
 use bilibi_finance_payables::{
-    DocumentLineInput, DocumentPageQuery, NewDocument, Party, Payables, Settings, SettingsInput,
+    DocumentLineInput, DocumentPageQuery, NewDocument, Payables, Settings, SettingsInput,
     DOCUMENT_SOURCE,
 };
 use bilibi_finance_walkthrough_fixture::{
@@ -87,15 +87,18 @@ async fn main() -> Outcome<()> {
         },
     )
     .await?;
+    let vendor = bilibi_finance_walkthrough_fixture::vendors::vendor(
+        &db,
+        services,
+        &manager,
+        COMPANY,
+        "np4-party",
+        "North Paper",
+    )
+    .await?;
     let draft = |number: &str, amount: &str, order: Option<i64>| -> Outcome<NewDocument> {
         Ok(NewDocument {
-            party: Party {
-                key: "np4-party".into(),
-                name: "North Paper".into(),
-                tax_id: Some("NP4-TAX".into()),
-                registration_id: Some("NP4-REG".into()),
-                address: Some("Documented party address".into()),
-            },
+            vendor_id: Some(vendor),
             party_document_number: Some(number.into()),
             document_date: date(2026, 10, 17),
             due_date: Some(date(2026, 11, 16)),

@@ -85,3 +85,7 @@ path = "src/bin/reconciliation-pages.rs"
 [[bin]]
 name = "bilibi-finance-payroll-source"
 path = "src/bin/payroll-source.rs"
+
+# Company setup proof uses Core currency defaults through the owning facade.
+[dependencies.bilibi-currency]
+workspace = true

@@ -10,7 +10,7 @@ use super::{
     format::{self as f, Errors},
     render, Flash, Pages, Written, CUSTOMERS, INVOICES, RECEIPTS,
 };
-use crate::{Customer as Record, CustomerCompany, Document, Payment, MANAGE_CUSTOMERS};
+use crate::{CompanyFacts, Customer as Record, Document, Payment, MANAGE_CUSTOMERS};
 use bilibi_database::{Error, Result};
 use bilibi_records::{Reference, Resolved};
 use bilibi_tenancy::Scope;
@@ -185,7 +185,7 @@ impl Customer {
     /// What Core says about the linked company for this reader: its name
     /// and page (Base Records), its current billing address (Core Address)
     /// and whether the current company records the relationship.
-    async fn read_company(&self, scope: &Scope, company: &CustomerCompany) -> Result<CompanyView> {
+    async fn read_company(&self, scope: &Scope, company: &CompanyFacts) -> Result<CompanyView> {
         let resolved = self
             .pages
             .records
@@ -260,7 +260,7 @@ impl Customer {
     /// restricted marker, or that Companies view is needed.
     fn company_fact(
         &self,
-        company: &CustomerCompany,
+        company: &CompanyFacts,
         key: &str,
         value: &Option<String>,
     ) -> Result<Html> {
@@ -278,7 +278,7 @@ impl Customer {
         Ok(Html::text(f::optional(value)))
     }
 
-    fn company_card(&self, c: &Record, company: &CustomerCompany) -> Result<Html> {
+    fn company_card(&self, c: &Record, company: &CompanyFacts) -> Result<Html> {
         let name = match &self.company.resolved {
             Some(resolved) if resolved.label.is_some() => {
                 render(resolved.pill("receivables-customer-company-pill", self.framed))?
@@ -732,7 +732,7 @@ impl Customer {
         let pages = self.pages.clone();
         if let Some(link) = self.link.as_mut() {
             if link.chooser.read(&form) {
-                link.chooser.search(&pages, scope).await?;
+                link.chooser.search(&pages.company_picker(), scope).await?;
             }
         }
         Ok(())
@@ -745,7 +745,7 @@ impl Customer {
         };
         let company = match link
             .chooser
-            .company(&pages, scope, credential, "link_customer")
+            .company(&pages.company_picker(), scope, credential, "link_customer")
             .await?
         {
             Chosen::Company(id) => id,
@@ -842,7 +842,9 @@ impl Customer {
             "pick_company" => {
                 let record = v["record"].as_str().ok_or(Error::Invalid)?;
                 if let Some(link) = self.link.as_mut() {
-                    link.chooser.pick(&pages, scope, record).await?;
+                    link.chooser
+                        .pick(&pages.company_picker(), scope, record)
+                        .await?;
                     link.errors.0.remove("company");
                 }
             }
@@ -854,7 +856,9 @@ impl Customer {
             "use_candidate" => {
                 let id = v["company"].as_str().ok_or(Error::Invalid)?;
                 if let Some(link) = self.link.as_mut() {
-                    link.chooser.use_candidate(&pages, scope, id).await?;
+                    link.chooser
+                        .use_candidate(&pages.company_picker(), scope, id)
+                        .await?;
                 }
             }
             "link_customer" => {
@@ -897,52 +901,7 @@ impl Customer {
     }
 }
 
-/// The company's billing address as of `today`, from Core Address's owner
-/// list: the attachment carrying the billing kind within its dates, primary
-/// first (the list's order), else the primary address, else the first.
-fn billing_lines(rows: &Value, today: &str) -> Vec<String> {
-    let attachment = |row: &Value| row["attachment"]["attachment"].clone();
-    let current: Vec<&Value> = rows
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|row| {
-            let dates = &row["attachment"]["attachment"]["dates"];
-            let from = dates["effective_from"].as_str();
-            let to = dates["effective_to"].as_str();
-            today.is_empty() || (from.is_none_or(|f| f <= today) && to.is_none_or(|t| t >= today))
-        })
-        .collect();
-    let billing = |row: &Value| {
-        attachment(row)["kinds"]
-            .as_array()
-            .is_some_and(|k| k.iter().any(|v| v == "billing"))
-    };
-    let primary = |row: &Value| attachment(row)["is_primary"] == true;
-    let chosen = current
-        .iter()
-        .find(|row| billing(row))
-        .or_else(|| current.iter().find(|row| primary(row)))
-        .or_else(|| current.first());
-    let Some(row) = chosen else {
-        return Vec::new();
-    };
-    let a = &row["address"]["address"];
-    let text = |key: &str| a[key].as_str().map(str::trim).filter(|s| !s.is_empty());
-    let mut lines: Vec<String> = ["line1", "line2", "line3"]
-        .into_iter()
-        .filter_map(text)
-        .map(str::to_owned)
-        .collect();
-    let place: Vec<&str> = ["postcode", "locality", "admin1_code", "country_iso"]
-        .into_iter()
-        .filter_map(text)
-        .collect();
-    if !place.is_empty() {
-        lines.push(place.join(" "));
-    }
-    lines
-}
+use bilibi_finance_ledger::company_billing_lines as billing_lines;
 
 #[derive(askama::Template)]
 #[template(

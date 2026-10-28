@@ -102,6 +102,8 @@ impl Draft {
 }
 
 pub(super) struct Groups {
+    company: Option<i64>,
+    pinned: bool,
     pages: Pages,
     list: ListState,
     columns: ListColumns,
@@ -111,7 +113,12 @@ pub(super) struct Groups {
 }
 
 impl Groups {
-    pub(super) fn new(pages: Pages, query: &HashMap<String, String>, framed: bool) -> Result<Self> {
+    pub(super) fn new(
+        pages: Pages,
+        query: &HashMap<String, String>,
+        framed: bool,
+        company: Option<i64>,
+    ) -> Result<Self> {
         let columns = vec![
             BuiltinColumn::new("code", "Code").sortable("code"),
             BuiltinColumn::new("name", "Name").sortable("name"),
@@ -121,6 +128,8 @@ impl Groups {
             BuiltinColumn::new("total", "Total"),
         ];
         Ok(Self {
+            company,
+            pinned: query.contains_key("company"),
             pages,
             list: ListState::parse(query, SPEC.clone()).map_err(|_| Error::Internal)?,
             columns: ListColumns::mount("ledger-groups-table", columns)
@@ -137,10 +146,11 @@ impl Groups {
         let mut actions = Html::EMPTY;
         let mut rows_shown = 0;
         let mut chart: Vec<view::Account> = Vec::new();
-        if Pages::company(scope).is_none() {
+        if self.company.is_none() {
             body.push(&no_company("ledger-groups-no-company")?);
         } else {
-            match self.pages.chart(scope).await? {
+            let company = self.company.ok_or(Error::Invalid)?;
+            match self.pages.chart_in(scope, company).await? {
                 Err(refused) => body.push(&unavailable(
                     "ledger-groups-refused",
                     "the account groups",
@@ -150,7 +160,7 @@ impl Groups {
                     chart = listed;
                     let book_open = self
                         .pages
-                        .book(scope)
+                        .book_in(scope, company)
                         .await?
                         .ok()
                         .is_some_and(|b| b.book.is_some());
@@ -165,15 +175,20 @@ impl Groups {
                         })?);
                     }
                     let figures = if book_open {
-                        self.pages.chart_figures(scope).await?
+                        self.pages.chart_figures_in(scope, company).await?
                     } else {
                         None
                     };
-                    rows_shown = self.table(&chart, figures.as_ref(), &mut body)?;
+                    rows_shown = self.table(&chart, figures.as_ref(), &mut body, company)?;
                 }
             }
         }
+        let company_name = match self.company {
+            Some(company) => self.pages.company_name_in(scope, company).await?,
+            None => String::new(),
+        };
         let mut page = render(Header {
+            subtitle: &company_name,
             title: Html::text("Account groups"),
             title_actions: super::menu_pin(
                 "ledger-groups-pin",
@@ -181,7 +196,6 @@ impl Groups {
                 "Account groups",
             )?,
             actions,
-            ..Header::default()
         })?;
         page.push(&body);
         if let Some(draft) = &mut self.draft {
@@ -192,12 +206,16 @@ impl Groups {
             page.push(&render(Modal {
                 id: "ledger-group-modal",
                 title: "New account group",
+                description: &format!("Add an account group to {company_name}."),
                 cancel_event: "close_modal",
                 body: form,
                 ..Modal::default()
             })?);
         }
         let mut query = self.list.to_params();
+        if let Some(company) = self.company.filter(|_| self.pinned) {
+            query.insert("company".into(), company.to_string());
+        }
         if self.draft.is_some() {
             query.insert("new".into(), "1".into());
         }
@@ -214,6 +232,7 @@ impl Groups {
         chart: &[view::Account],
         figures: Option<&view::ChartBalances>,
         body: &mut Html,
+        company: i64,
     ) -> Result<usize> {
         let search = self.list.search.trim().to_lowercase();
         let by_id: HashMap<i64, &view::Account> = chart.iter().map(|a| (a.id, a)).collect();
@@ -313,7 +332,7 @@ impl Groups {
                             workspace: self.framed,
                             kind: crate::MODULE,
                             record_id: &group.id.to_string(),
-                            href: &format!("{INDEX}/{}", group.id),
+                            href: &format!("{INDEX}/{}?company={company}", group.id),
                             class: "font-medium text-ink-strong hover:underline",
                             body: Html::text(&group.code),
                         })?,
@@ -465,8 +484,9 @@ impl Groups {
         };
         match self
             .pages
-            .submit(
+            .submit_in(
                 r.scope,
+                self.company.ok_or(Error::Invalid)?,
                 r.credential,
                 "create_group",
                 "finance.ledger.account_group.create",
@@ -515,6 +535,12 @@ impl LiveState<Scope, Error> for Groups {
             match r.input {
                 LiveInput::Refresh => {}
                 LiveInput::Params(values) => {
+                    let company = super::target_company(values, Some(r.scope))?;
+                    self.pinned = values.contains_key("company");
+                    if company != self.company {
+                        self.company = company;
+                        self.draft = None;
+                    }
                     self.list =
                         ListState::parse(values, SPEC.clone()).map_err(|_| Error::Internal)?;
                     if values.get("new").is_some() && self.draft.is_none() {

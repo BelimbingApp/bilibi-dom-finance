@@ -252,17 +252,17 @@ they govern this code and are not copied here.
 - Register assets through `FixedAssets`, never by posting or claiming their
   acquisition entry: ordinary acquisitions freeze one whole source debit and its revision; opening registers use `import_opening_register` against approved aggregate balances, preserving source accumulation and prospective remaining life;
   projected schedules are not posted depreciation (see `fixed_assets/README.md`).
-- A customer (and, when ported, a vendor) is a Finance record linked to a
+- A customer or vendor is a Finance record linked to a
   Core company through Base Records (`record_kind`/`record_id`, checked with
   `Records::check` on the write's own connection), never a copy of the
   company's name, tax ID, contact details or address: read them on the handed
-  connection as `receivables/src/companies.rs` does (`PartyProofs::organisation_name`
+  connection as `ledger/src/company_links.rs` does (`PartyProofs::organisation_name`
   for name and status on any connection, `bilibi_company::detail` for the
   facts on a full one, under Core's own view capability and masks), freeze
   them only at commit, and refuse a masked fact instead of freezing it. Core
   exports no create, role or relationship read on a caller's connection and no
   billing-address read, so the pages create the company and record the
-  relationship through Core's own contracts (`web/company_pick.rs`) and the
+  relationship through Core's own contracts (`ledger/src/company_picker.rs`) and the
   address is not frozen yet: these are Platform follow-ups
   (BelimbingApp/bilibi#231), not something to work around with SQL on Core's
   tables.

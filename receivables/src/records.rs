@@ -52,7 +52,7 @@ pub struct Customer {
     pub code: String,
     pub name: String,
     #[serde(default)]
-    pub company: Option<CustomerCompany>,
+    pub company: Option<bilibi_finance_ledger::CompanyFacts>,
     pub tax_identifier: Option<String>,
     pub registration_identifier: Option<String>,
     pub email: Option<String>,
@@ -67,33 +67,7 @@ pub struct Customer {
     pub payment_terms_days: i32,
     pub active: bool,
 }
-/// The Core company a customer is linked to, as this reader may see it.
-/// `name` and `status` come from Core on any connection; the facts need
-/// Companies view (`readable`), and a fact an administrator restricted for
-/// the reader is `None` and named in `restricted`.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CustomerCompany {
-    pub id: i64,
-    pub name: String,
-    /// `active`, `pending`, `suspended` or `archived`; `unavailable` when
-    /// Core cannot name the company for this reader (removed, or another
-    /// tenant's).
-    pub status: String,
-    pub path: String,
-    pub readable: bool,
-    pub tax_id: Option<String>,
-    pub registration_number: Option<String>,
-    pub email: Option<String>,
-    pub phone: Option<String>,
-    #[serde(default)]
-    pub restricted: Vec<String>,
-}
-impl CustomerCompany {
-    /// Whether new invoices may name this company: it is active in Core.
-    pub fn active(&self) -> bool {
-        self.status == "active"
-    }
-}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DocumentLine {
     pub line_number: i32,

@@ -3,7 +3,7 @@
 use crate::{
     authorize, companies, invalid,
     store::{self, Table, CUSTOMERS, HISTORY, SERIES, SETUPS, TAX},
-    validation as v, Customer, CustomerCompany, Page, ReceivableError as R, Receivables, Result,
+    validation as v, CompanyFacts, Customer, Page, ReceivableError as R, Receivables, Result,
     Series, Setup, SetupChange, TaxCode, MANAGE_CUSTOMERS, MANAGE_SETUP, VIEW,
 };
 use bilibi_agent_api::OperationClient;
@@ -19,7 +19,7 @@ pub(super) struct Prepared {
     pub after: Value,
     pub accounts: Vec<Account>,
     /// The Core company a customer write links to, as the actor sees it.
-    pub company: Option<CustomerCompany>,
+    pub company: Option<CompanyFacts>,
 }
 
 /// What `customer.create` and `customer.link` name the Core company by.

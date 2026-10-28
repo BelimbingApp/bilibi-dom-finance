@@ -184,6 +184,15 @@ inventory::submit! { Contribution::new(PAGE_WRITES, PAGES, Provenance { module: 
 }) }
 
 impl Pages {
+    pub(super) fn company_picker(&self) -> bilibi_finance_ledger::CompanyPickerContext {
+        bilibi_finance_ledger::CompanyPickerContext {
+            records: self.records.clone(),
+            contracts: self.contracts.clone(),
+            service: PAGES,
+            role: "customer",
+        }
+    }
+
     /// The company a person works in now: the session's current company.
     pub(super) fn company(scope: &Scope) -> Option<i64> {
         scope.current_company().map(|id| id.get())
@@ -359,84 +368,6 @@ impl Pages {
         Self::written(contract, event, answer)
     }
 
-    /// The review half of a confirmation on another module's contract: the
-    /// owner's review and the code that commits exactly that input.
-    pub(super) async fn review_core(
-        &self,
-        scope: &Scope,
-        credential: &str,
-        event: &str,
-        contract: &'static str,
-        input: Value,
-    ) -> Result<Reviewed> {
-        match self
-            .contracts
-            .preview(&Self::call(scope, credential, event, contract), input)
-            .await
-        {
-            Ok(value) => {
-                let result = &value["results"][0];
-                if result["valid"].as_bool() == Some(true) {
-                    if let Some(code) = value["plan_code"].as_str() {
-                        return Ok(Reviewed::Valid {
-                            code: code.to_owned(),
-                            review: result["preview"]["result"].clone(),
-                        });
-                    }
-                }
-                let mut fields: BTreeMap<String, Vec<String>> = BTreeMap::new();
-                if let Some(map) = result["error"]["fields"].as_object() {
-                    for (field, messages) in map {
-                        fields.insert(
-                            field.clone(),
-                            messages
-                                .as_array()
-                                .into_iter()
-                                .flatten()
-                                .filter_map(|m| m.as_str().map(str::to_owned))
-                                .collect(),
-                        );
-                    }
-                }
-                if fields.is_empty() {
-                    return Ok(Reviewed::Refused(
-                        if result["error"]["code"].as_str() == Some("missing_capability") {
-                            DENIED.into()
-                        } else {
-                            "That could not be reviewed. Please try again.".into()
-                        },
-                    ));
-                }
-                Ok(Reviewed::Invalid(fields))
-            }
-            Err(error) => Ok(match Self::written(contract, event, Err(error))? {
-                Written::Invalid(fields) => Reviewed::Invalid(fields),
-                Written::Refused(message) => Reviewed::Refused(message),
-                Written::Done(_) => Reviewed::Refused(DENIED.into()),
-            }),
-        }
-    }
-
-    /// Commits a reviewed confirmation with the same input and its code. A
-    /// commit answers the plan's envelope (`results[0].result`), where a
-    /// submit answers the one result itself.
-    pub(super) async fn commit_core(
-        &self,
-        scope: &Scope,
-        credential: &str,
-        event: &str,
-        contract: &'static str,
-        code: &str,
-        input: Value,
-    ) -> Result<Written> {
-        let answer = self
-            .contracts
-            .commit(&Self::call(scope, credential, event, contract), code, input)
-            .await
-            .map(|mut value| value["results"][0]["result"].take());
-        Self::written(contract, event, answer)
-    }
-
     fn written(
         contract: &str,
         event: &str,
@@ -484,14 +415,6 @@ pub(super) const DENIED: &str = "You do not have permission to do that.";
 pub(super) enum Written {
     Done(Value),
     /// Field errors keyed by the input's path (`lines.0.quantity`, `base`).
-    Invalid(BTreeMap<String, Vec<String>>),
-    Refused(String),
-}
-
-/// What a review came to: the owner's review with the code that commits
-/// it, or the refusal.
-pub(super) enum Reviewed {
-    Valid { code: String, review: Value },
     Invalid(BTreeMap<String, Vec<String>>),
     Refused(String),
 }

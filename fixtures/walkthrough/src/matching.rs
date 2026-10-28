@@ -9,8 +9,8 @@ use crate::{sign_in, COMPANY};
 use bilibi_database::{Db, Error};
 use bilibi_finance_ledger::{Ledger, Money};
 use bilibi_finance_payables::{
-    DocumentLineInput, DocumentPageQuery, DocumentQuery, MatchApproval, NewDocument, Party,
-    Payables, PayablesError, MATCH_EXCEPTION_CODES, MATCH_STATUSES,
+    DocumentLineInput, DocumentPageQuery, DocumentQuery, MatchApproval, NewDocument, Payables,
+    PayablesError, MATCH_EXCEPTION_CODES, MATCH_STATUSES,
 };
 use bilibi_module_registry::Services;
 use jiff::civil::date;
@@ -57,6 +57,15 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
     println!("\n== Payables NP2: three-way match");
     let p = services.get::<Payables>(bilibi_finance_payables::SERVICE)?;
     let manager = sign_in(db, services, 1, 1).await?;
+    let vendor = crate::vendors::vendor(
+        db,
+        services,
+        &manager,
+        COMPANY,
+        "supplier-np2",
+        "Matched supplier",
+    )
+    .await?;
     let staff = sign_in(db, services, 1, 3).await?;
     let other = sign_in(db, services, 2, 5).await?;
     let c = db.get().await?;
@@ -93,11 +102,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         quantity: quantity.map(|q| q.parse::<Decimal>().expect("fixture quantity")),
     };
     let new = |number: &str, l: DocumentLineInput| NewDocument {
-        party: Party {
-            key: "supplier-np2".into(),
-            name: "Matched supplier".into(),
-            ..Party::default()
-        },
+        vendor_id: Some(vendor),
         party_document_number: Some(number.into()),
         document_date: date(2026, 12, 20),
         due_date: None,

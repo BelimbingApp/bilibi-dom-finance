@@ -4,8 +4,8 @@ use bilibi_database::{Error, Result};
 use bilibi_datetime::{DisplayContext, Format, Precision};
 use bilibi_finance_ledger::{MinorUnits, Money};
 use bilibi_ui::{
-    error_sentence, Badge, BadgeKind, BuiltinColumn, ErrorSummary, Fact, FlashGroup, FlexRow,
-    FlexTable, Html, ListColumns, Modal, ModalWidth, Page, PageVariant,
+    error_sentence, Badge, BadgeKind, BuiltinColumn, Fact, FlashGroup, FlexRow, FlexTable, Html,
+    ListColumns, Modal, ModalWidth, Page, PageVariant,
 };
 use rust_decimal::Decimal;
 use serde_json::Value;
@@ -175,50 +175,7 @@ pub(super) fn link(href: &str, text: &str) -> Result<Html> {
 }
 
 /// What a refused write said, by field path (`lines.0.quantity`, `base`).
-#[derive(Clone, Debug, Default)]
-pub(super) struct Errors(pub BTreeMap<String, Vec<String>>);
-
-impl Errors {
-    pub(super) fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    /// The messages for one input field.
-    pub(super) fn of(&self, path: &str) -> Vec<String> {
-        self.0.get(path).cloned().unwrap_or_default()
-    }
-
-    /// The messages for one input field as sentences that name it, the way
-    /// the summary reads them, for the line under the field.
-    pub(super) fn under(&self, path: &str, label: &str) -> Vec<String> {
-        self.of(path)
-            .iter()
-            .map(|message| error_sentence(label, message))
-            .collect()
-    }
-
-    /// The messages that belong to no field (a refusal of the whole request).
-    pub(super) fn base(&self) -> Vec<String> {
-        self.of("base")
-    }
-
-    /// Everything the form was refused for, each sentence linked to the field
-    /// that holds it. `labels` names `(path, dom id, label)` for the fields on
-    /// the form; any other path is shown by its own words.
-    pub(super) fn summary(&self, id: &str, labels: &[(String, String, String)]) -> ErrorSummary {
-        let mut summary = ErrorSummary::new(id);
-        for (path, messages) in &self.0 {
-            let known = labels.iter().find(|(p, _, _)| p == path);
-            for message in messages {
-                match known {
-                    Some((_, dom, label)) => summary.push(dom, error_sentence(label, message)),
-                    None => summary.push("", message.clone()),
-                }
-            }
-        }
-        summary
-    }
-}
+pub(super) use bilibi_finance_ledger::CompanyErrors as Errors;
 
 /// The text of one posted form value, trimmed.
 pub(super) fn posted<'a>(

@@ -2,6 +2,41 @@
 
 `finance/payables` owns a company's supplier documents. It mirrors Bilimbi.Finance.Payables settings, tax codes, bills, debit notes, document approvals, payment requests and payments, including aging, tax totals and control-account tie-out, and the three-way match. Reviewed agent operations expose the facade-only workflows. Slice NP4 adds the Bills list and bill detail pages. Slice NP5 adds the pages that record a bill or debit note, request, decide and reverse supplier payments, read aged payables and set payables up, so a person who has no AI agent can do every daily task; each page write is the contract the agent doors call.
 
+## Vendors
+
+Add a vendor by finding its company in Companies or creating it through the shared company picker. Finance keeps the vendor code, payment terms, payable account, default expense account, default tax code and availability for the current company. Core owns its identity, tax and registration numbers, contacts and status. The company link is permanent and checked through Base Records. A company can be both a customer and a vendor.
+
+The Vendors page records the vendor relationship through Core's reviewed contract. Each step is audited by its owner. If company creation succeeds but adding the vendor or recording the relationship is refused, the company remains in Companies; choose it again and complete the missing step. Core does not yet expose these writes on Finance's transaction (BelimbingApp/bilibi#231).
+
+New bills take `vendor_id`, including replacement drafts. Both Finance availability and an active company are required. Pending, suspended and archived companies are refused by name. Due date defaults to the document date plus the vendor's payment terms; the form offers its expense and tax defaults. Posting uses the vendor's payable account when configured, otherwise the company default. Posted bills retain their original control account for payments and debit notes.
+
+The bill freezes the company's name, tax ID and registration number at commit under the recorder's Companies view permission. A restricted fact refuses the write. The shared `CompanyLinks` reader and `CompanyChooser` in the ledger serve both customers and vendors. Preview can read the name and status; full facts need the committing connection. No billing address is frozen until Core offers the read on that connection (BelimbingApp/bilibi#231); the company link opens Core's current facts and billing addresses.
+
+### Historical supplier keys
+
+The historical-key review shows every distinct name, tax ID, registration number and address recorded for a key, with other keys that share a name or tax ID. A person confirms each match to a vendor with a reason. Unmatched keys stay available for review; Finance never creates a company from historical evidence. Confirmed mappings are permanent, audited and included in evidence exports.
+
+Mapping changes no document snapshot, payment key, allocation or aged balance. Aging keeps a separate row per original supplier key and adds its confirmed `vendor_id`. Document, payment-request and payment reads carry the key’s confirmed `vendor_id`; their list contracts accept `vendor_id` to find all its keys without combining balances. A payment request names `vendor_id` and allocates only bills with one supplier key, so matching two keys never nets their balances. For an unmatched historical bill, `supplier_key` is the explicit settlement input. Existing requests can still be approved and payments reversed after mapping, or after the linked company becomes unavailable. Debit notes retain their original bill's snapshot and key. New bills check duplicate supplier invoice numbers across the vendor's confirmed historical keys as well as its new key.
+
+### Vendor contracts
+
+All keys below start with `finance.payables.` and take `company_id`.
+
+| Contract | Input |
+| --- | --- |
+| `vendor.create` | `code`, `core_company_id`; optional `payment_terms_days` (default 0), `active` (default true) and `payable_account_id`, `expense_account_id`, `tax_code_id` |
+| `vendor.update` | `vendor_id` and the settings to change; omissions preserve values, `clear_payable_account`, `clear_expense_account` or `clear_tax_code` clears a default; code and company cannot change |
+| `vendor.get` | `vendor_id` |
+| `vendor.list` | `after_id`, `page_size`; returns `records`, `next_after_id` |
+| `vendor.supplier_keys` | Historical snapshot groups and confirmed mappings |
+| `vendor.map_supplier_key` | `vendor_id`, `supplier_key`, `reason`; review before permanent confirmation |
+| `bill.create`, `bill.replace_draft` | `vendor_id` replaces all former party input fields |
+| `payment.submit` | `vendor_id`, allocations and payment fields; `supplier_key` may identify an unmatched historical group |
+
+Vendor settings and historical matches require `finance.payables.settings.manage`; reads require `finance.payables.view`. Company finding, creation, facts and relationships use Core's own permissions. Migration `finance-payables-004-vendors` adds the master and mapping tables without rewriting existing records. `finance-payables-005-vendor-company-scope` keeps vendor registration independent of opening a book, as customer registration is. Evidence adds the `vendor` and `vendor_key` datasets with explicit field lists.
+
+Run the linked-vendor proof on a disposable database with `cargo run -p bilibi-finance-walkthrough-fixture --bin vendors`. Set `VENDORS_UI=1`, `APP_ORIGIN` and `BIND_ADDR` to keep the same composed app running for browser proof. After the proof has populated the disposable database, `cargo run -p bilibi-finance-walkthrough-fixture --bin vendors -- serve` serves it again without rerunning the scenarios.
+
 ## Facade
 
 Resolve `Payables` through `finance/payables.payables`. Every call takes the sealed scope and an explicit company ID; every call authorizes through Core Company. Writes open through `Ledger::write`, holding the company lock on an audited `MutationTransaction` and refusing an archived company. Book and account validation use the ledger's authorized `get_book_on`/`list_accounts_on` on that same connection. Actor and impersonator always come from the scope.
@@ -26,7 +61,7 @@ Settings name an active liability account and optional quantity/price tolerances
 
 ## Documents
 
-A bill records a party snapshot, the party's own number, dates, description and positive lines against active asset/expense accounts. A duplicate party number is refused until the original is voided. Due date defaults to document date and cannot precede it. A debit note copies a posted bill's party, cannot precede the bill, and cannot exceed its remaining balance either when recorded or when posted. That balance is the bill less posted debit notes and allocated payments, counting reversal dates. Recording and posting a debit note checks the minimum balance on every later date, so a backdated note cannot overdraw a bill that a later payment temporarily settled.
+A bill records a party snapshot, the party's own number, dates, description and positive lines against active asset/expense accounts. A duplicate party number is refused until the original is voided. Due date defaults to the document date plus the vendor’s payment terms and cannot precede the document date. A debit note copies a posted bill's party, cannot precede the bill, and cannot exceed its remaining balance either when recorded or when posted. That balance is the bill less posted debit notes and allocated payments, counting reversal dates. Recording and posting a debit note checks the minimum balance on every later date, so a backdated note cannot overdraw a bill that a later payment temporarily settled.
 
 Amounts are `Money`, revalidated against the book's minor units. Tax snapshots group lines by code in first-use order, copying the code, rate and account. Computed tax rounds half up once per code; explicit party amounts may override it, with unused or repeated codes refused. Later tax-code changes never change a recorded document.
 
@@ -52,7 +87,8 @@ Bilimbi recorded documents, payments and settings through its API, so these page
 
 | Page | Path | Needs | What it does |
 | --- | --- | --- | --- |
-| Record a bill | `/finance/payables/bills/new` | `finance.payables.documents.create` | Supplier (typed, or picked from recent bills), invoice number, dates, lines with an account picker and tax code, live totals; saves a draft (`bill.create`) and opens it |
+| Vendors | `/finance/payables/vendors` | view; changes need `finance.payables.settings.manage` | Vendors linked to Companies, added through the shared company picker, and the historical supplier-key review (see [Vendors](#vendors)) |
+| Record a bill | `/finance/payables/bills/new` | `finance.payables.documents.create` | Vendor (picked from the company's vendors), invoice number, dates, lines with an account picker and tax code, live totals; saves a draft (`bill.create`) and opens it. Choosing a vendor fills the due date and each line's account and tax code from the vendor's defaults, replacing only values empty or last filled by a vendor default, never a value the person entered |
 | Correct a draft | `/finance/payables/bills/new?correct={id}` | create and approve | The same form filled from a draft. Documents are immutable, so saving calls `bill.replace_draft`, which voids the draft and records the corrected bill in one transaction: a refusal leaves the draft as it was, and the corrected bill may reuse its supplier invoice number. A draft that names order lines is not offered, because the form has no place for them |
 | Record a debit note | `/finance/payables/debit-notes/new?bill={id}` | create | Lines against a posted bill (`debit_note.create`); the supplier is the bill's |
 | Payments | `/finance/payables/payments` | view | Payment requests newest first with status filter and search, paged in SQL by `page_payment_requests` (page, size 25/50/100, the company's total), so no request is left out |
@@ -156,10 +192,10 @@ Import the complete supplier outstanding register against an approved opening tr
 The UTF-8 CSV header is:
 
 ```csv
-source_id,vendor_key,vendor_name,document_reference,document_date,due_date,original_total,outstanding,control_account_code
+source_id,vendor_code,vendor_name,document_reference,document_date,due_date,original_total,outstanding,control_account_code
 ```
 
-`vendor_key` is Payables' existing stable party key, used by bills, payments and aging; Payables has no separate vendor master. Keep the same key for all bills and later payments belonging to that vendor. A key cannot identify different names within one export. The source document reference must be unique for that vendor and cannot duplicate a recorded bill. Use original gross totals and the positive residual at cut-off, including partially settled bills. Preserve historical document and due dates; document dates precede the conversion date, which is the first day Bilibi owns processing.
+Create the linked Finance vendors first. `vendor_code` must name an active vendor of the current company whose Core company is active. `vendor_name` preserves the historical source name; it does not create or rename a vendor. The recorded bill freezes the linked Core company's permitted identity facts and uses the vendor's canonical settlement key. A code cannot identify different source names within one export. The source document reference must be unique for that vendor and cannot duplicate a recorded bill. Use original gross totals and the positive residual at cut-off, including partially settled bills. Preserve historical document and due dates; document dates precede the conversion date, which is the first day Bilibi owns processing.
 
 **Preview import** shows the source items and exact reconciliation to the configured opening control balance. **Approve import** records the complete register and source evidence in one audited transaction without posting purchases, tax or the control balance again. Approval uses Ledger's impersonation-aware duty separation against the opening journal's source preparer; an authorized exception requires its reason. The import and its source opening entry are permanent dependencies, so the opening entry cannot subsequently be reversed.
 

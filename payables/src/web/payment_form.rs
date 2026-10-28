@@ -204,7 +204,7 @@ impl PaymentForm {
         let top = |id: &str, label: &str| Some((format!("payables-pay-{id}"), label.to_owned()));
         match path {
             "payment_date" => top("date", "Payment date"),
-            "party_key" => top("party", "Supplier"),
+            "supplier_key" | "vendor_id" => top("party", "Supplier"),
             "paid_from_account_id" => top("account", "Paid from"),
             "reference" => top("reference", "Reference"),
             "description" => top("description", "Description"),
@@ -266,13 +266,16 @@ impl PaymentForm {
         });
         for (key, text) in [
             ("payment_date", &d.date),
-            ("party_key", &d.party),
+            ("supplier_key", &d.party),
             ("reference", &d.reference),
             ("description", &d.description),
         ] {
             if !text.trim().is_empty() {
                 input[key] = json!(text.trim());
             }
+        }
+        if let Some(vendor) = self.party().and_then(|p| p.vendor_id) {
+            input["vendor_id"] = json!(vendor);
         }
         if let Ok(id) = d.account.trim().parse::<i64>() {
             input["paid_from_account_id"] = json!(id);
@@ -358,9 +361,10 @@ impl PaymentForm {
             field("date", "date", "Payment date", &d.date)
                 .kind(InputKind::Date)
                 .required(),
-            field("party", "party", "Supplier", &d.party)
+            field("party", "party", "Vendor / historical supplier key", &d.party)
                 .kind(InputKind::Select)
-                .prompt("Choose a supplier")
+                .prompt("Choose a vendor or historical key")
+                .hint("Pay each historical supplier key separately, even when matched to the same vendor.")
                 .options(
                     self.owed
                         .iter()

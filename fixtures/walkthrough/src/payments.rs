@@ -9,8 +9,8 @@ use bilibi_finance_ledger::{
 };
 use bilibi_finance_payables::{
     AgingQuery, AllocationInput, Document, DocumentLineInput, NewDocument, NewPayment, NewTaxCode,
-    Party, Payables, PayablesError, PaymentQuery, PaymentRequestPageQuery, PaymentRequestQuery,
-    Settings, SettingsInput, TaxCodeDetails, TaxQuery, PAYMENT_SOURCE,
+    Payables, PayablesError, PaymentQuery, PaymentRequestPageQuery, PaymentRequestQuery, Settings,
+    SettingsInput, TaxCodeDetails, TaxQuery, PAYMENT_SOURCE,
 };
 use bilibi_module_registry::Services;
 use bilibi_tenancy::{Authentication, Scope};
@@ -45,13 +45,9 @@ async fn raw_refusal(c: &tokio_postgres::Client, label: &str, sql: &str) -> Outc
         Ok(()) => Err(format!("{label}: database accepted forbidden write").into()),
     }
 }
-fn bill_input(number: &str, expense: i64, amount: Money) -> NewDocument {
+fn bill_input(vendor: i64, number: &str, expense: i64, amount: Money) -> NewDocument {
     NewDocument {
-        party: Party {
-            key: "np3-party".into(),
-            name: "Payment proof party".into(),
-            ..Default::default()
-        },
+        vendor_id: Some(vendor),
         party_document_number: Some(number.into()),
         document_date: date(2026, 12, 1),
         due_date: Some(date(2026, 12, 10)),
@@ -78,10 +74,11 @@ async fn post_bill(
     p.approve_document(reviewer, COMPANY, b.id).await?;
     Ok(p.post_document(writer, COMPANY, b.id).await?)
 }
-fn request(bill: i64, bank: i64, amount: Money, date: Date) -> NewPayment {
+fn request(vendor: i64, bill: i64, bank: i64, amount: Money, date: Date) -> NewPayment {
     NewPayment {
         payment_date: date,
-        party_key: "np3-party".into(),
+        vendor_id: Some(vendor),
+        supplier_key: None,
         paid_from_account_id: bank,
         reference: Some("NP3 payment proof".into()),
         description: None,
@@ -97,6 +94,15 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
     let ledger = services.get::<Ledger>(bilibi_finance_ledger::SERVICE)?;
     let attachments = services.get::<Attachments>(bilibi_finance_attachments::SERVICE)?;
     let manager = sign_in(db, services, 1, 1).await?;
+    let vendor = crate::vendors::vendor(
+        db,
+        services,
+        &manager,
+        COMPANY,
+        "np3-party",
+        "Payment proof party",
+    )
+    .await?;
     let reviewer = sign_in(db, services, 1, 4).await?;
     let staff = sign_in(db, services, 1, 3).await?;
     let foreign = sign_in(db, services, 2, 5).await?;
@@ -147,10 +153,10 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         &p,
         &manager,
         &reviewer,
-        &bill_input("NP3-BILL", expense.id, money("100")),
+        &bill_input(vendor, "NP3-BILL", expense.id, money("100")),
     )
     .await?;
-    let input = request(b.id, bank.id, money("40"), date(2026, 12, 15));
+    let input = request(vendor, b.id, bank.id, money("40"), date(2026, 12, 15));
     refused(
         "staff cannot submit",
         p.submit_payment(&staff, COMPANY, &input).await,
@@ -181,7 +187,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         |e| matches!(e, PayablesError::Invalid(_)),
     )?;
     invalid = input.clone();
-    invalid.party_key = "different-party".into();
+    invalid.supplier_key = Some("different-party".into());
     refused(
         "another party bill",
         p.submit_payment(&manager, COMPANY, &invalid).await,
@@ -246,7 +252,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         "Impersonation separation proof",
     )
     .await?;
-    let outside = request(b.id, bank.id, money("1"), date(2027, 1, 1));
+    let outside = request(vendor, b.id, bank.id, money("1"), date(2027, 1, 1));
     let outside = p.submit_payment(&manager, COMPANY, &outside).await?;
     refused(
         "payment outside an open fiscal period",
@@ -319,7 +325,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
     let party = pinned
         .parties
         .iter()
-        .find(|p| p.party_key == "np3-party")
+        .find(|p| p.party_key == format!("vendor:{vendor}"))
         .ok_or(Error::NotFound)?;
     assert_eq!(party.total, money("60"));
     assert_eq!(party.buckets[1], money("60"));
@@ -327,7 +333,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         .submit_payment(
             &manager,
             COMPANY,
-            &request(b.id, bank.id, money("30"), date(2026, 12, 14)),
+            &request(vendor, b.id, bank.id, money("30"), date(2026, 12, 14)),
         )
         .await?;
     p.approve_payment(&reviewer, COMPANY, r2.id).await?;
@@ -382,12 +388,12 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         p.submit_payment(
             &manager,
             COMPANY,
-            &request(b.id, bank.id, money("40"), date(2026, 12, 13)),
+            &request(vendor, b.id, bank.id, money("40"), date(2026, 12, 13)),
         )
         .await,
         |e| matches!(e, PayablesError::Invalid(_)),
     )?;
-    let mut note = bill_input("NP3-NOTE", expense.id, money("40"));
+    let mut note = bill_input(vendor, "NP3-NOTE", expense.id, money("40"));
     note.document_date = date(2026, 12, 13);
     note.due_date = None;
     refused(
@@ -407,13 +413,13 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         before
             .parties
             .iter()
-            .find(|p| p.party_key == "np3-party")
+            .find(|p| p.party_key == format!("vendor:{vendor}"))
             .ok_or(Error::NotFound)?
             .total,
         money("30")
     );
     // Pending requests reserve nothing. Concurrent decisions share the company lock.
-    let candidate = request(b.id, bank.id, money("60"), date(2026, 12, 21));
+    let candidate = request(vendor, b.id, bank.id, money("60"), date(2026, 12, 21));
     let a = p.submit_payment(&manager, COMPANY, &candidate).await?;
     let z = p.submit_payment(&manager, COMPANY, &candidate).await?;
     let (a_result, z_result) = tokio::join!(
@@ -458,7 +464,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         &p,
         &manager,
         &reviewer,
-        &bill_input("NP3-NEXT-BILL", expense.id, money("100")),
+        &bill_input(vendor, "NP3-NEXT-BILL", expense.id, money("100")),
     )
     .await?;
     // The ledger requires zero balance before deactivation. Show the external
@@ -490,7 +496,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
             },
         )
         .await?;
-    let mut combined = request(b.id, bank.id, money("10"), date(2026, 12, 22));
+    let mut combined = request(vendor, b.id, bank.id, money("10"), date(2026, 12, 22));
     combined.allocations.push(AllocationInput {
         document_id: b2.id,
         amount: money("20"),
@@ -526,7 +532,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
             },
         )
         .await?;
-    let mut taxable = bill_input("NP3-TAX-BILL", expense.id, money("100"));
+    let mut taxable = bill_input(vendor, "NP3-TAX-BILL", expense.id, money("100"));
     taxable.lines[0].tax_code_id = Some(tax.id);
     let taxable = post_bill(&p, &manager, &reviewer, &taxable).await?;
     let taxes = p
@@ -746,7 +752,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
     // A page of requests is newest first with the company's whole count, so
     // a page past the first still shows the requests the first one does not.
     for i in 0..26 {
-        let mut paging = request(b2.id, bank.id, money("1"), date(2026, 12, 31));
+        let mut paging = request(vendor, b2.id, bank.id, money("1"), date(2026, 12, 31));
         paging.reference = Some(format!("NP3 paging proof {i}"));
         p.submit_payment(&manager, COMPANY, &paging).await?;
     }
@@ -831,10 +837,10 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         .create_bill(
             &manager,
             COMPANY,
-            &bill_input("NP3-REPLACE", expense.id, money("5")),
+            &bill_input(vendor, "NP3-REPLACE", expense.id, money("5")),
         )
         .await?;
-    let corrected = bill_input("NP3-REPLACE", expense.id, money("6"));
+    let corrected = bill_input(vendor, "NP3-REPLACE", expense.id, money("6"));
     refused(
         "duplicate invoice number",
         p.create_bill(&manager, COMPANY, &corrected).await,

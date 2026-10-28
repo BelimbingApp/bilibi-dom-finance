@@ -46,6 +46,7 @@ pub struct AgedDocument {
 }
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct AgedParty {
+    pub vendor_id: Option<i64>,
     pub party_key: String,
     pub party_name: String,
     pub documents: Vec<AgedDocument>,
@@ -238,6 +239,7 @@ impl Payables {
             let party = parties
                 .entry(d.party_key.clone())
                 .or_insert_with(|| AgedParty {
+                    vendor_id: None,
                     party_key: d.party_key.clone(),
                     party_name: d.party_name.clone(),
                     documents: vec![],
@@ -253,7 +255,10 @@ impl Payables {
             party.total = party.total + d.outstanding;
             party.documents.push(d);
         }
-        let parties: Vec<_> = parties.into_values().collect();
+        let mut parties: Vec<_> = parties.into_values().collect();
+        for p in &mut parties {
+            p.vendor_id = vendors::mapped(c, s.tenant(), company, &p.party_key).await?;
+        }
         let mut buckets = empty;
         for p in &parties {
             for (i, a) in p.buckets.iter().enumerate() {

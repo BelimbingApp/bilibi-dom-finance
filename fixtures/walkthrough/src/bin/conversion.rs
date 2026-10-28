@@ -7,7 +7,7 @@ use bilibi_finance_ledger::{
     AccountType, Ledger, Money, NewAccount, NewBook, NewFiscalYear, OpeningBalances, Reversal,
 };
 use bilibi_finance_payables::{
-    DocumentLineInput, NewDocument, Party, Payables, PayablesError, Settings, SettingsInput,
+    DocumentLineInput, NewDocument, Payables, PayablesError, Settings, SettingsInput, VendorInput,
 };
 use bilibi_finance_receivables::{AgingOptions, Receivables};
 use bilibi_finance_walkthrough_fixture::{install, sign_in};
@@ -33,7 +33,7 @@ roles!(
 type Outcome<T> = Result<T, Box<dyn std::error::Error>>;
 const SOURCE: &str = "source_id,account_code,debit,credit\nbank,1000,10000,\nreceivables,1100,3000,\nasset-cost,1200,12000,\nytd-cost,5000,2000,\npayables,2000,,1500\naccumulation,1290,,1800\ncapital,3000,,18200\nytd-sales,4000,,5500\n";
 const AR: &str = "source_id,customer_code,document_reference,document_date,due_date,original_total,outstanding,control_account_code\ninvoice-17,CONVERSION-CUSTOMER,OLD-INV-17,2026-05-15,2026-06-30,5000,3000,1100\n";
-const AP: &str = "source_id,vendor_key,vendor_name,document_reference,document_date,due_date,original_total,outstanding,control_account_code\nbill-29,conversion-vendor,Conversion vendor,OLD-BILL-29,2026-05-01,2026-06-15,2500,1500,2000\n";
+const AP: &str = "source_id,vendor_code,vendor_name,document_reference,document_date,due_date,original_total,outstanding,control_account_code\nbill-29,CONVERSION-VENDOR,Conversion vendor,OLD-BILL-29,2026-05-01,2026-06-15,2500,1500,2000\n";
 async fn setup(db: &Db, services: &Services, company: i64) -> Outcome<Value> {
     let admin = sign_in(db, services, 1, 4).await?;
     let manager = sign_in(db, services, 1, 1).await?;
@@ -132,6 +132,25 @@ async fn setup(db: &Db, services: &Services, company: i64) -> Outcome<Value> {
         },
     )
     .await?;
+    let vendors = ap.list_vendors(&admin, company, 0, 500).await?;
+    let vendor = if let Some(vendor) = vendors.iter().find(|v| v.code == "CONVERSION-VENDOR") {
+        vendor.clone()
+    } else {
+        ap.create_vendor(
+            &admin,
+            company,
+            &VendorInput {
+                code: "CONVERSION-VENDOR".into(),
+                core_company_id: 10,
+                payment_terms_days: 30,
+                payable_account_id: None,
+                expense_account_id: None,
+                tax_code_id: None,
+                active: true,
+            },
+        )
+        .await?
+    };
     let categories = assets.list_categories(&admin, company).await?;
     let revision = if let Some(c) = categories.iter().find(|c| c.name == "Conversion assets") {
         c.revision.id
@@ -181,7 +200,7 @@ async fn setup(db: &Db, services: &Services, company: i64) -> Outcome<Value> {
         "source_id,description,category_revision_id,acquisition_date,in_service_date,cost,accumulated_depreciation,remaining_life_months,residual_value\nasset-3,Source register asset,{revision},2024-06-01,2024-07-01,12000,1800,96,0\n"
     );
     Ok(
-        json!({"company_id":company,"customer_id":customer.id,"invoice_series":invoice.id,"payment_series":payment.id,"bank":account("1000"),"ar":AR,"ap":AP,"expense":account("5000"),"assets":asset_csv,"revision":revision}),
+        json!({"company_id":company,"vendor_id":vendor.id,"vendor_key":format!("vendor:{}", vendor.id),"customer_id":customer.id,"invoice_series":invoice.id,"payment_series":payment.id,"bank":account("1000"),"ar":AR,"ap":AP,"expense":account("5000"),"assets":asset_csv,"revision":revision}),
     )
 }
 async fn prove(db: &Db, services: &Services) -> Outcome<()> {
@@ -265,6 +284,12 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         .is_err());
     let a = ar.import_opening_invoices(&s, company, &ar_input).await?;
     assert_eq!(a, ar.import_opening_invoices(&s, company, &ar_input).await?);
+    let mut unknown_vendor = ap_input.clone();
+    unknown_vendor["csv"] = json!(AP.replace("CONVERSION-VENDOR", "MISSING-VENDOR"));
+    assert!(ap
+        .import_opening_bills(&s, company, &unknown_vendor)
+        .await
+        .is_err());
     let b = ap.import_opening_bills(&s, company, &ap_input).await?;
     assert_eq!(b, ap.import_opening_bills(&s, company, &ap_input).await?);
     let c = assets
@@ -419,14 +444,18 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
             .tied_out
     );
     let bill = ap.list_documents(&s, company, &Default::default()).await?[0].id;
+    let imported_bill = ap.get_document(&s, company, bill).await?;
+    assert_eq!(imported_bill.vendor_id, config["vendor_id"].as_i64());
+    assert_eq!(
+        imported_bill.party.key,
+        config["vendor_key"].as_str().unwrap()
+    );
+    assert_eq!(
+        imported_bill.opening.as_ref().unwrap()["vendor_name"],
+        "Conversion vendor"
+    );
     let note_on = |day| NewDocument {
-        party: Party {
-            key: "conversion-vendor".into(),
-            name: "Conversion vendor".into(),
-            tax_id: None,
-            registration_id: None,
-            address: None,
-        },
+        vendor_id: config["vendor_id"].as_i64(),
         party_document_number: Some("DEBIT-PROOF".into()),
         document_date: day,
         due_date: None,
@@ -473,7 +502,7 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
             company,
             &bilibi_finance_payables::NewPayment {
                 payment_date: date(2026, 7, 15),
-                party_key: "conversion-vendor".into(),
+                party_key: config["vendor_key"].as_str().unwrap().into(),
                 paid_from_account_id: config["bank"].as_i64().unwrap(),
                 reference: Some("Opening settlement proof".into()),
                 description: None,
