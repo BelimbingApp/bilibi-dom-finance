@@ -94,7 +94,7 @@ pub async fn run(db: &Db, services: &Services, root: &str, full_pack: &str) -> O
             &PostOptions {
                 owner: Some(EntryOwner {
                     module: bilibi_finance_payroll::MODULE.into(),
-                    record: "external-accountant-historical".into(),
+                    record: "payroll_run:9061".into(),
                 }),
                 ..Default::default()
             },
