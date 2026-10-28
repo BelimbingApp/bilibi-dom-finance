@@ -46,6 +46,7 @@ struct Customer {
 struct Invoice {
     document_id: i64,
     document_reference: Option<String>,
+    party_name: String,
     due_date: String,
     outstanding: Decimal,
     days_overdue: i64,
