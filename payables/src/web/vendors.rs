@@ -218,17 +218,19 @@ impl Vendors {
                 }
                 input["after_code"] = a["next_after_code"].clone();
             }
-            let taxes = self
-                .read(
-                    s,
-                    "finance.payables.tax_code.list",
-                    json!({"company_id":company,"page_size":100}),
-                )
-                .await?;
-            (
-                accounts,
-                taxes["records"].as_array().cloned().unwrap_or_default(),
-            )
+            let mut tax_input = json!({"company_id":company,"page_size":100});
+            let mut taxes = Vec::new();
+            loop {
+                let page = self
+                    .read(s, "finance.payables.tax_code.list", tax_input.clone())
+                    .await?;
+                taxes.extend(page["records"].as_array().into_iter().flatten().cloned());
+                if page["next_after_id"].is_null() {
+                    break;
+                }
+                tax_input["after_id"] = page["next_after_id"].clone();
+            }
+            (accounts, taxes)
         } else {
             (vec![], vec![])
         };
