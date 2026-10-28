@@ -402,6 +402,9 @@ async fn details(State(standin): Shared, headers: HeaderMap, Path(uuid): Path<St
                 "errorCode": "CV302", "error": "Invalid tax type. Please refer to https://sdk.myinvois.hasil.gov.my/codes/",
                 "innerError": [{"errorCode": "CV303", "error": "Tax type 01 is not registered for the supplier"}]}}]});
     }
+    if held.status == "Cancelled" {
+        body["documentStatusReason"] = json!("Issued in error");
+    }
     if held.rejection_requested {
         body["rejectRequestDateTime"] = json!(held.received);
         body["documentStatusReason"] = json!("Wrong buyer address");

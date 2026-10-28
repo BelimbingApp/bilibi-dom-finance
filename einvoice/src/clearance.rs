@@ -569,7 +569,9 @@ impl Einvoice {
                 _ => EinvoiceError::AuthorityUnavailable,
             })?;
         if status == "cancelled" {
-            return self.view(scope, company_id, document_id).await;
+            let mut view = self.view(scope, company_id, document_id).await?;
+            view.already_cancelled = true;
+            return Ok(view);
         }
         if !CANCELLABLE.contains(&status.as_str()) {
             return Err(EinvoiceError::NotCancellable);

@@ -179,10 +179,11 @@ call to the authority.
   (`RateLimited`, `AuthorityUnavailable` or `Authority(code)`). This also checks
   an earlier request whose response was lost: when the authority already holds
   the document as cancelled, the status is recorded, the ledger reversal runs
-  and `cancel_document` answers the updated document as a success (before, it
-  refused with `NotCancellable`); the page says "The tax authority had already
-  cancelled this document. Its status is now updated." The authority's refusal is recorded as
-  `cancellation_refused`. Each outcome is recorded only while the document,
+  and `cancel_document` answers the updated document as a success with
+  `already_cancelled` set (no other read sets it; before, it refused with
+  `NotCancellable`); the page says "The tax authority had already cancelled
+  this document. Its status is now updated." The authority's refusal is recorded
+  as `cancellation_refused`. Each outcome is recorded only while the document,
   read again under the company lock, is still cancellable.
 
 Once a `valid` (or `rejected`) status commits, the bridge posts the

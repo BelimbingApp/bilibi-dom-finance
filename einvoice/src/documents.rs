@@ -192,6 +192,9 @@ pub struct DocumentView {
     /// For a covered document, the consolidated document holding it now.
     pub consolidated_by: Option<DocumentSummary>,
     pub events: Vec<StatusEvent>,
+    /// Set only in `cancel_document`'s answer: the authority already held the
+    /// document as cancelled when the request was due, so none was sent.
+    pub already_cancelled: bool,
 }
 
 /// A recorded document and its events, before the view adds what needs
@@ -387,6 +390,7 @@ impl Recorded {
             recorded_at: self.recorded_at,
             events: self.events,
             document: self.document,
+            already_cancelled: false,
         }
     }
 }
