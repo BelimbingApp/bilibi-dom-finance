@@ -944,6 +944,23 @@ async fn run(db: &Db, services: &Services) -> Outcome<()> {
         through_entry_number: Some(sales.through_entry_number),
         through_mapping_number: Some(sales.through_mapping_number),
     };
+    let companies = services.get::<bilibi_company::CompanyService>(bilibi_company::SERVICE)?;
+    companies
+        .suspend_company(&admin, 22, Some("Walkthrough: customer suspended"))
+        .await?;
+    raw.execute(
+        "UPDATE companies SET legal_name='SST renamed customer' WHERE tenant_id=1 AND id=22",
+        &[],
+    )
+    .await?;
+    assert_eq!(
+        sst.preview_return(&manager, COMPANY, TaxType::SalesTax, jan, pin)
+            .await?,
+        sales
+    );
+    companies
+        .reactivate_company(&admin, 22, Some("Walkthrough: customer reactivated"))
+        .await?;
     issue(invoice("2026-02-25", &[("ST10", "10")])).await?;
     let live = sst
         .preview_return(&manager, COMPANY, TaxType::SalesTax, jan, Pins::default())

@@ -449,6 +449,29 @@ pub(crate) async fn run(f: Fixture<'_>) -> Outcome<()> {
         event.through_adjustment_number
     );
     assert_eq!(stored.posted_since.as_ref().map(|p| p.boxes.len()), Some(0));
+    let companies = services.get::<bilibi_company::CompanyService>(bilibi_company::SERVICE)?;
+    companies
+        .suspend_company(
+            &admin,
+            22,
+            Some("Walkthrough: customer suspended after finalising"),
+        )
+        .await?;
+    raw.execute(
+        "UPDATE companies SET legal_name='SST later customer' WHERE tenant_id=1 AND id=22",
+        &[],
+    )
+    .await?;
+    let renamed = sst.get_return(&manager, COMPANY, id).await?;
+    assert_eq!(renamed.figures.as_ref(), Some(snapshot));
+    assert!(
+        sst.reproduce_return(&manager, COMPANY, id)
+            .await?
+            .reproduced
+    );
+    companies
+        .reactivate_company(&admin, 22, Some("Walkthrough: customer reactivated"))
+        .await?;
     println!("its stored snapshot equals the figures read just before: every box, source row and account");
     for (label, result) in [
         (
