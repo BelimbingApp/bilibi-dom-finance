@@ -60,13 +60,12 @@ pub struct RunItem {
     #[serde(deserialize_with = "money_serde::deserialize")]
     pub amount: Money,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct RunException {
     pub id: i64,
     pub asset_id: i64,
     pub asset_number: i64,
     pub description: String,
-    #[serde(deserialize_with = "exception_reason")]
     pub reason: &'static str,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1052,15 +1051,35 @@ pub(super) struct PreparedEvent {
     pub review: Value,
 }
 
-// Preserve the facade's closed reason vocabulary when decoding trusted contract
-// results for the page. Never borrow arbitrary response text as a static value.
-fn exception_reason<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> std::result::Result<&'static str, D::Error> {
-    match String::deserialize(deserializer)?.as_str() {
-        "acquisition_reversed" => Ok("acquisition_reversed"),
-        _ => Err(serde::de::Error::custom(
-            "unknown depreciation exception reason",
-        )),
+// Decode the closed reason vocabulary without changing the facade's static
+// reason type or borrowing response text.
+impl<'de> Deserialize<'de> for RunException {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Wire {
+            id: i64,
+            asset_id: i64,
+            asset_number: i64,
+            description: String,
+            reason: String,
+        }
+        let value = Wire::deserialize(deserializer)?;
+        let reason = match value.reason.as_str() {
+            "acquisition_reversed" => "acquisition_reversed",
+            _ => {
+                return Err(serde::de::Error::custom(
+                    "unknown depreciation exception reason",
+                ))
+            }
+        };
+        Ok(Self {
+            id: value.id,
+            asset_id: value.asset_id,
+            asset_number: value.asset_number,
+            description: value.description,
+            reason,
+        })
     }
 }
