@@ -3,7 +3,7 @@
 use crate::*;
 use activity::Activity;
 use bilibi_finance_ledger::{AccountTotal, MinorUnits, TotalsQuery};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use store::{int, Table};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -187,8 +187,18 @@ impl FixedAssets {
             let id = int(v, "id")?;
             revision_map.insert(id, store::revision(c, s.tenant(), company, id).await?);
         }
-        let superseded:Vec<i64>=c.query("SELECT i.asset_id FROM finance_fixed_assets_opening_items i JOIN finance_fixed_assets_opening_decisions d ON d.replaces_batch_id=i.batch_id AND d.tenant_id=$1 AND d.company_id=$2 WHERE i.tenant_id=$1 AND i.company_id=$2 AND d.effective_date<=$4::text::date AND (SELECT max(a.asset_number) FROM finance_fixed_assets_opening_items n JOIN finance_fixed_assets_assets a ON a.id=n.asset_id AND a.tenant_id=$1 AND a.company_id=$2 WHERE n.tenant_id=$1 AND n.company_id=$2 AND n.batch_id=d.batch_id)<=$3",&[&s.tenant(),&company,&asset_pin,&date.to_string()]).await?.iter().map(|r|r.get(0)).collect();
-        let future:Vec<i64>=c.query("SELECT i.asset_id FROM finance_fixed_assets_opening_items i JOIN finance_fixed_assets_opening_decisions d ON d.batch_id=i.batch_id AND d.tenant_id=$1 AND d.company_id=$2 WHERE i.tenant_id=$1 AND i.company_id=$2 AND d.effective_date>$3::text::date",&[&s.tenant(),&company,&date.to_string()]).await?.iter().map(|r|r.get(0)).collect();
+        let superseded:HashSet<i64>=c.query("SELECT i.asset_id FROM finance_fixed_assets_opening_items i JOIN finance_fixed_assets_opening_decisions d ON d.replaces_batch_id=i.batch_id AND d.tenant_id=$1 AND d.company_id=$2 JOIN (SELECT n.batch_id,max(a.asset_number) AS last_asset FROM finance_fixed_assets_opening_items n JOIN finance_fixed_assets_assets a ON a.id=n.asset_id AND a.tenant_id=$1 AND a.company_id=$2 WHERE n.tenant_id=$1 AND n.company_id=$2 GROUP BY n.batch_id) pinned ON pinned.batch_id=d.batch_id WHERE i.tenant_id=$1 AND i.company_id=$2 AND d.effective_date<=$4::text::date AND pinned.last_asset<=$3",&[&s.tenant(),&company,&asset_pin,&date.to_string()]).await?.iter().map(|r|r.get(0)).collect();
+        let future:HashSet<i64>=c.query("SELECT i.asset_id FROM finance_fixed_assets_opening_items i JOIN finance_fixed_assets_opening_decisions d ON d.batch_id=i.batch_id AND d.tenant_id=$1 AND d.company_id=$2 WHERE i.tenant_id=$1 AND i.company_id=$2 AND d.effective_date>$3::text::date",&[&s.tenant(),&company,&date.to_string()]).await?.iter().map(|r|r.get(0)).collect();
+        let mut run_totals: HashMap<i64, Money> = HashMap::new();
+        for item in activity
+            .runs
+            .iter()
+            .filter(|r| !r.reversed)
+            .flat_map(|r| &r.items)
+        {
+            let total = run_totals.entry(item.asset_id).or_insert(Money::ZERO);
+            *total = *total + item.amount;
+        }
         let mut rows = Vec::new();
         for v in assets {
             let a = store::asset(&v, totals.minor_units)?;
@@ -209,15 +219,7 @@ impl FixedAssets {
             let accumulated = if voided {
                 Money::ZERO
             } else {
-                a.opening_accumulated
-                    + activity
-                        .runs
-                        .iter()
-                        .filter(|r| !r.reversed)
-                        .flat_map(|r| &r.items)
-                        .filter(|i| i.asset_id == a.id)
-                        .map(|i| i.amount)
-                        .sum()
+                a.opening_accumulated + run_totals.get(&a.id).copied().unwrap_or(Money::ZERO)
             };
             let schedule = schedule::rows(&a, totals.minor_units)?;
             let scheduled_depreciation = if voided {

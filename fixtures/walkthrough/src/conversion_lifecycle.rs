@@ -435,10 +435,80 @@ pub async fn prove(
         .register_report(&approver, company, day, &Default::default())
         .await?;
     assert_eq!(register.rows.len(), 10_000);
+    let first_ids: std::collections::HashSet<i64> =
+        register.rows.iter().map(|r| r.asset.id).collect();
+    assert_eq!(first_ids.len(), 10_000);
+    let second_asset_chunk = |start, end| {
+        let mut csv = asset_header.to_owned();
+        for n in start..end {
+            csv.push_str(&format!(
+                "second-{n},Second source register asset {n},{revision},2024-06-01,2024-07-01,1.20,0.18,51,0\n"
+            ));
+        }
+        csv
+    };
+    let second_common = json!({"source_reference":"ASSETS-CORRECTED-AGAIN","currency_code":"MYR","replaces_batch_id":replaced_assets["id"],"reason":"Correct the corrected register again","part_count":20});
+    for part in 1..=20 {
+        let mut stage = second_common.clone();
+        stage["part"] = json!(part);
+        stage["csv"] = json!(second_asset_chunk((part - 1) * 500, part * 500));
+        assert_eq!(
+            assets
+                .stage_opening_import(&preparer, company, &stage)
+                .await?["state"],
+            "committed"
+        );
+    }
+    let mut finalize_again = second_common.clone();
+    finalize_again["staged"] = json!(true);
+    finalize_again["csv"] = json!("");
+    assert!(assets
+        .import_opening_register(&preparer, company, &finalize_again)
+        .await
+        .is_err());
+    let replaced_again = assets
+        .import_opening_register(&approver, company, &finalize_again)
+        .await?;
+    assert_ne!(replaced_again["id"], replaced_assets["id"]);
+    assert_eq!(
+        assets
+            .import_opening_register(&approver, company, &finalize_again)
+            .await?,
+        replaced_again
+    );
+    let again = assets
+        .register_report(&approver, company, day, &Default::default())
+        .await?;
+    assert_eq!(again.rows.len(), 10_000);
+    assert!(again.rows.iter().all(|r| !first_ids.contains(&r.asset.id)));
+    let first_old = assets
+        .register_report(&approver, company, day, &register.pins())
+        .await?;
+    assert_eq!(
+        first_old
+            .rows
+            .iter()
+            .map(|r| r.asset.id)
+            .collect::<std::collections::HashSet<_>>(),
+        first_ids
+    );
+    assert_eq!(first_old.reconciliation, register.reconciliation);
+    let original_old = assets
+        .register_report(&approver, company, day, &asset_before.pins())
+        .await?;
+    assert_eq!(original_old.rows.len(), 1);
+    assert_eq!(original_old.rows[0].asset.id, asset);
+    assert_eq!(
+        ledger
+            .trial_balance(&approver, company, day, None)
+            .await?
+            .through_entry_number,
+        before_entry
+    );
     let run = assets
         .depreciate(&approver, company, date(2026, 8, 1))
         .await?;
-    assert_eq!(run.total, money("200"));
-    println!("Opening lifecycle: interrupted twenty-batch/10,000-invoice, bill and asset corrections resumed; identical/concurrent retries, changed-source and self-approval refusals, late correction rollback, dependent receipts/payments/depreciation/disposal and owner reversals, accounting-date and original report boundaries, unchanged opening postings and prospective catch-up passed.");
+    assert_eq!(run.total, money("400"));
+    println!("Opening lifecycle: interrupted twenty-batch/10,000-invoice, bill and asset corrections resumed, then a second 10,000-asset replacement of the first; identical/concurrent retries, changed-source and self-approval refusals, late correction rollback, dependent receipts/payments/depreciation/disposal and owner reversals, accounting-date and original report boundaries, unchanged opening postings and prospective catch-up passed.");
     Ok(())
 }
