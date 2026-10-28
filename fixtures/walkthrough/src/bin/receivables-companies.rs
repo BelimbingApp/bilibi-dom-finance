@@ -241,8 +241,11 @@ async fn main() -> Outcome<()> {
         .await?;
     // A reverse-direction link and out-of-date intervals are not current
     // customer relationships from the invoicing company.
-    for (from, to) in [(Some("2030-01-01"), None), (None, Some("2026-01-01"))] {
-        companies
+    for (from, to) in [
+        (Some("2030-01-01"), None),
+        (Some("2025-01-01"), Some("2026-01-01")),
+    ] {
+        let saved = companies
             .assign_relationship(
                 &manager,
                 &bilibi_party::RelationshipInput {
@@ -253,8 +256,12 @@ async fn main() -> Outcome<()> {
                 },
             )
             .await?;
+        assert!(
+            matches!(saved, bilibi_company::TypeOutcome::Saved(_)),
+            "{saved:?}"
+        );
     }
-    companies
+    let saved = companies
         .assign_relationship(
             &manager,
             &bilibi_party::RelationshipInput {
@@ -265,6 +272,10 @@ async fn main() -> Outcome<()> {
             },
         )
         .await?;
+    assert!(
+        matches!(saved, bilibi_company::TypeOutcome::Saved(_)),
+        "{saved:?}"
+    );
     refused(
         ar.create_draft(&manager, 1, &invoice("2026-08-31")).await,
         "customer_id",
@@ -308,6 +319,7 @@ async fn main() -> Outcome<()> {
             },
             &AttachmentInput {
                 is_primary: true,
+                dates: EffectiveDates::new(Some(day("2000-01-01")), Some(day("2099-12-31")))?,
                 ..AttachmentInput::default()
             },
         )
