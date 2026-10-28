@@ -189,14 +189,21 @@ impl Publication {
             }),
             ..Button::default()
         })?);
-        let form = render(Form {
-            id: "ledger-publication-form",
-            event: "validate_publication",
-            change: true,
-            class: "mt-4",
-            body,
-            actions: dialog_actions(actions)?,
-        })?;
+        let form = if self.review.is_some() {
+            // FlexTable owns its column-search form. A review has no draft
+            // fields, so keep it outside Form rather than nesting forms.
+            body.push(&dialog_actions(actions)?);
+            body
+        } else {
+            render(Form {
+                id: "ledger-publication-form",
+                event: "validate_publication",
+                change: true,
+                class: "mt-4",
+                body,
+                actions: dialog_actions(actions)?,
+            })?
+        };
         render(Modal {
             id: "ledger-publication-modal",
             width: if self.proposal {
