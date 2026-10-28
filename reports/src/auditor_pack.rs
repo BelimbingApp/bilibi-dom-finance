@@ -16,6 +16,7 @@ use bilibi_party_ids::OrganisationId;
 use bilibi_tenancy::Scope;
 use bilibi_ui::download::{Download, DownloadFuture, DownloadRequest, FileBody};
 use jiff::civil::Date;
+use pack_owner::Coverage;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
@@ -47,10 +48,10 @@ pub struct AuditorPack {
 }
 
 impl Reports {
-    /// Collects all Finance evidence (including drafts and reversals), dated
-    /// trial balance and aging, ledger lines and source indexes at one database
-    /// snapshot. `as_of` affects summaries only; a page's entry pin is not an
-    /// evidence cutoff. Publication rechecks every source grant after collection.
+    /// Collects the complete ledger, trial balance and issued reports at one
+    /// snapshot. Adds all Finance source evidence and aging only when every
+    /// source view is authorized; otherwise the manifest names the omissions.
+    /// Publication and download recheck the stored coverage's grants.
     pub async fn export_auditor_pack(
         &self,
         scope: &Scope,
@@ -60,7 +61,9 @@ impl Reports {
         let mut client = self.db.get().await.map_err(Error::from)?;
         authorize(&**client, scope, company, EXPORT).await?;
         let company_id = OrganisationId::new(company).map_err(|_| ReportsError::CompanyNotFound)?;
-        pack_owner::authorize_sources(&**client, scope, company_id)
+        // Prove the ledger before collecting; source grants choose coverage,
+        // never which entries or totals the person is allowed to see.
+        Coverage::select(&**client, scope, company_id)
             .await
             .map_err(crate::refusal)?;
         let max = self
@@ -79,11 +82,13 @@ impl Reports {
             .await
             .map_err(Error::from)?;
         authorize(&tx, scope, company, EXPORT).await?;
-        pack_owner::authorize_sources(&tx, scope, company_id)
+        let coverage = Coverage::select(&tx, scope, company_id)
             .await
             .map_err(crate::refusal)?;
         let mut files = Files::new()?;
-        let manifest = self.collect(&tx, scope, company, as_of, &mut files).await?;
+        let manifest = self
+            .collect(&tx, scope, company, as_of, coverage, &mut files)
+            .await?;
         files.write_json("manifest.json", &manifest, 1)?;
         tx.commit().await.map_err(snapshot_error)?;
         let bytes = files.archive(max)?;
@@ -97,7 +102,7 @@ impl Reports {
                 &mut client,
                 Reference {
                     subject: uuid::Uuid::new_v4().to_string(),
-                    kind: "auditor-pack".into(),
+                    kind: coverage.kind().into(),
                 },
                 &bytes,
                 "application/zip",
@@ -106,8 +111,8 @@ impl Reports {
             .map_err(artifact_error)
     }
 
-    /// Every read asks for export and all source view grants again, proves the
-    /// live company, and reads through Base Artifacts (expiry, hash, audit).
+    /// Every read asks for export and the stored pack's source grants again,
+    /// proves the live company and reads through Base Artifacts (expiry, hash, audit).
     pub async fn read_auditor_pack(
         &self,
         scope: &Scope,
@@ -127,7 +132,10 @@ impl Reports {
             .await
             .map_err(artifact_error)?;
         Ok(AuditorPack {
-            filename: format!("auditor-pack-{}.zip", document.metadata.reference.subject),
+            filename: format!(
+                "{}-{}.zip",
+                document.metadata.reference.kind, document.metadata.reference.subject
+            ),
             bytes: document.bytes,
         })
     }
@@ -138,6 +146,7 @@ impl Reports {
         scope: &Scope,
         company: i64,
         as_of: Date,
+        coverage: Coverage,
         files: &mut Files,
     ) -> Result<Value> {
         let totals = self
@@ -150,36 +159,6 @@ impl Reports {
             .ledger
             .trial_balance_on(tx, scope, company, as_of, Some(through))
             .await?;
-        let ar = self
-            .sources
-            .receivables
-            .aged_receivables_on(
-                tx,
-                scope,
-                company,
-                as_of,
-                &AgingOptions {
-                    through_entry_number: Some(through),
-                    ..AgingOptions::default()
-                },
-            )
-            .await
-            .map_err(source_error)?;
-        let ap = self
-            .sources
-            .payables
-            .aged_payables_on(
-                tx,
-                scope,
-                company,
-                as_of,
-                &AgingQuery {
-                    through_entry_number: Some(through),
-                    ..AgingQuery::default()
-                },
-            )
-            .await
-            .map_err(source_error)?;
         let debit: Money = totals.rows.iter().map(|r| r.debits).sum();
         let credit: Money = totals.rows.iter().map(|r| r.credits).sum();
         let (gl_debit, gl_credit) = self
@@ -189,17 +168,12 @@ impl Reports {
             return Err(ReportsError::ControlTotalsMismatch);
         }
         let trial = json(&trial)?;
-        let ar = json(&ar)?;
-        let ap = json(&ap)?;
+
         files.write_json(
             "trial-balance.json",
             &trial,
             trial["rows"].as_array().map_or(0, Vec::len),
         )?;
-        let ar_rows = aging_rows(&ar, true);
-        let ap_rows = aging_rows(&ap, false);
-        files.write_json("aged-receivables.json", &ar, ar_rows.len())?;
-        files.write_json("aged-payables.json", &ap, ap_rows.len())?;
         files.csv(
             "trial-balance.csv",
             &[
@@ -217,46 +191,84 @@ impl Reports {
             ],
             &summary_rows(&trial["rows"], as_of, through),
         )?;
-        files.csv(
-            "aged-receivables.csv",
-            &[
-                "as_of",
-                "through_entry_number",
-                "customer_id",
-                "customer_code",
-                "customer_name",
-                "document_id",
-                "document_reference",
-                "party_name",
-                "issue_date",
-                "due_date",
-                "total",
-                "outstanding",
-                "days_overdue",
-                "bucket",
-            ],
-            &with_pin(ar_rows, as_of, through),
-        )?;
-        files.csv(
-            "aged-payables.csv",
-            &[
-                "as_of",
-                "through_entry_number",
-                "id",
-                "document_number",
-                "party_key",
-                "party_name",
-                "party_document_number",
-                "document_date",
-                "due_date",
-                "currency_code",
-                "total",
-                "outstanding",
-                "days_overdue",
-                "bucket",
-            ],
-            &with_pin(ap_rows, as_of, through),
-        )?;
+        if coverage == Coverage::All {
+            let ar = self
+                .sources
+                .receivables
+                .aged_receivables_on(
+                    tx,
+                    scope,
+                    company,
+                    as_of,
+                    &AgingOptions {
+                        through_entry_number: Some(through),
+                        ..AgingOptions::default()
+                    },
+                )
+                .await
+                .map_err(source_error)?;
+            let ap = self
+                .sources
+                .payables
+                .aged_payables_on(
+                    tx,
+                    scope,
+                    company,
+                    as_of,
+                    &AgingQuery {
+                        through_entry_number: Some(through),
+                        ..AgingQuery::default()
+                    },
+                )
+                .await
+                .map_err(source_error)?;
+            let ar = json(&ar)?;
+            let ap = json(&ap)?;
+            let ar_rows = aging_rows(&ar, true);
+            let ap_rows = aging_rows(&ap, false);
+            files.write_json("aged-receivables.json", &ar, ar_rows.len())?;
+            files.write_json("aged-payables.json", &ap, ap_rows.len())?;
+            files.csv(
+                "aged-receivables.csv",
+                &[
+                    "as_of",
+                    "through_entry_number",
+                    "customer_id",
+                    "customer_code",
+                    "customer_name",
+                    "document_id",
+                    "document_reference",
+                    "party_name",
+                    "issue_date",
+                    "due_date",
+                    "total",
+                    "outstanding",
+                    "days_overdue",
+                    "bucket",
+                ],
+                &with_pin(ar_rows, as_of, through),
+            )?;
+            files.csv(
+                "aged-payables.csv",
+                &[
+                    "as_of",
+                    "through_entry_number",
+                    "id",
+                    "document_number",
+                    "party_key",
+                    "party_name",
+                    "party_document_number",
+                    "document_date",
+                    "due_date",
+                    "currency_code",
+                    "total",
+                    "outstanding",
+                    "days_overdue",
+                    "bucket",
+                ],
+                &with_pin(ap_rows, as_of, through),
+            )?;
+        }
         // Each owner keeps its schema and frozen field catalog private. Only
         // a bounded page is resident, on exactly the transaction passed here.
         macro_rules! evidence {
@@ -308,42 +320,44 @@ impl Reports {
             };
         }
         evidence!("ledger", self.ledger, Ledger::evidence_datasets());
-        evidence!(
-            "receivables",
-            self.sources.receivables,
-            Receivables::evidence_datasets()
-        );
-        evidence!(
-            "payables",
-            self.sources.payables,
-            self.sources.payables.evidence_datasets()
-        );
-        evidence!(
-            "reconciliation",
-            self.sources.reconciliation,
-            Reconciliation::evidence_datasets()
-        );
-        evidence!(
-            "einvoice",
-            self.sources.einvoice,
-            Einvoice::evidence_datasets()
-        );
-        evidence!(
-            "payroll",
-            self.sources.payroll,
-            Payroll::evidence_datasets().iter().copied()
-        );
-        evidence!("sst", self.sources.sst, Sst::evidence_datasets());
-        evidence!(
-            "fixed_assets",
-            self.sources.fixed_assets,
-            self.sources.fixed_assets.evidence_datasets()
-        );
-        evidence!(
-            "attachments",
-            self.sources.attachments,
-            Attachments::evidence_datasets().iter().copied()
-        );
+        if coverage == Coverage::All {
+            evidence!(
+                "receivables",
+                self.sources.receivables,
+                Receivables::evidence_datasets()
+            );
+            evidence!(
+                "payables",
+                self.sources.payables,
+                self.sources.payables.evidence_datasets()
+            );
+            evidence!(
+                "reconciliation",
+                self.sources.reconciliation,
+                Reconciliation::evidence_datasets()
+            );
+            evidence!(
+                "einvoice",
+                self.sources.einvoice,
+                Einvoice::evidence_datasets()
+            );
+            evidence!(
+                "payroll",
+                self.sources.payroll,
+                Payroll::evidence_datasets().iter().copied()
+            );
+            evidence!("sst", self.sources.sst, Sst::evidence_datasets());
+            evidence!(
+                "fixed_assets",
+                self.sources.fixed_assets,
+                self.sources.fixed_assets.evidence_datasets()
+            );
+            evidence!(
+                "attachments",
+                self.sources.attachments,
+                Attachments::evidence_datasets().iter().copied()
+            );
+        }
         // Reports reads its own issued evidence through the same facade contract.
         let mut issued = files.csv_writer("issued-reports.csv")?;
         let mut after = None;
@@ -360,13 +374,20 @@ impl Reports {
         files.finish_csv("issued-reports.csv", issued);
         files.finish_sources()?;
         Ok(json!({
-            "generator":"finance/reports/auditor-pack", "generator_version":"8",
+            "generator":"finance/reports/auditor-pack", "generator_version":"9",
             "tenant_id":scope.tenant(), "company_id":company,
             "currency_code":totals.currency_code, "minor_units":totals.minor_units,
             "generated_by_user_id":scope.user(), "generated_by_impersonator_id":scope.impersonator().map(|a|a.user()),
             "captured_at":snapshot.get::<_,String>(1), "timezone":"Etc/UTC", "database_snapshot":snapshot.get::<_,String>(0),
             "through_entry_number":through,
-            "filters":{"evidence":"all company records of the ledger, receivables, payables, reconciliation, einvoice, payroll, sst, fixed_assets, attachments modules visible at the database snapshot, including drafts and reversals", "trial_balance_and_aging_as_of":as_of.to_string()},
+            "coverage": if coverage == Coverage::All { "all-finance" } else { "ledger-and-reports" },
+            "excluded_sources": if coverage == Coverage::All { Vec::<&str>::new() } else { vec!["receivables", "payables", "reconciliation", "einvoice", "payroll", "sst", "fixed_assets", "attachments"] },
+            "coverage_notice": if coverage == Coverage::All {
+                "All Finance source datasets are included."
+            } else {
+                "Complete ledger, trial balance and issued reports only. Payroll source records and other subledger/source evidence are excluded. Payroll journal lines remain in the ledger. This is not a complete audit evidence pack."
+            },
+            "filters":{"evidence": if coverage == Coverage::All { "all Finance company records, including drafts and reversals" } else { "all ledger company records and issued reports, including drafts and reversals" }, "trial_balance_and_aging_as_of":as_of.to_string()},
             "decimal_encoding":"exact decimal strings; CSV numeric cells are unrounded",
             "csv_text_encoding":"UTF-8; formula-like text is prefixed with an apostrophe",
             "source_files":"source file bytes (bank statements, supporting documents) are not in the pack; the source-file and attachment indexes carry their SHA-256; authority payloads are included",
@@ -808,7 +829,7 @@ impl Download<Scope, Error> for Downloads {
 pub(crate) fn export_refusal(error: &ReportsError) -> &'static str {
     match error {
         ReportsError::SnapshotChanged => "The company changed while the pack was being generated. Generate it again.",
-        ReportsError::Unauthorized => "Auditor packs require read access to every Finance module. Ask your administrator for auditor access.",
+        ReportsError::Unauthorized => "You do not have permission to export this company’s ledger.",
         ReportsError::InvalidSize => "The archive exceeds the configured download size limit. Ask your administrator to increase it.",
         ReportsError::Artifact("policy") => "Document retention has not been configured. Ask your administrator to configure downloads.",
         _ => "The auditor pack could not be generated. Retry or ask your administrator to check document storage.",

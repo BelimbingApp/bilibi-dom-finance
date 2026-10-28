@@ -479,3 +479,6 @@ pub mod browser;
 
 // First-adopter setup and shared operation-transaction proofs.
 pub mod adopter_setup;
+
+// Restricted accountant access: production role, scoped exports and live revocation.
+pub mod external_accountant;
