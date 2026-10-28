@@ -52,7 +52,9 @@ pub(crate) async fn choose_on(
     })
 }
 
-/// The same answer for a review, which only reads.
+/// The same answer for a preview, which only reads. `TODO(platform)`: Core's
+/// facade takes a `GenericClient`, which the handed `OperationClient` is not,
+/// so a preview reads on a pooled connection; a commit uses `choose_on`.
 pub(crate) async fn choose(
     scope: &Scope,
     code: &str,
@@ -108,7 +110,8 @@ pub(crate) fn facts(code: &str, units: i64, chosen: &Chosen) -> Value {
 
 /// What the Book page and the discovery read offer: the enabled currencies
 /// that match `search` (code or name), and the company's base currency, else
-/// the tenant's, as the proposal.
+/// the tenant's, as the proposal. `TODO(platform)`: pooled for the same reason
+/// as `choose`; a read holds no company lock.
 pub(crate) async fn options(scope: &Scope, company: i64, search: &str) -> Result<Value> {
     let bound = bound()?;
     let client = bound.db.get().await.map_err(Error::from)?;

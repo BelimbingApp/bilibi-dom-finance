@@ -243,6 +243,7 @@ impl Write {
         client: &dyn OperationClient,
         scope: &Scope,
         input: &Value,
+        tx: Option<&MutationTransaction<'_>>,
     ) -> Result<Value> {
         let company = id(input, "company_id")?;
         authorize_on(client, scope, company, self.capability()).await?;
@@ -263,9 +264,11 @@ impl Write {
                     return Err(LedgerError::BookAlreadyOpen);
                 }
                 let code = shaped_code(input)?;
-                let chosen = currency::choose(scope, &code)
-                    .await?
-                    .map_err(|refused| LedgerError::Invalid(vec![refused]))?;
+                let chosen = match tx {
+                    Some(tx) => currency::choose_on(tx, scope, &code).await?,
+                    None => currency::choose(scope, &code).await?,
+                }
+                .map_err(|refused| LedgerError::Invalid(vec![refused]))?;
                 let units = match input["minor_units"].as_i64() {
                     Some(units) => units,
                     None => currency::default_units(&chosen)
@@ -664,7 +667,10 @@ impl WriteHandler for Write {
         input: &'a Value,
     ) -> OperationFuture<'a> {
         Box::pin(async move {
-            let review = self.review(client, scope, input).await.map_err(invalid)?;
+            let review = self
+                .review(client, scope, input, None)
+                .await
+                .map_err(invalid)?;
             fence(
                 client,
                 &json!({"action":self.consequence(),"input":input,"review":review}),
@@ -685,7 +691,10 @@ impl WriteHandler for Write {
             join(tx, scope, company, self.capability())
                 .await
                 .map_err(invalid)?;
-            let review = self.review(tx.sql(), scope, input).await.map_err(invalid)?;
+            let review = self
+                .review(tx.sql(), scope, input, Some(&*tx))
+                .await
+                .map_err(invalid)?;
             fence(
                 tx.sql(),
                 &json!({"action":self.consequence(),"input":input,"review":review}),
