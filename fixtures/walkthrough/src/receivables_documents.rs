@@ -1252,6 +1252,42 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         Some(linked_company.name.as_str())
     );
     assert!(legacy_invoice.party_line1.is_none() && legacy_invoice.party_country_iso.is_none());
+    let waiting = ar
+        .create_draft(&admin, 1, &invoice(Some("2026-10-08"), "1"))
+        .await?;
+    companies
+        .archive_company(&admin, party.id, Some("Walkthrough: customer archived"))
+        .await?;
+    field(
+        ar.issue_document(&admin, 1, waiting.id).await,
+        "customer_id",
+        "is an archived company",
+    );
+    ar.reverse_payment(
+        &admin,
+        1,
+        settled.id,
+        &json!({"reversal_date":"2026-10-08","reason":"Archived customer proof"}),
+    )
+    .await?;
+    let archived_payment = ar
+        .record_payment(
+            &admin,
+            1,
+            &payment("2026-10-09", "1", json!([allocation(first.id, "1")])),
+        )
+        .await?;
+    let archived_credit = ar
+        .create_draft(&admin, 1, &credit("2026-10-10", "1"))
+        .await?;
+    ar.issue_document(&admin, 1, archived_credit.id).await?;
+    ar.reverse_payment(
+        &admin,
+        1,
+        archived_payment.id,
+        &json!({"reversal_date":"2026-10-11","reason":"Archived customer proof"}),
+    )
+    .await?;
     println!("NR2 proof passed: numbering and rollback, immutable owned postings, dated/pinned reports, all 13 exports, SQL guards, row audits, tenant isolation, archive read-only (company restored active)");
     Ok(())
 }
