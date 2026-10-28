@@ -114,13 +114,8 @@ async fn main() -> Outcome<()> {
     let app = bilibi_web::App::new(db.clone(), &origin)?;
     bilibi_finance_walkthrough_fixture::without_step_up(&app.services)?;
     let services = &app.services;
-    let installed = install(&db, services).await?;
-    let manager = sign_in(&db, services, 1, 1).await?;
-    let admin = sign_in(&db, services, 1, 4).await?;
-    let viewer = sign_in(&db, services, 1, 2).await?;
-    let other = sign_in(&db, services, 2, 5).await?;
-    let ledger = services.get::<Ledger>(bilibi_finance_ledger::SERVICE)?;
-    let reports = services.get::<Reports>(bilibi_finance_reports::SERVICE)?;
+    // Steering must not reinstall fixtures: install also restores their
+    // original roles, which would contaminate the restricted-role proof.
     let grants = services.get::<Grants>("base/authz.grants")?;
     if let Some(mode) = std::env::args().nth(1).filter(|s| {
         [
@@ -133,6 +128,18 @@ async fn main() -> Outcome<()> {
         ]
         .contains(&s.as_str())
     }) {
+        let admin = sign_in(&db, services, 1, 4).await?;
+        let c = db.get().await?;
+        if c.query_opt(
+            "SELECT id FROM users WHERE tenant_id=1 AND id=2 AND email='viewer@example.test'",
+            &[],
+        )
+        .await?
+        .is_none()
+        {
+            return Err(Error::Invalid.into());
+        }
+        drop(c);
         grants
             .set_direct(
                 &admin,
@@ -150,6 +157,14 @@ async fn main() -> Outcome<()> {
         println!("Browser source-grant steering applied: {mode}");
         return Ok(());
     }
+    let installed = install(&db, services).await?;
+    let manager = sign_in(&db, services, 1, 1).await?;
+    let admin = sign_in(&db, services, 1, 4).await?;
+    let viewer = sign_in(&db, services, 1, 2).await?;
+    let other = sign_in(&db, services, 2, 5).await?;
+    let ledger = services.get::<Ledger>(bilibi_finance_ledger::SERVICE)?;
+    let reports = services.get::<Reports>(bilibi_finance_reports::SERVICE)?;
+    let grants = services.get::<Grants>("base/authz.grants")?;
     let root = std::env::var("AUDITOR_PACK_PROOF_DIR")?;
     std::fs::create_dir_all(&root)?;
     std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))?;
