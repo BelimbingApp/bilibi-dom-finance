@@ -77,7 +77,6 @@ impl Publication {
                     view::parse(after["rows"].clone()).unwrap_or_default();
                 let sections: Vec<crate::ChartTemplateSection> =
                     view::parse(after["sections"].clone()).unwrap_or_default();
-                self.columns.load(&rows, |r| r.code.clone());
                 let rows = rows
                     .iter()
                     .map(|row| {
@@ -336,7 +335,12 @@ impl Accounts {
                     )
                     .await?
                 {
-                    Ok(review) => draft.review = Some(review),
+                    Ok(review) => {
+                        let rows: Vec<crate::ChartTemplateRow> =
+                            view::parse(review.facts["after"]["rows"].clone()).unwrap_or_default();
+                        draft.columns.load(&rows, |r| r.code.clone());
+                        draft.review = Some(review);
+                    }
                     Err(Failure::Refused(refusal)) => draft.refusal = refusal,
                     Err(failure) => draft.notice = failure.text("The template"),
                 }
