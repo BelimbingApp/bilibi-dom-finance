@@ -343,7 +343,11 @@ impl Accounts {
                 draft_chart = chart.clone();
                 actions.push(&render(Button {
                     id: "ledger-account-groups-link",
-                    href: &format!("{}?company={}", super::groups::INDEX, company.id),
+                    href: &if self.list.filters["company"].is_empty() {
+                        super::groups::INDEX.to_string()
+                    } else {
+                        format!("{}?company={}", super::groups::INDEX, company.id)
+                    },
                     body: Html::text("Account groups"),
                     ..Button::default()
                 })?);
