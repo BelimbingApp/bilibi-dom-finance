@@ -3,7 +3,7 @@ use bilibi_authz::grants::Grants;
 use bilibi_database::{pool, Error};
 use bilibi_finance_attachments::{Attachments, NewFile};
 use bilibi_finance_ledger::{Ledger, Money, NewEntry, NewLine, PostOptions, TotalsQuery};
-use bilibi_finance_reports::{Issue, Reports, ReportsError};
+use bilibi_finance_reports::{Issue, Period, Reports, ReportsError};
 use bilibi_finance_walkthrough_fixture::{
     attachments::configure_storage, install, records, sign_in, COMPANY,
 };
@@ -274,6 +274,17 @@ async fn main() -> Outcome<()> {
     let before_link = reports
         .export_auditor_pack(&admin, COMPANY, date(2026, 3, 31))
         .await?;
+    let trial_before = ledger
+        .trial_balance(&admin, COMPANY, date(2026, 3, 31), None)
+        .await?;
+    let report_pin = trial_before.through_entry_number;
+    let periods = [Period {
+        from: date(2026, 3, 1),
+        to: date(2026, 3, 31),
+    }];
+    let profit_before = reports
+        .profit_and_loss(&admin, COMPANY, &periods, Some(report_pin))
+        .await?;
     let before_bytes = reports
         .read_auditor_pack(&admin, COMPANY, &before_link.id)
         .await?;
@@ -289,6 +300,20 @@ async fn main() -> Outcome<()> {
         .any(|row| row.contains("PACK-LEGACY") && row.ends_with(",\"\",\"\"")));
     ar.link_customer(&admin, COMPANY, legacy.id, &json!({"core_company_id":20}))
         .await?;
+    let trial_after = ledger
+        .trial_balance(&admin, COMPANY, date(2026, 3, 31), Some(report_pin))
+        .await?;
+    let profit_after = reports
+        .profit_and_loss(&admin, COMPANY, &periods, Some(report_pin))
+        .await?;
+    assert_eq!(
+        serde_json::to_vec(&trial_before)?,
+        serde_json::to_vec(&trial_after)?
+    );
+    assert_eq!(
+        serde_json::to_vec(&profit_before)?,
+        serde_json::to_vec(&profit_after)?
+    );
     let mut client = db.get().await?;
     let snapshot = (**client)
         .build_transaction()

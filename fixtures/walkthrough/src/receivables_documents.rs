@@ -88,6 +88,19 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         .await?;
     let party = customer.company.clone().expect("linked to Company 020");
     let prefill = einvoice.prefill_party(&admin, 1, party.id).await?;
+    let registry = services.get::<bilibi_agent_api::Registry>("base/agent_api.registry")?;
+    let key = "finance.einvoice.party.prefill";
+    let bilibi_agent_api::Handler::Read(prefill_handler) =
+        registry.operations[key].definition.handler
+    else {
+        panic!("prefill must be a read operation");
+    };
+    let prefill_input = json!({"company_id":1,"counterparty_id":party.id});
+    let agent_prefill = prefill_handler
+        .call(&**client, &admin, &prefill_input)
+        .await?
+        .envelope(key);
+    assert_eq!(agent_prefill["result"], serde_json::to_value(&prefill)?);
     assert_eq!(prefill.name.as_deref(), Some(party.name.as_str()));
     assert_eq!(prefill.tax_id, party.tax_id);
     assert_eq!(prefill.registration_number, party.registration_number);
@@ -176,6 +189,10 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         Err(bilibi_finance_einvoice::EinvoiceError::Invalid(fields))
             if fields.iter().any(|f| f.field == "buyer" && f.message.contains("Companies view permission"))
     ));
+    assert!(
+        matches!(prefill_handler.call(&**client, &admin, &prefill_input).await,
+        Err(bilibi_agent_api::Error::InvalidInput(fields)) if fields.contains_key("buyer"))
+    );
     field(
         ar.issue_document(&admin, 1, draft.id).await,
         "customer_id",
@@ -187,6 +204,10 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
     client.execute("INSERT INTO field_restrictions(tenant_id,role_id,table_id,field_id) VALUES(1,4,'companies','tax_id') ON CONFLICT DO NOTHING", &[]).await?;
     assert!(matches!(einvoice.prefill_party(&admin, 1, party.id).await,
         Err(bilibi_finance_einvoice::EinvoiceError::Invalid(fields)) if fields.iter().any(|f| f.field == "buyer" && f.message.contains("tax ID is restricted"))));
+    assert!(
+        matches!(prefill_handler.call(&**client, &admin, &prefill_input).await,
+        Err(bilibi_agent_api::Error::InvalidInput(fields)) if fields.contains_key("buyer"))
+    );
     field(
         ar.issue_document(&admin, 1, draft.id).await,
         "customer_id",
