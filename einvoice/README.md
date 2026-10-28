@@ -204,7 +204,7 @@ refuses a second entry for the document and a reversal by anyone else
 `posting_reversed` event, each in the transaction that posts it, under the
 company lock; the database refuses a second of either. A refusal (book not
 open, the book's currency differs, `posting accounts not set: ...`,
-`accounts not in the chart: ...`, a closed period, a missing ledger grant) is
+`accounts not in the chart: ...`, `accounts that are account groups, not posting accounts: ...`, a closed period, a missing ledger grant) is
 recorded afterwards, in its own transaction, as `posting_failed` or
 `reversal_failed` with the reason, and the document waits on
 `reconciliation` until `retry_posting` or `retry_reversal` succeeds. Only a
