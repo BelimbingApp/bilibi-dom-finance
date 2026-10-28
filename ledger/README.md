@@ -78,7 +78,7 @@ records (`Book`, `Account`, `Entry`, `FiscalYear`, `Period`, `ClosingEvent`,
 | `account_totals` | `finance.ledger.view` | Per-account debit and credit totals over entries dated `from` through `to`, optionally `through_entry_number` and `exclude_closing` (see Account totals) |
 | `account_totals_by_owner` | `finance.ledger.view` | The same totals, one row per account and owner module, for a control-account tie-out |
 | `evidence_page` | `finance.ledger.view` | One ID-ordered page of one of the ledger's tables for the auditor's pack (see Evidence) |
-| `Ledger::evidence_datasets` | none | The seventeen dataset names, sorted |
+| `Ledger::evidence_datasets` | none | The eighteen dataset names, sorted |
 | `Ledger::account_types`, `Ledger::late_recording_thresholds`, `Ledger::journal_statuses` | none | The five account types; the report's 45 and 60 days; `submitted`, `approved`, `rejected`, `withdrawn` |
 
 Every call authorizes the capability for the scope's actor and the target
@@ -179,8 +179,9 @@ Run the proof on a disposable PostgreSQL 18 database with `DATABASE_URL=… APP_
 
 ## Capabilities
 
-Twelve keys, verbatim from Bilimbi, under the `finance` domain, all granted to
-`tenant_owner`: `finance.ledger.view`, `.accounts.manage`, `.entries.post`,
+Twelve keys, verbatim from Bilimbi, and one port addition (`.templates.manage`, which publishes
+reusable charts and sets the starter-chart proposal), under the `finance` domain, all granted to
+`tenant_owner`: `finance.ledger.view`, `.accounts.manage`, `.templates.manage`, `.entries.post`,
 `.periods.manage`, `.periods.reopen`, `.periods.lock`,
 `.duty-separation.manage`, `.controlled-bookkeeping.manage`,
 `.late-recordings.review`, `.journals.submit`, `.journals.approve` and
@@ -595,14 +596,14 @@ objects) and `next`, the last id when the page was full; `limit` is 1 to 500
 (500 when absent) and `after` the previous page's `next`. An unknown dataset
 or an option out of range is `InvalidOption`. The datasets are `account`,
 `approval_exception`, `approval_exception_review`, `book`,
-`bookkeeping_change`, `closing_event`, `duty_separation_change`, `entry`,
+`bookkeeping_change`, `chart_template`, `closing_event`, `duty_separation_change`, `entry`,
 `fiscal_year`, `journal`, `journal_event`, `journal_line`,
 `journal_replacement`, `late_recording_review`, `line`, `opening_balances` and `period`. Existing datasets mirror Bilimbi's field lists (`src/evidence.rs`), less the entry's `legacy` and plus the account's `is_group`; `opening_balances` exports the retained source reference, CSV and journal link. Dates are `YYYY-MM-DD`,
 instants ISO 8601 UTC with microseconds and amounts the column's exact text
 (`100.0000`). Each page is a live read on its own connection. The field lists
 are an export contract: freeze one once exported and never add a credential.
 
-## Schema (versions 001 to 008)
+## Schema (versions 001 to 009)
 
 `finance_ledger_books` (one per company; currency and minor units fixed for
 good), `finance_ledger_accounts` (code and type kept by a trigger, a
@@ -662,6 +663,9 @@ ordinary approval journal, one per source reference and one per journal.
 never retained earnings (checks), keeps its group-ness for good (the identity
 trigger), a row sits only in a group of its own type (trigger on `parent_id`),
 and a posting line on a group is refused (trigger on entry lines).
+
+009 adds the append-only `finance_ledger_chart_templates`: a saved reusable chart, one
+per tenant and `saved:<key>`, refused any update or delete.
 
 ## Standards addressed
 
