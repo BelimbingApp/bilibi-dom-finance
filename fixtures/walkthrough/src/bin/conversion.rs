@@ -304,10 +304,10 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
     };
     ap.update_vendor(&s, company, vendor.id, &vendor_input)
         .await?;
-    assert!(ap
-        .import_opening_bills(&s, company, &ap_input)
-        .await
-        .is_err());
+    match ap.import_opening_bills(&s, company, &ap_input).await {
+        Err(PayablesError::Invalid(fields)) => assert!(fields.iter().all(|f| f.field == "csv")),
+        other => panic!("inactive opening vendor was not refused at the CSV field: {other:?}"),
+    }
     vendor_input.active = true;
     ap.update_vendor(&s, company, vendor.id, &vendor_input)
         .await?;

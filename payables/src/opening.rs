@@ -26,6 +26,22 @@ pub(super) struct Prepared {
     existing: Option<Value>,
 }
 
+// Vendor controls name vendor_id on ordinary bills; an import edits the CSV.
+fn vendor_refusal(error: PayablesError, source: &str) -> PayablesError {
+    let fields = match error {
+        PayablesError::Invalid(fields) | PayablesError::Ledger(LedgerError::Invalid(fields)) => {
+            fields
+        }
+        other => return other,
+    };
+    PayablesError::Invalid(
+        fields
+            .into_iter()
+            .map(|field| FieldError::new("csv", format!("{source}: vendor_code {}", field.message)))
+            .collect(),
+    )
+}
+
 impl Payables {
     pub(super) async fn opening_context(
         &self,
@@ -144,7 +160,8 @@ impl Payables {
             let vendor_id = c.query_opt("SELECT id FROM finance_payables_vendors WHERE tenant_id=$1 AND company_id=$2 AND code=$3", &[&s.tenant(), &company, &row[1]]).await?
                 .ok_or_else(|| fail("vendor_code must identify an existing vendor of the current company"))?.get(0);
             let vendor = self.vendor_on(c, s, company, vendor_id).await?;
-            Self::billable(&vendor)?;
+            Self::billable(&vendor)
+                .map_err(|e| vendor_refusal(e, &format!("row {}", index + 1)))?;
             let party_key = vendors::key(vendor_id);
             if c.query_opt("SELECT id FROM finance_payables_documents WHERE tenant_id=$1 AND company_id=$2 AND (party_key=$3 OR party_key IN (SELECT supplier_key FROM finance_payables_vendor_keys WHERE tenant_id=$1 AND company_id=$2 AND vendor_id=$5)) AND party_document_number=$4 AND status<>'voided'",&[&s.tenant(),&company,&party_key,&row[3],&vendor_id]).await?.is_some() {return Err(fail("the vendor document is already recorded"));}
             let date: Date = row[4]
@@ -272,7 +289,15 @@ impl Payables {
             let core_company = facts["vendor"]["company"]["id"]
                 .as_i64()
                 .ok_or(Error::Invalid)?;
-            facts["party"] = self.frozen_vendor_party(tx.sql(), s, core_company).await?;
+            facts["party"] = self
+                .frozen_vendor_party(tx.sql(), s, core_company)
+                .await
+                .map_err(|e| {
+                    vendor_refusal(
+                        e,
+                        &format!("source {}", facts["source_id"].as_str().unwrap_or("")),
+                    )
+                })?;
         }
         let batch=tx.mutate(move |sql|Box::pin(async move {
             let (batch,change)=store::insert(sql,store::Table::OpeningBatch,json!({"tenant_id":tenant,"company_id":company,"source_reference":source,"source_csv":csv,"currency_code":entry.currency_code,"conversion_date":entry.entry_date.to_string(),"entry_id":entry.id,"entry_number":entry.entry_number,"recorded_by_user_id":actor,"recorded_by_impersonator_id":imp,"recorded_at":jiff::Timestamp::now().to_string()})).await?;
