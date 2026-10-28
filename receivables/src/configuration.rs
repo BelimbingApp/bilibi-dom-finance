@@ -66,7 +66,9 @@ impl Receivables {
             AccountType::Asset,
         )?;
         v::account(&mut data, "income_account_id", &chart, AccountType::Income)?;
-        let control = data["receivable_account_id"].as_i64().expect("validated account id");
+        let control = data["receivable_account_id"]
+            .as_i64()
+            .expect("validated account id");
         let deposit = old.as_ref().map(|o| o["receivable_account_id"].as_i64()) != Some(Some(control))
             && client
                 .query(

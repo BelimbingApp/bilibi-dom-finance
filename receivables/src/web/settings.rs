@@ -227,7 +227,9 @@ impl Settings {
     fn receivable_choices(&self) -> Vec<Choice> {
         self.accounts
             .iter()
-            .filter(|a| a.active && a.account_type == "asset" && !self.receipts_into.contains(&a.id))
+            .filter(|a| {
+                a.active && a.account_type == "asset" && !self.receipts_into.contains(&a.id)
+            })
             .map(|a| Choice::new(a.choice_label(), a.id.to_string()))
             .collect()
     }
