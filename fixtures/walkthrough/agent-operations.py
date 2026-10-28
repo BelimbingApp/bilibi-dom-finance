@@ -9,6 +9,7 @@ import os
 import subprocess
 import urllib.error
 import urllib.request
+from decimal import Decimal
 
 if os.environ.get("BILIBI_AGENT_PROOF") != "disposable":
     raise SystemExit("BILIBI_AGENT_PROOF=disposable is required")
@@ -205,6 +206,50 @@ for channel, company in [("api", 1), ("mcp", 2)]:
     require(reversed_entry["reverses_entry_id"] == entry_id and reversed_entry["lines"][0]["credit"] == "101.23", "reversal is not the mirror")
     refused(channel, "entry.reverse", company, "already reversed", entry_id=entry_id, entry_date="2026-01-22", description="Twice")
     print("precision/balance refusals; submit without posting; same-person refusal; independent posting; rejection; withdrawal and replacement of a waiting journal (only its submitter, atomic, never posted); exact mirror and double-reversal refusal")
+
+    # A line with balance true takes the amount that balances the others; preview and commit must agree.
+    payable = write(channel, "account.create", company, code="L", name="Payable", account_type="liability")
+
+    def find(value, key):
+        if isinstance(value, dict):
+            if isinstance(value.get(key), dict) and "lines" in value[key]:
+                return value[key]
+            value = list(value.values())
+        if isinstance(value, list):
+            for item in value:
+                found = find(item, key)
+                if found is not None:
+                    return found
+        return None
+
+    def sides(lines):
+        return [(l["account_id"], Decimal(l.get("debit") or 0), Decimal(l.get("credit") or 0)) for l in lines]
+
+    def balanced(key, **extra):
+        lines = [{"account_id": asset["id"], "debit": "106.00"}, {"account_id": income["id"], "credit": "100.00"}, {"account_id": payable["id"], "balance": True}]
+        ops = [operation(key, company, entry_date="2026-01-26", description="Balance line", lines=lines, **extra)]
+        review = plan(channel, ops)
+        require(review.get("valid") is True, f"{key}: balance preview refused: {review.get('results', review.get('error'))}")
+        previewed = sides(find(review, "entry")["lines"])
+        body = commit(channel, ops, review)
+        require("results" in body, f"{key}: balance commit refused: {body.get('error')}")
+        record = body["results"][0]["result"]["result"]["record"]
+        committed = sides(read(channel, "journal.get", company, journal_id=record["id"])["lines"])
+        require(previewed == committed, f"{key}: preview and commit resolved the balance line differently")
+        require(committed[2] == (payable["id"], Decimal(0), Decimal("6.00")), f"{key}: surplus debit did not become a credit of 6.00")
+        return record
+
+    submitted = balanced("journal.submit")
+    short = plan(channel, [operation("journal.submit", company, entry_date="2026-01-26", description="Short side", lines=[{"account_id": asset["id"], "credit": "1.00"}, {"account_id": payable["id"], "balance": True}])])
+    require(short.get("valid") is True and sides(find(short, "entry")["lines"])[1] == (payable["id"], Decimal("1.00"), Decimal(0)), "a credit surplus did not become a debit of 1.00")
+    refused(channel, "journal.submit", company, "cannot be combined", entry_date="2026-01-26", description="Both", lines=[{"account_id": asset["id"], "debit": "106.00"}, {"account_id": payable["id"], "credit": "5.00", "balance": True}])
+    refused(channel, "journal.submit", company, "only one line", entry_date="2026-01-26", description="Two", lines=[{"account_id": asset["id"], "debit": "1.00"}, {"account_id": income["id"], "balance": True}, {"account_id": payable["id"], "balance": True}])
+    refused(channel, "journal.submit", company, "nothing to balance", entry_date="2026-01-26", description="Matched", lines=[{"account_id": asset["id"], "debit": "1.00"}, {"account_id": income["id"], "credit": "1.00"}, {"account_id": payable["id"], "balance": True}])
+    refused(channel, "journal.submit", company, "decimal places", entry_date="2026-01-26", description="Too fine", lines=[{"account_id": asset["id"], "debit": "1.005"}, {"account_id": payable["id"], "balance": True}])
+    require(sql(f"SELECT count(*) FROM finance_ledger_journals WHERE company_id={company} AND description IN ('Short side','Both','Two','Matched','Too fine')") == "0", "a refused balance journal was recorded")
+    replacement = balanced("journal.replace", journal_id=submitted["id"])
+    require(replacement["replaces_journal_id"] == submitted["id"] and read(channel, "journal.get", company, journal_id=submitted["id"])["status"] == "withdrawn", "balance replacement did not withdraw the original")
+    print("balance line: debit or credit filled to balance at the book's places, same in preview and commit for submit and replace; refused beside an amount, twice, when matched and when finer than the places; nothing recorded on refusal")
 
     # Keep nonzero income so close/reopen must show actual generated entries.
     posted = write(channel, "journal.submit", company, entry_date="2026-02-17", description="Year activity", lines=lines)
