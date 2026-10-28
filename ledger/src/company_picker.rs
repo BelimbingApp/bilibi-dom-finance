@@ -1,14 +1,14 @@
 //! Choosing the Core company a customer is, shared by Add customer and Link
 //! to company: an existing company found by name through Base Records and
-//! the shared `RecordPicker`, or a new one created through Core's own
-//! reviewed contract (`core.company.create`), whose duplicate review the
-//! dialog shows before the person creates anyway with a reason. The
-//! customer relationship is then recorded from the current company through
-//! `core.company.relationship.assign`, Core's reviewed write.
+//! the shared `RecordPicker`, or a new one whose duplicate review the dialog
+//! shows before the person creates anyway with a reason.
 //!
-//! `submit_composed` reviews and commits the customer's single operation,
-//! including Core's duplicate suggestions. The vendor's existing `company`
-//! flow still submits separate Core writes and reports a later refusal.
+//! `submit_composed` reviews and commits the customer's single operation
+//! (company, Finance link and relationship in one transaction), including
+//! Core's duplicate suggestions. The vendor's existing `company` flow still
+//! creates the company through Core's reviewed `core.company.create` and
+//! records the relationship through `core.company.relationship.assign` as
+//! separate writes, and reports a later refusal.
 use askama::Template;
 use bilibi_agent_api::{
     page::{Call, PageContracts},
