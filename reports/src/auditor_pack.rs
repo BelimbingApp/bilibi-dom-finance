@@ -390,7 +390,11 @@ impl Reports {
             "filters":{"evidence": if coverage == Coverage::All { "all Finance company records, including drafts and reversals" } else { "all ledger company records and issued reports, including drafts and reversals" }, "trial_balance_and_aging_as_of":as_of.to_string()},
             "decimal_encoding":"exact decimal strings; CSV numeric cells are unrounded",
             "csv_text_encoding":"UTF-8; formula-like text is prefixed with an apostrophe",
-            "source_files":"source file bytes (bank statements, supporting documents) are not in the pack; the source-file and attachment indexes carry their SHA-256; authority payloads are included",
+            "source_files": if coverage == Coverage::All {
+                "Source file bytes (bank statements, supporting documents) are not in the pack; the source-file and attachment indexes carry their SHA-256; authority payloads are included."
+            } else {
+                "Source evidence is excluded. The source-file index is empty; no attachment index or authority payloads are included."
+            },
             "report_notice":"Management reports for the company's own use, not statutory financial statements.",
             "files":files.metadata, "control_totals":{"debits":debit,"credits":credit}
         }))
