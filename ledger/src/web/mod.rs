@@ -859,7 +859,7 @@ pub(crate) fn no_company(id: &str) -> Result<Html> {
     render(
         EmptyState::missing(
             "No current company",
-            "Choose a current company in the top bar to see its ledger.",
+            "Choose a current company in the top bar, or ask an administrator for access.",
         )
         .id(id),
     )
