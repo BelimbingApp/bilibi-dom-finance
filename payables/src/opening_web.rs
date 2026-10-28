@@ -363,15 +363,15 @@ impl Opening {
                         .cell("source", Cell::text(text("source_id")))
                         .cell(
                             "record",
-                            Cell::text(&format!(
+                            Cell::text(format!(
                                 "{} · {}",
                                 text("vendor_name"),
                                 text("document_reference")
                             )),
                         )
                         .cell("date", Cell::text(text("document_date")))
-                        .cell("original", Cell::text(&money(&r["original_total"])))
-                        .cell("balance", Cell::text(&money(&r["outstanding"])))
+                        .cell("original", Cell::text(money(&r["original_total"])))
+                        .cell("balance", Cell::text(money(&r["outstanding"])))
                         .cell("due", Cell::text(text("due_date")))
                         .cell("account", Cell::text(text("account_code"))),
                 );

@@ -363,19 +363,19 @@ impl Opening {
                 rows.push(
                     FlexRow::new(text("source_id"))
                         .cell("source", Cell::text(text("source_id")))
-                        .cell("record", Cell::text(&text("description").to_owned()))
+                        .cell("record", Cell::text(text("description")))
                         .cell("date", Cell::text(text("acquisition_date")))
-                        .cell("original", Cell::text(&money(&r["cost"])))
-                        .cell("balance", Cell::text(&money(&r["carrying_value"])))
+                        .cell("original", Cell::text(money(&r["cost"])))
+                        .cell("balance", Cell::text(money(&r["carrying_value"])))
                         .cell(
                             "accumulated",
-                            Cell::text(&money(&r["accumulated_depreciation"])),
+                            Cell::text(money(&r["accumulated_depreciation"])),
                         )
                         .cell(
                             "remaining",
-                            Cell::text(&r["remaining_life_months"].to_string()),
+                            Cell::text(r["remaining_life_months"].to_string()),
                         )
-                        .cell("residual", Cell::text(&money(&r["residual_value"])))
+                        .cell("residual", Cell::text(money(&r["residual_value"])))
                         .cell("service", Cell::text(text("in_service_date")))
                         .cell("cost_account", Cell::text(text("cost_account_id_code")))
                         .cell(

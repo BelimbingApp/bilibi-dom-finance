@@ -162,8 +162,8 @@ require(Decimal(source_asset["cost"])==12000 and Decimal(source_asset["accumulat
 receipt={"series_id":payment_series,"customer_id":customer["id"],"payment_date":"2026-07-15","amount":"1000","deposit_account_id":accounts["1000"],"allocations":[{"document_id":invoice,"amount":"1000"}]}
 refused(channel,"finance.receivables.payment.record",company,"conversion",who="approver",**(receipt|{"payment_date":"2026-06-30"}))
 write(channel,"finance.receivables.payment.record",company,**receipt)
-request=write(channel,"finance.payables.payment.submit",company,"manager",payment_date="2026-07-15",party_key="conversion-vendor",paid_from_account_id=accounts["1000"],allocations=[{"document_id":bill,"amount":"500"}])
-write(channel,"finance.payables.payment.approve",company,request_id=request["id"])
+payment_request=write(channel,"finance.payables.payment.submit",company,"manager",payment_date="2026-07-15",party_key="conversion-vendor",paid_from_account_id=accounts["1000"],allocations=[{"document_id":bill,"amount":"500"}])
+write(channel,"finance.payables.payment.approve",company,request_id=payment_request["id"])
 final=read(channel,"finance.ledger.trial_balance.get",company,"approver",as_of="2026-07-31")
 actual={r["code"]:(Decimal(r["debit_balance"]),Decimal(r["credit_balance"])) for r in final["rows"]}
 for code,expected in {"1000":("10500","0"),"1100":("2000","0"),"2000":("0","1000"),"1200":("12000","0"),"1290":("0","1800"),"4000":("0","5500"),"5000":("2000","0")}.items():
