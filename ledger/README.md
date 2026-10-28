@@ -337,7 +337,7 @@ These example codes and currency choices belong to fixture companies, not produc
 
 Retry the same source reference, conversion date, currency and **exact CSV bytes** after a lost response. The operation returns its recorded journal, including its current decision, without another journal or entry. Whitespace/line-ending changes count as different CSV bytes. Reusing a reference for different data is refused. Another source reference is also refused while a submitted or approved opening journal exists, protecting against importing one source twice under a different name.
 
-If a submission is wrong, reject it with a reason and submit the corrected CSV with a new source reference. The rejected source remains evidence. After posting, reverse the entry through the existing reviewed reversal operation and submit an independently approved correction journal, retaining references to the original source and correction. Do not delete, overwrite or repeat the opening import. Read the balances again at a new entry-number pin after correction. Closed periods and archived companies retain their existing controls.
+If a submission is wrong, reject it with a reason and submit the corrected CSV with a new source reference. The rejected source remains evidence. After posting, reverse the entry through the existing reviewed reversal operation and submit an independently approved correction journal, retaining references to the original source and correction. Do not delete, overwrite or repeat the opening import. Read the balances again at a new entry-number pin after correction. Closed periods and archived companies retain their existing controls. The existing manual-journal UI accepts at most 12 lines; larger correction journals currently require the reviewed `finance.ledger.journal.submit` operation through MCP. The opening page accepts pasted CSV, with no file picker in this slice.
 
 ### Prepare and review through MCP
 
@@ -502,8 +502,7 @@ or an option out of range is `InvalidOption`. The datasets are `account`,
 `approval_exception`, `approval_exception_review`, `book`,
 `bookkeeping_change`, `closing_event`, `duty_separation_change`, `entry`,
 `fiscal_year`, `journal`, `journal_event`, `journal_line`,
-`journal_replacement`, `late_recording_review`, `line`, `opening_balances` and `period`, with
-Bilimbi's field lists (`src/evidence.rs`), less the entry's `legacy`. Dates are `YYYY-MM-DD`,
+`journal_replacement`, `late_recording_review`, `line`, `opening_balances` and `period`. Existing datasets mirror Bilimbi's field lists (`src/evidence.rs`), less the entry's `legacy`; `opening_balances` exports the retained source reference, CSV and journal link. Dates are `YYYY-MM-DD`,
 instants ISO 8601 UTC with microseconds and amounts the column's exact text
 (`100.0000`). Each page is a live read on its own connection. The field lists
 are an export contract: freeze one once exported and never add a credential.

@@ -3,7 +3,7 @@
 //! --bin opening-balances. UI proof: ledger-ui opening. MCP proof: the
 //! agent-operations credential fixture and opening-balances-operations.py.
 use bilibi_database::pool;
-use bilibi_finance_ledger::{Ledger, LedgerError, OpeningBalances, Reversal};
+use bilibi_finance_ledger::{Ledger, LedgerError, Money, OpeningBalances, Reversal};
 use bilibi_finance_walkthrough_fixture::{install, services, sign_in, COMPANY};
 use jiff::civil::date;
 
@@ -35,6 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut invalids = 0;
     for csv in [
         original.replace("5500", "5501"),
+        original.replace("bank,", "bank\0,"),
         original.replace("1000,", "unknown,"),
         original.replace("receivables,", "bank,"),
         original.replace("10000,", "10000.001,"),
@@ -192,36 +193,87 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .shown(trial.minor_units),
         "0.00"
     );
+    let bank = trial
+        .rows
+        .iter()
+        .find(|r| r.account.code == "1000")
+        .ok_or("bank")?
+        .account
+        .id;
+    let capital = trial
+        .rows
+        .iter()
+        .find(|r| r.account.code == "3000")
+        .ok_or("capital")?
+        .account
+        .id;
+    let mut lines: Vec<_> = entry
+        .lines
+        .iter()
+        .map(|line| bilibi_finance_ledger::NewLine {
+            account_id: line.account_id,
+            debit: line.debit,
+            credit: line.credit,
+            description: line.description.clone(),
+        })
+        .collect();
+    for line in &mut lines {
+        if line.account_id == bank {
+            line.debit = Money::parse("10100", trial.minor_units)?;
+        }
+        if line.account_id == capital {
+            line.credit = Money::parse("8100", trial.minor_units)?;
+        }
+    }
     let corrected = ledger
         .submit_journal(
             &manager,
             COMPANY,
             &bilibi_finance_ledger::NewEntry {
                 entry_date: source.conversion_date,
-                description: "Corrected opening balances".into(),
+                description: "Corrected opening balances against revised source".into(),
                 reference: Some("CORRECTION-2".into()),
-                lines: entry
-                    .lines
-                    .iter()
-                    .map(|l| bilibi_finance_ledger::NewLine {
-                        account_id: l.account_id,
-                        debit: l.debit,
-                        credit: l.credit,
-                        description: l.description.clone(),
-                    })
-                    .collect(),
+                lines,
             },
         )
         .await?;
     ledger
         .approve_journal(&reviewer, COMPANY, corrected.id)
         .await?;
+    let revised = ledger
+        .trial_balance(&manager, COMPANY, source.conversion_date, None)
+        .await?;
+    assert_eq!(revised.total_debit.shown(trial.minor_units), "15100.00");
+    assert_eq!(
+        revised
+            .rows
+            .iter()
+            .find(|r| r.account.id == bank)
+            .ok_or("revised bank")?
+            .debit_balance
+            .shown(trial.minor_units),
+        "10100.00"
+    );
+    assert_eq!(
+        revised
+            .rows
+            .iter()
+            .find(|r| r.account.id == capital)
+            .ok_or("revised capital")?
+            .credit_balance
+            .shown(trial.minor_units),
+        "8100.00"
+    );
     assert_eq!(
         ledger
-            .trial_balance(&manager, COMPANY, source.conversion_date, None)
-            .await?
-            .total_debit,
-        trial.total_debit
+            .trial_balance(
+                &manager,
+                COMPANY,
+                source.conversion_date,
+                Some(trial.through_entry_number)
+            )
+            .await?,
+        trial
     );
     let evidence = ledger
         .evidence_page(&manager, COMPANY, "opening_balances", Some(500), None)
@@ -235,7 +287,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let audited: i64 = client.query_one("SELECT count(*) FROM base_audit_mutations WHERE auditable_type='finance.ledger.opening_balances'", &[]).await?.get(0);
     assert_eq!(audited, 2);
     assert!(client.execute("UPDATE finance_ledger_opening_balances SET source_csv='overwritten' WHERE tenant_id=1 AND company_id=1", &[]).await.is_err());
-    println!("opening: reversal and independently approved correction restore source balances; two source evidence records and their audit changes retained; database refuses evidence overwrite");
+    println!("opening: reversal and independently approved correction reconcile revised balances to 15100.00; original pin reproduces 15000.00; two source evidence records and their audit changes retained; database refuses evidence overwrite");
     println!(
         "EXCLUDED: settleable open invoices/bills, aging and control tie-outs, bank reconciliation items, asset registers, tax return detail, historical/comparative migration; no complete conversion claim"
     );

@@ -158,8 +158,17 @@ write(channel, "entry.reverse", company, entry_id=entry_id, entry_date="2026-07-
 require(Decimal(read(channel, "trial_balance.get", company, as_of="2026-07-01")["total_debit"]) == 0, "reversal failed")
 entry = read(channel, "entry.get", company, entry_id=entry_id)
 lines = [{"account_id": line["account_id"], "debit": line["debit"], "credit": line["credit"], "description": line["description"]} for line in entry["lines"]]
+account_ids = {row["code"]: row["id"] for row in trial["rows"]}
+for line in lines:
+    if line["account_id"] == account_ids["1000"]: line["debit"] = "10100"
+    if line["account_id"] == account_ids["3000"]: line["credit"] = "8100"
 corrected = write(channel, "journal.submit", company, entry_date="2026-07-01", description="Corrected opening balances", reference="CORRECTION-2", lines=lines)
 write(channel, "journal.approve", company, "approver", journal_id=corrected["id"])
-require(Decimal(read(channel, "trial_balance.get", company, as_of="2026-07-01")["total_debit"]) == Decimal("15000"), "correction failed")
-print("MCP: preview is read-only; dependent plan rolls back; source retry is idempotent; separate independent approval posts exactly six balances totaling 15000.00; reversal and approved correction reconcile")
+revised = read(channel, "trial_balance.get", company, as_of="2026-07-01")
+require(Decimal(revised["total_debit"]) == Decimal("15100"), "correction failed")
+for row in revised["rows"]:
+    if row["code"] == "1000": require(Decimal(row["debit_balance"]) == Decimal("10100"), "revised bank differs")
+    if row["code"] == "3000": require(Decimal(row["credit_balance"]) == Decimal("8100"), "revised capital differs")
+require(read(channel, "trial_balance.get", company, as_of="2026-07-01", through_entry_number=trial["through_entry_number"]) == trial, "original trial-balance pin changed")
+print("MCP: preview is read-only; dependent plan rolls back; source retry is idempotent; separate independent approval posts exactly six balances totaling 15000.00; reversal and approved correction reconcile revised balances to 15100.00; original pin reproduces 15000.00")
 print("Reviews: 8 setup, 2 conversion (submission and independent approval); additional reviews exercise retry, rollback and correction. EXCLUDED: open items, settlement, aging, bank reconciliation items, assets, tax detail and historical transactions.")

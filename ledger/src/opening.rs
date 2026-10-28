@@ -40,11 +40,14 @@ pub(crate) async fn prepare(
     source: &OpeningBalances,
 ) -> Result<Prepared> {
     let reference = source.source_reference.trim();
-    if reference.is_empty() || reference.chars().count() > 100 {
+    if reference.is_empty() || reference.chars().count() > 100 || reference.contains('\0') {
         return Err(refused(
             "source_reference",
-            "must contain 1 to 100 characters",
+            "must contain 1 to 100 characters without null characters",
         ));
+    }
+    if source.csv.contains('\0') {
+        return Err(refused("csv", "must not contain null characters"));
     }
     let book = books::find(client, tenant, company)
         .await?
