@@ -111,7 +111,7 @@ Lengthen retention form, which re-asks the capability, and the change history;
 a recorded change reads the page again, and a blank or non-numeric years is
 refused with the reason's error first, as Bilimbi's changeset words it)
 and every attachment by number in a FlexTable (column settings, compact rows)
-with the record it supports, file and size, SHA-256, kept-until date and legal
+with the record it supports, file and size, SHA-256, retention date and legal
 hold, capture time and standing. The kind-of-record and standing selects
 (`filter[source]`, `filter[status]` in the form; `source`, `status` in the
 URL; standing by default) keep to the address, and "Show more" reads the next
