@@ -832,7 +832,7 @@ impl Settings {
                     .prompt("Choose a liability account")
                     .options(self.account_choices("liability"))
                     .required()
-                    .hint("Tax on invoice lines is credited to this liability account when the invoice is issued, whether or not the customer has paid. Paying the tax over is recorded separately."),
+                    .hint("The liability account tax on a document is posted to when it is issued. It records tax on the document, not that the customer has paid, that tax is due or that it was remitted: timing depends on the tax regime. Review the tax code and return before filing."),
             )?);
         }
         body.push(&render(
