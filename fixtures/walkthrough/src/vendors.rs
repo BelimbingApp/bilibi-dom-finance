@@ -5,7 +5,7 @@ use bilibi_module_registry::Services;
 use bilibi_tenancy::Scope;
 
 pub async fn vendor(
-    _db: &Db,
+    db: &Db,
     services: &Services,
     scope: &Scope,
     company: i64,
@@ -22,20 +22,40 @@ pub async fn vendor(
         return Ok(v.id);
     }
     let core = services.get::<bilibi_company::CompanyService>(bilibi_company::SERVICE)?;
-    let created = match core
-        .create_company(
+    let name = format!("{name} ({code})");
+    let existing = {
+        let client = db.get().await?;
+        bilibi_company::list(
+            &**client,
             scope,
-            &bilibi_company::NewCompany {
-                name: format!("{name} ({code})"),
-                status: Some("active".into()),
-                ..bilibi_company::NewCompany::default()
+            &bilibi_company::Params {
+                q: name.clone(),
+                ..bilibi_company::Params::default()
             },
         )
         .await?
-    {
-        bilibi_company::CreateOutcome::Created(c) => c,
-        bilibi_company::CreateOutcome::Refused(e) => {
-            return Err(format!("fixture company refused: {e:?}").into())
+        .rows
+        .into_iter()
+        .find(|c| c.name == name)
+    };
+    let core_company_id = if let Some(existing) = existing {
+        existing.id
+    } else {
+        match core
+            .create_company(
+                scope,
+                &bilibi_company::NewCompany {
+                    name,
+                    status: Some("active".into()),
+                    ..bilibi_company::NewCompany::default()
+                },
+            )
+            .await?
+        {
+            bilibi_company::CreateOutcome::Created(c) => c.id,
+            bilibi_company::CreateOutcome::Refused(e) => {
+                return Err(format!("fixture company refused: {e:?}").into())
+            }
         }
     };
     Ok(p.create_vendor(
@@ -43,7 +63,7 @@ pub async fn vendor(
         company,
         &bilibi_finance_payables::VendorInput {
             code: code.into(),
-            core_company_id: created.id,
+            core_company_id,
             payment_terms_days: 0,
             payable_account_id: None,
             expense_account_id: None,

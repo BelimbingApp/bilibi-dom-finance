@@ -391,7 +391,7 @@ impl Payables {
                 )
                 .await?;
             let facts = bilibi_finance_ledger::CompanyLinks::new(&self.parties)
-                .frozen_party(tx.sql(), s, vendor.company.id, "vendor_id")
+                .frozen_party(tx.sql(), s, vendor.company.id, "vendor_id", false)
                 .await?;
             for (field, label, max) in [
                 ("party_name", "name", 200),

@@ -46,7 +46,7 @@ pub(crate) async fn mapped(
     tenant: i64,
     company: i64,
     key: &str,
-) -> Result<Option<i64>> {
+) -> bilibi_database::Result<Option<i64>> {
     Ok(c.query_opt("SELECT vendor_id FROM finance_payables_vendor_keys WHERE tenant_id=$1 AND company_id=$2 AND supplier_key=$3", &[&tenant,&company,&key]).await?.map(|r|r.get(0)))
 }
 pub(crate) fn key(id: i64) -> String {
@@ -259,7 +259,7 @@ impl Payables {
         let id=tx.mutate(move |sql| Box::pin(async move {
             if let Some(id)=id {
                 let before=store::raw(sql,Table::Vendors,tenant,company,id).await?;
-                sql.execute("UPDATE finance_payables_vendors SET payment_terms_days=($4->>'payment_terms_days')::int,payable_account_id=($4->>'payable_account_id')::bigint,expense_account_id=($4->>'expense_account_id')::bigint,tax_code_id=($4->>'tax_code_id')::bigint,active=($4->>'active')::boolean,updated_at=timezone('UTC',clock_timestamp()) WHERE tenant_id=$1 AND company_id=$2 AND id=$3", &[&tenant,&company,&id,&value]).await?;
+                sql.execute("UPDATE finance_payables_vendors SET payment_terms_days=($4::jsonb->>'payment_terms_days')::int,payable_account_id=($4::jsonb->>'payable_account_id')::bigint,expense_account_id=($4::jsonb->>'expense_account_id')::bigint,tax_code_id=($4::jsonb->>'tax_code_id')::bigint,active=($4::jsonb->>'active')::boolean,updated_at=timezone('UTC',clock_timestamp()) WHERE tenant_id=$1 AND company_id=$2 AND id=$3", &[&tenant,&company,&id,&value]).await?;
                 let after=store::raw(sql,Table::Vendors,tenant,company,id).await?;
                 Ok((id,vec![store::update_change(Table::Vendors,id,before,after)]))
             } else {

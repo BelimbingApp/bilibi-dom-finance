@@ -34,6 +34,7 @@ pub struct NewPayment {
 #[derive(Clone, Debug, Serialize)]
 pub struct PaymentRequest {
     pub id: i64,
+    pub vendor_id: Option<i64>,
     pub request_number: i64,
     #[serde(serialize_with = "as_text")]
     pub payment_date: Date,
@@ -63,6 +64,7 @@ pub struct PaymentDecision {
 #[derive(Clone, Debug, Serialize)]
 pub struct Payment {
     pub id: i64,
+    pub vendor_id: Option<i64>,
     pub payment_number: i64,
     #[serde(serialize_with = "as_text")]
     pub payment_date: Date,
@@ -647,7 +649,7 @@ pub(super) fn approval(r: &PaymentRequest, override_reason: Option<String>) -> A
 pub(super) fn requested(r: &PaymentRequest) -> NewPayment {
     NewPayment {
         payment_date: r.payment_date,
-        vendor_id: None,
+        vendor_id: r.vendor_id,
         supplier_key: Some(r.party_key.clone()),
         paid_from_account_id: r.paid_from_account_id,
         reference: r.reference.clone(),
@@ -770,6 +772,7 @@ pub(crate) async fn request(
     let decision=c.query_opt("SELECT event,reason,payment_id,actor_user_id,actor_impersonator_id,occurred_at::text FROM finance_payables_payment_request_events WHERE tenant_id=$1 AND company_id=$2 AND request_id=$3",&[&tenant,&company,&id]).await?.map(|e|PaymentDecision {event:e.get(0),reason:e.get(1),payment_id:e.get(2),actor_user_id:e.get(3),actor_impersonator_id:e.get(4),occurred_at:e.get(5)});
     Ok(PaymentRequest {
         id,
+        vendor_id: vendors::mapped(c, tenant, company, &r.get::<_, String>(2)).await?,
         request_number: r.get(0),
         payment_date: r.get::<_, String>(1).parse().map_err(|_| Error::Invalid)?,
         party_key: r.get(2),
@@ -797,6 +800,7 @@ pub(crate) async fn payment(
     let reversed=c.query_opt("SELECT id FROM finance_payables_payments WHERE tenant_id=$1 AND company_id=$2 AND reverses_payment_id=$3",&[&tenant,&company,&id]).await?.map(|r|r.get(0));
     Ok(Payment {
         id,
+        vendor_id: vendors::mapped(c, tenant, company, &r.get::<_, String>(2)).await?,
         payment_number: r.get(0),
         payment_date: r.get::<_, String>(1).parse().map_err(|_| Error::Invalid)?,
         party_key: r.get(2),

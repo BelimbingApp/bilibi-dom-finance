@@ -108,7 +108,7 @@ impl Receivables {
         id: i64,
     ) -> Result<Value> {
         Ok(bilibi_finance_ledger::CompanyLinks::new(&self.parties)
-            .frozen_party(client, scope, id, "customer_id")
+            .frozen_party(client, scope, id, "customer_id", true)
             .await
             .map_err(|error| match error {
                 bilibi_finance_ledger::LedgerError::Invalid(fields) => {

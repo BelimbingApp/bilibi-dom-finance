@@ -68,12 +68,6 @@ pub struct Customer {
     pub active: bool,
 }
 
-impl bilibi_finance_ledger::CompanyFacts {
-    /// Whether new invoices may name this company: it is active in Core.
-    pub fn active(&self) -> bool {
-        self.status == "active"
-    }
-}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DocumentLine {
     pub line_number: i32,

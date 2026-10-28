@@ -243,7 +243,7 @@ impl CompanyChooser {
                     Mode::Existing => "existing",
                     Mode::New => "new",
                 })
-                .hint("A customer is a company in Companies: its name, tax and registration numbers, contact details and billing address are read from there.")
+                .hint("Company details and billing addresses are read from Companies.")
                 .wrapper_class("mb-3 sm:col-span-2"),
         )?;
         match self.mode {
@@ -522,9 +522,10 @@ pub async fn record_relationship(
     {
         Ok(roles) => roles,
         Err(Error::Forbidden | Error::Unauthorized) => {
-            return Ok(Err(
-                "you need permission to list companies to find the customer role".into(),
-            ))
+            return Ok(Err(format!(
+                "you need permission to list companies to find the {} role",
+                pages.role
+            )))
         }
         Err(error) => return Err(error),
     };
@@ -535,9 +536,10 @@ pub async fn record_relationship(
         .find(|role| role["code"] == pages.role)
         .and_then(|role| role["id"].as_i64())
     else {
-        return Ok(Err(
-            "the relationship roles have no customer role; add one under Companies › Relationship Roles".into(),
-        ));
+        return Ok(Err(format!(
+            "the relationship roles have no {} role; add one under Companies › Relationship Roles",
+            pages.role
+        )));
     };
     match pages
         .write_core(

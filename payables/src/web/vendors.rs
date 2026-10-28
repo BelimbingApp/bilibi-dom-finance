@@ -35,7 +35,7 @@ pub(super) struct Vendors {
     can_manage: bool,
     create: Option<Create>,
     mapping: Option<(String, HashMap<String, String>, CompanyErrors)>,
-    notice: Option<String>,
+    notice: Option<(StatusKind, String)>,
     company_name: String,
     states: CommitStates,
 }
@@ -188,11 +188,10 @@ impl Vendors {
             actions,
             ..Header::default()
         })?;
-        if let Some(message) = &self.notice {
+        if let Some((kind, message)) = &self.notice {
             body.push(&render(Alert {
                 id: "vendors-notice",
-                status: StatusKind::Warning,
-                title: "",
+                kind: *kind,
                 body: Html::text(message),
                 ..Alert::default()
             })?);
@@ -203,7 +202,12 @@ impl Vendors {
             loop {
                 let a = self
                     .read(s, "finance.ledger.account.list", input.clone())
-                    .await?;
+                    .await;
+                let a = match a {
+                    Ok(a) => a,
+                    Err(Error::Forbidden | Error::Unauthorized) => break,
+                    Err(e) => return Err(e),
+                };
                 for row in a["records"].as_array().into_iter().flatten() {
                     if row["active"] == true && row["is_group"] != true {
                         accounts.push(row.clone());
@@ -218,7 +222,7 @@ impl Vendors {
                 .read(
                     s,
                     "finance.payables.tax_code.list",
-                    json!({"company_id":company,"page_size":500}),
+                    json!({"company_id":company,"page_size":100}),
                 )
                 .await?;
             (
@@ -231,7 +235,6 @@ impl Vendors {
         let mut rows = vec![];
         body.push(&render(FilterToolbar::new(
             "vendor-filters",
-            "filters",
             vec![ToolbarControl::search(
                 "vendor-search",
                 "search",
@@ -259,72 +262,74 @@ impl Vendors {
             let mut row = FlexRow::new(v.id.to_string()).cell("code", Cell::text(&v.code));
             let mut company_body = render(ActionLink {
                 href: &v.company.path,
-                body: Html::text(format!("{} · {}", v.company.name, v.company.status)),
+                body: Html::text(&format!("{} · {}", v.company.name, v.company.status)),
                 ..ActionLink::default()
             })?;
-            let mut facts = vec![];
-            for (key, label, value) in [
-                ("tax_id", "Tax ID", &v.company.tax_id),
-                (
-                    "registration_number",
-                    "Registration number",
-                    &v.company.registration_number,
-                ),
-                ("email", "Email", &v.company.email),
-                ("phone", "Phone", &v.company.phone),
-            ] {
-                let value = if !v.company.readable || v.company.restricted.iter().any(|r| r == key)
+            if self.columns.mode() != RowMode::Compact {
+                let mut facts = vec![];
+                for (key, label, value) in [
+                    ("tax_id", "Tax ID", &v.company.tax_id),
+                    (
+                        "registration_number",
+                        "Registration number",
+                        &v.company.registration_number,
+                    ),
+                    ("email", "Email", &v.company.email),
+                    ("phone", "Phone", &v.company.phone),
+                ] {
+                    let value =
+                        if !v.company.readable || v.company.restricted.iter().any(|r| r == key) {
+                            render(Restricted::new(format!("vendor-{}-{key}-restricted", v.id)))?
+                        } else {
+                            Html::text(value.as_deref().unwrap_or("—"))
+                        };
+                    facts.push(Fact {
+                        title: label,
+                        value,
+                        ..Fact::default()
+                    });
+                }
+                let billing = match self
+                    .read(
+                        s,
+                        "core.address.company.list",
+                        json!({"company_id":v.company.id}),
+                    )
+                    .await
                 {
-                    render(Restricted::new(format!("vendor-{}-{key}-restricted", v.id)))?
-                } else {
-                    Html::text(value.as_deref().unwrap_or("—"))
+                    Ok(rows) => {
+                        let lines = bilibi_finance_ledger::company_billing_lines(
+                            &rows,
+                            &self.pages.today(s).await?.to_string(),
+                        );
+                        Html::text(&if lines.is_empty() {
+                            "No billing address in Companies".into()
+                        } else {
+                            lines.join(", ")
+                        })
+                    }
+                    Err(Error::Forbidden | Error::Unauthorized) => render(
+                        Restricted::new(format!("vendor-{}-billing-restricted", v.id))
+                            .reason("Viewing addresses needs permission."),
+                    )?,
+                    Err(e) => return Err(e),
                 };
                 facts.push(Fact {
-                    title: label,
-                    value,
+                    title: "Billing address",
+                    value: billing,
                     ..Fact::default()
                 });
+                company_body.push(&render(Fold {
+                    id: &format!("vendor-{}-company-details", v.id),
+                    title: "Company details",
+                    summary: "",
+                    open: false,
+                    body: render(Facts {
+                        id: &format!("vendor-{}-facts", v.id),
+                        items: facts,
+                    })?,
+                })?);
             }
-            let billing = match self
-                .read(
-                    s,
-                    "core.address.company.list",
-                    json!({"company_id":v.company.id}),
-                )
-                .await
-            {
-                Ok(rows) => {
-                    let lines = bilibi_finance_ledger::company_billing_lines(
-                        &rows,
-                        &self.pages.today(s).await?.to_string(),
-                    );
-                    Html::text(if lines.is_empty() {
-                        "No billing address in Companies".into()
-                    } else {
-                        lines.join(", ")
-                    })
-                }
-                Err(Error::Forbidden | Error::Unauthorized) => render(
-                    Restricted::new(format!("vendor-{}-billing-restricted", v.id))
-                        .reason("Viewing addresses needs permission."),
-                )?,
-                Err(e) => return Err(e),
-            };
-            facts.push(Fact {
-                title: "Billing address",
-                value: billing,
-                ..Fact::default()
-            });
-            company_body.push(&render(Fold {
-                id: &format!("vendor-{}-company-details", v.id),
-                title: "Company details",
-                summary: "",
-                open: false,
-                body: render(Facts {
-                    id: &format!("vendor-{}-facts", v.id),
-                    items: facts,
-                })?,
-            })?);
             row = row.slot("company", company_body);
             row = row.slot(
                 "terms",
@@ -367,14 +372,14 @@ impl Vendors {
                         .iter()
                         .find(|a| a["id"].as_i64() == current)
                         .map(|a| {
-                            Html::text(format!(
+                            Html::text(&format!(
                                 "{} · {}",
                                 a["name"].as_str().unwrap_or(""),
                                 a["code"].as_str().unwrap_or("")
                             ))
                         })
                         .unwrap_or_else(|| {
-                            Html::text(current.map_or_else(
+                            Html::text(&current.map_or_else(
                                 || "Company default".into(),
                                 |id| format!("Account {id}"),
                             ))
@@ -488,7 +493,7 @@ impl Vendors {
             "vendor-pagination",
             PageCounts::new(self.list.page, self.list.page_size, total),
             &[25, 50, 100],
-        )))?;
+        ))?);
         body.push(&render(SectionHeading{title:"Historical supplier keys",description:"Confirm each match after reviewing every snapshot and possible collision. Confirmations are permanent. Bills, payment keys and aging groups remain unchanged.",..SectionHeading::default()})?);
         let mut rows = vec![];
         for h in &self.history {
@@ -509,7 +514,7 @@ impl Vendors {
                 .collect::<Vec<_>>()
                 .join("; ");
             let matched = match h.vendor_id {
-                Some(id) => Html::text(self.all.iter().find(|v| v.id == id).map_or_else(
+                Some(id) => Html::text(&self.all.iter().find(|v| v.id == id).map_or_else(
                     || format!("Vendor {id}"),
                     |v| format!("{} · {}", v.code, v.company.name),
                 )),
@@ -587,22 +592,35 @@ impl Vendors {
     fn create_dialog(&self, c: &Create) -> Result<Html> {
         let mut labels = c.chooser.labels();
         labels.push(("code".into(), "vendor-code".into(), "Code".into()));
+        labels.push((
+            "payment_terms_days".into(),
+            "vendor-payment_terms_days".into(),
+            "Payment terms".into(),
+        ));
         let mut body = render(c.errors.summary("vendor-errors", &labels))?;
         body.push(&c.chooser.render(&c.errors, false)?);
         if c.chooser.created.is_some() {
-            body.push(&render(Alert{id:"vendor-company-created",status:StatusKind::Warning,title:"Company created",body:Html::text("The company exists in Companies. Complete the vendor settings to add it as a vendor."),..Alert::default()})?);
+            body.push(&render(Alert{id:"vendor-company-created",kind:StatusKind::Warning,body:Html::text("The company exists in Companies. Complete the vendor settings to add it as a vendor."),..Alert::default()})?);
         }
         for (key, label) in [
             ("code", "Code"),
             ("payment_terms_days", "Payment terms (days)"),
         ] {
-            body.push(&render(
-                Field::in_form(FORM, key)
-                    .id(format!("vendor-{key}"))
-                    .label(label)
-                    .value(c.values.get(key).cloned().unwrap_or_default())
-                    .errors(c.errors.under(key, label)),
-            ))?;
+            let field = Field::in_form(FORM, key)
+                .id(format!("vendor-{key}"))
+                .label(label)
+                .value(c.values.get(key).cloned().unwrap_or_default())
+                .errors(c.errors.under(key, label));
+            let field = if key == "code" {
+                field.required().attr("maxlength", "50")
+            } else {
+                field
+                    .kind(InputKind::Number)
+                    .attr("min", "0")
+                    .attr("max", "3650")
+                    .attr("step", "1")
+            };
+            body.push(&render(field)?);
         }
         self.modal(
             "vendor-new-modal",
@@ -629,14 +647,18 @@ impl Vendors {
                 ("reason".into(), "vendor-map-reason".into(), "Reason".into()),
             ],
         ))?;
-        body.push(&Html::text(format!(
+        body.push(&Html::text(&format!(
             "Supplier key: {key}. Review all recorded facts in the row before confirming."
         )));
         body.push(&render(
             Combobox::new("vendor-map-choice", format!("{FORM}[vendor_id]"))
                 .label("Vendor *")
                 .aria_label("Vendor")
-                .required()
+                .attrs(bilibi_ui::Attrs {
+                    required: true,
+                    aria_label: Some("Vendor".into()),
+                    ..bilibi_ui::Attrs::default()
+                })
                 .value(values.get("vendor_id").cloned().unwrap_or_default())
                 .options(
                     self.all
@@ -679,6 +701,25 @@ impl Vendors {
     async fn event(&mut self, s: &Scope, credential: &str, v: &Value) -> Result<LiveBody> {
         let event = v["type"].as_str().ok_or(Error::Invalid)?;
         let context = self.context();
+        if matches!(
+            event,
+            "create_vendor"
+                | "save_vendor"
+                | "confirm_vendor_mapping"
+                | "record_vendor_relationship"
+                | "show_mapping"
+        ) && !self.pages.allowed(s, MANAGE_SETTINGS).await?
+        {
+            self.notice = Some((
+                StatusKind::Error,
+                "You do not have permission to manage vendors.".into(),
+            ));
+            self.reload(s).await?;
+            return Ok(LiveBody {
+                html: self.body(s).await?,
+                ..LiveBody::default()
+            });
+        }
         match event {
             "filters" => self.list.apply_filters(&params::form_values(v, "filters")),
             "page" => self.list.put_page(v["page"].as_str()),
@@ -707,11 +748,13 @@ impl Vendors {
                     c.chooser
                         .pick(&context, s, v["record"].as_str().ok_or(Error::Invalid)?)
                         .await?;
+                    c.errors.0.remove("company");
                 }
             }
             "clear_company" => {
                 if let Some(c) = &mut self.create {
                     c.chooser.clear();
+                    c.errors.0.remove("company");
                 }
             }
             "use_candidate" => {
@@ -719,6 +762,7 @@ impl Vendors {
                     c.chooser
                         .use_candidate(&context, s, v["company"].as_str().ok_or(Error::Invalid)?)
                         .await?;
+                    c.errors = CompanyErrors::default();
                 }
             }
             "show_mapping" => {
@@ -759,8 +803,15 @@ impl Vendors {
                         ChosenCompany::Company(target) => {
                             let input = json!({"company_id":company(s),"core_company_id":target,"code":c.values.get("code").cloned().unwrap_or_default(),"payment_terms_days":c.values.get("payment_terms_days").and_then(|n|n.parse::<i32>().ok()).unwrap_or(0),"active":true});
                             match self.pages.write(s,credential,event,"finance.payables.vendor.create",input).await? {
-                                Written::Done(_)=>{let recorded=record_company_relationship(&context,s,credential,event,target).await?;self.notice=Some(match recorded {Ok(())=>"Vendor added. Vendor relationship recorded in Companies.".into(),Err(reason)=>format!("Vendor added. Relationship was not recorded: {reason}")});self.create=None;},
-                                Written::Fields(e)=>c.errors=CompanyErrors(e),
+                                Written::Done(_)=>{
+                                    let recorded=record_company_relationship(&context,s,credential,event,target).await?;
+                                    self.notice=Some(match recorded {
+                                        Ok(())=>(StatusKind::Success,"Vendor added. Vendor relationship recorded in Companies.".into()),
+                                        Err(reason)=>(StatusKind::Warning,format!("Vendor added. Relationship was not recorded: {reason}")),
+                                    });
+                                    self.create=None;
+                                },
+                                Written::Fields(e)=>c.errors=CompanyErrors(e.into_iter().map(|(key,messages)|(if key=="core_company_id" {"company".into()}else{key},messages)).collect()),
                                 _=>c.errors=CompanyErrors(BTreeMap::from([("base".into(),vec!["Vendor was not added. Check your permission and try again.".into()])])),
                             }
                         }
@@ -769,7 +820,7 @@ impl Vendors {
                             c.errors =
                                 CompanyErrors(BTreeMap::from([("base".into(), vec![message])]))
                         }
-                        ChosenCompany::Review => {}
+                        ChosenCompany::Review => c.errors = CompanyErrors::default(),
                     }
                 }
             }
@@ -790,7 +841,7 @@ impl Vendors {
                     {
                         Written::Done(_) => {
                             self.mapping = None;
-                            self.notice=Some("Supplier match confirmed. Historical records and balances are unchanged.".into());
+                            self.notice=Some((StatusKind::Success,"Supplier match confirmed. Historical records and balances are unchanged.".into()));
                         }
                         Written::Fields(e) => *errors = CompanyErrors(e),
                         _ => {
@@ -812,19 +863,32 @@ impl Vendors {
                     .ok_or(Error::Invalid)?;
                 let key = v["field"].as_str().ok_or(Error::Invalid)?;
                 let value = v["value"].as_str().ok_or(Error::Invalid)?;
-                let old = self.all.iter().find(|v| v.id == id).ok_or(Error::Invalid)?;
-                let mut input = json!({"company_id":company(s),"vendor_id":id,"code":old.code,"core_company_id":old.company.id,"payment_terms_days":old.payment_terms_days,"payable_account_id":old.payable_account_id,"expense_account_id":old.expense_account_id,"tax_code_id":old.tax_code_id,"active":old.active});
-                input[key] = match key {
-                    "payment_terms_days" => {
-                        value.parse::<i32>().map(|v| json!(v)).unwrap_or(json!(-1))
-                    }
-                    "active" => json!(value == "true"),
-                    "payable_account_id" | "expense_account_id" | "tax_code_id" => value
-                        .parse::<i64>()
-                        .map(|v| json!(v))
-                        .unwrap_or(Value::Null),
-                    _ => return Err(Error::Invalid),
-                };
+                if !self.all.iter().any(|v| v.id == id) {
+                    return Err(Error::Invalid);
+                }
+                let mut input = json!({"company_id":company(s),"vendor_id":id});
+                if matches!(
+                    key,
+                    "payable_account_id" | "expense_account_id" | "tax_code_id"
+                ) && value.trim().is_empty()
+                {
+                    input[match key {
+                        "payable_account_id" => "clear_payable_account",
+                        "expense_account_id" => "clear_expense_account",
+                        _ => "clear_tax_code",
+                    }] = json!(true);
+                } else {
+                    input[key] = match key {
+                        "payment_terms_days" => {
+                            value.parse::<i32>().map(|v| json!(v)).unwrap_or(json!(-1))
+                        }
+                        "active" => json!(value == "true"),
+                        "payable_account_id" | "expense_account_id" | "tax_code_id" => {
+                            value.parse::<i64>().map(|v| json!(v)).unwrap_or(json!(0))
+                        }
+                        _ => return Err(Error::Invalid),
+                    };
+                }
                 let status = match self
                     .pages
                     .write(
@@ -861,8 +925,11 @@ impl Vendors {
                 let recorded =
                     record_company_relationship(&context, s, credential, event, target).await?;
                 self.notice = Some(match recorded {
-                    Ok(()) => "Vendor relationship recorded in Companies.".into(),
-                    Err(e) => e,
+                    Ok(()) => (
+                        StatusKind::Success,
+                        "Vendor relationship recorded in Companies.".into(),
+                    ),
+                    Err(e) => (StatusKind::Warning, e),
                 });
             }
             _ => return Err(Error::Invalid),

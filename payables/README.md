@@ -16,7 +16,7 @@ The bill freezes the company's name, tax ID and registration number at commit un
 
 The historical-key review shows every distinct name, tax ID, registration number and address recorded for a key, with other keys that share a name or tax ID. A person confirms each match to a vendor with a reason. Unmatched keys stay available for review; Finance never creates a company from historical evidence. Confirmed mappings are permanent, audited and included in evidence exports.
 
-Mapping changes no document snapshot, payment key, allocation or aged balance. Aging keeps a separate row per original supplier key and adds its confirmed `vendor_id`. A payment request names `vendor_id` and allocates only bills with one supplier key, so matching two keys never nets their balances. For an unmatched historical bill, `supplier_key` is the explicit settlement input. Existing requests can still be approved and payments reversed after mapping, or after the linked company becomes unavailable. Debit notes retain their original bill's snapshot and key. New bills check duplicate supplier invoice numbers across the vendor's confirmed historical keys as well as its new key.
+Mapping changes no document snapshot, payment key, allocation or aged balance. Aging keeps a separate row per original supplier key and adds its confirmed `vendor_id`. Document, payment-request and payment reads carry the key’s confirmed `vendor_id`; their list contracts accept `vendor_id` to find all its keys without combining balances. A payment request names `vendor_id` and allocates only bills with one supplier key, so matching two keys never nets their balances. For an unmatched historical bill, `supplier_key` is the explicit settlement input. Existing requests can still be approved and payments reversed after mapping, or after the linked company becomes unavailable. Debit notes retain their original bill's snapshot and key. New bills check duplicate supplier invoice numbers across the vendor's confirmed historical keys as well as its new key.
 
 ### Vendor contracts
 
@@ -24,8 +24,8 @@ All keys below start with `finance.payables.` and take `company_id`.
 
 | Contract | Input |
 | --- | --- |
-| `vendor.create` | `code`, `core_company_id`, `payment_terms_days`, `active`; optional nullable `payable_account_id`, `expense_account_id`, `tax_code_id` |
-| `vendor.update` | The same settings plus `vendor_id`; code and company cannot change |
+| `vendor.create` | `code`, `core_company_id`; optional `payment_terms_days` (default 0), `active` (default true) and `payable_account_id`, `expense_account_id`, `tax_code_id` |
+| `vendor.update` | `vendor_id` and the settings to change; omissions preserve values, `clear_payable_account`, `clear_expense_account` or `clear_tax_code` clears a default; code and company cannot change |
 | `vendor.get` | `vendor_id` |
 | `vendor.list` | `after_id`, `page_size`; returns `records`, `next_after_id` |
 | `vendor.supplier_keys` | Historical snapshot groups and confirmed mappings |
@@ -35,7 +35,7 @@ All keys below start with `finance.payables.` and take `company_id`.
 
 Vendor settings and historical matches require `finance.payables.settings.manage`; reads require `finance.payables.view`. Company finding, creation, facts and relationships use Core's own permissions. Migration `finance-payables-004-vendors` adds the master and mapping tables without rewriting existing records. Evidence adds the `vendor` and `vendor_key` datasets with explicit field lists.
 
-Run the linked-vendor proof on a disposable database with `cargo run -p bilibi-finance-walkthrough-fixture --bin vendors`. Set `VENDORS_UI=1`, `APP_ORIGIN` and `BIND_ADDR` to keep the same composed app running for browser proof.
+Run the linked-vendor proof on a disposable database with `cargo run -p bilibi-finance-walkthrough-fixture --bin vendors`. Set `VENDORS_UI=1`, `APP_ORIGIN` and `BIND_ADDR` to keep the same composed app running for browser proof. After the proof has populated the disposable database, `cargo run -p bilibi-finance-walkthrough-fixture --bin vendors -- serve` serves it again without rerunning the scenarios.
 
 ## Facade
 
@@ -61,7 +61,7 @@ Settings name an active liability account and optional quantity/price tolerances
 
 ## Documents
 
-A bill records a party snapshot, the party's own number, dates, description and positive lines against active asset/expense accounts. A duplicate party number is refused until the original is voided. Due date defaults to document date and cannot precede it. A debit note copies a posted bill's party, cannot precede the bill, and cannot exceed its remaining balance either when recorded or when posted. That balance is the bill less posted debit notes and allocated payments, counting reversal dates. Recording and posting a debit note checks the minimum balance on every later date, so a backdated note cannot overdraw a bill that a later payment temporarily settled.
+A bill records a party snapshot, the party's own number, dates, description and positive lines against active asset/expense accounts. A duplicate party number is refused until the original is voided. Due date defaults to the document date plus the vendor’s payment terms and cannot precede the document date. A debit note copies a posted bill's party, cannot precede the bill, and cannot exceed its remaining balance either when recorded or when posted. That balance is the bill less posted debit notes and allocated payments, counting reversal dates. Recording and posting a debit note checks the minimum balance on every later date, so a backdated note cannot overdraw a bill that a later payment temporarily settled.
 
 Amounts are `Money`, revalidated against the book's minor units. Tax snapshots group lines by code in first-use order, copying the code, rate and account. Computed tax rounds half up once per code; explicit party amounts may override it, with unused or repeated codes refused. Later tax-code changes never change a recorded document.
 

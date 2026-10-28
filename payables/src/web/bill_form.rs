@@ -282,9 +282,14 @@ impl BillForm {
                 for line in &mut d.lines {
                     line.account = v
                         .expense_account_id
+                        .filter(|id| self.accounts.iter().any(|a| a.id == *id))
                         .map(|id| id.to_string())
                         .unwrap_or_default();
-                    line.tax = v.tax_code_id.map(|id| id.to_string()).unwrap_or_default();
+                    line.tax = v
+                        .tax_code_id
+                        .filter(|id| self.taxes.iter().any(|t| t.id == *id))
+                        .map(|id| id.to_string())
+                        .unwrap_or_default();
                 }
                 if let Ok(date) = d.date.parse::<jiff::civil::Date>() {
                     d.due = date
@@ -529,7 +534,11 @@ impl BillForm {
                 Combobox::new("payables-record-vendor", format!("{PREFIX}[vendor]"))
                     .label("Vendor *")
                     .aria_label("Vendor")
-                    .required()
+                    .attrs(bilibi_ui::Attrs {
+                        required: true,
+                        aria_label: Some("Vendor".into()),
+                        ..bilibi_ui::Attrs::default()
+                    })
                     .value(&d.vendor)
                     .options(
                         self.suppliers
@@ -582,7 +591,11 @@ impl BillForm {
                 .required(),
             field("due", "due", "Due date", &d.due)
                 .kind(InputKind::Date)
-                .hint("Leave empty to use the document date."),
+                .hint(if self.note {
+                    "Leave empty to use the document date."
+                } else {
+                    "Leave empty to use the vendor’s payment terms."
+                }),
             field("description", "description", "Description", &d.description),
         ];
         if !self.note {

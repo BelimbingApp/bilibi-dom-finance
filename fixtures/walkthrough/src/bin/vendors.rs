@@ -14,10 +14,14 @@ bilibi_walkthrough_fixture::walkthrough_vocabulary!();
 bilibi_walkthrough_fixture::walkthrough_module_roles!();
 bilibi_finance_walkthrough_fixture::walkthrough_ledger_roles!();
 bilibi_finance_walkthrough_fixture::walkthrough_payables_roles!();
+bilibi_finance_walkthrough_fixture::walkthrough_receivables_roles!();
 
 fn refused<T: std::fmt::Debug>(r: Result<T, PayablesError>, field: &str, text: &str) {
     match r {
-        Err(PayablesError::Invalid(e)) => assert!(
+        Err(
+            PayablesError::Invalid(e)
+            | PayablesError::Ledger(bilibi_finance_ledger::LedgerError::Invalid(e)),
+        ) => assert!(
             e.iter()
                 .any(|e| e.field == field && e.message.contains(text)),
             "{e:?}"
@@ -36,6 +40,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     bilibi_database::migrate(&db, &bilibi_module_registry::discover()?).await?;
     let app = bilibi_web::App::new(db.clone(), &origin)?;
     bilibi_finance_walkthrough_fixture::without_step_up(&app.services)?;
+    if std::env::args().nth(1).as_deref() == Some("serve") {
+        println!("Vendor browser fixture at {origin} (existing proof database)");
+        axum::serve(
+            tokio::net::TcpListener::bind(std::env::var("BIND_ADDR")?).await?,
+            bilibi_web::router(app),
+        )
+        .await?;
+        return Ok(());
+    }
     let services = &app.services;
     let installed = install(&db, services).await?;
     let manager = sign_in(&db, services, 1, 1).await?;
@@ -57,6 +70,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .ok_or(Error::NotFound)
     };
     let payable = account("2000")?;
+    let vendor_control = ledger
+        .create_account(
+            &manager,
+            1,
+            &bilibi_finance_ledger::NewAccount::new(
+                "2199",
+                "Vendor control",
+                bilibi_finance_ledger::AccountType::Liability,
+            ),
+        )
+        .await?;
+    let ar = services
+        .get::<bilibi_finance_receivables::Receivables>(bilibi_finance_receivables::SERVICE)?;
+    let customer = ar
+        .create_customer(
+            &manager,
+            1,
+            &serde_json::json!({"code":"BOTH-ROLES","core_company_id":v.company.id}),
+        )
+        .await?;
+    assert_eq!(customer.company.map(|c| c.id), Some(v.company.id));
+
     let expense = account("5000")?;
     let bank = account("1000")?;
     p.put_settings(
@@ -76,12 +111,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         code: "VEN-A".into(),
         core_company_id: v.company.id,
         payment_terms_days: 30,
-        payable_account_id: Some(payable),
+        payable_account_id: Some(vendor_control.id),
         expense_account_id: Some(expense),
         tax_code_id: None,
         active: true,
     };
     p.update_vendor(&manager, 1, id, &input).await?;
+    let mut inactive = input.clone();
+    inactive.active = false;
+    p.update_vendor(&manager, 1, id, &inactive).await?;
+
     refused(p.create_vendor(&manager, 1, &input).await, "code", "taken");
     let mut invalid = input.clone();
     invalid.code = "SELF".into();
@@ -130,6 +169,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }],
         tax_lines: None,
     };
+    refused(
+        p.create_bill(&manager, 1, &draft("INACTIVE-VENDOR")).await,
+        "vendor_id",
+        "inactive vendor",
+    );
+    p.update_vendor(&manager, 1, id, &input).await?;
     let mut unlinked = draft("MISSING");
     unlinked.vendor_id = None;
     refused(
@@ -155,6 +200,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
     db.get().await?.execute("UPDATE companies SET status='active',tax_id='CORE-TAX',registration_number='CORE-REG' WHERE id=$1",&[&v.company.id]).await?;
+    let grants = services.get::<bilibi_authz::grants::Grants>("base/authz.grants")?;
+    grants
+        .set_direct(&reviewer, manager.user(), bilibi_company::VIEW, Some(false))
+        .await?;
+    refused(
+        p.create_bill(&manager, 1, &draft("NO-COMPANY-VIEW")).await,
+        "vendor_id",
+        "Companies view",
+    );
+    grants
+        .set_direct(&reviewer, manager.user(), bilibi_company::VIEW, None)
+        .await?;
+    db.get().await?.execute("INSERT INTO field_restrictions(tenant_id,role_id,table_id,field_id) SELECT 1,id,'companies','tax_id' FROM roles WHERE tenant_id=1 AND code='manager' ON CONFLICT DO NOTHING",&[]).await?;
+    refused(
+        p.create_bill(&manager, 1, &draft("MASKED-TAX")).await,
+        "vendor_id",
+        "restricted",
+    );
+    db.get().await?.execute("DELETE FROM field_restrictions WHERE tenant_id=1 AND table_id='companies' AND field_id='tax_id' AND role_id IN (SELECT id FROM roles WHERE tenant_id=1 AND code='manager')",&[]).await?;
     let bill = p.create_bill(&manager, 1, &draft("VENDOR-BILL")).await?;
     assert_eq!(bill.party.tax_id.as_deref(), Some("CORE-TAX"));
     assert_eq!(bill.party.registration_id.as_deref(), Some("CORE-REG"));
@@ -163,6 +227,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(bill.vendor_id, Some(id));
     p.approve_document(&reviewer, 1, bill.id).await?;
     let bill = p.post_document(&manager, 1, bill.id).await?;
+    assert_eq!(bill.payable_account_id, Some(vendor_control.id));
     let snapshots: Vec<(i64, Value)> = {
         // Historical evidence, as a database installed before vendors would
         // contain. New product writes must never synthesize this evidence.
@@ -225,14 +290,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             },
         )
         .await?;
-    p.map_supplier_key(
-        &manager,
-        1,
-        id,
-        "old-a",
-        "Supplier verified against the original invoices",
-    )
-    .await?;
+    let (left, right) = tokio::join!(
+        p.map_supplier_key(
+            &manager,
+            1,
+            id,
+            "old-a",
+            "Supplier verified against original invoices"
+        ),
+        p.map_supplier_key(
+            &manager,
+            1,
+            id,
+            "old-a",
+            "Same supplier verified independently"
+        )
+    );
+    assert_ne!(left.is_ok(), right.is_ok());
     refused(
         p.map_supplier_key(&manager, 1, id, "old-a", "Repeat").await,
         "supplier_key",
@@ -250,6 +324,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         p.create_bill(&manager, 1, &draft("OLD-1")).await,
         "party_document_number",
         "already recorded",
+    );
+    refused(
+        p.submit_payment(
+            &manager,
+            1,
+            &NewPayment {
+                payment_date: date(2026, 10, 12),
+                vendor_id: Some(id),
+                supplier_key: None,
+                paid_from_account_id: bank,
+                reference: None,
+                description: None,
+                allocations: vec![
+                    AllocationInput {
+                        document_id: bill.id,
+                        amount: money("1"),
+                    },
+                    AllocationInput {
+                        document_id: snapshots[0].0,
+                        amount: money("1"),
+                    },
+                ],
+            },
+        )
+        .await,
+        "document_id",
+        "supplier key",
     );
     let payment = p.approve_payment(&reviewer, 1, requested.id).await?;
     assert_eq!(payment.party_key, "old-a");
@@ -284,6 +385,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .parties
         .iter()
         .any(|p| p.party_key == format!("vendor:{id}")));
+    let contracts = services.get::<bilibi_base::agent_api::page::PageContracts>(
+        bilibi_base::agent_api::page::SERVICE,
+    )?;
+    for key in [
+        "finance.payables.document.list",
+        "finance.payables.payment_request.list",
+        "finance.payables.payment.list",
+    ] {
+        let answer = contracts
+            .read(
+                &manager,
+                key,
+                &serde_json::json!({"company_id":1,"vendor_id":id,"page_size":100}),
+            )
+            .await?;
+        let records = answer["result"]["records"]
+            .as_array()
+            .ok_or(Error::Invalid)?;
+        assert!(!records.is_empty());
+        assert!(records.iter().all(|r| r["vendor_id"].as_i64() == Some(id)));
+        assert!(records
+            .iter()
+            .all(|r| r["party_key"].as_str() != Some("old-b")));
+    }
     let c = db.get().await?;
     assert!(c.execute("DELETE FROM finance_payables_vendor_keys WHERE tenant_id=1 AND company_id=1 AND supplier_key='old-a'",&[]).await.is_err());
     assert!(c.execute("UPDATE finance_payables_vendors SET record_id='1' WHERE tenant_id=1 AND company_id=1 AND id=$1",&[&id]).await.is_err());

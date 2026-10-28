@@ -191,21 +191,54 @@ async fn tax_input(
         reason: opt(v, "reason"),
     })
 }
-fn vendor_input(v: &Value) -> Result<VendorInput> {
-    let mut input = v.clone();
-    input
-        .as_object_mut()
-        .ok_or(PayablesError::InvalidOption)?
-        .remove("company_id");
-    input
-        .as_object_mut()
-        .ok_or(PayablesError::InvalidOption)?
-        .remove("vendor_id");
+async fn vendor_input(
+    c: &dyn OperationClient,
+    s: &Scope,
+    company: i64,
+    v: &Value,
+    update: bool,
+) -> Result<VendorInput> {
+    let mut input = if update {
+        let old = owner()?
+            .vendor_on(c, s, company, id(v, "vendor_id")?)
+            .await?;
+        json!({"code":old.code,"core_company_id":old.company.id,"payment_terms_days":old.payment_terms_days,"payable_account_id":old.payable_account_id,"expense_account_id":old.expense_account_id,"tax_code_id":old.tax_code_id,"active":old.active})
+    } else {
+        json!({"payment_terms_days":0,"active":true})
+    };
+    for (key, value) in v.as_object().ok_or(PayablesError::InvalidOption)? {
+        if !matches!(
+            key.as_str(),
+            "company_id"
+                | "vendor_id"
+                | "clear_payable_account"
+                | "clear_expense_account"
+                | "clear_tax_code"
+        ) {
+            input[key] = value.clone();
+        }
+    }
+    for (field, clear) in [
+        ("payable_account_id", "clear_payable_account"),
+        ("expense_account_id", "clear_expense_account"),
+        ("tax_code_id", "clear_tax_code"),
+    ] {
+        if v[clear].as_bool() == Some(true) {
+            if v.get(field).is_some() {
+                return Err(invalid(clear, format!("cannot be combined with {field}")));
+            }
+            input[field] = Value::Null;
+        }
+    }
     serde_json::from_value(input).map_err(|_| invalid("base", "vendor settings are invalid"))
 }
 fn vendor_schema(update: bool) -> Value {
-    let mut props = json!({"code":string(50),"core_company_id":identifier(),"payment_terms_days":{"type":"integer","minimum":0,"maximum":3650},"payable_account_id":{"type":["integer","null"]},"expense_account_id":{"type":["integer","null"]},"tax_code_id":{"type":["integer","null"]},"active":boolean()});
-    let mut required = vec!["code", "core_company_id", "payment_terms_days", "active"];
+    let mut props = json!({"code":string(50),"core_company_id":identifier(),"payment_terms_days":{"type":"integer","minimum":0,"maximum":3650},"payable_account_id":identifier(),"expense_account_id":identifier(),"tax_code_id":identifier(),"clear_payable_account":boolean(),"clear_expense_account":boolean(),"clear_tax_code":boolean(),"active":boolean()});
+    let mut required = if update {
+        vec![]
+    } else {
+        vec!["code", "core_company_id"]
+    };
     if update {
         props["vendor_id"] = identifier();
         required.push("vendor_id");
@@ -360,7 +393,8 @@ impl Write {
         }
         let changes = match self {
             Self::VendorCreate | Self::VendorUpdate => {
-                let input = vendor_input(v)?;
+                let input =
+                    vendor_input(c, s, company, v, matches!(self, Self::VendorUpdate)).await?;
                 let after = p
                     .prepare_vendor(c, s, company, v["vendor_id"].as_i64(), &input)
                     .await?;
@@ -626,7 +660,14 @@ impl WriteHandler for Write {
             let result: Result<Value> = async {
                 Ok(match self {
                     Self::VendorCreate | Self::VendorUpdate => {
-                        let input = vendor_input(v)?;
+                        let input = vendor_input(
+                            tx.sql(),
+                            s,
+                            company,
+                            v,
+                            matches!(self, Self::VendorUpdate),
+                        )
+                        .await?;
                         json!(
                             p.save_vendor_on(tx, s, company, v["vendor_id"].as_i64(), &input)
                                 .await?
@@ -830,7 +871,7 @@ impl ReadHandler for Read {
                 let result=match self {
                     Self::Vendor=>json!(owner()?.get_vendor(s,company,id(v,"vendor_id")?).await?),
                     Self::Vendors=>{
-                        let mut records=owner()?.list_vendors(s,company,after,limit).await?;
+                        let records=owner()?.list_vendors(s,company,after,limit).await?;
                         let more=records.len()==limit as usize;
                         let next=if more { records.last().map(|v|v.id) } else { None };
                         json!({"records":records,"next_after_id":next})
@@ -841,21 +882,22 @@ impl ReadHandler for Read {
                     Self::Request=>json!(payments::request(c,tenant,company,id(v,"request_id")?).await?),
                     Self::Payment=>json!(payments::payment(c,tenant,company,id(v,"payment_id")?).await?),
                     Self::Taxes|Self::Documents|Self::Requests|Self::Payments=>{
+                        let vendor=v["vendor_id"].as_i64();
                         let status=opt(v,"status"); let party=opt(v,"party_key");let kind=opt(v,"document_type"); let corrects=v["corrects_document_id"].as_i64();
                         // Cursor and ordering use the same stable ID. These
                         // agent lists deliberately don't reuse page offsets.
                         let query=match self {
                             Self::Taxes=>"SELECT id FROM finance_payables_tax_codes WHERE tenant_id=$1 AND company_id=$2 AND id>$3 ORDER BY id LIMIT $4".to_owned(),
-                            Self::Documents=>"SELECT id FROM finance_payables_documents WHERE tenant_id=$1 AND company_id=$2 AND id>$3 AND ($5::text IS NULL OR status=$5) AND ($6::text IS NULL OR party_key=$6) AND ($7::text IS NULL OR document_type=$7) AND ($8::bigint IS NULL OR corrects_document_id=$8) ORDER BY id LIMIT $4".to_owned(),
-                            Self::Requests=>format!("SELECT r.id FROM finance_payables_payment_requests r LEFT JOIN finance_payables_payment_request_events e ON e.tenant_id=r.tenant_id AND e.company_id=r.company_id AND e.request_id=r.id WHERE r.tenant_id=$1 AND r.company_id=$2 AND r.id{cmp}$3 AND ($5::text IS NULL OR COALESCE(e.event,'submitted')=$5) AND ($6::text IS NULL OR r.party_key=$6) ORDER BY r.id {order} LIMIT $4"),
-                            _=>format!("SELECT id FROM finance_payables_payments WHERE tenant_id=$1 AND company_id=$2 AND id{cmp}$3 AND ($5::text IS NULL OR party_key=$5) ORDER BY id {order} LIMIT $4"),
+                            Self::Documents=>"SELECT id FROM finance_payables_documents WHERE tenant_id=$1 AND company_id=$2 AND id>$3 AND ($5::text IS NULL OR status=$5) AND ($6::text IS NULL OR party_key=$6) AND ($7::text IS NULL OR document_type=$7) AND ($8::bigint IS NULL OR corrects_document_id=$8) AND ($9::bigint IS NULL OR party_key IN (SELECT supplier_key FROM finance_payables_vendor_keys WHERE tenant_id=$1 AND company_id=$2 AND vendor_id=$9)) ORDER BY id LIMIT $4".to_owned(),
+                            Self::Requests=>format!("SELECT r.id FROM finance_payables_payment_requests r LEFT JOIN finance_payables_payment_request_events e ON e.tenant_id=r.tenant_id AND e.company_id=r.company_id AND e.request_id=r.id WHERE r.tenant_id=$1 AND r.company_id=$2 AND r.id{cmp}$3 AND ($5::text IS NULL OR COALESCE(e.event,'submitted')=$5) AND ($6::text IS NULL OR r.party_key=$6) AND ($7::bigint IS NULL OR r.party_key IN (SELECT supplier_key FROM finance_payables_vendor_keys WHERE tenant_id=$1 AND company_id=$2 AND vendor_id=$7)) ORDER BY r.id {order} LIMIT $4"),
+                            _=>format!("SELECT id FROM finance_payables_payments WHERE tenant_id=$1 AND company_id=$2 AND id{cmp}$3 AND ($5::text IS NULL OR party_key=$5) AND ($6::bigint IS NULL OR party_key IN (SELECT supplier_key FROM finance_payables_vendor_keys WHERE tenant_id=$1 AND company_id=$2 AND vendor_id=$6)) ORDER BY id {order} LIMIT $4"),
                         };
                         let n=limit+1;
                         let mut params:Vec<&(dyn tokio_postgres::types::ToSql+Sync)>=vec![&tenant,&company,&after,&n];
                         match self {
-                            Self::Documents => { params.push(&status); params.push(&party); params.push(&kind); params.push(&corrects); }
-                            Self::Requests => { params.push(&status); params.push(&party); }
-                            Self::Payments => params.push(&party),
+                            Self::Documents => { params.push(&status); params.push(&party); params.push(&kind); params.push(&corrects); params.push(&vendor); }
+                            Self::Requests => { params.push(&status); params.push(&party); params.push(&vendor); }
+                            Self::Payments => { params.push(&party); params.push(&vendor); },
                             _ => {}
                         }
                         let mut ids:Vec<i64>=c.query(&query,&params).await?.iter().map(|r|r.get(0)).collect();
@@ -978,8 +1020,9 @@ fn payment_id() -> Value {
 }
 fn list_schema(kind: &str) -> Value {
     let mut props = json!({"after_id":{"type":"integer","minimum":0},"page_size":{"type":"integer","minimum":1,"maximum":100}});
-    if kind != "tax" {
+    if kind != "tax" && kind != "vendor" {
         props["party_key"] = string(100);
+        props["vendor_id"] = identifier();
     }
     if kind == "document" {
         props["status"] =

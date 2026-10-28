@@ -389,7 +389,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         |e| matches!(e, PayablesError::NotVoidable),
     )?;
     let mut note = draft(vendor, "NOTE-001", expense, code.id, units);
-    note.party.name = "Caller cannot replace supplier".into();
+    note.vendor_id = Some(i64::MAX); // A note always retains its original bill's vendor.
     note.lines[0].amount = money("10");
     let note = p
         .create_debit_note(&manager, COMPANY, bill.id, &note)

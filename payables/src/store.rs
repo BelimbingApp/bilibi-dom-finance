@@ -219,9 +219,7 @@ pub(crate) async fn document_record(
     };
     Ok(Some(Document {
         id,
-        vendor_id: crate::vendors::mapped(c, tenant, company, &text(&v, "party_key")?)
-            .await
-            .map_err(|_| Error::Invalid)?,
+        vendor_id: crate::vendors::mapped(c, tenant, company, &text(&v, "party_key")?).await?,
         document_type: kind,
         status,
         document_number: opt_int(&v, "document_number"),

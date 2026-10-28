@@ -123,6 +123,7 @@ impl<'a> CompanyLinks<'a> {
         scope: &Scope,
         id: i64,
         field: &'static str,
+        include_contacts: bool,
     ) -> Result<Value> {
         let (company, masked) =
             bilibi_company::detail(client, scope, id)
@@ -137,7 +138,23 @@ impl<'a> CompanyLinks<'a> {
                     }
                     other => other.into(),
                 })?;
-        if let Some((_, label)) = FACTS.iter().find(|(field, _)| masked.contains(*field)) {
+        if masked.contains("legal_name")
+            || (company
+                .legal_name
+                .as_ref()
+                .is_none_or(|name| name.trim().is_empty())
+                && masked.contains("name"))
+        {
+            return Err(invalid(
+                field,
+                "the company's name is restricted for you, so it cannot be frozen on the document",
+            ));
+        }
+        if let Some((_, label)) = FACTS
+            .iter()
+            .take(if include_contacts { 4 } else { 2 })
+            .find(|(field, _)| masked.contains(*field))
+        {
             return Err(invalid(
                 field,
                 format!("the company's {label} is restricted for you, so it cannot be frozen on the document"),
@@ -147,8 +164,15 @@ impl<'a> CompanyLinks<'a> {
             "party_name": company.display_name(),
             "party_tax_identifier": blank_to_none(company.tax_id),
             "party_registration_identifier": company.registration_number.and_then(blank_to_none),
-            "party_email": blank_to_none(company.email),
-            "party_phone": blank_to_none(company.phone),
+            "party_email": if include_contacts {blank_to_none(company.email)} else {None},
+            "party_phone": if include_contacts {blank_to_none(company.phone)} else {None},
         }))
+    }
+}
+
+impl CompanyFacts {
+    /// Whether new documents may name this company: it is active in Core.
+    pub fn active(&self) -> bool {
+        self.status == "active"
     }
 }
