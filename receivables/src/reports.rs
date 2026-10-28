@@ -259,8 +259,9 @@ impl Receivables {
         // Codes are immutable; names come from issued documents, not live Core.
         let mut labels: BTreeMap<i64, String> = BTreeMap::new();
         for row in store::list(client, store::CUSTOMERS, scope.tenant(), company).await? {
-            let customer: crate::Customer = store::decode(row)?;
-            labels.insert(customer.id, customer.code);
+            let id = row["id"].as_i64().ok_or(Error::Internal)?;
+            let code = row["code"].as_str().ok_or(Error::Internal)?;
+            labels.insert(id, code.to_owned());
         }
         let mut customers: BTreeMap<i64, AgedCustomer> = BTreeMap::new();
         let mut totals = vec![Decimal::ZERO; buckets.len()];

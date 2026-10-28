@@ -258,6 +258,37 @@ async fn main() -> Outcome<()> {
             None,
         )
         .await?;
+    // A pre-link customer represents an existing Finance record. Evidence is
+    // a snapshot of records at export time, independently of the entry pin.
+    let raw = db.get().await?;
+    raw.execute("INSERT INTO finance_receivables_customers(tenant_id,company_id,code,name,payment_terms_days,active,inserted_at,updated_at) VALUES(1,$1,'PACK-LEGACY','Pack legacy',0,true,now(),now())", &[&COMPANY]).await?;
+    drop(raw);
+    let ar = services
+        .get::<bilibi_finance_receivables::Receivables>(bilibi_finance_receivables::SERVICE)?;
+    let legacy = ar
+        .list_customers(&admin, COMPANY)
+        .await?
+        .into_iter()
+        .find(|c| c.code == "PACK-LEGACY")
+        .expect("legacy customer");
+    let before_link = reports
+        .export_auditor_pack(&admin, COMPANY, date(2026, 3, 31))
+        .await?;
+    let before_bytes = reports
+        .read_auditor_pack(&admin, COMPANY, &before_link.id)
+        .await?;
+    let (_, before_files) = inspect(&before_bytes.bytes)?;
+    let before_csv = String::from_utf8(before_files["receivables-customer.csv"].clone())?;
+    assert!(before_csv
+        .lines()
+        .next()
+        .unwrap()
+        .ends_with("\"record_kind\",\"record_id\""));
+    assert!(before_csv
+        .lines()
+        .any(|row| row.contains("PACK-LEGACY") && row.ends_with(",\"\",\"\"")));
+    ar.link_customer(&admin, COMPANY, legacy.id, &json!({"core_company_id":20}))
+        .await?;
     let mut client = db.get().await?;
     let snapshot = (**client)
         .build_transaction()
@@ -326,6 +357,10 @@ async fn main() -> Outcome<()> {
         .read_auditor_pack(&manager, COMPANY, &artifact.id)
         .await?;
     let (manifest, files) = inspect(&pack.bytes)?;
+    let customer_csv = String::from_utf8(files["receivables-customer.csv"].clone())?;
+    assert!(customer_csv
+        .lines()
+        .any(|row| row.contains("PACK-LEGACY") && row.ends_with(",\"company\",\"20\"")));
     assert_eq!(manifest["through_entry_number"], pin + 1);
     for (name, count) in [
         ("ledger-entry.csv", 503),

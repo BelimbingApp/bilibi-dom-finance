@@ -208,6 +208,7 @@ pub async fn run(db: &Db, services: &Services, root: &str, full_pack: &str) -> O
     }
     let manifest: Value = serde_json::from_slice(&files["manifest.json"])?;
     assert_eq!(manifest["coverage"], "ledger-and-reports");
+    assert!(!files.contains_key("receivables-customer.csv"));
     assert!(manifest["coverage_notice"]
         .as_str()
         .unwrap()
