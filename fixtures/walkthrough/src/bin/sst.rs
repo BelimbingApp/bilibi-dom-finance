@@ -594,8 +594,8 @@ async fn run(db: &Db, services: &Services) -> Outcome<()> {
         bill_codes.insert(code, created.id);
     }
     let vendor = bilibi_finance_walkthrough_fixture::vendors::vendor(
-        &db,
-        &services,
+        db,
+        services,
         &manager,
         COMPANY,
         "supplier-sst",

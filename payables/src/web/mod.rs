@@ -188,6 +188,21 @@ impl Pages {
         Ok(bilibi_authz::decide(&**c, scope, capability).await?.allowed)
     }
 
+    async fn company_name(&self, scope: &Scope) -> String {
+        let Some(company) = scope.current_company() else {
+            return "Company unavailable".into();
+        };
+        let Ok(client) = self.db.get().await else {
+            return "Company unavailable".into();
+        };
+        self.parties
+            .organisation_name(&**client, scope, company)
+            .await
+            .ok()
+            .flatten()
+            .map_or_else(|| "Company unavailable".into(), |company| company.name)
+    }
+
     async fn display(&self, scope: &Scope) -> Result<DisplayContext> {
         let c = self.db.get().await?;
         let locale = self.locales.resolve(&**c, scope, None).await?.locale;

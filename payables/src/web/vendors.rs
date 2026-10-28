@@ -99,16 +99,7 @@ impl Vendors {
             self.history.clear();
             return Ok(());
         };
-        self.company_name = self
-            .pages
-            .parties
-            .organisation_name(
-                &**self.pages.db.get().await?,
-                s,
-                s.current_company().ok_or(Error::Unauthorized)?,
-            )
-            .await?
-            .map_or_else(|| "Company unavailable".into(), |c| c.name);
+        self.company_name = self.pages.company_name(s).await;
         let mut input = json!({"company_id":company,"page_size":100});
         self.all.clear();
         loop {
