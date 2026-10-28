@@ -60,7 +60,7 @@ def invoke(channel, tool, args, who="manager"):
 def op(key, company, **values):
     if not key.startswith(("finance.", "core.")):
         key = "finance.payables." + key
-    return {"key": key, "input": {"company_id": company, **values}}
+    return {"key": key, "input": values if key.startswith("core.") else {"company_id": company, **values}}
 
 
 def read(channel, key, company, who="manager", **values):
