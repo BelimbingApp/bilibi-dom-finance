@@ -57,7 +57,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // A second real Person/Company affiliation, not an actor passed to a write.
     for key in bilibi_finance_ledger::CAPABILITIES
         .into_iter()
-        .chain(["admin.company.tenant-wide.manage"])
+        .chain(["admin.company.tenant-wide.manage", bilibi_company::VIEW])
     {
         grants.set_direct(&admin, 7, key, Some(true)).await?;
     }

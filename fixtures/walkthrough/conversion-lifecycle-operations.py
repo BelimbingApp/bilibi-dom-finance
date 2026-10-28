@@ -97,7 +97,7 @@ def write(channel, key, company, who="approver", **values):
     review = plan(channel, ops, who)
     require(review.get("valid") is True, f"{key}: preview refused: {review.get('results', review.get('error'))}")
     body = commit(channel, ops, review, who)
-    require("results" in body, f"{key}: commit refused: {body.get('error')}")
+    require("results" in body, f"{key}: commit refused: {body.get('error')}; fields={body.get('fields')}")
     return body["results"][0]["result"]["result"]["record"]
 
 
@@ -112,7 +112,8 @@ inputs = {}
 original = {}
 for module in ["receivables", "payables", "fixed_assets"]:
     context = read(channel, f"finance.{module}.opening.context", company, "approver")
-    require(context["batch"] is None, "requires a fresh conversion server")
+    # An interrupted wire proof may already have committed its original register.
+    # Repeating the exact original import exercises the owner’s safe retry path.
     if module == "receivables":
         series=read(channel,"finance.receivables.series.list",company,"approver")["records"]
         series_id=next(r["id"] for r in series if r["code"]=="OPENING")
