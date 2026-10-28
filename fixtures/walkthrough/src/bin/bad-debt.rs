@@ -460,10 +460,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     )
     .await?;
+    sst.add_adjustment(&manager,1,tax_return.id,&AdjustmentInput {
+        box_key:"11d".into(),taxable_amount:Some("25".into()),tax_amount:Some("2".into()),
+        description:Some("Specimen repayment after recovery of 27 on invoice BD-I-002; externally approved refund was 4".into()),
+        reference:Some("BD-I-002 / BD-EXTERNAL-APPROVAL-SPECIMEN".into()),
+    }).await?;
     let return_report = sst.get_return(&manager, 1, tax_return.id).await?;
     assert_eq!(
         return_report.figures.ok_or(Error::Internal)?.tax_payable,
-        Decimal::from(-4)
+        Decimal::from(-2)
     );
     let trial = ledger
         .trial_balance(&manager, 1, date(2026, 10, 28), None)
@@ -482,8 +487,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .aged_receivables(&manager, 1, date(2026, 10, 28), &AgingOptions::default())
         .await?;
     assert_eq!(aging.total, Decimal::from(216));
-    println!("Reconciliation: original invoices 432 = receipts 81 + net write-offs 135 + open receivables 216. Original tax ledger 32 = received tax 4 + twelve-month unpaid tax 28; separate specimen return relief 4 does not post a ledger refund or record tax paid.");
-    println!("SST: September unpaid tax 28; October manual 13(d) adjustment 4 uses an explicit specimen external approval. Bilibi neither determines eligibility nor applies/files. Income-tax treatment needs accountant confirmation.");
+    println!("Reconciliation: original invoices 432 = receipts 81 + net write-offs 135 + open receivables 216. Original tax ledger 32 = received tax 4 + twelve-month unpaid tax 28; separate specimen return relief 4 less recovery repayment 2 gives a net deduction of 2, without posting a ledger refund or recording tax paid.");
+    println!("SST: September unpaid tax 28; October manual 13(d) relief 4 and recovery repayment 2 use explicit specimen external approval/evidence. Bilibi neither determines eligibility nor applies/files. Income-tax treatment needs accountant confirmation.");
     for dataset in ["write_off", "write_off_event"] {
         let page = ar
             .evidence_page(&manager, 1, dataset, Some(500), None)

@@ -150,9 +150,9 @@ impl Journals {
                 FlexRow::new(w.id.to_string())
                     .cell("date", Cell::text(&w.entry_date))
                     .slot("amount", f::tabular(&figures.money(w.amount))?)
-                    .cell(
+                    .slot(
                         "account",
-                        Cell::text(super::account_label(accounts, w.offset_account_id)),
+                        super::account_html(accounts, w.offset_account_id)?,
                     )
                     .cell(
                         "reason",
@@ -231,9 +231,9 @@ impl Journals {
                 items: vec![
                     f::fact("Journal date", &journal.entry_date),
                     f::fact("Amount", &figures.money(journal.amount)),
-                    f::fact(
+                    f::fact_html(
                         "Allowance or expense",
-                        &super::account_label(accounts, journal.offset_account_id),
+                        super::account_html(accounts, journal.offset_account_id)?,
                     ),
                     f::fact("Reason", &journal.reason),
                     f::fact("Evidence reference", &journal.evidence),
@@ -256,7 +256,7 @@ impl Journals {
                         accounts
                             .iter()
                             .filter(|a| self.eligible.contains(&a.id))
-                            .map(|a| Choice::new(a.label(), a.id.to_string()))
+                            .map(|a| Choice::new(a.choice_label(), a.id.to_string()))
                             .collect(),
                     ),
                 "reason" | "evidence" => field.kind(InputKind::Textarea).attr("maxlength", "500"),
