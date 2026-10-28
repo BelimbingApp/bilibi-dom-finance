@@ -12,9 +12,9 @@ use bilibi_ui::{
     list_state::FILTERS_FORM,
     page::{LiveBody, LiveFuture, LiveInput, LiveRequest, LiveState},
     params, Alert, BuiltinColumn, Button, ButtonVariant, Card, Cell, Choice, ColumnsOutcome,
-    CreateButton, EmptyState, Field, Filter, FilterToolbar, FlexRow, FlexTable, Form, Header, Html,
-    InputKind, ListColumns, ListSpec, ListState, Modal, PageCounts, PageVariant, Pagination,
-    RecordLink, SortDir, StatusKind, TableEmpty, ToolbarControl,
+    Combobox, CreateButton, EmptyState, Field, Filter, FilterToolbar, FlexRow, FlexTable, Form,
+    Header, Html, InputKind, ListColumns, ListSpec, ListState, Modal, PageCounts, PageVariant,
+    Pagination, RecordLink, SortDir, StatusKind, TableEmpty, ToolbarControl,
 };
 use serde_json::{json, Value};
 use std::{
@@ -361,11 +361,7 @@ impl Groups {
                 .filter(|a| a.is_group && a.account_type == draft.account_type),
         );
         let mut parents = vec![Choice::new("No group", "")];
-        parents.extend(
-            eligible
-                .iter()
-                .map(|a| Choice::new(view::account_label(a), a.id.to_string())),
-        );
+        parents.extend(eligible.iter().map(|a| view::account_choice(a)));
         let parent_hint = if eligible.is_empty() {
             format!("Optional. This company has no {type_word} group to put it in yet.")
         } else {
@@ -421,14 +417,19 @@ impl Groups {
                         .collect(),
                 )
                 .hint("The type cannot be changed later. A group takes no postings."),
-            field("parent", "Group under", &draft.parent)
-                .errors(errors("parent_id"))
-                .kind(InputKind::Select)
-                .options(parents)
-                .hint(parent_hint),
         ] {
             body.push(&render(f)?);
         }
+        let parent = field("parent", "Group under", &draft.parent);
+        body.push(&render(
+            Combobox::new(parent.id.clone(), parent.name.clone())
+                .label("Group under")
+                .placeholder("No group")
+                .value(&draft.parent)
+                .options(parents)
+                .errors(errors("parent_id"))
+                .hint(parent_hint),
+        )?);
         let actions = {
             let mut a = render(Button {
                 id: "ledger-group-cancel",

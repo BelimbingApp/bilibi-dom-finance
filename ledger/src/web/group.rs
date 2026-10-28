@@ -13,9 +13,9 @@ use bilibi_database::{Error, Result};
 use bilibi_tenancy::Scope;
 use bilibi_ui::{
     page::{LiveBody, LiveFuture, LiveInput, LiveRequest, LiveState},
-    BackLink, BuiltinColumn, Card, Cell, Choice, CommitStates, CommitStatus, Fact, Facts, Field,
-    FlexRow, FlexTable, Header, Html, InlineChoice, InlineEdit, InlineField, InputKind,
-    ListColumns, PageVariant, SectionHeading, TableEmpty,
+    BackLink, BuiltinColumn, Card, Cell, Choice, Combobox, CommitStates, CommitStatus, Fact, Facts,
+    FlexRow, FlexTable, Header, Html, InlineChoice, InlineEdit, InlineField, ListColumns,
+    PageVariant, SectionHeading, TableEmpty,
 };
 use serde_json::{json, Value};
 use std::collections::HashSet;
@@ -111,17 +111,12 @@ impl Group {
             None => Html::text("None"),
         };
         let mut options = vec![Choice::new("No group", "")];
-        options.extend(
-            others
-                .iter()
-                .map(|a| Choice::new(view::account_label(a), a.id.to_string())),
-        );
+        options.extend(others.iter().map(|a| view::account_choice(a)));
         let editor = render(
-            Field::named("parent")
-                .id("ledger-group-parent-select")
-                .label_class("sr-only")
-                .label("Group")
-                .kind(InputKind::Select)
+            Combobox::new("ledger-group-parent-input", "parent")
+                .aria_label("Group")
+                .placeholder("No group")
+                .wrapper_class("mb-0")
                 .value(group.parent_id.map(|p| p.to_string()).unwrap_or_default())
                 .options(options),
         )?;
