@@ -195,7 +195,7 @@ pub(crate) async fn prepare(
         "currency_code":book.currency_code,"minor_units":book.minor_units,"source_reference":reference,"rows":mapped,
         "debit":debit,"credit":credit,
         "existing_journal":existing,"posts":false,
-        "excluded":"Open invoices and bills, asset registers, bank reconciliation items, tax return detail and historical transactions are not migrated. Control-account balances will remain differences until domain-owned opening items are supported. Income and expense balances appear on the conversion date; review the YTD reporting bridge with the accountant."});
+        "excluded":"Open invoices and bills, asset registers, bank reconciliation items, tax return detail and historical transactions are not migrated. Control-account balances remain differences until opening invoices and bills are supported. Income and expense balances appear on the conversion date; review the YTD reporting bridge with the accountant."});
     Ok(Prepared {
         entry,
         existing,
