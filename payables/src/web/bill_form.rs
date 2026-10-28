@@ -30,6 +30,9 @@ struct Line {
     account: String,
     tax: String,
     amount: String,
+    /// What the vendor's defaults last put in `account` and `tax`.
+    filled_account: String,
+    filled_tax: String,
 }
 
 #[derive(Default)]
@@ -38,6 +41,8 @@ struct Draft {
     number: String,
     date: String,
     due: String,
+    /// What the vendor's terms last put in `due`.
+    filled_due: String,
     description: String,
     lines: Vec<Line>,
     next: u32,
@@ -274,7 +279,14 @@ impl BillForm {
         take(&fields, "due", &mut d.due);
         take(&fields, "description", &mut d.description);
         if any_line {
+            let before = std::mem::take(&mut d.lines);
             d.lines = lines.into_values().collect();
+            for line in &mut d.lines {
+                if let Some(old) = before.iter().find(|o| o.id == line.id) {
+                    line.filled_account = old.filled_account.clone();
+                    line.filled_tax = old.filled_tax.clone();
+                }
+            }
             d.next = d.next.max(d.lines.last().map_or(0, |l| l.id));
         }
         if previous != d.vendor {
@@ -287,20 +299,25 @@ impl BillForm {
                     .tax_code_id
                     .filter(|id| self.taxes.iter().any(|t| t.id == *id))
                     .map(|id| id.to_string());
+                let account = account.unwrap_or_default();
+                let tax = tax.unwrap_or_default();
                 for line in &mut d.lines {
-                    if line.account.is_empty() {
-                        line.account = account.clone().unwrap_or_default();
+                    if line.account.is_empty() || line.account == line.filled_account {
+                        line.account = account.clone();
+                        line.filled_account = account.clone();
                     }
-                    if line.tax.is_empty() {
-                        line.tax = tax.clone().unwrap_or_default();
+                    if line.tax.is_empty() || line.tax == line.filled_tax {
+                        line.tax = tax.clone();
+                        line.filled_tax = tax.clone();
                     }
                 }
-                if d.due.is_empty() {
+                if d.due.is_empty() || d.due == d.filled_due {
                     if let Ok(date) = d.date.parse::<jiff::civil::Date>() {
                         d.due = date
                             .checked_add(jiff::Span::new().days(i64::from(v.payment_terms_days)))
                             .map(|d| d.to_string())
                             .unwrap_or_default();
+                        d.filled_due = d.due.clone();
                     }
                 }
             }
