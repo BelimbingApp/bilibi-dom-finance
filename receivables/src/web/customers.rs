@@ -505,8 +505,11 @@ impl Customers {
                         .collect();
                     self.create = Some(Create {
                         values: HashMap::new(),
-                        chooser: Chooser::new(PREFIX, FORM)
-                            .existing("Already a customer", "View customer", existing),
+                        chooser: Chooser::new(PREFIX, FORM).existing(
+                            "Already a customer",
+                            "View customer",
+                            existing,
+                        ),
                         errors: Errors::default(),
                     });
                 } else {

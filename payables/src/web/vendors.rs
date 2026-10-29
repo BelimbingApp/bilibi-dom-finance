@@ -748,8 +748,11 @@ impl Vendors {
                         })
                         .collect();
                     self.create = Some(Create {
-                        chooser: CompanyChooser::new("vendor-new", FORM)
-                            .existing("Already a supplier", "View supplier", existing),
+                        chooser: CompanyChooser::new("vendor-new", FORM).existing(
+                            "Already a supplier",
+                            "View supplier",
+                            existing,
+                        ),
                         values: HashMap::new(),
                         errors: CompanyErrors::default(),
                     });
