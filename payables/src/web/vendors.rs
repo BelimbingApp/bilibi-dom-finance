@@ -729,8 +729,30 @@ impl Vendors {
             }
             "show_vendor" => {
                 if self.pages.allowed(s, MANAGE_SETTINGS).await? {
+                    self.reload(s).await?;
+                    let existing = self
+                        .all
+                        .iter()
+                        .map(|vendor| {
+                            let search = vendor.code.to_lowercase();
+                            let position = self.all.iter().filter(|v| {
+                                v.code.to_lowercase().contains(&search)
+                                    || v.company.name.to_lowercase().contains(&search)
+                            }).position(|v| v.id == vendor.id).unwrap_or(0);
+                            let page = (position / 25 + 1).to_string();
+                            let query = url::form_urlencoded::Serializer::new(String::new())
+                                .append_pair("search", &vendor.code)
+                                .append_pair("page", &page)
+                                .finish();
+                            (
+                                vendor.record_id.clone(),
+                                format!("/finance/payables/vendors?{query}#payables-vendors-table-row-{}", vendor.id),
+                            )
+                        })
+                        .collect();
                     self.create = Some(Create {
-                        chooser: CompanyChooser::new("vendor-new", FORM),
+                        chooser: CompanyChooser::new("vendor-new", FORM)
+                            .existing("Already a supplier", existing),
                         values: HashMap::new(),
                         errors: CompanyErrors::default(),
                     });

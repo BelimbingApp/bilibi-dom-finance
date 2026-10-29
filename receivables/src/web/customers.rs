@@ -484,9 +484,32 @@ impl Customers {
             }
             "show_create" => {
                 if self.pages.allowed(scope, crate::MANAGE_CUSTOMERS).await? {
+                    let mut existing = HashMap::new();
+                    let mut input = json!({"page_size": 100});
+                    loop {
+                        let page = self
+                            .pages
+                            .read(scope, "finance.receivables.customer.list", input.clone())
+                            .await?;
+                        for value in page["records"].as_array().into_iter().flatten() {
+                            let customer: Customer = serde_json::from_value(value.clone())
+                                .map_err(|_| Error::Internal)?;
+                            if let Some(company) = customer.company {
+                                existing.insert(
+                                    company.id.to_string(),
+                                    format!("/finance/receivables/customers/{}", customer.id),
+                                );
+                            }
+                        }
+                        if page["next_after_code"].is_null() {
+                            break;
+                        }
+                        input["after_code"] = page["next_after_code"].clone();
+                    }
                     self.create = Some(Create {
                         values: HashMap::new(),
-                        chooser: Chooser::new(PREFIX, FORM),
+                        chooser: Chooser::new(PREFIX, FORM)
+                            .existing("Already a customer", existing),
                         errors: Errors::default(),
                     });
                 } else {
