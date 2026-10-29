@@ -24,9 +24,10 @@ pub async fn vendor(
     let core = services.get::<bilibi_company::CompanyService>(bilibi_company::SERVICE)?;
     let name = format!("{name} ({code})");
     let existing = {
-        let client = db.get().await?;
+        // Mirrors Bilimbi Finance's vendor-to-company lookup before linking a vendor.
+        let mut client = db.get().await?;
         bilibi_company::list(
-            &**client,
+            &mut *client,
             scope,
             &bilibi_company::Params {
                 q: name.clone(),
@@ -54,7 +55,7 @@ pub async fn vendor(
         {
             bilibi_company::CreateOutcome::Created(c) => c.id,
             bilibi_company::CreateOutcome::Refused(e) => {
-                return Err(format!("fixture company refused: {e:?}").into())
+                return Err(format!("fixture company refused: {e:?}").into());
             }
         }
     };
