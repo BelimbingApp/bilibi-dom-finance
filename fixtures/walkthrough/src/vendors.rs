@@ -24,9 +24,9 @@ pub async fn vendor(
     let core = services.get::<bilibi_company::CompanyService>(bilibi_company::SERVICE)?;
     let name = format!("{name} ({code})");
     let existing = {
-        let client = db.get().await?;
+        let mut client = db.get().await?;
         bilibi_company::list(
-            &**client,
+            &mut client,
             scope,
             &bilibi_company::Params {
                 q: name.clone(),
