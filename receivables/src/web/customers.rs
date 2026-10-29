@@ -525,6 +525,7 @@ impl Customers {
                         .chooser
                         .pick(&pages.company_picker(), scope, record)
                         .await?;
+                    create.chooser.offer_code(&mut create.values);
                     create.errors.0.remove("company");
                 }
             }
@@ -540,6 +541,7 @@ impl Customers {
                         .chooser
                         .use_candidate(&pages.company_picker(), scope, id)
                         .await?;
+                    create.chooser.offer_code(&mut create.values);
                 }
             }
             "create_customer" => {

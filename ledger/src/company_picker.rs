@@ -94,6 +94,10 @@ pub struct CompanyChooser {
     existing: HashMap<String, String>,
     existing_label: &'static str,
     pub selected: Option<Resolved>,
+    /// The chosen company's own code, offered as the Finance code until the
+    /// person types another; `None` when Core hides it from the reader.
+    code: Option<String>,
+    offered: Option<String>,
     new: HashMap<String, String>,
     candidates: Vec<Candidate>,
     likely: bool,
@@ -114,6 +118,8 @@ impl CompanyChooser {
             existing: HashMap::new(),
             existing_label: "",
             selected: None,
+            code: None,
+            offered: None,
             new: HashMap::new(),
             candidates: Vec::new(),
             likely: false,
@@ -217,10 +223,33 @@ impl CompanyChooser {
             .resolve(scope, &[Reference::new(KINDS[0], id)])
             .await?;
         self.selected = named.into_iter().next();
+        self.code = match id.parse::<i64>() {
+            Ok(company) => pages
+                .read_core(scope, "core.company.get", json!({"company_id": company}))
+                .await
+                .ok()
+                .and_then(|company| company["code"].as_str().map(str::to_owned))
+                .filter(|code| !code.is_empty()),
+            Err(_) => None,
+        };
         self.mode = Mode::Existing;
         self.hits.clear();
         self.query.clear();
         Ok(())
+    }
+
+    /// Offer the chosen company's code as the Finance `code`: it replaces a
+    /// blank field or the code offered for the company chosen before, never
+    /// what the person typed.
+    pub fn offer_code(&mut self, values: &mut HashMap<String, String>) {
+        let Some(code) = self.code.clone() else {
+            return;
+        };
+        let current = values.get("code").map(String::as_str).unwrap_or_default();
+        if current.is_empty() || self.offered.as_deref() == Some(current) {
+            values.insert("code".to_owned(), code.clone());
+            self.offered = Some(code);
+        }
     }
 
     pub fn clear(&mut self) {

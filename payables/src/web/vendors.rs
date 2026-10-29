@@ -768,6 +768,7 @@ impl Vendors {
                     c.chooser
                         .pick(&context, s, v["record"].as_str().ok_or(Error::Invalid)?)
                         .await?;
+                    c.chooser.offer_code(&mut c.values);
                     c.errors.0.remove("company");
                 }
             }
@@ -782,6 +783,7 @@ impl Vendors {
                     c.chooser
                         .use_candidate(&context, s, v["company"].as_str().ok_or(Error::Invalid)?)
                         .await?;
+                    c.chooser.offer_code(&mut c.values);
                     c.errors = CompanyErrors::default();
                 }
             }
