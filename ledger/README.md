@@ -750,6 +750,6 @@ The initial bounded imports have explicit follow-ups: [credits and historical co
 
 `CompanyChooser::submit_composed` submits a single owning Finance operation that accepts `core_company_id` or `new_company` and returns Core duplicate suggestions under `changes.target.creation`. Receivables uses it to avoid creating a company before its Finance link and relationship succeed. The vendor picker retains its existing Core-contract flow.
 
-The shared Finance company chooser uses `RecordPicker` for available companies and disabled buttons with links for existing Finance records. Platform follow-up: let `RecordPicker` render a disabled hit with a link, so all results can remain in the picker list.
+The shared Finance company chooser uses `RecordPicker` for available companies and disabled buttons with links for existing Finance records. Platform follow-up: let `RecordPicker` render a disabled hit with a link, so all results can remain in the picker list. Duplicate candidates already linked are disabled the same way, and `choose` refuses them.
 
 Picking an existing company offers its Core code as the Finance code (`CompanyChooser::offer_code`): it fills a blank field or replaces the code offered for the company picked before, never what the person typed, and the facade still validates it is unique.
