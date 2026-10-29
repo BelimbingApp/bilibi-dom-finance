@@ -4,7 +4,7 @@
 
 ## Vendors
 
-Add a vendor by finding its company in Companies or creating it through the shared company picker. Finance keeps the vendor code, payment terms, payable account, default expense account, default tax code and availability for the current company. Core owns its identity, tax and registration numbers, contacts and status. The company link is permanent and checked through Base Records. A company can be both a customer and a vendor.
+Add a vendor by finding its company in Companies or creating it through the shared company picker. Finance keeps the vendor code, payment terms, payable account, default expense account, default tax code and availability for the current company. Core owns its identity, tax and registration numbers, contacts and status. The company link is permanent and checked through Base Records. Search marks companies already linked to a supplier and links to the matching vendor; they cannot be selected. A company can be both a customer and a vendor.
 
 The Vendors page records the vendor relationship through Core's reviewed contract. Each step is audited by its owner. If company creation succeeds but adding the vendor or recording the relationship is refused, the company remains in Companies; choose it again and complete the missing step. Core does not yet expose these writes on Finance's transaction (BelimbingApp/bilibi#231).
 

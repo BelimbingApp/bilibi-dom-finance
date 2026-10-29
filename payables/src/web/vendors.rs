@@ -690,6 +690,7 @@ impl Vendors {
             if c.chooser.read(&form) {
                 c.chooser.search(&context, s).await?;
             }
+            c.chooser.offer_code(&mut c.values);
         }
         if let Some((_, values, _)) = &mut self.mapping {
             values.extend(form);
@@ -729,8 +730,29 @@ impl Vendors {
             }
             "show_vendor" => {
                 if self.pages.allowed(s, MANAGE_SETTINGS).await? {
+                    self.reload(s).await?;
+                    let existing = self
+                        .all
+                        .iter()
+                        .map(|vendor| {
+                            let query = url::form_urlencoded::Serializer::new(String::new())
+                                .append_pair("search", &vendor.code)
+                                .finish();
+                            (
+                                vendor.record_id.clone(),
+                                format!(
+                                    "/finance/payables/vendors?{query}#payables-vendors-table-row-{}",
+                                    vendor.id
+                                ),
+                            )
+                        })
+                        .collect();
                     self.create = Some(Create {
-                        chooser: CompanyChooser::new("vendor-new", FORM),
+                        chooser: CompanyChooser::new("vendor-new", FORM).existing(
+                            "Already a supplier",
+                            "View supplier",
+                            existing,
+                        ),
                         values: HashMap::new(),
                         errors: CompanyErrors::default(),
                     });
@@ -746,12 +768,14 @@ impl Vendors {
                     c.chooser
                         .pick(&context, s, v["record"].as_str().ok_or(Error::Invalid)?)
                         .await?;
+                    c.chooser.offer_code(&mut c.values);
                     c.errors.0.remove("company");
                 }
             }
             "clear_company" => {
                 if let Some(c) = &mut self.create {
                     c.chooser.clear();
+                    c.chooser.offer_code(&mut c.values);
                     c.errors.0.remove("company");
                 }
             }
@@ -760,6 +784,7 @@ impl Vendors {
                     c.chooser
                         .use_candidate(&context, s, v["company"].as_str().ok_or(Error::Invalid)?)
                         .await?;
+                    c.chooser.offer_code(&mut c.values);
                     c.errors = CompanyErrors::default();
                 }
             }

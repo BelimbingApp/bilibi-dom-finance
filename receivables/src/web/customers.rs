@@ -393,6 +393,7 @@ impl Customers {
                 .search(&pages.company_picker(), scope)
                 .await?;
         }
+        create.chooser.offer_code(&mut create.values);
         Ok(())
     }
 
@@ -484,9 +485,31 @@ impl Customers {
             }
             "show_create" => {
                 if self.pages.allowed(scope, crate::MANAGE_CUSTOMERS).await? {
+                    let (customers, _) = self
+                        .pages
+                        .read_all::<Customer>(
+                            scope,
+                            "finance.receivables.customer.list",
+                            json!({}),
+                            ("after_code", "next_after_code"),
+                        )
+                        .await?;
+                    let existing = customers
+                        .into_iter()
+                        .filter_map(|customer| {
+                            Some((
+                                customer.company?.id.to_string(),
+                                format!("/finance/receivables/customers/{}", customer.id),
+                            ))
+                        })
+                        .collect();
                     self.create = Some(Create {
                         values: HashMap::new(),
-                        chooser: Chooser::new(PREFIX, FORM),
+                        chooser: Chooser::new(PREFIX, FORM).existing(
+                            "Already a customer",
+                            "View customer",
+                            existing,
+                        ),
                         errors: Errors::default(),
                     });
                 } else {
@@ -502,12 +525,14 @@ impl Customers {
                         .chooser
                         .pick(&pages.company_picker(), scope, record)
                         .await?;
+                    create.chooser.offer_code(&mut create.values);
                     create.errors.0.remove("company");
                 }
             }
             "clear_company" => {
                 if let Some(create) = self.create.as_mut() {
                     create.chooser.clear();
+                    create.chooser.offer_code(&mut create.values);
                 }
             }
             "use_candidate" => {
@@ -517,6 +542,7 @@ impl Customers {
                         .chooser
                         .use_candidate(&pages.company_picker(), scope, id)
                         .await?;
+                    create.chooser.offer_code(&mut create.values);
                 }
             }
             "create_customer" => {

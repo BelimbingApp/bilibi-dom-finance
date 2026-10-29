@@ -18,7 +18,7 @@ use bilibi_database::{Error, Result};
 use bilibi_records::{Hit, Reference, Resolved};
 use bilibi_tenancy::Scope;
 use bilibi_ui::{error_sentence, ErrorSummary};
-use bilibi_ui::{Button, Field, Html, InputKind, RecordPicker, StatusKind};
+use bilibi_ui::{ActionLink, Button, Field, Html, InputKind, RecordPicker, StatusKind};
 use serde_json::json;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
@@ -91,7 +91,14 @@ pub struct CompanyChooser {
     pub mode: Mode,
     query: String,
     hits: Vec<Hit>,
+    existing: HashMap<String, String>,
+    existing_label: &'static str,
+    existing_link: &'static str,
     pub selected: Option<Resolved>,
+    /// The chosen company's own code, offered as the Finance code until the
+    /// person types another; `None` when Core hides it from the reader.
+    code: Option<String>,
+    offered: Option<String>,
     new: HashMap<String, String>,
     candidates: Vec<Candidate>,
     likely: bool,
@@ -109,13 +116,31 @@ impl CompanyChooser {
             mode: Mode::Existing,
             query: String::new(),
             hits: Vec::new(),
+            existing: HashMap::new(),
+            existing_label: "",
+            existing_link: "",
             selected: None,
+            code: None,
+            offered: None,
             new: HashMap::new(),
             candidates: Vec::new(),
             likely: false,
             reason: String::new(),
             created: None,
         }
+    }
+
+    /// Mark companies already linked to this company's Finance records.
+    pub fn existing(
+        mut self,
+        label: &'static str,
+        link: &'static str,
+        records: HashMap<String, String>,
+    ) -> Self {
+        self.existing_label = label;
+        self.existing_link = link;
+        self.existing = records;
+        self
     }
 
     /// The posted fields `(path, dom id, label)`, for the error summary.
@@ -198,15 +223,52 @@ impl CompanyChooser {
         scope: &Scope,
         id: &str,
     ) -> Result<()> {
+        if self.existing.contains_key(id) {
+            return Err(Error::Invalid);
+        }
         let named = pages
             .records
             .resolve(scope, &[Reference::new(KINDS[0], id)])
             .await?;
         self.selected = named.into_iter().next();
+        self.code = match id.parse::<i64>() {
+            Ok(company) => pages
+                .read_core(scope, "core.company.get", json!({"company_id": company}))
+                .await
+                .ok()
+                .and_then(|company| company["code"].as_str().map(str::to_owned))
+                .filter(|code| !code.is_empty()),
+            Err(_) => None,
+        };
         self.mode = Mode::Existing;
         self.hits.clear();
         self.query.clear();
         Ok(())
+    }
+
+    /// Offer the chosen company's code as the Finance `code`: it replaces a
+    /// blank field or the code offered before, never what the person typed,
+    /// and takes it back once no existing company is chosen.
+    pub fn offer_code(&mut self, values: &mut HashMap<String, String>) {
+        let code = match (&self.mode, &self.selected) {
+            (Mode::Existing, Some(_)) => self.code.clone(),
+            _ => None,
+        };
+        let current = values.get("code").map(String::as_str).unwrap_or_default();
+        if !current.is_empty() && self.offered.as_deref() != Some(current) {
+            return;
+        }
+        match code {
+            Some(code) => {
+                values.insert("code".to_owned(), code.clone());
+                self.offered = Some(code);
+            }
+            None => {
+                if self.offered.take().is_some() {
+                    values.remove("code");
+                }
+            }
+        }
     }
 
     pub fn clear(&mut self) {
@@ -260,22 +322,69 @@ impl CompanyChooser {
                         s.pill(format!("{prefix}-company-pill"), framed),
                     )
                 });
+                let available: Vec<_> = self
+                    .hits
+                    .iter()
+                    .filter(|h| !self.existing.contains_key(&h.id))
+                    .cloned()
+                    .collect();
                 let picker = RecordPicker::new(
                     &format!("{prefix}-company"),
                     self.form,
                     "company",
                     "Company",
                     &self.query,
-                    &pages_hits(&self.hits),
+                    &pages_hits(&available),
                     selected
                         .as_ref()
                         .map(|(value, pill)| (value.as_str(), pill.clone())),
                     ("pick_company", "clear_company"),
                     errors.under("company", "Company"),
                 );
+                // RecordPicker cannot render disabled hits with links yet. When
+                // every hit is linked, draw its search field without its empty
+                // message; the excluded hits follow as disabled controls.
+                let mut choices =
+                    if self.selected.is_none() && available.is_empty() && !self.hits.is_empty() {
+                        render(
+                            Field::in_form(self.form, "company_search")
+                                .id(format!("{prefix}-company-search"))
+                                .label("Company")
+                                .kind(InputKind::Search)
+                                .value(&self.query)
+                                .attr("data-debounce", "300")
+                                .autocomplete("off")
+                                .hint("Type part of a name.")
+                                .errors(errors.under("company", "Company")),
+                        )?
+                    } else {
+                        render(picker)?
+                    };
+                if self.selected.is_none() {
+                    for (index, hit) in self.hits.iter().enumerate() {
+                        if let Some(href) = self.existing.get(&hit.id) {
+                            choices.push(&render(Button {
+                                id: &format!("{prefix}-existing-{index}"),
+                                button_type: "button",
+                                disabled: true,
+                                class: "w-full min-w-0 justify-start",
+                                body: Html::text(&format!(
+                                    "{} · {}",
+                                    hit.label, self.existing_label
+                                )),
+                                ..Button::default()
+                            })?);
+                            choices.push(&render(ActionLink {
+                                href,
+                                body: Html::text(self.existing_link),
+                                ..ActionLink::default()
+                            })?);
+                        }
+                    }
+                }
                 body.push(&render(Wrapped {
                     class: "mb-3 sm:col-span-2",
-                    body: render(picker)?,
+                    body: choices,
                 })?);
             }
             Mode::New => {
@@ -310,20 +419,34 @@ impl CompanyChooser {
         let prefix = &self.prefix;
         let mut rows = Vec::new();
         for (index, c) in self.candidates.iter().enumerate() {
+            let linked = self.existing.get(&c.id.to_string());
+            let mut button = render(Button {
+                id: &format!("{prefix}-candidate-{index}-use"),
+                button_type: "button",
+                event: "use_candidate",
+                name: "company",
+                value: &c.id.to_string(),
+                disabled: linked.is_some(),
+                body: Html::text(if linked.is_some() {
+                    self.existing_label
+                } else {
+                    "Use this company"
+                }),
+                ..Button::default()
+            })?;
+            if let Some(href) = linked {
+                button.push(&render(ActionLink {
+                    href,
+                    body: Html::text(self.existing_link),
+                    ..ActionLink::default()
+                })?);
+            }
             rows.push(CandidateRow {
                 id: format!("{prefix}-candidate-{index}"),
                 name: c.name.clone(),
                 status: c.status.clone(),
                 score: c.score.clone(),
-                button: render(Button {
-                    id: &format!("{prefix}-candidate-{index}-use"),
-                    button_type: "button",
-                    event: "use_candidate",
-                    name: "company",
-                    value: &c.id.to_string(),
-                    body: Html::text("Use this company"),
-                    ..Button::default()
-                })?,
+                button,
             });
         }
         let mut body = render(CandidateList {
