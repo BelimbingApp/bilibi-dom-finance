@@ -5,20 +5,20 @@
 {{ date|safe }}
 {% if let Some(empty) = empty %}{{ empty|safe }}{% endif %}
 {% if let Some(parties) = parties %}
+{% call ui::section_heading(id="payables-aged-parties-heading", title="By supplier") %}{% endcall %}
 {% call ui::card(id="payables-aged-parties", inner_class="p-0", role="region", labelledby="payables-aged-parties-heading") %}
-{% call ui::section_heading(id="payables-aged-parties-heading", title="By supplier", class="p-5 pb-0") %}{% endcall %}
 {{ parties|safe }}
 {% endcall %}
 {% endif %}
 {% if let Some(bills) = bills %}
+{% call ui::section_heading(id="payables-aged-bills-heading", title="Bills still owed") %}{% endcall %}
 {% call ui::card(id="payables-aged-bills", inner_class="p-0", role="region", labelledby="payables-aged-bills-heading") %}
-{% call ui::section_heading(id="payables-aged-bills-heading", title="Bills still owed", class="p-5 pb-0") %}{% endcall %}
 {{ bills|safe }}
 {% endcall %}
 {% endif %}
 {% if let Some(credits) = credits %}
+{% call ui::section_heading(id="payables-aged-credits-heading", title="Credit balances", description="Bills a payment or debit note has paid more than in full.") %}{% endcall %}
 {% call ui::card(id="payables-aged-credits", inner_class="p-0", role="region", labelledby="payables-aged-credits-heading") %}
-{% call ui::section_heading(id="payables-aged-credits-heading", title="Credit balances", class="p-5 pb-0", description="Bills a payment or debit note has paid more than in full.") %}{% endcall %}
 {{ credits|safe }}
 {% endcall %}
 {% endif %}
