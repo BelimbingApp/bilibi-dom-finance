@@ -270,20 +270,31 @@ impl Aging {
             .zip(&amounts)
             .map(|(l, a)| f::fact(l, a))
             .collect();
+        body.push(&render(SectionHeading {
+            id: "receivables-aging-customers-heading",
+            title: "By customer",
+            class: "mt-4",
+            description:
+                "A day late is counted from the due date. An invoice due today is not yet late.",
+            ..SectionHeading::default()
+        })?);
         body.push(&render(Card {
             id: "receivables-aging-customers",
             role: "region",
-            class: "mt-4",
+            labelledby: "receivables-aging-customers-heading",
             inner_class: "p-0",
             body: {
-                let mut b = render(SectionHeading {
-                    title: "By customer",
-                    class: "p-5 pb-0",
-                    description: "A day late is counted from the due date. An invoice due today is not yet late.",
-                    ..SectionHeading::default()
-                })?;
-                b.push(&f::table(&self.customers, "customers_grid", "Receivables aging by customer", rows, "Nobody owes anything on this date.")?);
-                b.push(&render(Facts { id: "receivables-aging-bucket-totals", items: totals })?);
+                let mut b = f::table(
+                    &self.customers,
+                    "customers_grid",
+                    "Receivables aging by customer",
+                    rows,
+                    "Nobody owes anything on this date.",
+                )?;
+                b.push(&render(Facts {
+                    id: "receivables-aging-bucket-totals",
+                    items: totals,
+                })?);
                 b
             },
             ..Card::default()
@@ -326,26 +337,24 @@ impl Aging {
                 );
             }
         }
+        body.push(&render(SectionHeading {
+            id: "receivables-aging-invoices-heading",
+            title: "Invoices still owed",
+            class: "mt-4",
+            ..SectionHeading::default()
+        })?);
         body.push(&render(Card {
             id: "receivables-aging-invoices",
             role: "region",
-            class: "mt-4",
+            labelledby: "receivables-aging-invoices-heading",
             inner_class: "p-0",
-            body: {
-                let mut b = render(SectionHeading {
-                    title: "Invoices still owed",
-                    class: "p-5 pb-0",
-                    ..SectionHeading::default()
-                })?;
-                b.push(&f::table(
-                    &self.invoices,
-                    "invoices_grid",
-                    "Invoices still owed",
-                    invoice_rows,
-                    "Nobody owes anything on this date.",
-                )?);
-                b
-            },
+            body: f::table(
+                &self.invoices,
+                "invoices_grid",
+                "Invoices still owed",
+                invoice_rows,
+                "Nobody owes anything on this date.",
+            )?,
             ..Card::default()
         })?);
         f::frame(
