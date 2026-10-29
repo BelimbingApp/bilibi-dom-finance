@@ -247,16 +247,27 @@ impl CompanyChooser {
     }
 
     /// Offer the chosen company's code as the Finance `code`: it replaces a
-    /// blank field or the code offered for the company chosen before, never
-    /// what the person typed.
+    /// blank field or the code offered before, never what the person typed,
+    /// and takes it back once no existing company is chosen.
     pub fn offer_code(&mut self, values: &mut HashMap<String, String>) {
-        let Some(code) = self.code.clone() else {
-            return;
+        let code = match (&self.mode, &self.selected) {
+            (Mode::Existing, Some(_)) => self.code.clone(),
+            _ => None,
         };
         let current = values.get("code").map(String::as_str).unwrap_or_default();
-        if current.is_empty() || self.offered.as_deref() == Some(current) {
-            values.insert("code".to_owned(), code.clone());
-            self.offered = Some(code);
+        if !current.is_empty() && self.offered.as_deref() != Some(current) {
+            return;
+        }
+        match code {
+            Some(code) => {
+                values.insert("code".to_owned(), code.clone());
+                self.offered = Some(code);
+            }
+            None => {
+                if self.offered.take().is_some() {
+                    values.remove("code");
+                }
+            }
         }
     }
 

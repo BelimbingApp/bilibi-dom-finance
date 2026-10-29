@@ -393,6 +393,7 @@ impl Customers {
                 .search(&pages.company_picker(), scope)
                 .await?;
         }
+        create.chooser.offer_code(&mut create.values);
         Ok(())
     }
 
@@ -528,6 +529,7 @@ impl Customers {
             "clear_company" => {
                 if let Some(create) = self.create.as_mut() {
                     create.chooser.clear();
+                    create.chooser.offer_code(&mut create.values);
                 }
             }
             "use_candidate" => {

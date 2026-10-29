@@ -752,4 +752,4 @@ The initial bounded imports have explicit follow-ups: [credits and historical co
 
 The shared Finance company chooser uses `RecordPicker` for available companies and disabled buttons with links for existing Finance records. Platform follow-up: let `RecordPicker` render a disabled hit with a link, so all results can remain in the picker list. Duplicate candidates already linked are disabled the same way, and `choose` refuses them.
 
-Picking an existing company offers its Core code as the Finance code (`CompanyChooser::offer_code`): it fills a blank field or replaces the code offered for the company picked before, never what the person typed, and the facade still validates it is unique.
+Picking an existing company offers its Core code as the Finance code (`CompanyChooser::offer_code`): it fills a blank field or replaces the code offered for the company picked before, never what the person typed, and takes it back when the company is cleared or a new company is chosen instead, and the facade still validates it is unique.

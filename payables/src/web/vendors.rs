@@ -690,6 +690,7 @@ impl Vendors {
             if c.chooser.read(&form) {
                 c.chooser.search(&context, s).await?;
             }
+            c.chooser.offer_code(&mut c.values);
         }
         if let Some((_, values, _)) = &mut self.mapping {
             values.extend(form);
@@ -771,6 +772,7 @@ impl Vendors {
             "clear_company" => {
                 if let Some(c) = &mut self.create {
                     c.chooser.clear();
+                    c.chooser.offer_code(&mut c.values);
                     c.errors.0.remove("company");
                 }
             }
