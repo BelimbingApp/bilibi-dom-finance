@@ -26,7 +26,7 @@ pub async fn vendor(
     let existing = {
         let mut client = db.get().await?;
         bilibi_company::list(
-            &mut **client,
+            &mut client,
             scope,
             &bilibi_company::Params {
                 q: name.clone(),
