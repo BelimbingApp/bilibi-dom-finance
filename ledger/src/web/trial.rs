@@ -201,7 +201,7 @@ impl Trial {
                         "entries",
                         render(EntriesLink {
                             href: format!(
-                                "/finance/ledger/entries?account={}&to={}&through={}",
+                                "/finance/ledger/journals?account={}&to={}&through={}",
                                 row.id, trial.as_of, trial.through_entry_number
                             ),
                         })?,

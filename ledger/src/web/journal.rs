@@ -111,7 +111,7 @@ impl Journal {
 
     async fn view(&mut self, scope: &Scope) -> Result<LiveBody> {
         if Pages::company(scope).is_none() {
-            return self.simple("Manual journal", no_company("ledger-journal-no-company")?);
+            return self.simple("Journal", no_company("ledger-journal-no-company")?);
         }
         let journal: view::Journal = match self
             .pages
@@ -126,18 +126,18 @@ impl Journal {
                 Some(journal) => journal,
                 None => {
                     return self.simple(
-                        "Manual journal",
+                        "Journal",
                         unavailable("ledger-journal-refused", "this journal", &Read::Failed)?,
                     );
                 }
             },
             Read::Failed | Read::Refused(_) => {
                 return self.simple(
-                    "Manual journal",
+                    "Journal",
                     render(
                         EmptyState::missing(
                             "This journal does not exist",
-                            "It may belong to another company. Go back to the manual journals.",
+                            "It may belong to another company. Go back to Journals.",
                         )
                         .id("ledger-journal-missing"),
                     )?,
@@ -145,7 +145,7 @@ impl Journal {
             }
             other => {
                 return self.simple(
-                    "Manual journal",
+                    "Journal",
                     unavailable("ledger-journal-refused", "this journal", &other)?,
                 );
             }
@@ -216,7 +216,7 @@ impl Journal {
         let total: Decimal = journal.lines.iter().map(|l| view::decimal(&l.debit)).sum();
         let mut facts = vec![
             Fact {
-                title: "Number",
+                title: "Request",
                 id: "ledger-journal-number",
                 value: Html::text(&journal.journal_number.to_string()),
             },
@@ -484,15 +484,42 @@ impl Journal {
         actions.push(&render(BackLink {
             href: INDEX,
             id: "ledger-journal-back",
-            title: "Back to the manual journals",
+            title: "Back to Journals",
             ..BackLink::default()
         })?);
-        let name = format!("Journal {}", journal.journal_number);
+        let posted = match journal.decision.as_ref().and_then(|d| d.entry_id) {
+            Some(entry_id) => match self
+                .pages
+                .read(
+                    scope,
+                    "finance.ledger.entry.get",
+                    json!({"entry_id": entry_id}),
+                )
+                .await?
+            {
+                Read::Found(value) => view::parse::<view::Entry>(value).map(|e| e.entry_number),
+                _ => None,
+            },
+            None => None,
+        };
+        let name = match posted {
+            Some(number) => format!("Journal {number}"),
+            None => "Draft journal".to_owned(),
+        };
         let url = format!("/finance/ledger/journals/{}", journal.id);
+        let subtitle = format!(
+            "Request {} · {}",
+            journal.journal_number, journal.description
+        );
         let mut page = render(Header {
             title: Html::text(&name),
-            subtitle: &journal.description,
-            title_actions: super::record_pin("ledger-journal-pin", "journal", &name, &url)?,
+            subtitle: &subtitle,
+            title_actions: super::record_pin(
+                "ledger-journal-pin",
+                "journal",
+                &format!("Journal · Request {}", journal.journal_number),
+                &url,
+            )?,
             actions,
         })?;
         page.push(&render(Announce {

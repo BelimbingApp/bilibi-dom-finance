@@ -117,7 +117,7 @@ they govern this code and are not copied here.
   carries a trailing `*` in its `label` with the plain name as `aria_label`
   (a stopgap until the Platform's Combobox draws the shared required marker),
   and the filter
-  toolbar has no combobox, so the Journal entries account filter is a shared
+  toolbar has no combobox, so the Journals account filter is a shared
   `Form` on the `filters` event around one.
 - Declare every page or panel service's write events in its `PageWrites`
   (Bilibi `apps/base/agent_api/README.md`): the host refuses, as
@@ -134,7 +134,7 @@ they govern this code and are not copied here.
 - A recorded document is immutable, so "edit a draft" is a corrected draft that replaces it, through `finance.payables.bill.replace_draft` (`Payables::replace_draft_on` voids the old draft and records the new one in one transaction, so a refusal leaves the draft as it was); never void then create in two calls, and do not add an update path. List a page of payment requests with `page_payment_requests` (newest first, the total from SQL), never by loading batches of `list_payment_requests` and cutting them, which drops the newest. A form with many fields reads its own `name[...]` keys: `params::form_values` keeps only 64.
 - Narrow a list by a date range with the shared period filter
   (`bilibi_datetime::PeriodFilter`, `apps/base/datetime/README.md`; the
-  pattern is `ledger/src/web/entries.rs`), never bare from/to date inputs or
+  pattern is `ledger/src/web/journals.rs`), never bare from/to date inputs or
   a range of the page's own: it keeps presets, the custom-range draft and the
   calendar zone the same on every page, and its events carry its id
   (`period_select:<id>`). An as-of date (trial balance, aging), a tax period

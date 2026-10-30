@@ -132,6 +132,8 @@ pub(crate) struct Entry {
     pub posted_by_impersonator_id: Option<i64>,
     pub posted_at: String,
     pub reversed_by_entry_id: Option<i64>,
+    #[serde(default)]
+    pub request_number: Option<i64>,
     pub lines: Vec<Line>,
 }
 

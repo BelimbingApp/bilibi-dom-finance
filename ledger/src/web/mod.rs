@@ -7,11 +7,11 @@ mod account;
 mod accounts;
 mod book;
 mod books;
-mod entries;
 mod entry;
 mod group;
 mod groups;
 mod journal;
+mod journal_period;
 mod journals;
 mod opening;
 mod trial;
@@ -101,11 +101,6 @@ route!(
     "entries"
 );
 route!(
-    "finance/ledger.entry",
-    "/finance/ledger/entries/{id}",
-    "entry"
-);
-route!(
     "finance/ledger.journals",
     "/finance/ledger/journals",
     "journals"
@@ -151,14 +146,8 @@ menu!(
     6
 );
 menu!(
-    "finance.ledger.entries",
-    "Journal entries",
-    "/finance/ledger/entries",
-    7
-);
-menu!(
     "finance.ledger.journals",
-    "Manual journals",
+    "Journals",
     "/finance/ledger/journals",
     8
 );
@@ -1015,7 +1004,7 @@ pub(crate) struct Figure {
 /// A plain link to an entry's page.
 #[derive(Template)]
 #[template(
-    source = r#"<a href="/finance/ledger/entries/{{ id }}" class="text-link hover:underline">{{ label }}</a>"#,
+    source = r#"<a href="/finance/ledger/journals/entry-{{ id }}" class="text-link hover:underline">{{ label }}</a>"#,
     ext = "html"
 )]
 pub(crate) struct EntryLink<'a> {
@@ -1118,14 +1107,17 @@ impl Page<Scope, Error> for Pages {
             "account" => "Account",
             "groups" => "Account groups",
             "group" => "Account group",
-            "entries" => "Journal entries",
-            "entry" => "Journal entry",
-            "journals" => "Manual journals",
-            "journal" => "Manual journal",
+            "entries" => return None,
+            "journals" => "Journals",
+            "journal" => "Journal",
             "years" => "Fiscal years",
             "trial" => "Trial balance",
             _ => return None,
         })
+    }
+
+    fn redirect(&self, operation: &str) -> Option<&'static str> {
+        (operation == "entries").then_some("/finance/ledger/journals")
     }
 
     fn render<'a>(&'a self, r: PageRequest<'a, Scope>) -> PageFuture<'a, Error> {
@@ -1168,10 +1160,21 @@ impl Pages {
             "account" => Box::new(account::Account::new(pages, id_param(r.path)?, company)),
             "groups" => Box::new(groups::Groups::new(pages, r.query, r.framed, company)?),
             "group" => Box::new(group::Group::new(pages, id_param(r.path)?, company)),
-            "entries" => Box::new(entries::Entries::new(pages, r.query, r.framed)?),
-            "entry" => Box::new(entry::Entry::new(pages, id_param(r.path)?)),
+            "entries" => Box::new(journals::Journals::new(pages, r.query, r.framed)?),
             "journals" => Box::new(journals::Journals::new(pages, r.query, r.framed)?),
-            "journal" => Box::new(journal::Journal::new(pages, id_param(r.path)?)),
+            "journal" => {
+                let record = r.path.get("id").ok_or(Error::NotFound)?;
+                if let Some(entry_id) = record.strip_prefix("entry-") {
+                    let id = entry_id
+                        .parse::<i64>()
+                        .ok()
+                        .filter(|id| *id > 0)
+                        .ok_or(Error::NotFound)?;
+                    Box::new(entry::Entry::new(pages, id))
+                } else {
+                    Box::new(journal::Journal::new(pages, id_param(r.path)?))
+                }
+            }
             "years" => Box::new(years::Years::new(pages, r.query)),
             "trial" => Box::new(trial::Trial::new(pages, r.query)),
             _ => return Err(Error::NotFound),

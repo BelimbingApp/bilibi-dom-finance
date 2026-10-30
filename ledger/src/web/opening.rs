@@ -338,7 +338,9 @@ impl LiveState<Scope, Error> for Opening {
                                         self.destination =
                                             Some(format!("/finance/ledger/journals/{journal}"));
                                     } else {
-                                        self.flash.success("The opening journal is recorded. Find it in Manual journals.");
+                                        self.flash.success(
+                                            "The opening journal is recorded. Find it in Journals.",
+                                        );
                                     }
                                 }
                                 Err(failure) => self.failed(failure),

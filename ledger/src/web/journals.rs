@@ -1,12 +1,13 @@
-//! Manual journals: adjustments submitted for approval.
-//! An approved journal posts as an entry; a submitted one posts nothing yet.
+//! Journals: postings from every source and unposted manual journals.
+//! Approved manual journals appear as their posting; waiting journals post nothing.
 use super::{
-    dialog_actions, error_text, event_type, figure, instant, no_company, render, shell,
-    unavailable, view, who, Failure, Flash, Pages, Read, Refusal,
+    dialog_actions, error_text, event_type, figure, journal_period::Window, no_company, render,
+    shell, source_label, unavailable, view, Failure, Flash, Pages, Read, Refusal,
 };
 use crate::SUBMIT_JOURNALS;
 use askama::Template;
 use bilibi_database::{Error, Result};
+use bilibi_datetime::{filter::Outcome, Clock, Mode, PeriodFilter, Preset};
 use bilibi_tenancy::Scope;
 use bilibi_ui::{
     list_state::FILTERS_FORM,
@@ -16,7 +17,9 @@ use bilibi_ui::{
     FlexRow, FlexTable, Form, Header, Html, InputKind, ListColumns, ListSpec, ListState, Modal,
     ModalWidth, PageVariant, RecordLink, StatusKind, TableEmpty, ToolbarControl,
 };
+use jiff::Timestamp;
 use rust_decimal::Decimal;
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -25,6 +28,11 @@ use std::{
 
 pub(super) const INDEX: &str = "/finance/ledger/journals";
 const LIMIT: usize = 100;
+const FILTER_ID: &str = "ledger-journals-period";
+const ALL_DATES: &str = "all";
+fn clear_event() -> String {
+    format!("period_clear:{FILTER_ID}")
+}
 /// Fields a posted form keeps are bounded (64), so a journal has at most this many lines.
 const MAX_LINES: usize = 12;
 
@@ -39,11 +47,22 @@ static SPEC: LazyLock<Arc<ListSpec>> = LazyLock::new(|| {
             (
                 "status".into(),
                 Filter::one_of(
-                    &["all", "submitted", "approved", "rejected", "withdrawn"],
+                    &[
+                        "all",
+                        "submitted",
+                        "posted",
+                        "reversed",
+                        "reversal",
+                        "rejected",
+                        "withdrawn",
+                    ],
                     "all",
                 ),
             ),
             ("after".into(), Filter::string("")),
+            ("source".into(), Filter::string("")),
+            ("account".into(), Filter::string("")),
+            ("through".into(), Filter::string("")),
         ]),
         omit_defaults: true,
         ..ListSpec::default()
@@ -203,7 +222,9 @@ impl Draft {
             .lines
             .iter()
             .map(|line| {
-                let active = accounts.iter().any(|a| a.id == line.account_id && a.active);
+                let active = accounts
+                    .iter()
+                    .any(|a| a.id == line.account_id && a.postable());
                 gone |= !active;
                 LineDraft {
                     account: if active {
@@ -470,12 +491,17 @@ pub(super) struct Journals {
     pages: Pages,
     list: ListState,
     columns: ListColumns,
+    loaded_keys: Option<Vec<String>>,
     flash: Flash,
     draft: Option<Draft>,
     /// A journal named in the address (`correct` or `copy`) whose dialog is
     /// still to open: it is read through the contract on the first update.
     opening: Option<Opening>,
     framed: bool,
+    window: Window,
+    period: PeriodFilter,
+    browser_zone: Option<String>,
+    timezone_request: String,
 }
 
 /// How an address names an earlier journal to prefill the dialog from.
@@ -504,20 +530,29 @@ impl Journals {
     pub(super) fn new(pages: Pages, query: &HashMap<String, String>, framed: bool) -> Result<Self> {
         let columns = vec![
             BuiltinColumn::new("number", "Number"),
+            BuiltinColumn::new("request", "Request"),
             BuiltinColumn::new("date", "Date"),
             BuiltinColumn::new("description", "Description"),
-            BuiltinColumn::new("reference", "Reference"),
-            BuiltinColumn::new("amount", "Amount").right(),
+            BuiltinColumn::new("source", "Source"),
             BuiltinColumn::new("status", "Status"),
-            BuiltinColumn::new("by", "Submitted by"),
-            BuiltinColumn::new("at", "Submitted"),
+            BuiltinColumn::new("amount", "Amount").right(),
         ];
+        let window = Window::parse(query);
+        let clock = Clock {
+            timezone: "Etc/UTC".into(),
+            today: Timestamp::now().to_zoned(jiff::tz::TimeZone::UTC).date(),
+        };
         Ok(Self {
+            period: PeriodFilter::new(FILTER_ID, window.widget(&clock), &clock),
+            window,
+            browser_zone: None,
+            timezone_request: Timestamp::now().to_string(),
             pages,
             list: ListState::parse(query, SPEC.clone()).map_err(|_| Error::Internal)?,
             columns: ListColumns::mount("ledger-journals-table", columns)
                 .map_err(|_| Error::Internal)?,
             flash: Flash::default(),
+            loaded_keys: None,
             draft: None,
             opening: Opening::parse(query),
             framed,
@@ -569,12 +604,12 @@ impl Journals {
             }
         }
         let mut page = render(Header {
-            title: Html::text("Manual journals"),
+            title: Html::text("Journals"),
             subtitle: guidance,
             title_actions: super::menu_pin(
                 "ledger-journals-pin",
                 "nav-finance-ledger-journals",
-                "Manual journals",
+                "Journals",
             )?,
             actions,
         })?;
@@ -605,6 +640,7 @@ impl Journals {
             })?);
         }
         let mut query = self.list.to_params();
+        query.extend(self.window.params());
         if let Some(draft) = &self.draft {
             match &draft.replaces {
                 Some(replaces) => query.insert("correct".into(), replaces.id.to_string()),
@@ -619,107 +655,284 @@ impl Journals {
         })
     }
 
+    async fn clock(&self, scope: &Scope) -> Result<(Clock, bool)> {
+        let display = self.pages.display(scope).await?;
+        let settled = display.mode != Mode::Local || self.browser_zone.is_some();
+        Ok((
+            display.clock(self.browser_zone.as_deref(), Timestamp::now()),
+            settled,
+        ))
+    }
+
     async fn table(&mut self, scope: &Scope, units: u8, body: &mut Html) -> Result<usize> {
+        let (clock, settled) = self.clock(scope).await?;
+        if let Some(period) = self.window.resolved(&clock) {
+            if (self.window.from != Some(period.from) || self.window.to != Some(period.to))
+                && (settled || self.window.from.is_none())
+            {
+                self.list.filters.insert("after".into(), String::new());
+                self.window.apply(period);
+            }
+        }
+        self.period.set(self.window.widget(&clock), &clock);
         let mut input = json!({"page_size": LIMIT});
+        if let Some(date) = self.window.from {
+            input["from"] = json!(date.to_string());
+        }
+        if let Some(date) = self.window.to {
+            input["to"] = json!(date.to_string());
+        }
         if self.filter("status") != "all" {
             input["status"] = json!(self.filter("status"));
         }
-        if let Ok(after) = self.filter("after").parse::<i64>() {
-            input["after"] = json!(after);
+        if !self.filter("source").is_empty() {
+            input["source"] = json!(self.filter("source"));
         }
-        let form = self.list.filters_form();
-        body.push(&render(FilterToolbar::new(
-            "ledger-journals-filters",
-            vec![ToolbarControl::select(
-                "ledger-journals-status",
-                "status",
-                "Status",
-                &form["status"],
-                vec![
-                    Choice::new("All journals", "all"),
-                    Choice::new("Waiting for approval", "submitted"),
-                    Choice::new("Posted", "approved"),
-                    Choice::new("Rejected", "rejected"),
-                    Choice::new("Withdrawn", "withdrawn"),
-                ],
-            )],
-        ))?);
-        let display = self.pages.display(scope).await?;
-        let records: Vec<view::Journal> = match self
+        if let Ok(id) = self.filter("account").parse::<i64>() {
+            input["account_id"] = json!(id);
+        }
+        let search: String = self.list.search.trim().chars().take(20).collect();
+        if !search.is_empty() {
+            input["search"] = json!(search);
+        }
+        if let Ok(n) = self.filter("through").parse::<i64>() {
+            input["through_entry_number"] = json!(n);
+        }
+        let cursor: Vec<_> = self.filter("after").split('|').collect();
+        if cursor.len() == 3 {
+            if let Ok(id) = cursor[1].parse::<i64>() {
+                input["after_time"] = json!(cursor[0]);
+                input["after_id"] = json!(id);
+                input["after_kind"] = json!(cursor[2]);
+            }
+        }
+        let value = match self
             .pages
-            .read(scope, "finance.ledger.journal.list", input)
+            .read(scope, "finance.ledger.journals.list", input)
             .await?
         {
-            Read::Found(value) => view::parse(value["records"].clone()).unwrap_or_default(),
+            Read::Found(value) => value,
             other => {
-                body.push(&unavailable(
-                    "ledger-journals-refused",
-                    "manual journals",
-                    &other,
-                )?);
+                body.push(&unavailable("ledger-journals-refused", "journals", &other)?);
                 return Ok(0);
             }
         };
-        self.columns.load(&records, |j| j.id.to_string());
+        let records: Vec<ListRow> = view::parse(value["records"].clone()).unwrap_or_default();
+        let mut sources = vec![
+            Choice::new("All sources", ""),
+            Choice::new("Manual", "manual"),
+        ];
+        if let Some(items) = value["sources"].as_array() {
+            for item in items {
+                if let Some(source) = item.as_str() {
+                    sources.push(Choice::new(source_label(source), source));
+                }
+            }
+        }
+        let form = self.list.filters_form();
+        let toolbar = render(FilterToolbar::new(
+            "ledger-journals-filters",
+            vec![
+                ToolbarControl::search(
+                    "ledger-journals-search",
+                    "search",
+                    "Search",
+                    &form["search"],
+                    "Entry or request number",
+                ),
+                ToolbarControl::select(
+                    "ledger-journals-status",
+                    "status",
+                    "Status",
+                    &form["status"],
+                    vec![
+                        Choice::new("All statuses", "all"),
+                        Choice::new("Waiting for approval", "submitted"),
+                        Choice::new("Posted", "posted"),
+                        Choice::new("Reversed", "reversed"),
+                        Choice::new("Reversal", "reversal"),
+                        Choice::new("Rejected", "rejected"),
+                        Choice::new("Withdrawn", "withdrawn"),
+                    ],
+                ),
+                ToolbarControl::select(
+                    "ledger-journals-source",
+                    "source",
+                    "Source",
+                    &form["source"],
+                    sources,
+                ),
+            ],
+        ))?;
+        let chart = self.pages.chart(scope).await?.unwrap_or_default();
+        let mut account_options = vec![Choice::new("All accounts", "")];
+        account_options.extend(
+            view::by_name(chart.iter().filter(|a| !a.is_group))
+                .iter()
+                .map(|a| view::account_choice(a)),
+        );
+        let account = render(Form {
+            id: "ledger-journals-account-filter",
+            event: "filters",
+            change: true,
+            class: "mb-0 w-full sm:w-fit sm:min-w-36",
+            body: render(
+                Combobox::new(
+                    "ledger-journals-account",
+                    format!("{FILTERS_FORM}[account]"),
+                )
+                .label("Account")
+                .placeholder("All accounts")
+                .wrapper_class("mb-0")
+                .value(&form["account"])
+                .options(account_options),
+            )?,
+            actions: Html::EMPTY,
+        })?;
+        let mut clear = Html::EMPTY;
+        let period = if self.window.is_all() && !self.period.is_open() {
+            let mut options = vec![Choice::new("All dates", ALL_DATES)];
+            options.extend(
+                Preset::ALL
+                    .iter()
+                    .map(|(label, preset)| Choice::new(*label, preset.as_str())),
+            );
+            render(AllDates {
+                id: format!("{FILTER_ID}-all"),
+                event: self.period.select_event(),
+                field: render(
+                    Field::in_form("period_filter", "period")
+                        .id(format!("{FILTER_ID}-period"))
+                        .kind(InputKind::Select)
+                        .label(self.period.label.clone())
+                        .label_class("sr-only")
+                        .wrapper_class("mb-0")
+                        .value(ALL_DATES)
+                        .options(options),
+                )?,
+            })?
+        } else {
+            if !self.window.is_all() {
+                clear = render(Button {
+                    id: "ledger-journals-period-clear",
+                    button_type: "button",
+                    event: &clear_event(),
+                    body: Html::text("All dates"),
+                    ..Button::default()
+                })?;
+            }
+            render(self.period.clone())?
+        };
+        body.push(&render(FilterRegion {
+            timezone_request: &self.timezone_request,
+            toolbar,
+            account,
+            period,
+            clear,
+        })?);
+        if !self.filter("through").is_empty() {
+            body.push(&render(Alert {
+                id: "ledger-journals-through",
+                kind: StatusKind::Info,
+                class: "mb-3",
+                body: Html::text(&format!("Showing entries through number {}, as the trial balance counted them. Later entries and unposted journals are left out.", self.filter("through"))),
+            })?);
+        }
+        let keys: Vec<_> = records
+            .iter()
+            .map(|row| format!("{}-{}", row.kind, row.id))
+            .collect();
+        if self.loaded_keys.as_ref() != Some(&keys) {
+            self.columns
+                .load(&records, |row| format!("{}-{}", row.kind, row.id));
+            self.loaded_keys = Some(keys);
+        }
         let mut rows = Vec::new();
-        for journal in &records {
-            let total: Decimal = journal.lines.iter().map(|l| view::decimal(&l.debit)).sum();
-            let mut row = FlexRow::new(journal.id.to_string())
-                .slot(
-                    "number",
-                    render(RecordLink {
-                        workspace: self.framed,
-                        kind: crate::MODULE,
-                        record_id: &format!("journal-{}", journal.id),
-                        href: &format!("{INDEX}/{}", journal.id),
-                        class: "font-medium text-ink-strong hover:underline",
-                        body: Html::text(&journal.journal_number.to_string()),
-                    })?,
-                )
-                .cell("date", Cell::text(&journal.entry_date))
-                .cell("description", Cell::text(&journal.description))
+        for record in &records {
+            let href = if record.kind == "entry" {
+                format!("/finance/ledger/journals/entry-{}", record.id)
+            } else {
+                format!("{INDEX}/{}", record.id)
+            };
+            let key = format!("{}-{}", record.kind, record.id);
+            let record_id = if record.kind == "entry" {
+                record.id.to_string()
+            } else {
+                key.clone()
+            };
+            let status = match record.status.as_str() {
+                "posted" => Badge::status(BadgeKind::Success, "Posted"),
+                "reversed" => Badge::status(BadgeKind::Warning, "Reversed"),
+                "reversal" => Badge::status(BadgeKind::Neutral, "Reversal"),
+                "rejected" => Badge::status(BadgeKind::Danger, "Rejected"),
+                "withdrawn" => Badge::status(BadgeKind::Neutral, "Withdrawn"),
+                _ => Badge::status(BadgeKind::Warning, "Waiting for approval"),
+            };
+            let link = |body: Html| {
+                render(RecordLink {
+                    workspace: self.framed,
+                    kind: crate::MODULE,
+                    record_id: &record_id,
+                    href: &href,
+                    class: "font-medium text-ink-strong hover:underline",
+                    body,
+                })
+            };
+            let mut row = FlexRow::new(&key)
                 .cell(
-                    "reference",
-                    Cell::text(journal.reference.as_deref().unwrap_or("—")),
+                    "request",
+                    Cell::text(record.request.map(|n| n.to_string()).unwrap_or_default()),
                 )
-                .slot("amount", figure(&view::amount(&total.to_string(), units))?)
-                .slot("status", status_badge(&journal.status)?)
+                .cell("date", Cell::text(&record.date));
+            row = match record.number {
+                Some(number) => row
+                    .slot("number", link(Html::text(&number.to_string()))?)
+                    .cell("description", Cell::text(&record.description)),
+                None => row
+                    .cell("number", Cell::text(""))
+                    .slot("description", link(Html::text(&record.description))?),
+            };
+            row = row
                 .cell(
-                    "by",
-                    Cell::text(who(
-                        journal.submitted_by_user_id,
-                        journal.submitted_by_impersonator_id,
-                    )),
+                    "source",
+                    Cell::text(if record.source == "manual" {
+                        "Manual".to_owned()
+                    } else {
+                        source_label(&record.source)
+                    }),
                 )
+                .slot("status", render(status)?)
                 .slot(
-                    "at",
-                    instant(
-                        &display,
-                        &journal.submitted_at,
-                        &format!("ledger-journal-at-{}", journal.id),
-                    )?,
+                    "amount",
+                    figure(&crate::Money::display_decimal(
+                        view::decimal(&record.amount),
+                        crate::MinorUnits::new(i64::from(units)),
+                    ))?,
                 );
-            row.dom_id = Some(format!("ledger-journal-{}", journal.id));
+            row.dom_id = Some(format!("ledger-{key}"));
             rows.push(row);
         }
         let mut table = FlexTable::new("ledger-journals-table", self.columns.flex_columns(), rows);
-        table.caption = "Manual journals";
+        table.caption = "Journals";
         table.framed = false;
         table.zoom = self.columns.zoom;
         table.suggestions = self.columns.flex_suggestions();
         table.add_query = &self.columns.add_query;
         table.empty = Some(TableEmpty::Content(Html::text(
-            "No journals match. Submit a journal to start one.",
+            "No journals match these filters.",
         )));
         let mut card = render(table)?;
-        if records.len() == LIMIT {
+        if value["more"].as_bool() == Some(true) {
             if let Some(last) = records.last() {
                 let mut later = self.list.clone();
-                later
-                    .filters
-                    .insert("after".into(), last.journal_number.to_string());
+                later.filters.insert(
+                    "after".into(),
+                    format!("{}|{}|{}", last.stamp, last.id, last.kind),
+                );
+                let mut query = later.to_params();
+                query.extend(self.window.params());
                 card.push(&render(LaterLink {
-                    href: params::address(INDEX, &later.to_params()),
+                    href: params::address(INDEX, &query),
                 })?);
             }
         }
@@ -1113,6 +1326,43 @@ pub(super) fn status_badge(status: &str) -> Result<Html> {
     })
 }
 
+#[derive(Deserialize)]
+struct ListRow {
+    id: i64,
+    kind: String,
+    stamp: String,
+    number: Option<i64>,
+    request: Option<i64>,
+    date: String,
+    description: String,
+    source: String,
+    status: String,
+    amount: String,
+}
+
+#[derive(Template)]
+#[template(
+    source = r#"<div id="ledger-journals-period-region" data-hook="BrowserTimeZone" data-timezone-request="{{ timezone_request }}" class="flex flex-wrap items-start gap-3">{{ toolbar }}{{ account }}{{ period }}{{ clear }}</div>"#,
+    ext = "html"
+)]
+struct FilterRegion<'a> {
+    timezone_request: &'a str,
+    toolbar: Html,
+    account: Html,
+    period: Html,
+    clear: Html,
+}
+#[derive(Template)]
+#[template(
+    source = r#"<form id="{{ id }}" data-event="{{ event }}" data-change class="ui-compact-controls w-full sm:w-fit sm:min-w-36">{{ field }}</form>"#,
+    ext = "html"
+)]
+struct AllDates {
+    id: String,
+    event: String,
+    field: Html,
+}
+
 #[derive(Template)]
 #[template(
     source = r#"<div id="ledger-journal-line-{{ n }}" class="mt-3 grid grid-cols-1 items-start gap-2 sm:grid-cols-4"><div class="sm:col-span-2">{{ account|safe }}</div>{{ debit|safe }}{{ credit|safe }}<div class="sm:col-span-2">{{ note|safe }}</div><div class="flex flex-wrap items-center gap-2">{{ fill|safe }}{{ remove|safe }}</div></div>"#,
@@ -1167,66 +1417,89 @@ impl LiveState<Scope, Error> for Journals {
                 LiveInput::Params(values) => {
                     self.list =
                         ListState::parse(values, SPEC.clone()).map_err(|_| Error::Internal)?;
+                    self.window = Window::parse(values);
                 }
-                LiveInput::Event(value) => match event_type(value)? {
-                    "filters" => {
-                        let mut posted = params::form_values(value, FILTERS_FORM);
-                        posted.insert("after".into(), String::new());
-                        self.list.apply_filters(&posted);
-                    }
-                    "grid" => {
-                        if let ColumnsOutcome::Sort(_) =
-                            self.columns.handle(&params::string_values(value))
-                        {
+                LiveInput::Event(value) => {
+                    let kind = event_type(value)?;
+                    let (clock, _) = self.clock(r.scope).await?;
+                    if kind == clear_event() {
+                        self.window.clear();
+                        self.list.filters.insert("after".into(), String::new());
+                    } else if let Some(outcome) = self.period.event(kind, value, &clock) {
+                        if let Outcome::Applied(period) = outcome {
+                            self.window.apply(period);
+                            self.period.set(period, &clock);
+                            self.list.filters.insert("after".into(), String::new());
                         }
-                    }
-                    "new" => self.open_new(r.scope).await?,
-                    "close_modal" => self.draft = None,
-                    "validate" => {
-                        if let Some(draft) = &mut self.draft {
-                            let before = draft.lines.clone();
-                            draft.read(value);
-                            draft.suggest(&before);
-                        }
-                    }
-                    "fill_difference" => {
-                        if let Some(draft) = &mut self.draft {
-                            let index = value["index"]
-                                .as_str()
-                                .and_then(|i| i.parse::<usize>().ok());
-                            if let Some(index) = index {
-                                draft.fill_difference(index);
+                    } else {
+                        match kind {
+                            "filters" => {
+                                let mut posted = params::form_values(value, FILTERS_FORM);
+                                posted.insert("after".into(), String::new());
+                                self.list.apply_filters(&posted);
                             }
-                        }
-                    }
-                    "add_line" => {
-                        if let Some(draft) = &mut self.draft {
-                            draft.replacing = None;
-                            if draft.lines.len() < MAX_LINES {
-                                draft.lines.push(LineDraft::default());
-                                draft.suggest(&[]);
+                            "grid" => {
+                                if let ColumnsOutcome::Sort(_) =
+                                    self.columns.handle(&params::string_values(value))
+                                {
+                                }
                             }
-                        }
-                    }
-                    "remove_line" => {
-                        if let Some(draft) = &mut self.draft {
-                            let index = value["index"]
-                                .as_str()
-                                .and_then(|i| i.parse::<usize>().ok());
-                            if let Some(index) =
-                                index.filter(|i| *i < draft.lines.len() && draft.lines.len() > 2)
-                            {
-                                draft.lines.remove(index);
-                                draft.replacing = None;
-                                draft.refusal = Refusal::default();
-                                draft.suggest(&[]);
+                            "new" => self.open_new(r.scope).await?,
+                            "close_modal" => self.draft = None,
+                            "validate" => {
+                                if let Some(draft) = &mut self.draft {
+                                    let before = draft.lines.clone();
+                                    draft.read(value);
+                                    draft.suggest(&before);
+                                }
                             }
+                            "fill_difference" => {
+                                if let Some(draft) = &mut self.draft {
+                                    let index = value["index"]
+                                        .as_str()
+                                        .and_then(|i| i.parse::<usize>().ok());
+                                    if let Some(index) = index {
+                                        draft.fill_difference(index);
+                                    }
+                                }
+                            }
+                            "add_line" => {
+                                if let Some(draft) = &mut self.draft {
+                                    draft.replacing = None;
+                                    if draft.lines.len() < MAX_LINES {
+                                        draft.lines.push(LineDraft::default());
+                                        draft.suggest(&[]);
+                                    }
+                                }
+                            }
+                            "remove_line" => {
+                                if let Some(draft) = &mut self.draft {
+                                    let index = value["index"]
+                                        .as_str()
+                                        .and_then(|i| i.parse::<usize>().ok());
+                                    if let Some(index) = index
+                                        .filter(|i| *i < draft.lines.len() && draft.lines.len() > 2)
+                                    {
+                                        draft.lines.remove(index);
+                                        draft.replacing = None;
+                                        draft.refusal = Refusal::default();
+                                        draft.suggest(&[]);
+                                    }
+                                }
+                            }
+                            "submit_journal" | "replace_journal" => self.submit(&r).await?,
+                            "browser_timezone" => {
+                                self.browser_zone = value["timezone"]
+                                    .as_str()
+                                    .filter(|zone| bilibi_datetime::valid_timezone(zone))
+                                    .map(str::to_owned);
+                                self.timezone_request.clear();
+                            }
+                            "clear-flash" => self.flash.dismiss(value),
+                            _ => return Err(Error::Invalid),
                         }
                     }
-                    "submit_journal" | "replace_journal" => self.submit(&r).await?,
-                    "clear-flash" => self.flash.dismiss(value),
-                    _ => return Err(Error::Invalid),
-                },
+                }
             }
             self.view(r.scope).await
         })

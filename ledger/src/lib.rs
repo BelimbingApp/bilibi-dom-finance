@@ -75,6 +75,7 @@ mod entries;
 mod evidence;
 mod groups;
 mod journal_approvals;
+mod journal_list;
 mod journals;
 mod late_recordings;
 mod money;
@@ -130,6 +131,7 @@ inventory::submit! {
             ("finance-ledger-010-opening-recognitions", include_str!("../migrations/010-opening-recognitions.sql")),
             ("finance-ledger-011-opening-replacements", include_str!("../migrations/011-opening-replacements.sql")),
             ("finance-ledger-012-workflow-approvals", include_str!("../migrations/012-workflow-approvals.sql")),
+            ("finance-ledger-013-journal-list", include_str!("../migrations/013-journal-list.sql")),
         ],
         services: &[Service { id: SERVICE, factory: |services| {
             agent_operations::bind(services.get("base/tenancy.parties")?)?;

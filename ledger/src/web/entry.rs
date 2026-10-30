@@ -1,19 +1,17 @@
 //! One journal entry, read-only. A manual entry can be reversed from here: the
 //! ledger posts a mirror entry and keeps the original.
 use super::{
-    dialog_actions,
-    entries::{entry_status, INDEX},
-    error_text, event_type, figure, instant, no_company, render, shell, source_label, unavailable,
-    view, who, Announce, Failure, Flash, Pages, Read, Refusal,
+    dialog_actions, error_text, event_type, figure, instant, journals::INDEX, no_company, render,
+    shell, source_label, unavailable, view, who, Announce, Failure, Flash, Pages, Read, Refusal,
 };
 use crate::POST_ENTRIES;
 use bilibi_database::{Error, Result};
 use bilibi_tenancy::Scope;
 use bilibi_ui::{
     page::{LiveBody, LiveFuture, LiveInput, LiveRequest, LiveState},
-    params, Alert, BackLink, BuiltinColumn, Button, ButtonVariant, Card, Cell, EmptyState, Fact,
-    Facts, Field, FlexRow, FlexTable, Form, Header, Html, InputKind, ListColumns, Modal,
-    PageVariant, SectionHeading, StatusKind, TableEmpty,
+    params, Alert, BackLink, Badge, BadgeKind, BuiltinColumn, Button, ButtonVariant, Card, Cell,
+    EmptyState, Fact, Facts, Field, FlexRow, FlexTable, Form, Header, Html, InputKind, ListColumns,
+    Modal, PageVariant, SectionHeading, StatusKind, TableEmpty,
 };
 use rust_decimal::Decimal;
 use serde_json::json;
@@ -48,7 +46,7 @@ impl Entry {
 
     async fn view(&mut self, scope: &Scope) -> Result<LiveBody> {
         if Pages::company(scope).is_none() {
-            return self.simple("Journal entry", no_company("ledger-entry-no-company")?);
+            return self.simple("Journal", no_company("ledger-entry-no-company")?);
         }
         let entry: view::Entry = match self
             .pages
@@ -63,18 +61,18 @@ impl Entry {
                 Some(entry) => entry,
                 None => {
                     return self.simple(
-                        "Journal entry",
+                        "Journal",
                         unavailable("ledger-entry-refused", "this entry", &Read::Failed)?,
                     )
                 }
             },
             Read::Failed | Read::Refused(_) => {
                 return self.simple(
-                    "Journal entry",
+                    "Journal",
                     render(
                         EmptyState::missing(
                             "This entry does not exist",
-                            "It may belong to another company. Go back to the journal entries.",
+                            "It may belong to another company. Go back to Journals.",
                         )
                         .id("ledger-entry-missing"),
                     )?,
@@ -82,7 +80,7 @@ impl Entry {
             }
             other => {
                 return self.simple(
-                    "Journal entry",
+                    "Journal",
                     unavailable("ledger-entry-refused", "this entry", &other)?,
                 )
             }
@@ -332,15 +330,23 @@ impl Entry {
         actions.push(&render(BackLink {
             href: INDEX,
             id: "ledger-entry-back",
-            title: "Back to the journal entries",
+            title: "Back to Journals",
             ..BackLink::default()
         })?);
-        let name = format!("Entry {}", entry.entry_number);
-        let url = format!("/finance/ledger/entries/{}", entry.id);
+        let name = format!("Journal {}", entry.entry_number);
+        let url = format!("/finance/ledger/journals/entry-{}", entry.id);
+        let subtitle = match entry.request_number {
+            Some(request) => format!("Request {request} · {}", entry.description),
+            None => entry.description.clone(),
+        };
+        let pin = match entry.request_number {
+            Some(request) => format!("Journal · Request {request}"),
+            None => name.clone(),
+        };
         let mut page = render(Header {
             title: Html::text(&name),
-            subtitle: &entry.description,
-            title_actions: super::record_pin("ledger-entry-pin", "entry", &name, &url)?,
+            subtitle: &subtitle,
+            title_actions: super::record_pin("ledger-entry-pin", "entry", &pin, &url)?,
             actions,
         })?;
         page.push(&render(Announce {
@@ -565,4 +571,14 @@ impl LiveState<Scope, Error> for Entry {
             self.view(r.scope).await
         })
     }
+}
+
+fn entry_status(entry: &view::Entry) -> Result<Html> {
+    render(if entry.reversed_by_entry_id.is_some() {
+        Badge::status(BadgeKind::Warning, "Reversed")
+    } else if entry.reverses_entry_id.is_some() {
+        Badge::status(BadgeKind::Neutral, "Reversal")
+    } else {
+        Badge::status(BadgeKind::Success, "Posted")
+    })
 }
