@@ -3,12 +3,13 @@
 //! company (`company_pick`) and submits `customer.create`, which records
 //! the company, Finance customer and relationship in one transaction.
 use super::{
-    company_pick::{Chooser, Submitted},
+    company_pick::Submitted,
     format::{self as f, Errors},
     render, Flash, Pages, CUSTOMERS,
 };
 use crate::Customer;
 use bilibi_database::{Error, Result};
+use bilibi_finance_ledger::MultiCompanyChooser;
 use bilibi_tenancy::Scope;
 use bilibi_ui::{
     page::{LiveBody, LiveFuture, LiveInput, LiveRequest, LiveState},
@@ -67,7 +68,7 @@ const PREFIX: &str = "receivables-customer-new";
 /// The Add customer dialog while it is open.
 struct Create {
     values: HashMap<String, String>,
-    chooser: Chooser,
+    chooser: MultiCompanyChooser,
     errors: Errors,
 }
 
@@ -305,10 +306,14 @@ impl Customers {
                 )
             })
             .collect();
+
         labels.extend(create.chooser.labels());
         let mut body = render(create.errors.summary(&format!("{PREFIX}-errors"), &labels))?;
         let mut own = Html::EMPTY;
         for (key, label, kind, max, required, hint) in FIELDS {
+            if *key == "code" && !create.chooser.is_new() {
+                continue;
+            }
             let mut field = Field::in_form(FORM, key)
                 .id(format!("{PREFIX}-{key}"))
                 .label(*label)
@@ -331,7 +336,7 @@ impl Customers {
         body.push(&f::group(
             "receivables-customer-company",
             "Company",
-            create.chooser.render(&create.errors, self.framed)?,
+            create.chooser.render(&create.errors)?,
         )?);
         body.push(&f::group("receivables-customer-terms", "In Finance", own)?);
         let actions = {
@@ -348,7 +353,11 @@ impl Customers {
                 event: "create_customer",
                 variant: ButtonVariant::Primary,
                 working: "Adding…",
-                body: Html::text("Add customer"),
+                body: Html::text(if create.chooser.count() == 1 {
+                    "Add customer"
+                } else {
+                    "Add customers"
+                }),
                 ..Button::default()
             })?);
             f::actions(a)?
@@ -363,7 +372,7 @@ impl Customers {
         })?;
         f::modal(
             "receivables-customer-new-modal",
-            "Add customer",
+            "Add customers",
             "",
             "cancel_create",
             ModalWidth::Wide,
@@ -373,12 +382,22 @@ impl Customers {
     }
 
     /// The dialog's own values and the company chooser's, from a posted form.
-    async fn take_form(&mut self, scope: &Scope, v: &serde_json::Value) -> Result<()> {
-        let form = params::form_values(v, FORM);
+    async fn take_form(&mut self, _scope: &Scope, v: &serde_json::Value) -> Result<()> {
+        let mut form = params::form_values(v, FORM);
+        if let Some(create) = &self.create {
+            for row in create.chooser.rows() {
+                let key = format!("code_{}", row.id);
+                if let Some(value) = v[format!("{FORM}[{key}]")].as_str() {
+                    if value.len() > 1024 {
+                        return Err(Error::Invalid);
+                    }
+                    form.insert(key, value.to_owned());
+                }
+            }
+        }
         if form.is_empty() {
             return Ok(());
         }
-        let pages = self.pages.clone();
         let Some(create) = self.create.as_mut() else {
             return Ok(());
         };
@@ -387,13 +406,7 @@ impl Customers {
                 create.values.insert((*key).to_owned(), value.clone());
             }
         }
-        if create.chooser.read(&form) {
-            create
-                .chooser
-                .search(&pages.company_picker(), scope)
-                .await?;
-        }
-        create.chooser.offer_code(&mut create.values);
+        create.chooser.read(&form);
         Ok(())
     }
 
@@ -402,67 +415,122 @@ impl Customers {
         let Some(create) = self.create.as_mut() else {
             return Ok(None);
         };
-        let mut input = json!({});
-        let mut local = Errors::default();
-        let code = f::posted(&create.values, "code");
-        f::put(&mut input, "code", code);
+        create.errors = Errors::default();
         let terms = f::posted(&create.values, "payment_terms_days");
-        if !terms.is_empty() {
-            match terms.parse::<i64>() {
-                Ok(n) => input["payment_terms_days"] = json!(n),
-                Err(_) => local
-                    .0
-                    .entry("payment_terms_days".into())
-                    .or_default()
-                    .push("must be a whole number of days".into()),
-            }
-        }
-        if code.is_empty() {
-            local
+        let days = if terms.is_empty() {
+            0
+        } else if let Ok(days) = terms.parse::<i64>() {
+            days
+        } else {
+            create.errors.0.insert(
+                "payment_terms_days".into(),
+                vec!["must be a whole number of days".into()],
+            );
+            return Ok(None);
+        };
+        if create.chooser.count() == 0 {
+            create
+                .errors
                 .0
-                .entry("code".into())
-                .or_default()
-                .push("can't be blank".into());
-        }
-        if !local.is_empty() {
-            create.errors = local;
+                .insert("base".into(), vec!["Choose a company.".into()]);
             return Ok(None);
         }
-        match create
-            .chooser
-            .submit_composed(
-                &pages.company_picker(),
-                scope,
-                credential,
-                "create_customer",
-                "finance.receivables.customer.create",
-                input,
-            )
-            .await?
-        {
-            Submitted::Review => {
-                create.errors = Errors::default();
-                Ok(None)
-            }
-            Submitted::Done(record) => {
-                self.create = None;
-                self.flash.set(StatusKind::Success, "Customer added.");
-                self.load(scope).await?;
-                Ok(record["id"].as_i64().map(|id| format!("{CUSTOMERS}/{id}")))
-            }
-            Submitted::Invalid(fields) => {
-                create.errors = fields;
-                Ok(None)
-            }
-            Submitted::Refused(message) => {
-                self.create = None;
-                self.flash.set(
-                    StatusKind::Error,
-                    super::worded(message, "You do not have permission to add customers."),
-                );
-                Ok(None)
+        let mut added = 0;
+        let mut pending_new = false;
+        if create.chooser.is_new() {
+            let input =
+                json!({"code": f::posted(&create.values, "code"), "payment_terms_days": days});
+            match create
+                .chooser
+                .chooser()
+                .submit_composed(
+                    &pages.company_picker(),
+                    scope,
+                    credential,
+                    "create_customer",
+                    "finance.receivables.customer.create",
+                    input,
+                )
+                .await?
+            {
+                Submitted::Done(_) => {
+                    added += 1;
+                    create.chooser.cancel_new();
+                }
+                Submitted::Invalid(errors) => {
+                    create.errors = errors;
+                    pending_new = true;
+                }
+                Submitted::Refused(message) => {
+                    create.errors.0.insert("base".into(), vec![message]);
+                    pending_new = true;
+                }
+                Submitted::Review => {
+                    create.errors = Errors::default();
+                    pending_new = true;
+                }
             }
         }
+        let rows: Vec<_> = create
+            .chooser
+            .rows()
+            .iter()
+            .map(|r| (r.id.clone(), r.code.clone()))
+            .collect();
+        for (id, code) in rows {
+            create.chooser.activate(&id)?;
+            let input = json!({"code": code, "payment_terms_days": days});
+            match create
+                .chooser
+                .chooser()
+                .submit_composed(
+                    &pages.company_picker(),
+                    scope,
+                    credential,
+                    "create_customer",
+                    "finance.receivables.customer.create",
+                    input,
+                )
+                .await?
+            {
+                Submitted::Done(record) => {
+                    added += 1;
+                    if let Some(customer_id) = record["id"].as_i64() {
+                        create
+                            .chooser
+                            .mark_existing(&id, format!("{CUSTOMERS}/{customer_id}"));
+                    }
+                    create.chooser.remove(&id);
+                }
+                Submitted::Invalid(errors) => create.chooser.row_errors(&id, errors),
+                Submitted::Refused(message) => create.chooser.row_errors(
+                    &id,
+                    Errors(BTreeMap::from([("base".into(), vec![message])])),
+                ),
+                Submitted::Review => return Err(Error::Invalid),
+            }
+        }
+        if pending_new {
+            create.chooser.resume_new();
+        }
+        if create.chooser.count() == 0 {
+            self.create = None;
+            self.flash.set(
+                StatusKind::Success,
+                if added == 1 {
+                    "Customer added."
+                } else {
+                    "Customers added."
+                },
+            );
+            self.load(scope).await?;
+        } else if added > 0 {
+            self.flash.set(
+                StatusKind::Success,
+                format!("{added} customers added. Review the remaining rows."),
+            );
+        }
+        Ok(None)
     }
 
     async fn event(
@@ -505,7 +573,7 @@ impl Customers {
                         .collect();
                     self.create = Some(Create {
                         values: HashMap::new(),
-                        chooser: Chooser::new(PREFIX, FORM).existing(
+                        chooser: MultiCompanyChooser::new(PREFIX, FORM).existing(
                             "Already a customer",
                             "View customer",
                             existing,
@@ -518,31 +586,59 @@ impl Customers {
             }
             "cancel_create" => self.create = None,
             "customer_change" => self.take_form(scope, v).await?,
-            "pick_company" => {
-                let record = v["record"].as_str().ok_or(Error::Invalid)?;
+            "search_companies" => {
                 if let Some(create) = self.create.as_mut() {
                     create
                         .chooser
-                        .pick(&pages.company_picker(), scope, record)
+                        .search(
+                            &pages.company_picker(),
+                            scope,
+                            v["query"].as_str().unwrap_or(""),
+                        )
                         .await?;
-                    create.chooser.offer_code(&mut create.values);
-                    create.errors.0.remove("company");
                 }
             }
-            "clear_company" => {
+            "pick_companies" => {
                 if let Some(create) = self.create.as_mut() {
-                    create.chooser.clear();
-                    create.chooser.offer_code(&mut create.values);
+                    create
+                        .chooser
+                        .pick(
+                            &pages.company_picker(),
+                            scope,
+                            v["value"].as_str().ok_or(Error::Invalid)?,
+                        )
+                        .await?;
+                    create.errors = Errors::default();
+                }
+            }
+            "remove_company" => {
+                if let Some(create) = self.create.as_mut() {
+                    create
+                        .chooser
+                        .remove(v["value"].as_str().ok_or(Error::Invalid)?);
+                }
+            }
+            "new_company" => {
+                if let Some(create) = self.create.as_mut() {
+                    create.chooser.start_new(v["query"].as_str().unwrap_or(""));
+                }
+            }
+            "cancel_new_company" => {
+                if let Some(create) = self.create.as_mut() {
+                    create.chooser.cancel_new();
                 }
             }
             "use_candidate" => {
-                let id = v["company"].as_str().ok_or(Error::Invalid)?;
                 if let Some(create) = self.create.as_mut() {
                     create
                         .chooser
-                        .use_candidate(&pages.company_picker(), scope, id)
+                        .use_candidate(
+                            &pages.company_picker(),
+                            scope,
+                            v["company"].as_str().ok_or(Error::Invalid)?,
+                        )
                         .await?;
-                    create.chooser.offer_code(&mut create.values);
+                    create.errors = Errors::default();
                 }
             }
             "create_customer" => {

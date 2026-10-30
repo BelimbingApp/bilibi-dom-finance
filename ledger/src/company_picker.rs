@@ -18,7 +18,10 @@ use bilibi_database::{Error, Result};
 use bilibi_records::{Hit, Reference, Resolved};
 use bilibi_tenancy::Scope;
 use bilibi_ui::{error_sentence, ErrorSummary};
-use bilibi_ui::{ActionLink, Button, Field, Html, InputKind, RecordPicker, StatusKind};
+use bilibi_ui::{
+    ActionLink, Button, Field, Html, InputKind, RecordPicker, SearchMultiOption, SearchMultiSelect,
+    StatusKind,
+};
 use serde_json::json;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
@@ -685,6 +688,262 @@ impl CompanyChooser {
             Written::Invalid(fields) => Ok(Chosen::Invalid(company_errors(fields))),
             Written::Refused(message) => Ok(Chosen::Refused(message)),
         }
+    }
+}
+
+/// A batch of companies selected for one Finance add dialog. Each row is
+/// submitted through the same operation as an individual creation.
+pub struct MultiCompanyChooser {
+    chooser: CompanyChooser,
+    rows: Vec<CompanyRow>,
+}
+
+pub struct CompanyRow {
+    pub id: String,
+    pub name: String,
+    pub code: String,
+    pub errors: CompanyErrors,
+    resolved: Resolved,
+}
+
+impl MultiCompanyChooser {
+    pub fn new(prefix: &str, form: &'static str) -> Self {
+        Self {
+            chooser: CompanyChooser::new(prefix, form),
+            rows: Vec::new(),
+        }
+    }
+
+    pub fn existing(
+        mut self,
+        label: &'static str,
+        link: &'static str,
+        records: HashMap<String, String>,
+    ) -> Self {
+        self.chooser = self.chooser.existing(label, link, records);
+        self
+    }
+
+    pub fn labels(&self) -> Vec<(String, String, String)> {
+        self.chooser.labels()
+    }
+
+    pub fn rows(&self) -> &[CompanyRow] {
+        &self.rows
+    }
+    pub fn is_new(&self) -> bool {
+        self.chooser.mode == Mode::New
+    }
+    pub fn count(&self) -> usize {
+        self.rows.len() + usize::from(self.is_new())
+    }
+
+    pub fn read(&mut self, form: &HashMap<String, String>) {
+        self.chooser.read(form);
+        for row in &mut self.rows {
+            if let Some(code) = form.get(&format!("code_{}", row.id)) {
+                row.code = code.clone();
+            }
+        }
+    }
+
+    pub async fn search(
+        &mut self,
+        pages: &CompanyPickerContext,
+        scope: &Scope,
+        query: &str,
+    ) -> Result<()> {
+        self.chooser.query = query.chars().take(1024).collect();
+        self.chooser.search(pages, scope).await
+    }
+
+    pub async fn pick(
+        &mut self,
+        pages: &CompanyPickerContext,
+        scope: &Scope,
+        id: &str,
+    ) -> Result<()> {
+        if self.rows.iter().any(|row| row.id == id) {
+            self.remove(id);
+            return Ok(());
+        }
+        if !self.chooser.hits.iter().any(|hit| hit.id == id)
+            || self.chooser.existing.contains_key(id)
+        {
+            return Err(Error::Invalid);
+        }
+        let was_new = self.is_new();
+        let query = self.chooser.query.clone();
+        let hits = self.chooser.hits.clone();
+        self.chooser.choose(pages, scope, id).await?;
+        self.capture_selected()?;
+        self.chooser.query = query;
+        self.chooser.hits = hits;
+        if was_new {
+            self.chooser.mode = Mode::New;
+        }
+        Ok(())
+    }
+
+    fn capture_selected(&mut self) -> Result<()> {
+        let resolved = self.chooser.selected.take().ok_or(Error::Invalid)?;
+        let name = resolved.label.clone().ok_or(Error::Invalid)?;
+        if !self.rows.iter().any(|row| row.id == resolved.id) {
+            self.rows.push(CompanyRow {
+                id: resolved.id.clone(),
+                name,
+                code: self.chooser.code.take().unwrap_or_default(),
+                errors: CompanyErrors::default(),
+                resolved,
+            });
+        }
+        Ok(())
+    }
+
+    pub fn capture_created(&mut self, code: &str) -> Result<()> {
+        self.capture_selected()?;
+        if let Some(row) = self.rows.last_mut() {
+            row.code = code.to_owned();
+        }
+        Ok(())
+    }
+    pub fn mark_existing(&mut self, id: &str, href: String) {
+        self.chooser.existing.insert(id.to_owned(), href);
+    }
+    pub fn remove(&mut self, id: &str) {
+        self.rows.retain(|row| row.id != id);
+    }
+    pub fn start_new(&mut self, query: &str) {
+        self.chooser.mode = Mode::New;
+        self.chooser.new.clear();
+        self.chooser
+            .new
+            .insert("name".into(), query.trim().to_owned());
+        self.chooser.candidates.clear();
+        self.chooser.likely = false;
+        self.chooser.reason.clear();
+    }
+    pub fn cancel_new(&mut self) {
+        self.chooser.mode = Mode::Existing;
+    }
+    pub fn resume_new(&mut self) {
+        self.chooser.mode = Mode::New;
+    }
+    pub async fn use_candidate(
+        &mut self,
+        pages: &CompanyPickerContext,
+        scope: &Scope,
+        id: &str,
+    ) -> Result<()> {
+        self.chooser.use_candidate(pages, scope, id).await?;
+        self.capture_selected()
+    }
+    pub fn activate(&mut self, id: &str) -> Result<()> {
+        let row = self
+            .rows
+            .iter()
+            .find(|row| row.id == id)
+            .ok_or(Error::Invalid)?;
+        self.chooser.selected = Some(row.resolved.clone());
+        self.chooser.mode = Mode::Existing;
+        Ok(())
+    }
+    pub fn row_errors(&mut self, id: &str, errors: CompanyErrors) {
+        if let Some(row) = self.rows.iter_mut().find(|row| row.id == id) {
+            row.errors = errors;
+        }
+    }
+    pub fn chooser(&mut self) -> &mut CompanyChooser {
+        &mut self.chooser
+    }
+
+    pub fn render(&self, errors: &CompanyErrors) -> Result<Html> {
+        let chooser = &self.chooser;
+        let selected = self
+            .rows
+            .iter()
+            .map(|row| SearchMultiOption::new(&row.id, &row.name))
+            .collect();
+        let results = chooser
+            .hits
+            .iter()
+            .map(|hit| {
+                let option = SearchMultiOption::new(&hit.id, &hit.label);
+                match chooser.existing.get(&hit.id) {
+                    Some(href) => option.disabled(chooser.existing_label, Some(href.clone())),
+                    None => option,
+                }
+            })
+            .collect();
+        let mut body = render(
+            SearchMultiSelect::new(
+                format!("{}-company-search", chooser.prefix),
+                format!("{}[companies]", chooser.form),
+                "Companies",
+                "search_companies",
+                "pick_companies",
+                "remove_company",
+            )
+            .query(&chooser.query)
+            .selected(selected)
+            .results(results)
+            .create("Create company", "new_company")
+            .wrap_chips(),
+        )?;
+        for row in &self.rows {
+            body.push(&render(
+                Field::in_form(chooser.form, &format!("code_{}", row.id))
+                    .id(format!("{}-code-{}", chooser.prefix, row.id))
+                    .label(format!("Code for {}", row.name))
+                    .required()
+                    .attr("maxlength", "50")
+                    .value(&row.code)
+                    .errors(row.errors.under("code", "Code")),
+            )?);
+            let messages: Vec<_> = row
+                .errors
+                .0
+                .iter()
+                .filter(|(key, _)| *key != "code")
+                .flat_map(|(_, messages)| messages.iter())
+                .cloned()
+                .collect();
+            if !messages.is_empty() {
+                body.push(&render(bilibi_ui::Alert {
+                    id: &format!("{}-row-{}-errors", chooser.prefix, row.id),
+                    kind: StatusKind::Error,
+                    body: Html::text(&format!("{}: {}", row.name, messages.join("; "))),
+                    ..bilibi_ui::Alert::default()
+                })?);
+            }
+        }
+        if self.is_new() {
+            for (key, label, kind, max, required) in NEW_FIELDS {
+                let path = format!("company_{key}");
+                let mut field = Field::in_form(chooser.form, &path)
+                    .id(format!("{}-company-{key}", chooser.prefix))
+                    .label(*label)
+                    .kind(*kind)
+                    .value(chooser.new.get(*key).cloned().unwrap_or_default())
+                    .attr("maxlength", max)
+                    .errors(errors.under(&path, label));
+                if *required {
+                    field = field.required();
+                }
+                body.push(&render(field)?);
+            }
+            if !chooser.candidates.is_empty() || chooser.likely {
+                body.push(&chooser.review(errors)?);
+            }
+            body.push(&render(Button {
+                id: &format!("{}-cancel-new-company", chooser.prefix),
+                button_type: "button",
+                event: "cancel_new_company",
+                body: Html::text("Cancel new company"),
+                ..Button::default()
+            })?);
+        }
+        Ok(body)
     }
 }
 
