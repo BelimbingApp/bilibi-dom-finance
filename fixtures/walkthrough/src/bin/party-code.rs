@@ -40,6 +40,54 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             INSERT INTO users(id,tenant_id,name,email,password_hash,person_id,affiliation_id,organisation_id) SELECT 1,1,'Ada Manager','manager@example.test',password_hash,1,1,1 FROM users WHERE email='ai@agent.my' ON CONFLICT DO NOTHING;").await?;
     }
     let installed = install(&db, &app.services).await?;
+    if std::env::args().any(|arg| arg == "--evidence") {
+        let scope = sign_in(&db, &app.services, 1, 4).await?;
+        let ar = app
+            .services
+            .get::<Receivables>(bilibi_finance_receivables::SERVICE)?;
+        let ap = app
+            .services
+            .get::<Payables>(bilibi_finance_payables::SERVICE)?;
+        for dataset in Receivables::evidence_datasets() {
+            ar.evidence_page(&scope, 1, dataset, Some(500), None)
+                .await
+                .map_err(|e| format!("Receivables {dataset}: {e:?}"))?;
+        }
+        for dataset in ap.evidence_datasets() {
+            ap.evidence_page(&scope, 1, dataset, Some(500), None)
+                .await
+                .map_err(|e| format!("Payables {dataset}: {e:?}"))?;
+        }
+        let storage = std::env::var("PARTY_CODE_STORAGE_ROOT")?;
+        bilibi_finance_walkthrough_fixture::attachments::configure_storage(
+            &db,
+            &app.services,
+            &scope,
+            &storage,
+        )
+        .await?;
+        let reports = app
+            .services
+            .get::<bilibi_finance_reports::Reports>(bilibi_finance_reports::SERVICE)?;
+        let artifact = reports
+            .export_auditor_pack(&scope, 1, date(2026, 10, 30))
+            .await?;
+        let pack = reports.read_auditor_pack(&scope, 1, &artifact.id).await?;
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(pack.bytes))?;
+        use std::io::Read;
+        for name in ["receivables-customer.csv", "payables-vendor.csv"] {
+            let mut csv = String::new();
+            zip.by_name(name)?.read_to_string(&mut csv)?;
+            assert!(
+                csv.contains("jamie_tv_consumer"),
+                "Core code missing from {name}"
+            );
+        }
+        println!(
+            "PASS: every Receivables/Payables dataset and complete auditor pack carry Core codes"
+        );
+        return Ok(());
+    }
     // The normal launcher retires demo identities at startup. Restore only the
     // walkthrough installation after that seed, without replaying Finance writes.
     if restore {
