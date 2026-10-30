@@ -5,7 +5,7 @@ use bilibi_address::{AddressInput, AddressKind, AddressService, AttachmentInput}
 use bilibi_agent_api::{Handler, Registry, WriteHandler};
 use bilibi_company::CompanyService;
 use bilibi_database::{pool, MutationBoundary};
-use bilibi_finance_ledger::Ledger;
+use bilibi_finance_ledger::{Ledger, LedgerError};
 use bilibi_finance_receivables::{ReceivableError, Receivables};
 use bilibi_finance_walkthrough_fixture::{install, sign_in};
 use bilibi_party::{CalendarDate, EffectiveDates, OrganisationId, PartyId};
@@ -32,8 +32,20 @@ fn day(s: &str) -> CalendarDate {
     s.to_owned().try_into().expect("fixture date")
 }
 fn refused<T: std::fmt::Debug>(answer: Result<T, ReceivableError>, field: &str, words: &str) {
+    // A refusal Receivables decides, or one Core's composed write raises through the ledger.
+    let refusals: Vec<(String, String)> = match &answer {
+        Err(ReceivableError::Invalid(errors)) => errors
+            .iter()
+            .map(|e| (e.field.to_string(), e.message.to_string()))
+            .collect(),
+        Err(ReceivableError::Ledger(LedgerError::Invalid(errors))) => errors
+            .iter()
+            .map(|e| (e.field.to_string(), e.message.to_string()))
+            .collect(),
+        _ => Vec::new(),
+    };
     assert!(
-        matches!(answer, Err(ReceivableError::Invalid(ref errors)) if errors.iter().any(|e| e.field == field && e.message.contains(words))),
+        refusals.iter().any(|(f, m)| f == field && m.contains(words)),
         "{answer:?}"
     );
     println!("PASS: refusal at {field}: {words}");

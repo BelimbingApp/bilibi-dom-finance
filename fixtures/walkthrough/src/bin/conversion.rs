@@ -290,6 +290,27 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         .import_opening_invoices(&viewer, company, &ar_input)
         .await
         .is_err());
+    // A blank, unknown or wrong-kind Core code is a refusal of its row, never a
+    // match to a customer or supplier whose Core party cannot be read.
+    for (csv, words) in [
+        (AR.replace("invoice-17,company_010", "invoice-17,"), "customer_code is required"),
+        (AR.replace("company_010", "MISSING-CUSTOMER"), "customer_code and party_kind"),
+        (AR.replace(",company\n", ",person\n"), "customer_code and party_kind"),
+    ] {
+        let mut bad = ar_input.clone();
+        bad["csv"] = json!(csv);
+        let refusal = format!("{:?}", ar.import_opening_invoices(&s, company, &bad).await.unwrap_err());
+        assert!(refusal.contains(words), "{refusal}");
+    }
+    for csv in [
+        AP.replace("bill-29,company_010", "bill-29,"),
+        AP.replace(",company\n", ",person\n"),
+    ] {
+        let mut bad = ap_input.clone();
+        bad["csv"] = json!(csv);
+        assert!(ap.import_opening_bills(&s, company, &bad).await.is_err());
+    }
+    println!("PASS: blank, unknown and wrong-kind Core codes refuse opening invoices and bills");
     let a = ar.import_opening_invoices(&s, company, &ar_input).await?;
     assert_eq!(a, ar.import_opening_invoices(&s, company, &ar_input).await?);
     let mut unknown_vendor = ap_input.clone();

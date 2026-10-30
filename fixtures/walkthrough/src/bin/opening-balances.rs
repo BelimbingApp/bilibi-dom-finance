@@ -95,7 +95,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     assert!(matches!(
         ledger.approve_journal(&manager, COMPANY, journal.id).await,
-        Err(LedgerError::SamePerson)
+        Err(LedgerError::ApprovalRefused(message)) if message.contains("cannot decide this journal")
     ));
     let rejected = ledger
         .reject_journal(
