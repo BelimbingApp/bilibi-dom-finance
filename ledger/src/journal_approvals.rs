@@ -501,6 +501,7 @@ pub(crate) async fn submission_policy(
         .map_err(refusal)?;
     Ok(json!({"policy_id":id,"rules":policy}))
 }
+const NO_SEAT: &str = "You cannot decide this journal. The approval rules need another eligible person, such as someone who did not prepare it.";
 pub(crate) async fn preview(
     sql: &Transaction<'_>,
     scope: &Scope,
@@ -512,13 +513,14 @@ pub(crate) async fn preview(
         .approval_detail_on(sql, scope, request)
         .await
         .map_err(|error| match error {
-            Error::Forbidden => LedgerError::ApprovalRefused(
-                "You cannot decide this journal. The approval rules need another eligible person, such as someone who did not prepare it.".into(),
-            ),
+            Error::Forbidden => LedgerError::ApprovalRefused(NO_SEAT.into()),
             error => refusal(error),
         })
 }
 pub(crate) fn single_step(item: &bilibi_workflow::ApprovalItem) -> Result<()> {
+    if item.seats.is_empty() {
+        return Err(LedgerError::ApprovalRefused(NO_SEAT.into()));
+    }
     if item.seats.len() != 1 || item.request.stages.len() != 1 {
         return Err(LedgerError::ApprovalRefused(
             "More than one approval step or seat is open to you. Open Waiting for my approval and choose the one you are deciding.".into(),
