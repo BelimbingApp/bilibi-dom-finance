@@ -160,19 +160,16 @@ pub(crate) async fn list(
     tenant: i64,
     company: i64,
 ) -> Result<Vec<Value>> {
+    let order = if table.name == CUSTOMERS.name {
+        "id"
+    } else {
+        "code"
+    };
     Ok(client
         .query(
             &format!(
-                "SELECT to_jsonb(r) FROM {} r WHERE tenant_id=$1 AND company_id=$2 ORDER BY code",
+                "SELECT to_jsonb(r) FROM {} r WHERE tenant_id=$1 AND company_id=$2 ORDER BY {order}",
                 table.name
-            )
-            .replace(
-                "ORDER BY code",
-                if table.name == CUSTOMERS.name {
-                    "ORDER BY id"
-                } else {
-                    "ORDER BY code"
-                },
             ),
             &[&tenant, &company],
         )

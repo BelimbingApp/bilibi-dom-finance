@@ -194,6 +194,12 @@ impl Receivables {
             .iter()
             .map(|i| i.record_id().to_string())
             .collect();
+        let by_party: std::collections::HashMap<_, _> = kinds
+            .iter()
+            .zip(&ids)
+            .zip(&identities)
+            .map(|((kind, id), identity)| (((*kind).to_owned(), id.clone()), identity))
+            .collect();
         let mut customers = std::collections::HashMap::new();
         for row in c
             .query(
@@ -203,10 +209,7 @@ impl Receivables {
             .await?
         {
             let (id, kind, record): (i64, String, String) = (row.get(0), row.get(1), row.get(2));
-            if let Some(party) = identities
-                .iter()
-                .find(|i| i.record_kind() == kind && i.record_id().to_string() == record)
-            {
+            if let Some(party) = by_party.get(&(kind.clone(), record)) {
                 customers.insert(
                     (kind, party.code.clone()),
                     json!({"id":id,"code":party.code,"name":party.name,"record_kind":party.record_kind(),"record_id":party.record_id()}),
@@ -234,6 +237,9 @@ impl Receivables {
             }
             if !["company", "person"].contains(&row[8]) {
                 return Err(fail("party_kind must be company or person"));
+            }
+            if row[1].is_empty() {
+                return Err(fail("customer_code is required"));
             }
             let customer = customers.get(&(row[8].to_owned(),row[1].to_owned())).ok_or_else(|| {
                 fail("customer_code and party_kind must identify an active Core-linked customer in the current company")

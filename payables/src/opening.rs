@@ -149,6 +149,12 @@ impl Payables {
             .iter()
             .map(|i| i.record_id().to_string())
             .collect();
+        let by_party: std::collections::HashMap<_, _> = kinds
+            .iter()
+            .zip(&ids)
+            .zip(&identities)
+            .map(|((kind, id), identity)| (((*kind).to_owned(), id.clone()), identity))
+            .collect();
         let mut vendor_ids = std::collections::HashMap::new();
         for row in c
             .query(
@@ -159,10 +165,7 @@ impl Payables {
         {
             let (id, kind, record, active): (i64, String, String, bool) =
                 (row.get(0), row.get(1), row.get(2), row.get(3));
-            if let Some(party) = identities
-                .iter()
-                .find(|i| i.record_kind() == kind && i.record_id().to_string() == record)
-            {
+            if let Some(&party) = by_party.get(&(kind.clone(), record)) {
                 vendor_ids.insert((kind, party.code.clone()), (id, active, party));
             }
         }

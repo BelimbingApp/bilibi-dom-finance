@@ -604,8 +604,7 @@ fn tax_update() -> Value {
 fn customer_own_fields() -> Value {
     json!({"payment_terms_days":{"type":"integer","minimum":0,"maximum":3650},"active":boolean()})
 }
-/// The party fields a customer recorded before Core companies still carries;
-/// a linked customer refuses them, its company holds the facts.
+/// A new Core company to create and link in the same transaction.
 fn company_creation() -> Value {
     object(
         &["name"],
@@ -766,7 +765,7 @@ inventory::submit! { Contribution::new(DEFINITIONS,"finance/receivables.operatio
         Operation {key:"finance.receivables.tax_code.create",title:"Create a tax code",summary:"Create a percentage tax code on an active liability account. Also requires ledger view.",keywords:&[],capability:MANAGE_SETUP,input:tax_create,output,handler:Handler::SafeWrite(&Write::Code(TAX,None)),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.tax_code.update",title:"Change a tax code",summary:"Change name, account or active flag, preserving code and rate. Also requires ledger view.",keywords:&[],capability:MANAGE_SETUP,input:tax_update,output,handler:Handler::SafeWrite(&Write::Code(TAX,Some("tax_code_id"))),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.customer.create",title:"Create a customer",summary:"Add a Core Company or Person as a customer with payment terms and availability. Supply record_kind and record_id, new_company, or new_person. Use the Core party code everywhere. Party creation, permanent Finance link and customer relationship commit atomically.",keywords:&["company","party"],capability:MANAGE_CUSTOMERS,input:customer_create,output,handler:Handler::SafeWrite(&Write::Code(CUSTOMERS,None)),channels:Channels::Every,step_up:&[]},
-        Operation {key:"finance.receivables.customer.update",title:"Change a customer",summary:"Change payment terms or availability; a customer recorded before Core companies may still change its own party fields. Code, link and issued-document snapshots never change.",keywords:&[],capability:MANAGE_CUSTOMERS,input:customer_update,output,handler:Handler::SafeWrite(&Write::Code(CUSTOMERS,Some("customer_id"))),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.receivables.customer.update",title:"Change a customer",summary:"Change payment terms or availability; The linked Core party's facts are refused. Code, link and issued-document snapshots never change.",keywords:&[],capability:MANAGE_CUSTOMERS,input:customer_update,output,handler:Handler::SafeWrite(&Write::Code(CUSTOMERS,Some("customer_id"))),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.draft.create",title:"Create a receivables draft",summary:"Save an unnumbered invoice or credit note with derived amounts. Also requires ledger view and configured setup.",keywords:&[],capability:MANAGE_DOCUMENTS,input:draft_create,output,handler:Handler::SafeWrite(&Write::Draft(false)),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.draft.update",title:"Change a receivables draft",summary:"Change header or atomically replace lines; omit lines to keep snapshots. Also requires ledger view.",keywords:&[],capability:MANAGE_DOCUMENTS,input:draft_update,output,handler:Handler::SafeWrite(&Write::Draft(true)),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.draft.discard",title:"Discard a receivables draft",summary:"Keep the draft and its lines permanently as discarded, without numbering or posting.",keywords:&[],capability:MANAGE_DOCUMENTS,input:document,output,handler:Handler::SafeWrite(&Write::Discard),channels:Channels::Every,step_up:&[]},

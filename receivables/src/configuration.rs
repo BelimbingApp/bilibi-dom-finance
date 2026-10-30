@@ -221,8 +221,8 @@ impl Receivables {
     ) -> Result<Customer> {
         self.save_customer(scope, company, None, attrs).await
     }
-    /// Changes payment terms or availability; the party fields of a customer
-    /// recorded before linking stay editable until it is linked.
+    /// Changes payment terms or availability; the linked Core party's facts
+    /// are refused here.
     pub async fn update_customer(
         &self,
         scope: &Scope,
@@ -409,10 +409,11 @@ impl Receivables {
                 "phone",
                 "line1",
                 "line2",
-                "city",
-                "postal_code",
+                "line3",
+                "locality",
+                "postcode",
+                "admin1_code",
                 "country_iso",
-                "state_code",
             ] {
                 if attrs.get(field).is_some() {
                     return Err(invalid(field, "is read from the linked Core party"));
