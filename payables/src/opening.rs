@@ -255,7 +255,7 @@ impl Payables {
             }
             balance = Money::new((balance + residual).amount(), book.minor_units)
                 .map_err(|e| fail(&e.to_string()))?;
-            rows.push(json!({"source_id":row[0],"vendor_code":row[1],"party_kind":row[9],"vendor_name":row[2],"vendor_id":vendor_id,"vendor":vendor,"party":{"party_code":party.code,"party_name":party.name,"party_tax_identifier":Value::Null,"party_registration_identifier":Value::Null},"party_key":party_key,"document_reference":row[3],"document_date":date.to_string(),"due_date":due.to_string(),"original_total":original,"outstanding":residual,"settled_before_conversion":original-residual,"account_id":control,"account_code":account.code}));
+            rows.push(json!({"source_id":row[0],"vendor_code":row[1],"party_kind":row[9],"vendor_name":row[2],"vendor_id":vendor_id,"vendor":vendor,"party_key":party_key,"document_reference":row[3],"document_date":date.to_string(),"due_date":due.to_string(),"original_total":original,"outstanding":residual,"settled_before_conversion":original-residual,"account_id":control,"account_code":account.code}));
         }
         if !recorded.is_empty() {
             let (ids, keys, numbers, rows_at): (Vec<i64>, Vec<String>, Vec<String>, Vec<i32>) =
@@ -375,7 +375,33 @@ impl Payables {
             .to_owned();
         let csv = input["csv"].clone();
         let entry = p.context.entry;
-        let rows = p.rows;
+        let mut rows = p.rows;
+        let mut frozen = std::collections::HashMap::new();
+        for facts in &mut rows {
+            let vendor_id = facts["vendor_id"].as_i64().ok_or(Error::Invalid)?;
+            if let std::collections::hash_map::Entry::Vacant(e) = frozen.entry(vendor_id) {
+                e.insert(
+                    self.frozen_vendor_party(
+                        tx.sql(),
+                        s,
+                        facts["vendor"]["party"]["kind"]
+                            .as_str()
+                            .ok_or(Error::Invalid)?,
+                        facts["vendor"]["party"]["id"]
+                            .as_i64()
+                            .ok_or(Error::Invalid)?,
+                    )
+                    .await
+                    .map_err(|e| {
+                        vendor_refusal(
+                            e,
+                            &format!("source {}", facts["source_id"].as_str().unwrap_or("")),
+                        )
+                    })?,
+                );
+            }
+            facts["party"] = frozen[&vendor_id].clone();
+        }
         let batch=tx.mutate(move |sql|Box::pin(async move {
             let (batch,change)=store::insert(sql,store::Table::OpeningBatch,json!({"tenant_id":tenant,"company_id":company,"source_reference":source,"source_csv":csv,"currency_code":entry.currency_code,"conversion_date":entry.entry_date.to_string(),"entry_id":entry.id,"entry_number":entry.entry_number,"recorded_by_user_id":actor,"recorded_by_impersonator_id":imp,"recorded_at":jiff::Timestamp::now().to_string()})).await?;
             let mut changes=vec![change];
