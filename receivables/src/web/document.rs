@@ -783,6 +783,7 @@ impl Document {
                         .as_ref()
                         .map(|(_, review)| &review["changes"]["after"]);
                     let items = [
+                        ("party_code", "Core code"),
                         ("party_name", "Name"),
                         ("party_tax_identifier", "Tax ID"),
                         ("party_registration_identifier", "Registration number"),

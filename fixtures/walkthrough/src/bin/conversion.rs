@@ -181,6 +181,10 @@ async fn setup(db: &Db, services: &Services, company: i64) -> Outcome<Value> {
             .await?
             .id
     };
+    bilibi_finance_walkthrough_fixture::initialize_journal_approvals(
+        db, services, &manager, company,
+    )
+    .await?;
     if l.opening_context_on(&**db.get().await?, &admin, company)
         .await
         .is_err()
