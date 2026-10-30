@@ -185,11 +185,7 @@ impl Aging {
         })?;
         let mut body = render(Header {
             title: Html::text("Receivables aging"),
-            title_actions: super::menu_pin(
-                "receivables-aging-pin",
-                "nav-finance-receivables-aging",
-                "Aging",
-            )?,
+            title_actions: bilibi_ui::Html::EMPTY,
             subtitle: "Who owes you money, and how late it is.",
             ..Header::default()
         })?;

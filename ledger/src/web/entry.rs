@@ -334,19 +334,15 @@ impl Entry {
             ..BackLink::default()
         })?);
         let name = format!("Journal {}", entry.entry_number);
-        let url = format!("/finance/ledger/journals/entry-{}", entry.id);
         let subtitle = match entry.request_number {
             Some(request) => format!("Request {request} · {}", entry.description),
             None => entry.description.clone(),
         };
-        let pin = match entry.request_number {
-            Some(request) => format!("Journal · Request {request}"),
-            None => name.clone(),
-        };
+
         let mut page = render(Header {
             title: Html::text(&name),
             subtitle: &subtitle,
-            title_actions: super::record_pin("ledger-entry-pin", "entry", &pin, &url)?,
+            title_actions: bilibi_ui::Html::EMPTY,
             actions,
         })?;
         page.push(&render(Announce {

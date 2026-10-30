@@ -272,11 +272,7 @@ impl Customers {
         }
         let header = render(Header {
             title: Html::text("Customers"),
-            title_actions: super::menu_pin(
-                "receivables-customers-pin",
-                "nav-finance-receivables-customers",
-                "Customers",
-            )?,
+            title_actions: bilibi_ui::Html::EMPTY,
             actions,
             ..Header::default()
         })?;

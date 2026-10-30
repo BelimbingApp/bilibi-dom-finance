@@ -129,7 +129,7 @@ they govern this code and are not copied here.
   their routes, and a new write event calls its operation contract through
   `PageContracts` where one exists.
 - Build a page on contracts, not the facade: use `Pages::read`, `read_all` and `write` in `receivables/src/web/mod.rs` (they go through `PageContracts` and unwrap the envelope), and name each write event's contract in `PAGE_WRITES` with `Pending::None`. A read with no contract gets a contract in the owning module (`aging.get`), not a facade call from the page.
-- A settings page names the company it changes (header subtitle and each dialog's description, through `Pages::company_name`) and carries the title pin (`IconButton` with `nav_pin` = the menu item id with dots as hyphens, `nav-finance-receivables-settings`); edit a settings row's name, status or account in place with `InlineEdit`/`InlineChoice` keyed per row on a `save_event` listed in `PAGE_WRITES`, and open a dialog only for a new record whose fields are fixed once saved. `receivables/src/web/settings.rs` is the running pattern, including a setup that needs two values in one write (the first choice waits on the page, nothing half-set is persisted) and a change history folded under `Fold` (`DESIGN.md`: History is a quiet disclosure).
+- A settings page names the company it changes (header subtitle and each dialog's description, through `Pages::company_name`); edit a settings row's name, status or account in place with `InlineEdit`/`InlineChoice` keyed per row on a `save_event` listed in `PAGE_WRITES`, and open a dialog only for a new record whose fields are fixed once saved. `receivables/src/web/settings.rs` is the running pattern, including a setup that needs two values in one write (the first choice waits on the page, nothing half-set is persisted) and a change history folded under `Fold` (`DESIGN.md`: History is a quiet disclosure).
 - Write from a page with `Pages::write` (the contract the agent doors call, event listed in `PageWrites`), never `Payables::approve_document` and the other facade writes: the facade skips the contract's validation and review, so a person and an agent stop getting the same answer. Show `Written::Fields` (keyed by input path) on the fields, not as one flash.
 - A recorded document is immutable, so "edit a draft" is a corrected draft that replaces it, through `finance.payables.bill.replace_draft` (`Payables::replace_draft_on` voids the old draft and records the new one in one transaction, so a refusal leaves the draft as it was); never void then create in two calls, and do not add an update path. List a page of payment requests with `page_payment_requests` (newest first, the total from SQL), never by loading batches of `list_payment_requests` and cutting them, which drops the newest. A form with many fields reads its own `name[...]` keys: `params::form_values` keeps only 64.
 - Narrow a list by a date range with the shared period filter
@@ -214,13 +214,7 @@ they govern this code and are not copied here.
   Call `refresh_retention` in the transaction that finalises a record whose
   date can change while it is a draft; never extend retention yourself.
 - Show a record's source documents by mounting the embed `finance.attachments-panel` (`PANEL_EMBED`) as a `PanelSpec` (path `panel`, `source`, `document`; `attachments/README.md`), not an upload form, a download route or `Attachments` calls of your own: the panel owns the live upload, asks the facade on every action and reads whether the record is final from your `Source`, so a page passing its own flag cannot offer replace on a final record. Link a file as `/finance/attachments/{id}/download`; that route reauthorizes on every click.
-- Put the sidebar pin beside every page title through `Header::title_actions`: a
-  menu page renders the Platform's `bilibi_ui::IconButton` with `nav_pin` set to
-  `nav-` plus its menu id (dots as hyphens), and a record page renders its
-  module's `record_pin` (`ledger/src/web/mod.rs`), never a pin markup or a
-  `data-nav-pin` attribute of the page's own: the shell owns pin state,
-  `aria-pressed` and the sidebar row. A compose screen, a download and a record
-  the page could not load have no pin. Finance identity icons (`gmdi-money-r`
+- The Platform header supplies the page pin; pages do not wire it themselves. Finance identity icons (`gmdi-money-r`
   default; `tabler-receipt-tax` tax, `vaadin-invoice` invoices,
   `iconoir-receive-dollars` receivables, `iconoir-send-dollars` payables,
   `carbon-financial-assets` assets) are vendored in the Platform's

@@ -285,11 +285,7 @@ impl Index {
             None
         };
         View {
-            title_actions: super::menu_pin(
-                "bank-accounts-pin",
-                "nav-finance-reconciliation",
-                "Bank reconciliation",
-            )?,
+            title_actions: bilibi_ui::Html::EMPTY,
             flash: flash_map(&self.flash),
             table,
             forbidden: render(

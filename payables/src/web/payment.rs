@@ -307,12 +307,7 @@ impl Request {
         let title = format!("Payment request #{}", r.request_number);
         View {
             flash,
-            title_actions: super::record_pin(
-                "payables-payment-pin",
-                "payment request",
-                &title,
-                &format!("/finance/payables/payments/{}", self.id),
-            )?,
+            title_actions: bilibi_ui::Html::EMPTY,
             title,
             status: f::request_status(&r.status)?,
             actions: render(Actions {

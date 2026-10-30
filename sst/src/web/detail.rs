@@ -706,12 +706,7 @@ impl Return {
             refusal,
             record: Some(RecordView {
                 record: r.id,
-                title_actions: super::record_pin(
-                    "sst-return-pin",
-                    "return",
-                    &title,
-                    &format!("/finance/sst/returns/{}", r.id),
-                )?,
+                title_actions: bilibi_ui::Html::EMPTY,
                 title,
                 subtitle,
                 actions,

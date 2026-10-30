@@ -110,7 +110,7 @@ impl Book {
         let mut page = render(Header {
             title: Html::text("Book"),
             subtitle: &company_name,
-            title_actions: super::menu_pin("ledger-book-pin", "nav-finance-ledger-book", "Book")?,
+            title_actions: bilibi_ui::Html::EMPTY,
             ..Header::default()
         })?;
         page.push(&body);

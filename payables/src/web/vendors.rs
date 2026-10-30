@@ -172,11 +172,7 @@ impl Vendors {
         let mut body = render(Header {
             title: Html::text("Vendors"),
             subtitle: &format!("Vendor settings for {}", self.company_name),
-            title_actions: super::menu_pin(
-                "vendors-pin",
-                "nav-finance-payables-vendors",
-                "Vendors",
-            )?,
+            title_actions: bilibi_ui::Html::EMPTY,
             actions,
         })?;
         if let Some((kind, message)) = &self.notice {

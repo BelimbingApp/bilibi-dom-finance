@@ -139,16 +139,6 @@ fn render(fragment: impl Template) -> Result<Html> {
     Html::render(&fragment).map_err(|_| Error::Internal)
 }
 
-fn menu_pin(id: &str, nav: &str, page: &str) -> Result<Html> {
-    let label = format!("Pin {page} to sidebar");
-    render(bilibi_ui::IconButton {
-        context: bilibi_ui::IconContext::Inline,
-        id,
-        nav_pin: nav,
-        ..bilibi_ui::IconButton::new("bilimbi-pin", &label)
-    })
-}
-
 /// A refusal told as the page tells it; a failure is not a refusal.
 fn told<T>(
     result: std::result::Result<T, AttachmentError>,
@@ -495,11 +485,7 @@ impl Index {
             }
         }
         View {
-            title_actions: menu_pin(
-                "attachments-pin",
-                "nav-finance-attachments",
-                "Source documents",
-            )?,
+            title_actions: bilibi_ui::Html::EMPTY,
             flash,
             retention: retention_view,
             retention_form,

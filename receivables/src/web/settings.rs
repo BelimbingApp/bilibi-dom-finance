@@ -22,8 +22,8 @@ use bilibi_ui::{
     page::{LiveBody, LiveFuture, LiveInput, LiveRequest, LiveState},
     params, Alert, Attrs, Badge, BadgeKind, Button, ButtonVariant, Card, Cell, Choice, Combobox,
     CommitStates, CommitStatus, ConfirmDialog, Facts, Field, FlexRow, Fold, Form, Header, Html,
-    IconButton, IconContext, InlineChoice, InlineEdit, InlineField, InputKind, ListColumns,
-    ModalWidth, PageVariant, SectionHeading, StatusKind,
+    InlineChoice, InlineEdit, InlineField, InputKind, ListColumns, ModalWidth, PageVariant,
+    SectionHeading, StatusKind,
 };
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -453,12 +453,7 @@ impl Settings {
         let mut body = render(Header {
             title: Html::text("Receivables settings"),
             subtitle: &self.company,
-            title_actions: render(IconButton {
-                context: IconContext::Inline,
-                id: "receivables-settings-pin",
-                nav_pin: "nav-finance-receivables-settings",
-                ..IconButton::new("bilimbi-pin", "Pin Receivables settings to sidebar")
-            })?,
+            title_actions: bilibi_ui::Html::EMPTY,
             ..Header::default()
         })?;
 

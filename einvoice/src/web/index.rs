@@ -255,11 +255,7 @@ impl Index {
             Html::EMPTY
         };
         View {
-            title_actions: super::menu_pin(
-                "einvoice-documents-pin",
-                "nav-finance-einvoice-documents",
-                "E-invoices",
-            )?,
+            title_actions: bilibi_ui::Html::EMPTY,
             actions: render(HeaderLinks)?,
             toolbar: render(toolbar)?,
             table: render(grid)?,

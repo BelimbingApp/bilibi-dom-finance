@@ -254,7 +254,7 @@ impl Setup {
             })
             .transpose()?;
         View {
-            title_actions: super::menu_pin("sst-setup-pin", "nav-finance-sst-setup", "SST setup")?,
+            title_actions: bilibi_ui::Html::EMPTY,
             flash: flash(&self.flash),
             actions,
             forbidden,

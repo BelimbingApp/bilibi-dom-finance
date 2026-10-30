@@ -225,18 +225,7 @@ pub(super) fn header(
     }
     // Bilimbi shows only the back link above a refused account's empty state.
     let missing = activity && !matches!(report, Some(Report::Activity(_)));
-    let title_actions = if let Some(id) = account_id.as_deref() {
-        super::record_pin(
-            "report-activity-pin",
-            "account",
-            &title,
-            &format!("/finance/reports/accounts/{id}"),
-        )?
-    } else if missing {
-        Html::EMPTY
-    } else {
-        super::menu_pin("reports-pin", "nav-finance-reports", "Reports")?
-    };
+    let title_actions = Html::EMPTY;
     render(HeaderView {
         title: &title,
         subtitle,

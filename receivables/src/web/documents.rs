@@ -359,11 +359,7 @@ impl Documents {
         }
         let mut body = render(Header {
             title: Html::text("Invoices"),
-            title_actions: super::menu_pin(
-                "receivables-invoices-pin",
-                "nav-finance-receivables-invoices",
-                "Invoices",
-            )?,
+            title_actions: bilibi_ui::Html::EMPTY,
             actions,
             ..Header::default()
         })?;

@@ -256,11 +256,7 @@ impl Bills {
             content.push(&render(pager)?);
         }
         View {
-            title_actions: super::menu_pin(
-                "payables-bills-pin",
-                "nav-finance-payables-bills",
-                "Bills",
-            )?,
+            title_actions: bilibi_ui::Html::EMPTY,
             actions,
             content,
         }

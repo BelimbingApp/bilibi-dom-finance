@@ -189,7 +189,7 @@ impl Returns {
             None => None,
         };
         View {
-            title_actions: super::menu_pin("sst-returns-pin", "nav-finance-sst", "SST returns")?,
+            title_actions: bilibi_ui::Html::EMPTY,
             flash: flash(&self.flash),
             actions,
             refusal,

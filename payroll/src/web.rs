@@ -495,16 +495,7 @@ impl State {
                 "Posting accounts",
             )
         };
-        let title_actions = if self.setup {
-            record_pin(
-                "payroll-setup-pin",
-                "page",
-                "Payroll posting accounts",
-                "/finance/payroll/setup",
-            )?
-        } else {
-            menu_pin("payroll-pin", "nav-finance-payroll", "Payroll and claims")?
-        };
+        let title_actions = Html::EMPTY;
         parts.push(render(Header {
             title: Html::text(title),
             title_actions,
@@ -1405,41 +1396,6 @@ fn section(
 }
 fn render(fragment: impl Template) -> Result<Html> {
     Html::render(&fragment).map_err(|_| Error::Internal)
-}
-
-/// Sidebar pin for a menu page. Payroll setup is not a menu row, so it uses
-/// [`record_pin`].
-fn menu_pin(id: &str, nav: &str, page: &str) -> Result<Html> {
-    let label = format!("Pin {page} to sidebar");
-    render(bilibi_ui::IconButton {
-        context: bilibi_ui::IconContext::Inline,
-        id,
-        nav_pin: nav,
-        ..bilibi_ui::IconButton::new("bilimbi-pin", &label)
-    })
-}
-
-fn record_pin(id: &str, noun: &str, name: &str, url: &str) -> Result<Html> {
-    let label = format!("Pin this {noun} to sidebar");
-    let pin_label = name.replace('/', " ");
-    render(RecordPin {
-        id,
-        label: &label,
-        pin_label: &pin_label,
-        url,
-    })
-}
-
-#[derive(Template)]
-#[template(
-    source = r#"{% import "components.html" as ui %}{% call ui::icon_button(icon="bilimbi-pin", label=label, context=bilibi_ui::IconContext::Inline, id=id, nav_pin="record", record_label=pin_label, record_url=url) %}{% endcall %}"#,
-    ext = "html"
-)]
-struct RecordPin<'a> {
-    id: &'a str,
-    label: &'a str,
-    pin_label: &'a str,
-    url: &'a str,
 }
 
 #[derive(Template)]

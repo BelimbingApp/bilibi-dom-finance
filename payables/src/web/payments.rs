@@ -271,11 +271,7 @@ impl Payments {
             content.push(&render(pager)?);
         }
         View {
-            title_actions: super::menu_pin(
-                "payables-payments-pin",
-                "nav-finance-payables-payments",
-                "Payments",
-            )?,
+            title_actions: bilibi_ui::Html::EMPTY,
             actions,
             content,
         }

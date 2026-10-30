@@ -240,12 +240,7 @@ impl Account {
                 return view.render().map_err(|_| Error::Internal);
             }
         };
-        view.title_actions = super::record_pin(
-            "bank-account-pin",
-            "bank account",
-            &account.name,
-            &format!("/finance/reconciliation/accounts/{}", account.id),
-        )?;
+        view.title_actions = bilibi_ui::Html::EMPTY;
         let (statements, reconciliations, files) = self.data(scope).await?;
         view.statement_count = Some(statements.len());
         view.reconciliation_count = Some(reconciliations.len());

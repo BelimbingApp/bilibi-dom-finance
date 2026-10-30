@@ -548,12 +548,7 @@ impl Detail {
         );
         view.record = Some(RecordView {
             id: report.id,
-            title_actions: super::record_pin(
-                "reconciliation-pin",
-                "reconciliation",
-                &title,
-                &format!("/finance/reconciliation/reconciliations/{}", report.id),
-            )?,
+            title_actions: bilibi_ui::Html::EMPTY,
             title,
             subtitle,
             actions: render(Actions {

@@ -209,11 +209,7 @@ impl Aged {
             );
             empty.id = "payables-aged-unavailable".into();
             return View {
-                title_actions: super::menu_pin(
-                    "payables-aged-pin",
-                    "nav-finance-payables-aged",
-                    "Aged payables",
-                )?,
+                title_actions: bilibi_ui::Html::EMPTY,
                 date,
                 parties: None,
                 bills: None,
@@ -268,11 +264,7 @@ impl Aged {
             })
             .transpose()?;
         View {
-            title_actions: super::menu_pin(
-                "payables-aged-pin",
-                "nav-finance-payables-aged",
-                "Aged payables",
-            )?,
+            title_actions: bilibi_ui::Html::EMPTY,
             date,
             parties: Some(Self::table(
                 &self.parties,

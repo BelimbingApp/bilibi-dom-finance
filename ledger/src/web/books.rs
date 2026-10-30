@@ -286,11 +286,7 @@ impl Books {
         let mut page = render(Header {
             title: Html::text("Company books"),
             subtitle: "The book and fiscal calendar of each company you can work in",
-            title_actions: super::menu_pin(
-                "ledger-books-pin",
-                "nav-finance-ledger-books",
-                "Company books",
-            )?,
+            title_actions: bilibi_ui::Html::EMPTY,
             ..Header::default()
         })?;
         page.push(&body);
