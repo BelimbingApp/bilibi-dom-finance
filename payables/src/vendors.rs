@@ -316,11 +316,11 @@ impl Payables {
         }
         Ok(facts)
     }
-    pub(crate) fn billable(v: &Vendor) -> Result<()> {
-        if !v.active {
+    pub(crate) fn billable(active: bool, party_status: &str) -> Result<()> {
+        if !active {
             return Err(invalid("vendor_id", "is an inactive vendor"));
         }
-        match v.party.status.as_str() {
+        match party_status {
             "active" => Ok(()),
             "pending" => Err(invalid(
                 "vendor_id",

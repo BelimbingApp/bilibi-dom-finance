@@ -172,7 +172,7 @@ impl Payables {
                 .vendor_id
                 .ok_or_else(|| invalid("vendor_id", "is required"))?;
             let v = self.vendor_on(c, s, company, id).await?;
-            Self::billable(&v)?;
+            Self::billable(v.active, &v.party.status)?;
             Some(v)
         } else {
             None

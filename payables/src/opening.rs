@@ -152,20 +152,20 @@ impl Payables {
         let mut vendor_ids = std::collections::HashMap::new();
         for row in c
             .query(
-                "SELECT id, record_kind, record_id FROM finance_payables_vendors WHERE tenant_id=$1 AND company_id=$2 AND (record_kind, record_id) IN (SELECT * FROM unnest($3::text[], $4::text[]))",
+                "SELECT id, record_kind, record_id, active FROM finance_payables_vendors WHERE tenant_id=$1 AND company_id=$2 AND (record_kind, record_id) IN (SELECT * FROM unnest($3::text[], $4::text[]))",
                 &[&s.tenant(), &company, &kinds, &ids],
             )
             .await?
         {
-            let (id, kind, record): (i64, String, String) = (row.get(0), row.get(1), row.get(2));
+            let (id, kind, record, active): (i64, String, String, bool) =
+                (row.get(0), row.get(1), row.get(2), row.get(3));
             if let Some(party) = identities
                 .iter()
                 .find(|i| i.record_kind() == kind && i.record_id().to_string() == record)
             {
-                vendor_ids.insert((kind, party.code.clone()), id);
+                vendor_ids.insert((kind, party.code.clone()), (id, active, party));
             }
         }
-        let mut loaded = std::collections::HashMap::new();
         let mut recorded: Vec<(i64, String, String, i32)> = vec![];
         let mut rows = vec![];
         let mut balance = Money::ZERO;
@@ -207,14 +207,17 @@ impl Payables {
             if !["company", "person"].contains(&row[9]) {
                 return Err(fail("party_kind must be company or person"));
             }
-            let vendor_id = *vendor_ids.get(&(row[9].to_owned(),row[1].to_owned())).ok_or_else(|| {
+            let &(vendor_id, active, party) = vendor_ids.get(&(row[9].to_owned(),row[1].to_owned())).ok_or_else(|| {
                 fail("vendor_code and party_kind must identify an existing Core-linked vendor of the current company")
             })?;
-            if let std::collections::hash_map::Entry::Vacant(e) = loaded.entry(vendor_id) {
-                e.insert(self.vendor_on(c, s, company, vendor_id).await?);
+            Self::billable(active, &party.status)
+                .map_err(|e| vendor_refusal(e, &format!("row {}", index + 1)))?;
+            if party.name.chars().count() > 200 {
+                return Err(fail(
+                    "the party's name exceeds the document's 200 character limit",
+                ));
             }
-            let vendor = &loaded[&vendor_id];
-            Self::billable(vendor).map_err(|e| vendor_refusal(e, &format!("row {}", index + 1)))?;
+            let vendor = json!({"id":vendor_id,"active":active,"party":{"kind":party.record_kind(),"id":party.record_id(),"code":party.code,"name":party.name,"status":party.status}});
             let party_key = vendors::key(vendor_id);
             recorded.push((
                 vendor_id,
@@ -252,7 +255,7 @@ impl Payables {
             }
             balance = Money::new((balance + residual).amount(), book.minor_units)
                 .map_err(|e| fail(&e.to_string()))?;
-            rows.push(json!({"source_id":row[0],"vendor_code":row[1],"party_kind":row[9],"vendor_name":row[2],"vendor_id":vendor_id,"vendor":vendor,"party_key":party_key,"document_reference":row[3],"document_date":date.to_string(),"due_date":due.to_string(),"original_total":original,"outstanding":residual,"settled_before_conversion":original-residual,"account_id":control,"account_code":account.code}));
+            rows.push(json!({"source_id":row[0],"vendor_code":row[1],"party_kind":row[9],"vendor_name":row[2],"vendor_id":vendor_id,"vendor":vendor,"party":{"party_code":party.code,"party_name":party.name,"party_tax_identifier":Value::Null,"party_registration_identifier":Value::Null},"party_key":party_key,"document_reference":row[3],"document_date":date.to_string(),"due_date":due.to_string(),"original_total":original,"outstanding":residual,"settled_before_conversion":original-residual,"account_id":control,"account_code":account.code}));
         }
         if !recorded.is_empty() {
             let (ids, keys, numbers, rows_at): (Vec<i64>, Vec<String>, Vec<String>, Vec<i32>) =
@@ -372,28 +375,7 @@ impl Payables {
             .to_owned();
         let csv = input["csv"].clone();
         let entry = p.context.entry;
-        let mut rows = p.rows;
-        for facts in &mut rows {
-            let core_company = facts["vendor"]["party"]["id"]
-                .as_i64()
-                .ok_or(Error::Invalid)?;
-            facts["party"] = self
-                .frozen_vendor_party(
-                    tx.sql(),
-                    s,
-                    facts["vendor"]["party"]["kind"]
-                        .as_str()
-                        .ok_or(Error::Invalid)?,
-                    core_company,
-                )
-                .await
-                .map_err(|e| {
-                    vendor_refusal(
-                        e,
-                        &format!("source {}", facts["source_id"].as_str().unwrap_or("")),
-                    )
-                })?;
-        }
+        let rows = p.rows;
         let batch=tx.mutate(move |sql|Box::pin(async move {
             let (batch,change)=store::insert(sql,store::Table::OpeningBatch,json!({"tenant_id":tenant,"company_id":company,"source_reference":source,"source_csv":csv,"currency_code":entry.currency_code,"conversion_date":entry.entry_date.to_string(),"entry_id":entry.id,"entry_number":entry.entry_number,"recorded_by_user_id":actor,"recorded_by_impersonator_id":imp,"recorded_at":jiff::Timestamp::now().to_string()})).await?;
             let mut changes=vec![change];
