@@ -225,7 +225,9 @@ async fn main() -> Outcome<()> {
     for scope in [&manager, &impersonated, &agent_manager] {
         assert!(matches!(
             ledger.approve_journal(scope, COMPANY, journal.id).await,
-            Err(LedgerError::ApprovalRefused(_))
+            Err(LedgerError::ApprovalRefused(message))
+                if message.contains("cannot decide this journal")
+                    && !message.contains("Waiting for my approval")
         ));
         assert_eq!(
             ledger

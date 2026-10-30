@@ -548,11 +548,9 @@ impl Write {
                     None
                 };
                 if let Some(item) = &approval {
-                    if item.seats.len() != 1
-                        || item.request.stages.len() != 1
-                        || (matches!(self, Self::Approve) && item.approval_reason_required)
-                    {
-                        return Err(LedgerError::ApprovalRefused("Decide this journal from Waiting for my approval, where its step, seat and required reason are explicit.".into()));
+                    journal_approvals::single_step(item)?;
+                    if matches!(self, Self::Approve) && item.approval_reason_required {
+                        return Err(LedgerError::ApprovalRefused("These rules require an approval reason. Decide this journal from Waiting for my approval.".into()));
                     }
                 }
                 if matches!(self, Self::Replace) {

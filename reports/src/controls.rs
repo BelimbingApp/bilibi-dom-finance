@@ -1170,11 +1170,45 @@ impl State {
             ..bilibi_ui::ActionLink::default()
         })?);
         parts.push(section("journal-approval-controls","Journal approvals","Journal rules decide who may approve. Approvals by the person who prepared a journal are kept here for independent review.",links,false)?);
-        let envelope=match self.pages.contracts.read(scope,"base.workflow.approvals.exceptions",&json!({"company":company,"case":"finance.ledger.manual_journal","after":self.after().unwrap_or(0),"page_size":100,"unreviewed":self.filter("review")=="pending"})).await {
-            Ok(value)=>value,
-            Err(error)=>{parts.push(html(Alert {id:"journal-exceptions-refused",kind:StatusKind::Error,body:Html::text(match error {bilibi_agent_api::Error::Forbidden=>"Your role does not allow you to read approval exceptions.",_=>"The journal approval exceptions could not be read. Reload the page and try again."}),..Alert::default()})?);return Ok(parts);}
-        };
-        parts.push(self.tabs(
+        let clock = self.sync_period(display);
+        let (from, before) = self
+            .period
+            .as_ref()
+            .expect("period initialized")
+            .period
+            .bounds(&clock.timezone)
+            .map_err(|_| LedgerError::InvalidOption)?;
+        let mut after = self.after().unwrap_or(0);
+        let mut shown: Vec<Value> = Vec::new();
+        let mut next_cursor = None;
+        // The contract filters only by review state and cursor; the period and the Reviewed tab are
+        // applied here, so keep reading pages until one has a row to show or the list ends.
+        for _ in 0..20 {
+            let envelope=match self.pages.contracts.read(scope,"base.workflow.approvals.exceptions",&json!({"company":company,"case":"finance.ledger.manual_journal","after":after,"page_size":100,"unreviewed":self.filter("review")=="pending"})).await {
+                Ok(value)=>value,
+                Err(error)=>{parts.push(html(Alert {id:"journal-exceptions-refused",kind:StatusKind::Error,body:Html::text(match error {bilibi_agent_api::Error::Forbidden=>"Your role does not allow you to read approval exceptions.",_=>"The journal approval exceptions could not be read. Reload the page and try again."}),..Alert::default()})?);return Ok(parts);}
+            };
+            let result = &envelope["result"];
+            for e in result["entries"].as_array().ok_or(Error::Internal)? {
+                let stamp = e["created_at"]
+                    .as_str()
+                    .and_then(|s| s.parse::<Timestamp>().ok())
+                    .ok_or(Error::Internal)?;
+                if stamp >= from
+                    && stamp < before
+                    && (self.filter("review") != "reviewed" || e["reviewed"] == true)
+                {
+                    shown.push(e.clone());
+                }
+            }
+            next_cursor = result["next_cursor"].as_i64();
+            match next_cursor {
+                Some(cursor) if shown.is_empty() => after = cursor,
+                _ => break,
+            }
+        }
+        let mut filters = html(self.period.as_ref().expect("period initialized"))?;
+        filters.push(&self.tabs(
             "journal-exceptions-review",
             "Review status",
             "review",
@@ -1184,13 +1218,13 @@ impl State {
                 ("reviewed", "Reviewed"),
             ],
         )?);
-        let result = &envelope["result"];
-        let entries = result["entries"].as_array().ok_or(Error::Internal)?;
+        parts.push(html(FiltersView {
+            id: "exceptions-filters",
+            class: "mt-4 mb-3 flex flex-wrap items-center gap-4",
+            content: filters,
+        })?);
         let mut rows = Vec::new();
-        for e in entries {
-            if self.filter("review") == "reviewed" && e["reviewed"] != true {
-                continue;
-            }
+        for e in &shown {
             let id = e["id"].as_i64().ok_or(Error::Internal)?;
             let label = e["label"].as_str().unwrap_or("Journal");
             let url = e["owner_url"]
@@ -1264,7 +1298,7 @@ impl State {
                 "Approvals by the person who prepared a journal appear here.",
             )),
         )?);
-        if let Some(next) = result["next_cursor"].as_i64() {
+        if let Some(next) = next_cursor {
             parts.push(self.next("journal-exceptions-next", next, "Later exceptions")?);
         }
         Ok(parts)

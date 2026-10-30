@@ -511,7 +511,20 @@ pub(crate) async fn preview(
     engine()?
         .approval_detail_on(sql, scope, request)
         .await
-        .map_err(refusal)
+        .map_err(|error| match error {
+            Error::Forbidden => LedgerError::ApprovalRefused(
+                "You cannot decide this journal. The approval rules need another eligible person, such as someone who did not prepare it.".into(),
+            ),
+            error => refusal(error),
+        })
+}
+pub(crate) fn single_step(item: &bilibi_workflow::ApprovalItem) -> Result<()> {
+    if item.seats.len() != 1 || item.request.stages.len() != 1 {
+        return Err(LedgerError::ApprovalRefused(
+            "More than one approval step or seat is open to you. Open Waiting for my approval and choose the one you are deciding.".into(),
+        ));
+    }
+    Ok(())
 }
 pub(crate) async fn decide(
     tx: &mut MutationTransaction<'_>,
@@ -524,11 +537,7 @@ pub(crate) async fn decide(
     join(tx, scope, company, APPROVE_JOURNALS).await?;
     submitted_journal(tx.sql(), scope.tenant(), company, journal).await?;
     let item = preview(tx.sql(), scope, company, journal).await?;
-    if item.seats.len() != 1 || item.request.stages.len() != 1 {
-        return Err(LedgerError::ApprovalRefused(
-            "Open Waiting for my approval and choose the approval step you are deciding.".into(),
-        ));
-    }
+    single_step(&item)?;
     if approve && item.approval_reason_required && reason.trim().is_empty() {
         return Err(LedgerError::ApprovalRefused("These rules require an approval reason. Decide this journal from Waiting for my approval.".into()));
     }
