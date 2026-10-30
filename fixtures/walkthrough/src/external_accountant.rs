@@ -44,7 +44,8 @@ pub async fn run(db: &Db, services: &Services, root: &str, full_pack: &str) -> O
         [
             "finance.ledger.journals.submit",
             "finance.ledger.view",
-            "finance.reports.reports-export"
+            "finance.reports.reports-export",
+            "workflow.approvals.view"
         ]
     );
     let old_roles: Vec<(i64, i64)> = c
