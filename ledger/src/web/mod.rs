@@ -46,7 +46,7 @@ pub(crate) const PAGES: &str = "finance/ledger.pages";
 const GROUP: &str = "finance.group.bookkeeping";
 
 /// Finance page identity, most specific first: tax, invoice, receivables,
-/// payables, assets, then money. The pin beside a title stays `bilimbi-pin`.
+/// payables, assets, then money.
 /// The glyphs are vendored in the Platform (`apps/base/ui/assets/vendor/product-icons/`).
 const ICON_MONEY: &str = "gmdi-money-r";
 
@@ -909,47 +909,6 @@ struct DialogActions {
 
 pub(crate) fn render(template: impl Template) -> Result<Html> {
     Html::render(&template).map_err(|_| Error::Internal)
-}
-
-/// Sidebar pin for a menu page. `nav` is the shell id (`nav-` plus the menu id
-/// with dots written as hyphens). The shell stores the menu row's own label
-/// and route, including the signed-in company the route already addresses.
-pub(crate) fn menu_pin(id: &str, nav: &str, page: &str) -> Result<Html> {
-    let label = format!("Pin {page} to sidebar");
-    render(bilibi_ui::IconButton {
-        context: bilibi_ui::IconContext::Inline,
-        id,
-        nav_pin: nav,
-        ..bilibi_ui::IconButton::new("bilimbi-pin", &label)
-    })
-}
-
-/// Sidebar pin for one stable record. Compose screens (a new bill, a new
-/// payment request) are not records and do not call this. A page that could
-/// not load the record omits the pin: there is no name to return to.
-pub(crate) fn record_pin(id: &str, noun: &str, name: &str, url: &str) -> Result<Html> {
-    let label = format!("Pin this {noun} to sidebar");
-    // The shell keeps the last `/` segment of a pin label, so a name that
-    // contains one would be stored as only its tail.
-    let pin_label = name.replace('/', " ");
-    render(RecordPin {
-        id,
-        label: &label,
-        pin_label: &pin_label,
-        url,
-    })
-}
-
-#[derive(Template)]
-#[template(
-    source = r#"{% import "components.html" as ui %}{% call ui::icon_button(icon="bilimbi-pin", label=label, context=bilibi_ui::IconContext::Inline, id=id, nav_pin="record", record_label=pin_label, record_url=url) %}{% endcall %}"#,
-    ext = "html"
-)]
-struct RecordPin<'a> {
-    id: &'a str,
-    label: &'a str,
-    pin_label: &'a str,
-    url: &'a str,
 }
 
 /// A timestamp from a contract answer, in the person's own display mode.

@@ -348,15 +348,7 @@ impl Detail {
             )?;
         }
         let visible = detail.is_some();
-        let title_actions = match &detail {
-            Some(d) => super::record_pin(
-                "asset-pin",
-                "asset",
-                &format!("Asset {} {}", d.asset.asset_number, d.asset.description),
-                &format!("/finance/fixed-assets/register/{}", d.asset.id),
-            )?,
-            None => Html::EMPTY,
-        };
+        let title_actions = Html::EMPTY;
         View {title_actions,register_link:render(RegisterLink)?,detail:detail.as_ref(),unavailable,flash:flash_map(&self.flash),assumptions,schedule,charges,events,dispose:if visible {self.form(s,"dispose",&accounts).await?}else{Html::EMPTY},void:if detail.as_ref().is_some_and(|d|!d.voided){self.form(s,"void",&accounts).await?}else{Html::EMPTY},reverse:if visible{self.form(s,"reverse",&accounts).await?}else{Html::EMPTY},confirm:if self.pending_void.is_some(){render(ConfirmDialog {id:"asset-void-confirm",consequence:"Void acquisition",detail:"Depreciation already posted for this asset is reversed; other assets keep theirs. This cannot be undone.",confirm:"Void acquisition",working:"Recording…",confirm_event:"confirm_void",cancel_event:"cancel_void"})?}else{Html::EMPTY}}.render().map_err(|_|Error::Internal)
     }
     fn input(&self, s: &Scope, d: &Draft) -> crate::Result<serde_json::Value> {

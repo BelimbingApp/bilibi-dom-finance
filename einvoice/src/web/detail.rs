@@ -398,12 +398,7 @@ impl Detail {
             flash,
         };
         if let Some(d) = &self.document {
-            view.title_actions = super::record_pin(
-                "einvoice-document-pin",
-                "document",
-                &view.title,
-                &format!("/finance/einvoice/documents/{}", d.document.id),
-            )?;
+            view.title_actions = bilibi_ui::Html::EMPTY;
             let can_submit = self.pages.allowed(scope, SUBMIT).await?;
             let can_cancel = self.pages.allowed(scope, CANCEL).await?;
             view.header_subtitle = render(Subtitle {

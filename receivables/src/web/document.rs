@@ -706,12 +706,7 @@ impl Document {
         let pin_name = reference(&d);
         body.push(&render(Header {
             title: Html::text(&pin_name),
-            title_actions: super::record_pin(
-                "receivables-invoice-pin",
-                "invoice",
-                &pin_name,
-                &format!("{}/{}", super::INVOICES, d.id),
-            )?,
+            title_actions: bilibi_ui::Html::EMPTY,
             subtitle: &format!("{kind} for {customer_name}"),
             actions,
         })?);

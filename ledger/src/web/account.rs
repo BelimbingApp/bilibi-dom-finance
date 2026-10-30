@@ -300,12 +300,10 @@ impl Account {
             title: "Back to the chart of accounts",
             ..BackLink::default()
         })?);
-        let name = format!("{} · {} · {}", account.name, account.code, company_name);
-        let url = format!("/finance/ledger/accounts/{}?company={company}", account.id);
         let mut page = render(Header {
             title: account_name(&account)?,
             subtitle: &company_name,
-            title_actions: super::record_pin("ledger-account-pin", "account", &name, &url)?,
+            title_actions: bilibi_ui::Html::EMPTY,
             actions,
         })?;
         page.push(&render(super::Announce {

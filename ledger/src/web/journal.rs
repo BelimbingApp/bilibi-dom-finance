@@ -506,7 +506,6 @@ impl Journal {
             Some(number) => format!("Journal {number}"),
             None => "Draft journal".to_owned(),
         };
-        let url = format!("/finance/ledger/journals/{}", journal.id);
         let subtitle = format!(
             "Request {} · {}",
             journal.journal_number, journal.description
@@ -514,12 +513,7 @@ impl Journal {
         let mut page = render(Header {
             title: Html::text(&name),
             subtitle: &subtitle,
-            title_actions: super::record_pin(
-                "ledger-journal-pin",
-                "journal",
-                &format!("Journal · Request {}", journal.journal_number),
-                &url,
-            )?,
+            title_actions: bilibi_ui::Html::EMPTY,
             actions,
         })?;
         page.push(&render(Announce {

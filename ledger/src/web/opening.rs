@@ -63,11 +63,7 @@ impl Opening {
         let mut page = render(Header {
             title: Html::text("Opening balances"),
             subtitle: "Establish the source closing trial balance as one journal for approval.",
-            title_actions: super::menu_pin(
-                "opening-pin",
-                "nav-finance-ledger-opening-balances",
-                "Opening balances",
-            )?,
+            title_actions: bilibi_ui::Html::EMPTY,
             ..Header::default()
         })?;
         if Pages::company(scope).is_none() {

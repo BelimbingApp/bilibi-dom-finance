@@ -590,11 +590,7 @@ impl Index {
         let view = View {
             page_dom: format!("assets-{}", self.kind.key()),
             title: self.kind.title(),
-            title_actions: super::menu_pin(
-                &format!("assets-{}-pin", self.kind.key()),
-                &format!("nav-finance-fixed-assets-{}", self.kind.key()),
-                self.kind.title(),
-            )?,
+            title_actions: bilibi_ui::Html::EMPTY,
             flash: flash_map(&self.flash),
             toolbar: render(toolbar)?,
             period: if self.kind == Kind::Register {

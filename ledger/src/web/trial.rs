@@ -96,11 +96,7 @@ impl Trial {
         }
         let mut page = render(Header {
             title: Html::text("Trial balance"),
-            title_actions: super::menu_pin(
-                "ledger-trial-pin",
-                "nav-finance-ledger-trial-balance",
-                "Trial balance",
-            )?,
+            title_actions: bilibi_ui::Html::EMPTY,
             ..Header::default()
         })?;
         page.push(&body);

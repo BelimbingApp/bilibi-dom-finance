@@ -553,17 +553,9 @@ impl State {
         } else {
             "Same-person approvals and overrides of controls, for someone independent to review."
         };
-        let (pin_id, nav) = if self.bookkeeping {
-            ("bookkeeping-pin", "nav-finance-reports-bookkeeping")
-        } else {
-            (
-                "approval-exceptions-pin",
-                "nav-finance-reports-approval-exceptions",
-            )
-        };
         let mut parts = vec![html(Header {
             title: Html::text(title),
-            title_actions: crate::web::menu_pin(pin_id, nav, title)?,
+            title_actions: bilibi_ui::Html::EMPTY,
             subtitle,
             ..Header::default()
         })?];

@@ -4,7 +4,7 @@
 //! and writes nothing. Setup is per company: the page acts on the session's
 //! current company and names it; the books of every company the person works
 //! in are on the ledger's Company books page.
-use crate::{setup::SetupState, web::menu_pin};
+use crate::setup::SetupState;
 use askama::Template;
 use bilibi_agent_api::{page::PageContracts, Error as ContractError};
 use bilibi_database::{Db, Error, Result};
@@ -251,7 +251,7 @@ impl Setup {
         let mut page = render(Header {
             title: Html::text("Finance setup"),
             subtitle: &subtitle,
-            title_actions: menu_pin("setup-pin", "nav-finance-reports-setup", "Finance setup")?,
+            title_actions: bilibi_ui::Html::EMPTY,
             ..Header::default()
         })?;
         page.push(&body);

@@ -211,12 +211,7 @@ impl Payment {
         };
         body.push(&render(Header {
             title: Html::text(&pin_name),
-            title_actions: super::record_pin(
-                "receivables-receipt-pin",
-                "receipt",
-                &pin_name,
-                &format!("{}/{}", super::RECEIPTS, p.id),
-            )?,
+            title_actions: bilibi_ui::Html::EMPTY,
             subtitle: &format!("Receipt from {customer_name}"),
             actions,
         })?);

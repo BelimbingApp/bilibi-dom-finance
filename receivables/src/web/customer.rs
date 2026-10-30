@@ -638,15 +638,9 @@ impl Customer {
             ..Card::default()
         })?);
         let mut body = f::announce(c.id)?;
-        let pin_name = format!("{} {}", c.code, c.name);
         body.push(&render(Header {
             title: Html::text(&c.name),
-            title_actions: super::record_pin(
-                "receivables-customer-pin",
-                "customer",
-                &pin_name,
-                &format!("{}/{}", super::CUSTOMERS, c.id),
-            )?,
+            title_actions: bilibi_ui::Html::EMPTY,
             subtitle: &format!("Customer {}", c.code),
             actions: back,
         })?);

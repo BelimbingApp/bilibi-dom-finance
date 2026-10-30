@@ -93,11 +93,7 @@ impl State {
     fn render(&self) -> Result<String> {
         let mut content = render(Header {
             title: Html::text("Report sections"),
-            title_actions: super::menu_pin(
-                "report-sections-pin",
-                "nav-finance-reports-sections",
-                "Report sections",
-            )?,
+            title_actions: bilibi_ui::Html::EMPTY,
             subtitle: "Choose headings and accounts for your reports.",
             ..Header::default()
         })?;

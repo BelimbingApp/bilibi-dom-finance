@@ -433,12 +433,7 @@ impl Bill {
         View {
             flash,
             record: d.id,
-            title_actions: super::record_pin(
-                "payables-bill-pin",
-                "document",
-                &title,
-                &format!("/finance/payables/bills/{}", d.id),
-            )?,
+            title_actions: bilibi_ui::Html::EMPTY,
             title,
             status: f::status(&d.status)?,
             match_status: d

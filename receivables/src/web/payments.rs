@@ -343,11 +343,7 @@ impl Payments {
         }
         let mut body = render(Header {
             title: Html::text("Receipts"),
-            title_actions: super::menu_pin(
-                "receivables-receipts-pin",
-                "nav-finance-receivables-receipts",
-                "Receipts",
-            )?,
+            title_actions: bilibi_ui::Html::EMPTY,
             actions,
             ..Header::default()
         })?;

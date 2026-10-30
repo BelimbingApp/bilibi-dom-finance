@@ -278,12 +278,10 @@ impl Group {
             ..BackLink::default()
         })?);
         let company_name = self.pages.company_name_in(scope, company).await?;
-        let name = format!("{} · {} · {}", group.name, group.code, company_name);
-        let url = format!("{INDEX}/{}?company={company}", group.id);
         let mut page = render(Header {
             title: account_name(&group)?,
             subtitle: &company_name,
-            title_actions: super::record_pin("ledger-group-pin", "account group", &name, &url)?,
+            title_actions: bilibi_ui::Html::EMPTY,
             actions,
         })?;
         page.push(&render(super::Announce {

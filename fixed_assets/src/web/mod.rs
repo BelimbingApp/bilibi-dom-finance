@@ -72,40 +72,6 @@ menu!("categories", "Asset categories", 3);
 fn render(t: impl Template) -> Result<Html> {
     Html::render(&t).map_err(|_| Error::Internal)
 }
-
-/// Sidebar pin for a menu page. An asset the page could not load is not pinned.
-pub(super) fn menu_pin(id: &str, nav: &str, page: &str) -> Result<Html> {
-    let label = format!("Pin {page} to sidebar");
-    render(bilibi_ui::IconButton {
-        context: bilibi_ui::IconContext::Inline,
-        id,
-        nav_pin: nav,
-        ..bilibi_ui::IconButton::new("bilimbi-pin", &label)
-    })
-}
-
-pub(super) fn record_pin(id: &str, noun: &str, name: &str, url: &str) -> Result<Html> {
-    let label = format!("Pin this {noun} to sidebar");
-    let pin_label = name.replace('/', " ");
-    render(RecordPin {
-        id,
-        label: &label,
-        pin_label: &pin_label,
-        url,
-    })
-}
-
-#[derive(Template)]
-#[template(
-    source = r#"{% import "components.html" as ui %}{% call ui::icon_button(icon="bilimbi-pin", label=label, context=bilibi_ui::IconContext::Inline, id=id, nav_pin="record", record_label=pin_label, record_url=url) %}{% endcall %}"#,
-    ext = "html"
-)]
-struct RecordPin<'a> {
-    id: &'a str,
-    label: &'a str,
-    pin_label: &'a str,
-    url: &'a str,
-}
 fn company(s: &Scope) -> Option<i64> {
     s.current_company().map(|p| p.get())
 }

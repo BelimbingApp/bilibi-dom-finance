@@ -190,11 +190,7 @@ impl Groups {
         let mut page = render(Header {
             subtitle: &company_name,
             title: Html::text("Account groups"),
-            title_actions: super::menu_pin(
-                "ledger-groups-pin",
-                "nav-finance-ledger-groups",
-                "Account groups",
-            )?,
+            title_actions: bilibi_ui::Html::EMPTY,
             actions,
         })?;
         page.push(&body);

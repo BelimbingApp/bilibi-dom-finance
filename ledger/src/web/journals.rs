@@ -606,11 +606,7 @@ impl Journals {
         let mut page = render(Header {
             title: Html::text("Journals"),
             subtitle: guidance,
-            title_actions: super::menu_pin(
-                "ledger-journals-pin",
-                "nav-finance-ledger-journals",
-                "Journals",
-            )?,
+            title_actions: bilibi_ui::Html::EMPTY,
             actions,
         })?;
         page.push(&body);

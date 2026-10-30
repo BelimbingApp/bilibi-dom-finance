@@ -312,11 +312,7 @@ impl Years {
         let mut page = render(Header {
             title: Html::text("Fiscal years"),
             subtitle: &subtitle,
-            title_actions: super::menu_pin(
-                "ledger-years-pin",
-                "nav-finance-ledger-years",
-                "Fiscal years",
-            )?,
+            title_actions: bilibi_ui::Html::EMPTY,
             actions,
         })?;
         page.push(&body);

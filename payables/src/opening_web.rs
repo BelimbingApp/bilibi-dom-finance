@@ -13,8 +13,8 @@ use bilibi_module_registry::{
 };
 use bilibi_ui::{
     page::*, params, Alert, BuiltinColumn, Button, ButtonVariant, Card, Cell, ErrorSummary, Field,
-    FlashGroup, FlexRow, FlexTable, Form, Header, Html, IconButton, InputKind, ListColumns, Modal,
-    ModalWidth, PageVariant, StatusKind,
+    FlashGroup, FlexRow, FlexTable, Form, Header, Html, InputKind, ListColumns, Modal, ModalWidth,
+    PageVariant, StatusKind,
 };
 
 use serde_json::{json, Value};
@@ -171,10 +171,7 @@ impl Opening {
         let mut page = render(Header {
             title: Html::text(TITLE),
             subtitle: "Reconcile the source register with the current company's approved opening balances.",
-            title_actions: render(IconButton {
-                nav_pin: "nav-finance-payables-opening",
-                ..IconButton::new("bilimbi-pin", "Pin opening records to sidebar")
-            })?,
+            title_actions: bilibi_ui::Html::EMPTY,
             ..Header::default()
         })?;
         let Some(company) = scope.current_company().map(|id| id.get()) else {

@@ -625,12 +625,7 @@ impl Matching {
             Money::display_decimal(items.into_iter().sum(), MinorUnits::new(i64::from(units)))
         };
         View {
-            title_actions: super::record_pin(
-                "bank-matching-pin",
-                "matching page",
-                &format!("{} matching", l.account.name),
-                &format!("/finance/reconciliation/accounts/{}/matching", l.account.id),
-            )?,
+            title_actions: bilibi_ui::Html::EMPTY,
             flash: flash_map(&self.flash),
             account: &l.account,
             can_match: l.can_match,

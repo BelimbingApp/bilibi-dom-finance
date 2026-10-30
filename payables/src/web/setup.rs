@@ -445,11 +445,7 @@ impl Setup {
                 .transpose()
         };
         View {
-            title_actions: super::menu_pin(
-                "payables-setup-pin",
-                "nav-finance-payables-setup",
-                "Payables setup",
-            )?,
+            title_actions: bilibi_ui::Html::EMPTY,
             flash,
             configured: self.settings.is_some(),
             can_manage: self.can_manage,
