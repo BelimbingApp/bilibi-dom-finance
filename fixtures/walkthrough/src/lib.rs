@@ -172,8 +172,55 @@ pub async fn install(db: &Db, services: &Services) -> Result<Installed> {
             )
             .await?;
     }
+    initialize_journal_approvals(db, services, &manager, COMPANY).await?;
     records::install(db).await?;
     Ok(Installed { book, accounts })
+}
+
+/// Explicit disposable setup through Workflow, never a boot-time seed.
+pub async fn initialize_journal_approvals(
+    db: &Db,
+    services: &Services,
+    scope: &Scope,
+    company: i64,
+) -> Result<()> {
+    let engine = services
+        .get::<bilibi_workflow::Engine>(bilibi_workflow::SERVICE)
+        .map_err(Error::from)?;
+    match engine
+        .approval_policy(scope, "finance.ledger.manual_journal", company)
+        .await
+    {
+        Ok(_) => return Ok(()),
+        Err(Error::NotFound) => {}
+        Err(e) => return Err(e.into()),
+    }
+    let ledger = services.get::<Ledger>(SERVICE).map_err(Error::from)?;
+    let mut client = db.get().await.map_err(Error::from)?;
+    let mut tx = ledger
+        .write(
+            &mut client,
+            scope,
+            company,
+            &[bilibi_finance_ledger::MANAGE_DUTY_SEPARATION],
+            "finance.walkthrough.journal_rules",
+        )
+        .await?;
+    engine
+        .publish_approval_policy_in(
+            &mut tx,
+            scope,
+            bilibi_workflow::ApprovalPolicyChange {
+                case: "finance.ledger.manual_journal",
+                company,
+                expected: None,
+                policy: Ledger::journal_approval_policy(),
+                reason: "Walkthrough manual journal approval rules",
+            },
+        )
+        .await?;
+    tx.commit().await?;
+    Ok(())
 }
 
 /// A sealed scope for one fixture account, as a signed-in session would hold.
@@ -206,6 +253,7 @@ macro_rules! walkthrough_ledger_roles {
                     "finance.ledger.duty-separation.manage", "finance.ledger.controlled-bookkeeping.manage",
                     "finance.ledger.late-recordings.review", "finance.ledger.journals.submit",
                     "finance.ledger.journals.approve", "finance.ledger.approval-exceptions.review",
+                    "workflow.approvals.view",
                 ] },
                 $crate::authz::RoleDefinition { code: "staff", name: "staff", description: "Walkthrough fixture role", grant_all: false, capabilities: &[
                     "finance.ledger.view", "finance.ledger.accounts.manage",

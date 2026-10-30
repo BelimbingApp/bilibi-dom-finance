@@ -49,7 +49,7 @@ they govern this code and are not copied here.
 
 - Authorize every facade call inside the facade with
   `bilibi_company::authorize_target` and the scope it was
-  handed, and open every write with `Ledger::write` (the capability, then the
+  handed, and open every transaction it owns with `Ledger::write` (the capability, then the
   audited `MutationBoundary` transaction holding
   `bilibi_company::require_writable(.., lock = true)`), never a bare
   `client.transaction()`: the boundary is what records every affected row as a
@@ -171,7 +171,7 @@ they govern this code and are not copied here.
   inside the ledger read it through `periods::state` and record each override
   of a control (a reopen, controlled bookkeeping off) with
   `duties::record_override` in the same write.
-- Ask `Ledger::check_approval` on your own `MutationTransaction` before every
+- For Finance consumers not yet converted to Workflow, ask `Ledger::check_approval` on your own `MutationTransaction` before every
   approval you record, with everyone whose work it approves in `prepared_by`
   and an `override_reason` for an override; never compare actor ids yourself:
   the ledger counts impersonation both ways, records the exception an

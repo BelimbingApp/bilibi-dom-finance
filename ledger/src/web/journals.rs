@@ -321,7 +321,7 @@ impl Draft {
                         return Err(format!(
                             "Line {} has an amount the book cannot hold. Correct it first.",
                             i + 1
-                        ))
+                        ));
                     }
                 }
             }
@@ -533,7 +533,8 @@ impl Journals {
         let mut body = Html::EMPTY;
         let mut actions = Html::EMPTY;
         let mut shown = 0;
-        let mut guidance = "Submission does not post a journal. Approval is required.";
+        let guidance =
+            "A submitted journal waits for the approvals required by the company’s journal rules.";
         if Pages::company(scope).is_none() {
             body.push(&no_company("ledger-journals-no-company")?);
         } else {
@@ -543,40 +544,28 @@ impl Journals {
                     "manual journals",
                     &refused,
                 )?),
-                Ok(state) => {
-                    let required = state
-                        .duty_separation
-                        .as_ref()
-                        .and_then(|c| c.required)
-                        .unwrap_or(true);
-                    guidance = if required {
-                        "Submission does not post a journal. Someone else must approve it."
-                    } else {
-                        "Submission does not post a journal. An authorized person may approve their own journal; this records an approval exception."
-                    };
-                    match state.book {
-                        None => body.push(&render(
-                            EmptyState::missing(
-                                "The book is not open yet",
-                                "Open the company's book before you submit a journal.",
-                            )
-                            .id("ledger-journals-no-book"),
-                        )?),
-                        Some(book) => {
-                            if can_submit {
-                                actions.push(&render(CreateButton {
-                                    noun: "Journal",
-                                    id: "ledger-journal-new",
-                                    class: "text-xs",
-                                    event: "new",
-                                    button_type: "button",
-                                    ..CreateButton::default()
-                                })?);
-                            }
-                            shown = self.table(scope, book.minor_units, &mut body).await?;
+                Ok(state) => match state.book {
+                    None => body.push(&render(
+                        EmptyState::missing(
+                            "The book is not open yet",
+                            "Open the company's book before you submit a journal.",
+                        )
+                        .id("ledger-journals-no-book"),
+                    )?),
+                    Some(book) => {
+                        if can_submit {
+                            actions.push(&render(CreateButton {
+                                noun: "Journal",
+                                id: "ledger-journal-new",
+                                class: "text-xs",
+                                event: "new",
+                                button_type: "button",
+                                ..CreateButton::default()
+                            })?);
                         }
+                        shown = self.table(scope, book.minor_units, &mut body).await?;
                     }
-                }
+                },
             }
         }
         let mut page = render(Header {

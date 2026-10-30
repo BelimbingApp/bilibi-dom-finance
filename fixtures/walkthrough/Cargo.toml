@@ -89,3 +89,12 @@ path = "src/bin/payroll-source.rs"
 # Company setup proof uses Core currency defaults through the owning facade.
 [dependencies.bilibi-currency]
 workspace = true
+
+# Manual journals use Workflow's shared approval gate.
+[dependencies.bilibi-workflow]
+workspace = true
+
+# Shared manual journal approvals: facade, plan and browser proof.
+[[bin]]
+name = "approval-journals"
+path = "src/bin/approval-journals.rs"

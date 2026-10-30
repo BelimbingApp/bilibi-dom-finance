@@ -300,28 +300,62 @@ impl Write {
     }
     fn consequence(self) -> &'static str {
         match self {
-            Self::OpenBook => "Open the book once; currency and minor units are permanent. Controlled bookkeeping starts on.",
+            Self::OpenBook => {
+                "Open the book once; currency and minor units are permanent. Controlled bookkeeping starts on."
+            }
             Self::CreateAccount => "Create an account; its code and account type are permanent.",
-            Self::UpdateAccount => "Change the account; deactivation requires a zero balance. A new retained-earnings designation releases the previous one.",
-            Self::Opening => "Submit opening balances for approval; no entry posts yet. With replaces_journal_id, withdraw your waiting opening journal and submit this correction in its place. Open operational items and historical transactions are excluded.",
-            Self::CreateGroup => "Create an account group; it takes no postings and shows the total of what is under it. Its code and account type are permanent.",
-            Self::UpdateGroup => "Change the account group's name or the group it sits in; its code and account type are permanent.",
-            Self::SaveTemplate => "Publish an immutable snapshot of the current company chart for reuse within this tenant. No balances or settings are copied. Review every row before saving.",
-            Self::ProposeTemplate => "Set or clear the starter chart proposed for new books in this tenant. Existing books and accounts are unchanged; application always needs its own review.",
-            Self::ApplyTemplate => "Create this starter chart's core groups and accounts, and those of the optional sections chosen, in an empty chart. Sections not chosen are not created. They become the company's own, with no link to the template. A chart that already has accounts is never changed.",
+            Self::UpdateAccount => {
+                "Change the account; deactivation requires a zero balance. A new retained-earnings designation releases the previous one."
+            }
+            Self::Opening => {
+                "Submit opening balances for approval; no entry posts yet. With replaces_journal_id, withdraw your waiting opening journal and submit this correction in its place. Open operational items and historical transactions are excluded."
+            }
+            Self::CreateGroup => {
+                "Create an account group; it takes no postings and shows the total of what is under it. Its code and account type are permanent."
+            }
+            Self::UpdateGroup => {
+                "Change the account group's name or the group it sits in; its code and account type are permanent."
+            }
+            Self::SaveTemplate => {
+                "Publish an immutable snapshot of the current company chart for reuse within this tenant. No balances or settings are copied. Review every row before saving."
+            }
+            Self::ProposeTemplate => {
+                "Set or clear the starter chart proposed for new books in this tenant. Existing books and accounts are unchanged; application always needs its own review."
+            }
+            Self::ApplyTemplate => {
+                "Create this starter chart's core groups and accounts, and those of the optional sections chosen, in an empty chart. Sections not chosen are not created. They become the company's own, with no link to the template. A chart that already has accounts is never changed."
+            }
             Self::Submit => "Submit a manual journal for approval; no entry posts yet.",
-            Self::Approve => "Approve the journal and post its immutable entry; separation of duties still applies.",
+            Self::Approve => {
+                "Record an eligible approval under the journal rules. The final required approval posts the immutable entry."
+            }
             Self::Reject => "Reject the journal permanently with this reason; no entry posts.",
-            Self::Withdraw => "Withdraw your submitted journal before it is approved; it stays on record, can no longer be approved, and no entry posts.",
-            Self::Replace => "Withdraw your submitted journal and submit the corrected one in its place; the correction needs its own approval and no entry posts.",
-            Self::Reverse => "Post one mirror entry on the chosen date; the original remains. Owned and closing entries cannot use this action.",
-            Self::OpenYear => "Open the next fiscal year and its monthly periods; dates must be contiguous with the previous year.",
+            Self::Withdraw => {
+                "Withdraw your submitted journal before it is approved; it stays on record, can no longer be approved, and no entry posts."
+            }
+            Self::Replace => {
+                "Withdraw your submitted journal and submit the corrected one in its place; the correction needs its own approval and no entry posts."
+            }
+            Self::Reverse => {
+                "Post one mirror entry on the chosen date; the original remains. Owned and closing entries cannot use this action."
+            }
+            Self::OpenYear => {
+                "Open the next fiscal year and its monthly periods; dates must be contiguous with the previous year."
+            }
             Self::ClosePeriod => "Close the period to posting until a privileged reopening.",
-            Self::ReopenPeriod => "Reopen the period to posting and record the control override with its reason.",
+            Self::ReopenPeriod => {
+                "Reopen the period to posting and record the control override with its reason."
+            }
             Self::LockPeriod => "Lock the closed period permanently; it can never reopen.",
-            Self::CloseYear => "Close the fiscal year and its open periods; post the computed year-end entry to the designated retained-earnings account, if needed.",
-            Self::ReopenYear => "Reopen the year and only its last period; reverse its closing entry at year-end and record the control override.",
-            Self::LockYear => "Lock every remaining closed period of this closed fiscal year permanently; the year can never reopen.",
+            Self::CloseYear => {
+                "Close the fiscal year and its open periods; post the computed year-end entry to the designated retained-earnings account, if needed."
+            }
+            Self::ReopenYear => {
+                "Reopen the year and only its last period; reverse its closing entry at year-end and record the control override."
+            }
+            Self::LockYear => {
+                "Lock every remaining closed period of this closed fiscal year permanently; the year can never reopen."
+            }
         }
     }
     async fn review(
@@ -479,6 +513,15 @@ impl Write {
                 json!({"template":{"key":preview.template.key,"name":preview.template.name,"review":preview.template.review,"notes":preview.template.notes},"sections":offered,"groups":groups,"accounts":preview.template.rows.len() - groups,"rows":preview.template.rows})
             }
             Self::Submit | Self::Approve | Self::Reject | Self::Withdraw | Self::Replace => {
+                let journal_policy = if matches!(self, Self::Submit | Self::Replace) {
+                    let sql = tx
+                        .map(|t| t.sql())
+                        .or_else(|| client.transaction())
+                        .ok_or(Error::Internal)?;
+                    Some(journal_approvals::submission_policy(sql, scope, company).await?)
+                } else {
+                    None
+                };
                 let current = if matches!(self, Self::Submit) {
                     None
                 } else if matches!(self, Self::Withdraw | Self::Replace) {
@@ -492,6 +535,26 @@ impl Write {
                             .await?,
                     )
                 };
+                let approval = if matches!(self, Self::Approve | Self::Reject) {
+                    let sql = tx
+                        .map(|t| t.sql())
+                        .or_else(|| client.transaction())
+                        .ok_or(Error::Internal)?;
+                    Some(
+                        journal_approvals::preview(sql, scope, company, id(input, "journal_id")?)
+                            .await?,
+                    )
+                } else {
+                    None
+                };
+                if let Some(item) = &approval {
+                    if item.seats.len() != 1
+                        || item.request.stages.len() != 1
+                        || (matches!(self, Self::Approve) && item.approval_reason_required)
+                    {
+                        return Err(LedgerError::ApprovalRefused("Decide this journal from Waiting for my approval, where its step, seat and required reason are explicit.".into()));
+                    }
+                }
                 if matches!(self, Self::Replace) {
                     opening::refuse_manual_replacement(
                         client,
@@ -508,25 +571,11 @@ impl Write {
                 if matches!(self, Self::Reject) {
                     let reason = journals::validate_reason(text(input, "reason")?)
                         .map_err(LedgerError::Invalid)?;
-                    json!({"before":current,"status":"rejected","reason":reason})
+                    json!({"before":current,"status":"rejected","reason":reason,"approval":approval})
                 } else if matches!(self, Self::Withdraw) {
                     json!({"before":current,"status":"withdrawn","reason":opt_text(input, "reason"),"posts":false})
                 } else {
                     let book = book.as_ref().ok_or(LedgerError::BookNotOpen)?;
-                    let exception =
-                        if let (Some(journal), true) = (&current, matches!(self, Self::Approve)) {
-                            duties::decide(
-                                client,
-                                tenant,
-                                company,
-                                people(scope),
-                                &journals::approval(journal),
-                            )
-                            .await?
-                            .is_some()
-                        } else {
-                            false
-                        };
                     let new = match &current {
                         Some(journal) if matches!(self, Self::Approve) => journals::entry(journal),
                         _ => new_entry(input, book.minor_units)?,
@@ -542,7 +591,7 @@ impl Write {
                     )
                     .await?
                     .map_err(LedgerError::Invalid)?;
-                    json!({"before":current,"entry":valid,"posts":matches!(self,Self::Approve),"withdraws":matches!(self,Self::Replace),"approval_exception":exception,"accounts":accounts::list(client,tenant,company).await?,"periods":periods::state(client,tenant,company).await?.years,"duty_separation":duties::latest_change(client,tenant,company).await?})
+                    json!({"before":current,"entry":valid,"posts_when_approval_complete":matches!(self,Self::Approve),"withdraws":matches!(self,Self::Replace),"approval":approval,"journal_policy":journal_policy,"accounts":accounts::list(client,tenant,company).await?,"periods":periods::state(client,tenant,company).await?.years})
                 }
             }
             Self::Reverse => {
@@ -1588,7 +1637,7 @@ inventory::submit! { Contribution::new(DEFINITIONS,"finance/ledger.operations",P
         Operation {key:"finance.ledger.chart_template.apply",title:"Apply a starter chart",summary:"Create a starter chart's core groups and accounts, and those of the optional `sections` chosen, in a company whose chart is empty. Optional `sections` choose the conditional parts, none by default; sections not chosen are not created. The review lists every row; a chart that already has accounts or groups is refused and never changed.",keywords:&[],capability:MANAGE_ACCOUNTS,input:template_schema,output,handler:Handler::SafeWrite(&Write::ApplyTemplate),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.opening_balances.submit",title:"Submit opening balances",summary:"Map a source closing trial balance CSV to existing accounts, preview balanced opening amounts and retain source evidence in one approval journal. Identical source retries return the recorded journal; replaces_journal_id corrects your waiting opening journal; open items and history are excluded.",keywords:&["conversion", "opening balances", "CSV"],capability:SUBMIT_JOURNALS,input:opening_schema,output,handler:Handler::SafeWrite(&Write::Opening),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.journal.submit",title:"Submit a journal",summary:"Keep balanced manual lines for approval without posting an entry.",keywords:&[],capability:SUBMIT_JOURNALS,input:submit_schema,output,handler:Handler::SafeWrite(&Write::Submit),channels:Channels::Every,step_up:&[]},
-        Operation {key:"finance.ledger.journal.approve",title:"Approve a journal",summary:"Approve and post atomically; recheck accounts, period and separation of duties.",keywords:&[],capability:APPROVE_JOURNALS,input:journal_schema,output,handler:Handler::SafeWrite(&Write::Approve),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.ledger.journal.approve",title:"Approve a journal",summary:"Record the next eligible approval through Workflow; the final required approval rechecks accounts and period, then posts atomically.",keywords:&[],capability:APPROVE_JOURNALS,input:journal_schema,output,handler:Handler::SafeWrite(&Write::Approve),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.journal.withdraw",title:"Withdraw a journal",summary:"Take back your own submitted journal before approval; it stays on record and no entry posts.",keywords:&[],capability:SUBMIT_JOURNALS,input:withdraw_schema,output,handler:Handler::SafeWrite(&Write::Withdraw),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.journal.replace",title:"Replace a journal",summary:"Withdraw your submitted journal and submit its correction, which needs its own approval.",keywords:&[],capability:SUBMIT_JOURNALS,input:replace_schema,output,handler:Handler::SafeWrite(&Write::Replace),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.journal.reject",title:"Reject a journal",summary:"Record a permanent rejection with a reason and no posting.",keywords:&[],capability:APPROVE_JOURNALS,input:reject_schema,output,handler:Handler::SafeWrite(&Write::Reject),channels:Channels::Every,step_up:&[]},

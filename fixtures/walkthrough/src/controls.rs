@@ -750,6 +750,9 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
             .await
             .map(|j| journal(&j)),
     );
+    ledger
+        .reject_journal(&admin, COMPANY, rejected.id, "Duplicate of journal 1")
+        .await?;
     let accrual = ledger
         .post_entry(
             &manager,
@@ -857,7 +860,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
             .await,
     );
     show(
-        "manager approves the journal admin submitted while impersonating the manager",
+        "legacy Finance separation off does not relax the journal Workflow policy",
         ledger
             .approve_journal(&manager, COMPANY, impersonated.id)
             .await
@@ -988,7 +991,6 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
             .ok_or("an exception of that kind")
     };
     let reopen = find("period_reopen", false)?;
-    let journal_exception = find("journal_approval", true)?;
     let own_record = find("record_approval", true)?;
     show(
         "unreviewed exceptions, one at a time after the first",
@@ -1045,13 +1047,6 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         "manager reviews the reopen of January, which the manager made",
         ledger
             .review_approval_exception(&manager, COMPANY, reopen, Some("Fine"))
-            .await
-            .map(|x| exception(&x)),
-    );
-    show(
-        "admin reviews the journal approval admin prepared as the manager",
-        ledger
-            .review_approval_exception(&admin, COMPANY, journal_exception, None)
             .await
             .map(|x| exception(&x)),
     );
@@ -1310,8 +1305,12 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         println!(
             "approval against {label} (approval asked {}): approval {}, {label} {}; the journal is {} with entry {:?}",
             if approve_first { "first" } else { "second" },
-            approval.as_ref().map_or_else(|e| format!("refused ({e})"), |_| "won".into()),
-            correction.as_ref().map_or_else(|e| format!("refused ({e})"), |_| "won".into()),
+            approval
+                .as_ref()
+                .map_or_else(|e| format!("refused ({e})"), |_| "won".into()),
+            correction
+                .as_ref()
+                .map_or_else(|e| format!("refused ({e})"), |_| "won".into()),
             settled.status.as_str(),
             settled.decision.as_ref().and_then(|d| d.entry_id),
         );
@@ -1479,7 +1478,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
     .await;
     raw(
         &client,
-        "the submitter approves a journal with no exception",
+        "write a journal decision without its Workflow approval round",
         &format!(
             "BEGIN; \
              WITH j AS (INSERT INTO finance_ledger_journals(tenant_id,company_id,journal_number,entry_date,description,currency_code,submitted_by_user_id,submitted_at) \
@@ -1524,7 +1523,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         "the approver reviews an exception",
         &format!(
             "INSERT INTO finance_ledger_approval_exception_reviews(tenant_id,company_id,exception_id,reviewed_by_user_id,reviewed_at) \
-             VALUES(1,1,{journal_exception},1,NULL)"
+             VALUES(1,1,{own_record},1,NULL)"
         ),
     )
     .await;

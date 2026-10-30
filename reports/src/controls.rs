@@ -23,12 +23,13 @@ use bilibi_ui::{
     ListState, Modal, RowMode, SectionHeading, StatusKind, Tab, Tabs, NO_FLASH,
 };
 use jiff::{civil::Date, Timestamp};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::{collections::HashMap, sync::Arc};
 
 #[derive(Clone)]
 pub(crate) struct Pages {
     pub reports: Arc<Reports>,
+    pub contracts: Arc<bilibi_agent_api::page::PageContracts>,
     pub display: Arc<DisplayPolicy>,
     pub locales: Arc<Locales>,
 }
@@ -44,6 +45,7 @@ enum Dialog {
 struct State {
     pages: Pages,
     bookkeeping: bool,
+    framed: bool,
     list: ListState,
     columns: Vec<ListColumns>,
     browser_zone: Option<String>,
@@ -55,7 +57,12 @@ struct State {
 }
 
 impl State {
-    fn new(pages: Pages, operation: &str, query: &HashMap<String, String>) -> Result<Self> {
+    fn new(
+        pages: Pages,
+        operation: &str,
+        query: &HashMap<String, String>,
+        framed: bool,
+    ) -> Result<Self> {
         let bookkeeping = match operation {
             "bookkeeping" => true,
             "approval-exceptions" => false,
@@ -72,6 +79,10 @@ impl State {
             Filter::one_of(&["all", "pending", "reviewed"], "all"),
         );
         spec.filters.insert("after".into(), Filter::string(""));
+        spec.filters.insert(
+            "area".into(),
+            Filter::one_of(&["journals", "other"], "journals"),
+        );
         if bookkeeping {
             spec.filters.insert(
                 "status".into(),
@@ -147,7 +158,7 @@ impl State {
                 ),
             ]
         };
-        let columns = tables
+        let mut columns: Vec<ListColumns> = tables
             .iter()
             .map(|(id, fields)| {
                 ListColumns::mount(
@@ -160,9 +171,25 @@ impl State {
                 .map_err(|_| Error::Internal)
             })
             .collect::<Result<_>>()?;
+        if !bookkeeping {
+            columns.push(
+                ListColumns::mount(
+                    "journal-approval-exceptions",
+                    vec![
+                        BuiltinColumn::new("when", "When"),
+                        BuiltinColumn::new("subject", "Journal"),
+                        BuiltinColumn::new("who", "Approved by"),
+                        BuiltinColumn::new("reason", "Reason"),
+                        BuiltinColumn::new("review", "Review"),
+                    ],
+                )
+                .map_err(|_| Error::Internal)?,
+            );
+        }
         Ok(Self {
             pages,
             bookkeeping,
+            framed,
             list: ListState::parse(query, spec.shared().map_err(|_| Error::Internal)?)
                 .map_err(|_| Error::Invalid)?,
             columns,
@@ -755,9 +782,18 @@ impl State {
                 .collect::<Result<_>>()?;
             content.push(&self.table(0, rows, "Changes to controlled bookkeeping", None)?);
         }
-        let mut parts = vec![section("controlled-bookkeeping", "Controlled bookkeeping", "When enabled, entries can be posted only to open fiscal periods. Open a fiscal year before posting to its periods. Late entries can still be posted to an open period.", content, false)?];
+        let mut parts = vec![section(
+            "controlled-bookkeeping",
+            "Controlled bookkeeping",
+            "When enabled, entries can be posted only to open fiscal periods. Open a fiscal year before posting to its periods. Late entries can still be posted to an open period.",
+            content,
+            false,
+        )?];
         let thresholds = bilibi_finance_ledger::Ledger::late_recording_thresholds();
-        let description = format!("An entry is listed once it is recorded {} or more days after its transaction date, and is late past {} days. Each late entry needs a reason from an independent reviewer, someone who did not post it. The days are whole days from the transaction date to the day it was recorded.", thresholds.approaching_days, thresholds.late_days);
+        let description = format!(
+            "An entry is listed once it is recorded {} or more days after its transaction date, and is late past {} days. Each late entry needs a reason from an independent reviewer, someone who did not post it. The days are whole days from the transaction date to the day it was recorded.",
+            thresholds.approaching_days, thresholds.late_days
+        );
         let mut filters = self.tabs(
             "late-recordings-status",
             "Lateness",
@@ -888,6 +924,9 @@ impl State {
         scope: &Scope,
         display: &DisplayContext,
     ) -> std::result::Result<Vec<Html>, LedgerError> {
+        if self.filter("area") == "journals" {
+            return self.journal_exception_parts(scope, display).await;
+        }
         let ledger = self.pages.reports.ledger.clone();
         let company = company(scope)?;
         let clock = self.sync_period(display);
@@ -977,7 +1016,16 @@ impl State {
                 .collect::<Result<_>>()?;
             content.push(&self.table(0, rows, "Changes to separation of duties", None)?);
         }
-        let mut parts = vec![section("duty-separation", "Separation of duties", "When required, a person cannot approve, post or finalise a record they prepared, including while impersonating another person. When turned off, same-person approvals are recorded below for independent review.", content, false)?];
+        let mut parts = vec![self.tabs(
+            "approval-areas",
+            "Approval area",
+            "area",
+            &[
+                ("journals", "Manual journals"),
+                ("other", "Other Finance approvals"),
+            ],
+        )?];
+        parts.push(section("duty-separation", "Other Finance approvals", "This control applies to the other Finance approvals. Manual journals follow their rules on Approval rules.",content,false)?);
         let mut filters = html(self.period.as_ref().expect("period initialized"))?;
         filters.push(&self.tabs(
             "exceptions-review",
@@ -1091,6 +1139,136 @@ impl State {
         }
         Ok(parts)
     }
+    async fn journal_exception_parts(
+        &mut self,
+        scope: &Scope,
+        display: &DisplayContext,
+    ) -> std::result::Result<Vec<Html>, LedgerError> {
+        let company = company(scope)?;
+        let mut parts = vec![self.tabs(
+            "approval-areas",
+            "Approval area",
+            "area",
+            &[
+                ("journals", "Manual journals"),
+                ("other", "Other Finance approvals"),
+            ],
+        )?];
+        let mut links = html(bilibi_ui::ActionLink {
+            id: "journal-approval-rules",
+            href: &format!(
+                "/workflow/approval-rules?case=finance.ledger.manual_journal&company={company}"
+            ),
+            body: Html::text("Journal approval rules"),
+            ..bilibi_ui::ActionLink::default()
+        })?;
+        links.push(&html(bilibi_ui::ActionLink {
+            id: "journal-approval-waiting",
+            href: "/workflow/approvals",
+            body: Html::text("Waiting for my approval"),
+            ..bilibi_ui::ActionLink::default()
+        })?);
+        parts.push(section("journal-approval-controls","Journal approvals","Journal rules decide who may approve. Approvals by the person who prepared a journal are kept here for independent review.",links,false)?);
+        let envelope=match self.pages.contracts.read(scope,"base.workflow.approvals.exceptions",&json!({"company":company,"case":"finance.ledger.manual_journal","after":self.after().unwrap_or(0),"page_size":100,"unreviewed":self.filter("review")=="pending"})).await {
+            Ok(value)=>value,
+            Err(error)=>{parts.push(html(Alert {id:"journal-exceptions-refused",kind:StatusKind::Error,body:Html::text(match error {bilibi_agent_api::Error::Forbidden=>"Your role does not allow you to read approval exceptions.",_=>"The journal approval exceptions could not be read. Reload the page and try again."}),..Alert::default()})?);return Ok(parts);}
+        };
+        parts.push(self.tabs(
+            "journal-exceptions-review",
+            "Review status",
+            "review",
+            &[
+                ("all", "All"),
+                ("pending", "Not reviewed"),
+                ("reviewed", "Reviewed"),
+            ],
+        )?);
+        let result = &envelope["result"];
+        let entries = result["entries"].as_array().ok_or(Error::Internal)?;
+        let mut rows = Vec::new();
+        for e in entries {
+            if self.filter("review") == "reviewed" && e["reviewed"] != true {
+                continue;
+            }
+            let id = e["id"].as_i64().ok_or(Error::Internal)?;
+            let label = e["label"].as_str().unwrap_or("Journal");
+            let url = e["owner_url"]
+                .as_str()
+                .unwrap_or("/finance/ledger/journals");
+            let review = if e["reviewed"] == true {
+                let by = e["reviewer"].as_i64();
+                Html::text(&format!(
+                    "Reviewed by {}. {}",
+                    actor(by, None),
+                    e["review_note"].as_str().unwrap_or("")
+                ))
+            } else if e["reviewable"] == true {
+                html(bilibi_ui::ActionLink {
+                    id: &format!("journal-exception-review-{id}"),
+                    href: &format!(
+                        "/workflow/approval-exceptions?case=finance.ledger.manual_journal&company={company}&cursor={}",
+                        id - 1
+                    ),
+                    body: Html::text("Record review"),
+                    ..bilibi_ui::ActionLink::default()
+                })?
+            } else {
+                Html::text("Waiting for an independent review")
+            };
+            let stamp = e["created_at"]
+                .as_str()
+                .and_then(|s| s.parse::<Timestamp>().ok())
+                .ok_or(Error::Internal)?;
+            rows.push(
+                FlexRow::new(id.to_string())
+                    .slot(
+                        "when",
+                        datetime(display, stamp, &format!("journal-exception-at-{id}"))?,
+                    )
+                    .slot(
+                        "subject",
+                        html(bilibi_ui::lists::RecordLink {
+                            workspace: self.framed,
+                            kind: bilibi_finance_ledger::MODULE,
+                            record_id: &format!(
+                                "journal-{}",
+                                e["subject_id"].as_i64().ok_or(Error::Internal)?
+                            ),
+                            href: url,
+                            class: "",
+                            body: Html::text(label),
+                        })?,
+                    )
+                    .cell(
+                        "who",
+                        bilibi_ui::Cell::text(actor(
+                            e["actor"].as_i64(),
+                            e["impersonator"].as_i64(),
+                        )),
+                    )
+                    .cell(
+                        "reason",
+                        bilibi_ui::Cell::text(e["reason"].as_str().unwrap_or("")),
+                    )
+                    .slot("review", review),
+            );
+        }
+        parts.push(self.table(
+            2,
+            rows,
+            "Manual journal approval exceptions",
+            Some((
+                "journal-exceptions-empty",
+                "No journal approval exceptions",
+                "Approvals by the person who prepared a journal appear here.",
+            )),
+        )?);
+        if let Some(next) = result["next_cursor"].as_i64() {
+            parts.push(self.next("journal-exceptions-next", next, "Later exceptions")?);
+        }
+        Ok(parts)
+    }
+
     fn tabs(&self, id: &str, label: &str, key: &str, choices: &[(&str, &str)]) -> Result<Html> {
         let links: Vec<_> = choices
             .iter()
@@ -1143,14 +1321,75 @@ impl State {
         let Some(dialog) = self.dialog else {
             return Ok(Html::default());
         };
-        let (prefix, title, description, submit, label, working, variant, field_label, required) = match dialog {
-            Dialog::ControlledOff => ("controlled-off", "Turn off controlled bookkeeping", "Entries may then post into a date no fiscal period covers, after the last year. The change is listed in the approval exceptions for an independent reviewer, with this reason.", "turn_off", "Turn off", "Saving…", ButtonVariant::Danger, "Reason (1 to 500 characters)", true),
-            Dialog::FiscalYear => ("fiscal-year", "Open a fiscal year", "A fiscal year is divided into monthly periods, which are open until they are closed. The first year may start on any month; each later year starts the day after the previous one ends. Leave the end date blank for twelve months.", "open_fiscal_year", "Open fiscal year", "Opening…", ButtonVariant::Primary, "", false),
-            Dialog::Separation { required: false } => ("duty-separation", "Turn separation of duties off", "Whoever prepares a record may then approve it. Each such approval is listed here with this reason, for someone independent to review.", "change_separation", "Turn off", "Saving…", ButtonVariant::Primary, "Reason (1 to 500 characters)", true),
-            Dialog::Separation { required: true } => ("duty-separation", "Require separation of duties again", "Nobody may then approve, post, or finalise a record they prepared.", "change_separation", "Require again", "Saving…", ButtonVariant::Primary, "Reason (optional)", false),
-            Dialog::Review { .. } if self.bookkeeping => ("late-review", "Record your review", "Your review is kept with your name and the time; it cannot be changed. You cannot review an entry you posted.", "review", "Record review", "Recording…", ButtonVariant::Primary, "Why it was recorded late (1 to 500 characters)", true),
-            Dialog::Review { .. } => ("exception-review", "Record your review", "Your review is kept with your name and the time; it cannot be changed. You cannot review an approval you made or a record you prepared.", "review", "Record review", "Recording…", ButtonVariant::Primary, "Note (optional, up to 500 characters)", false),
-        };
+        let (prefix, title, description, submit, label, working, variant, field_label, required) =
+            match dialog {
+                Dialog::ControlledOff => (
+                    "controlled-off",
+                    "Turn off controlled bookkeeping",
+                    "Entries may then post into a date no fiscal period covers, after the last year. The change is listed in the approval exceptions for an independent reviewer, with this reason.",
+                    "turn_off",
+                    "Turn off",
+                    "Saving…",
+                    ButtonVariant::Danger,
+                    "Reason (1 to 500 characters)",
+                    true,
+                ),
+                Dialog::FiscalYear => (
+                    "fiscal-year",
+                    "Open a fiscal year",
+                    "A fiscal year is divided into monthly periods, which are open until they are closed. The first year may start on any month; each later year starts the day after the previous one ends. Leave the end date blank for twelve months.",
+                    "open_fiscal_year",
+                    "Open fiscal year",
+                    "Opening…",
+                    ButtonVariant::Primary,
+                    "",
+                    false,
+                ),
+                Dialog::Separation { required: false } => (
+                    "duty-separation",
+                    "Turn separation of duties off",
+                    "Whoever prepares a record may then approve it. Each such approval is listed here with this reason, for someone independent to review.",
+                    "change_separation",
+                    "Turn off",
+                    "Saving…",
+                    ButtonVariant::Primary,
+                    "Reason (1 to 500 characters)",
+                    true,
+                ),
+                Dialog::Separation { required: true } => (
+                    "duty-separation",
+                    "Require separation of duties again",
+                    "Nobody may then approve, post, or finalise a record they prepared.",
+                    "change_separation",
+                    "Require again",
+                    "Saving…",
+                    ButtonVariant::Primary,
+                    "Reason (optional)",
+                    false,
+                ),
+                Dialog::Review { .. } if self.bookkeeping => (
+                    "late-review",
+                    "Record your review",
+                    "Your review is kept with your name and the time; it cannot be changed. You cannot review an entry you posted.",
+                    "review",
+                    "Record review",
+                    "Recording…",
+                    ButtonVariant::Primary,
+                    "Why it was recorded late (1 to 500 characters)",
+                    true,
+                ),
+                Dialog::Review { .. } => (
+                    "exception-review",
+                    "Record your review",
+                    "Your review is kept with your name and the time; it cannot be changed. You cannot review an approval you made or a record you prepared.",
+                    "review",
+                    "Record review",
+                    "Recording…",
+                    ButtonVariant::Primary,
+                    "Note (optional, up to 500 characters)",
+                    false,
+                ),
+            };
         let fields = if matches!(dialog, Dialog::FiscalYear) {
             vec![
                 Field::in_form("dialog", "start_date")
@@ -1439,7 +1678,12 @@ impl Page<Scope, Error> for Pages {
     }
     fn render<'a>(&'a self, request: PageRequest<'a, Scope>) -> PageFuture<'a, Error> {
         Box::pin(async move {
-            let mut state = State::new(self.clone(), request.operation, request.query)?;
+            let mut state = State::new(
+                self.clone(),
+                request.operation,
+                request.query,
+                request.framed,
+            )?;
             Ok(PageBody {
                 html: state
                     .render(request.scope.ok_or(Error::Unauthorized)?)
@@ -1451,8 +1695,12 @@ impl Page<Scope, Error> for Pages {
     }
     fn mount<'a>(&'a self, request: PageRequest<'a, Scope>) -> MountFuture<'a, Scope, Error> {
         Box::pin(async move {
-            let state: Box<dyn LiveState<Scope, Error>> =
-                Box::new(State::new(self.clone(), request.operation, request.query)?);
+            let state: Box<dyn LiveState<Scope, Error>> = Box::new(State::new(
+                self.clone(),
+                request.operation,
+                request.query,
+                request.framed,
+            )?);
             Ok(Some(state))
         })
     }
