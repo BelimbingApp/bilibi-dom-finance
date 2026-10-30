@@ -9,6 +9,7 @@ they govern this code and are not copied here.
 
 ## Shape of the Domain
 
+- **No production users yet (until 2027-01-01).** Never build data imports, backfills, conversion of existing rows, or compatibility tables, columns or code paths; replace or drop them in a new migration. Development and walkthrough databases are disposable. After 2027-01-01 this rule no longer applies: ask the owner whether to extend it before relying on it.
 - Keep each module deep behind one small facade (`ledger/src/lib.rs`'s
   `Ledger` and its record types), and keep its schema, SQL, validation and
   helpers private (`mod`, `pub(crate)`), not `pub`: a sibling that reaches a
