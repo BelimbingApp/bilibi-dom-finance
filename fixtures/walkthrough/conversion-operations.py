@@ -144,7 +144,7 @@ for module,values in inputs.items():
     key=f"finance.{module}.opening.import"
     record=write(channel,key,company,**values)
     require(write(channel,key,company,**values)["id"]==record["id"],"identical import retry duplicated batch")
-    refused(channel,key,company,"already",who="approver",**(values|{"source_reference":"RENAMED"}))
+    refused(channel,key,company,"current register",who="approver",**(values|{"source_reference":"RENAMED"}))
 require(read(channel,"finance.ledger.trial_balance.get",company,"approver",as_of="2026-07-01")==trial,"imports changed ledger balances")
 for module,expected in [("receivables","3000"),("payables","1500")]:
     report=read(channel,f"finance.{module}.aging.get",company,"approver",as_of="2026-07-01",through_entry_number=trial["through_entry_number"])

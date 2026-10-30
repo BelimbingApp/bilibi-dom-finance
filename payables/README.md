@@ -99,7 +99,7 @@ Bilimbi recorded documents, payments and settings through its API, so these page
 
 The recording forms keep their draft on the server and send every field as `bill[...]` (a line's are `bill[line_<id>_...]`), because `params::form_values` stops at 64 fields. Totals are worked out on the page with the facade's rules (tax rounded half up once per code) for display only; the saved draft has the facade's own. An amount, date or account the contract refuses is shown on its field and in the summary in the contract's words. Lines are limited to 100 here (the contract allows 500).
 
-## Source documents and later slices
+## Source documents
 
 The contributed `finance/payables/document` source reads on the connection Attachments hands it and reauthorizes `finance.payables.view`. It labels a posted document by number and a draft by record ID. Attachments remain replaceable/removable only while the document is a draft. Dates cannot change after recording, so no retention refresh is needed at approval.
 
