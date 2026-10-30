@@ -525,7 +525,9 @@ pub(crate) async fn page(
     let select: Vec<String> = fields
         .iter()
         .map(|field| {
-            if dataset == "vendor" && matches!(*field, "code" | "name") {
+            if (dataset == "vendor" && matches!(*field, "code" | "name"))
+                || (matches!(dataset, "payment" | "payment_request") && *field == "party_code")
+            {
                 format!("NULL::text AS {field}")
             } else {
                 column(field)
@@ -593,6 +595,21 @@ impl Payables {
                     .await?;
                 row["code"] = serde_json::json!(vendor.code);
                 row["name"] = serde_json::json!(vendor.party.name);
+            }
+        }
+        if matches!(dataset, "payment" | "payment_request") {
+            for row in &mut page.rows {
+                let id = row["id"].as_i64().ok_or(Error::Internal)?;
+                let code = if dataset == "payment" {
+                    crate::payments::payment(c, s.tenant(), company, id)
+                        .await?
+                        .party_code
+                } else {
+                    crate::payments::request(c, s.tenant(), company, id)
+                        .await?
+                        .party_code
+                };
+                row["party_code"] = serde_json::json!(code);
             }
         }
         Ok(page)

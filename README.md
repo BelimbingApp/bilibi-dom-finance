@@ -157,3 +157,19 @@ that loads `/`). Bump that revision to build against a newer Platform.
 [MIT](LICENSE).
 
 Customers and suppliers permanently link to a Core Company or Person at creation. Finance owns no party codes: every page, agent operation, report and document uses the fixed Core code. The shared party picker and transaction helpers live in Ledger ([party controls](ledger/README.md#shared-party-controls)).
+
+For the Company/Person code walkthrough, mount this repository in the pinned
+Platform and run on an empty disposable database:
+
+```sh
+cargo run -p bilibi-finance-walkthrough-fixture --bin party-code
+```
+
+The walkthrough creates both party kinds through Core, uses the agent customer
+create contract, posts a consumer's TV invoice and checks its Core code in aging
+and customer/supplier evidence. To check the full auditor archive afterward,
+set `PARTY_CODE_STORAGE_ROOT` to a private disposable directory and run the same
+binary with `-- --evidence`. For browser proof, use the Platform launcher and
+its own `BILIBI_DEV_HOST`. Its startup seed retires demo accounts; the proof's
+`-- --restore-identities` restores only walkthrough identities after that seed,
+and requires this walkthrough's issued invoice before it will run.
