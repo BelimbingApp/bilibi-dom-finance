@@ -111,7 +111,7 @@ H1 makes the facade-only writes reachable through the Platform's shared `/api/v1
 | `book.open` (`minor_units` optional), `account.create`, `account.update` | Reviewed book/chart changes; account update preserves omitted fields and uses `clear_parent` to remove a grouping |
 | `account_group.create`, `account_group.update` | Reviewed changes to account groups; update takes the group's id as `account_id` |
 | `chart_template.apply` | `sections` names the optional parts to include (none by default). The review lists every group and account to be created; a chart that already has any is refused and never changed |
-| `journal.submit`, `journal.approve`, `journal.reject` | Submission does not post; approval posts once with separation of duties; rejection records a reason without posting. A line may carry `balance: true` instead of `debit` and `credit` (on at most one line): the preview and the commit give it the debit or credit that balances the other lines at the book's minor units, and refuse `balance` beside a `debit` or `credit`, on a second line, or when the other lines already match |
+| `journal.submit`, `journal.approve`, `journal.reject` | Submission does not post; the final Workflow approval posts once, by independent approvers under the company's published journal rules; rejection records a reason without posting. A line may carry `balance: true` instead of `debit` and `credit` (on at most one line): the preview and the commit give it the debit or credit that balances the other lines at the book's minor units, and refuse `balance` beside a `debit` or `credit`, on a second line, or when the other lines already match |
 | `journal.withdraw`, `journal.replace` | Only the journal's submitter, while it waits: withdrawal records an optional `reason` and posts nothing; replacement takes the `journal.submit` fields (including `balance`) plus `journal_id`, withdraws it and submits the correction, which needs its own approval |
 | `opening_balances.get` | Latest opening submission with journal number, conversion date, status, posted entry and reversal identifiers; `opening: null` before submission |
 | `opening_balances.submit` | Reviewed CSV mapping to one opening journal; source reference and exact CSV are retained; optional `replaces_journal_id` withdraws the submitter's waiting opening journal and takes its place; approval is separate |
@@ -651,8 +651,8 @@ review by anyone overlapping the approver or preparer.
 `finance_ledger_journal_events` (all append-only): the database numbers and
 stamps a journal, refuses a line added after the submitting transaction and,
 deferred to commit, a journal with no lines or out of balance; a journal is
-decided once, an approval names its entry and a rejection its reason, and an
-the original local same-person guard is replaced by 012: decisions require the journal’s Workflow reference, while the coordinator proves independence and records any permitted exception once.
+decided once, and an approval names its entry and a rejection its reason.
+Bilimbi's database guard against approval by the submitter is replaced by 012.
 
 006 (a port addition, no Bilimbi counterpart) lets the event be `withdrawn`,
 which the database allows only to whoever submitted the journal, and adds the
@@ -672,6 +672,12 @@ and a posting line on a group is refused (trigger on entry lines).
 
 009 adds the append-only `finance_ledger_chart_templates`: a saved reusable chart, one
 per tenant and `saved:<key>`, refused any update or delete.
+
+012 (a port addition) adds the append-only `finance_ledger_journal_approvals`, one
+durable reference from a journal to its Workflow request, and replaces the journal
+event trigger: a decision now requires that reference, and no longer refuses the
+submitter by itself. Workflow proves independence and records any permitted
+exception once; the unique journal event stays the fence against posting twice.
 
 ## Standards addressed
 
