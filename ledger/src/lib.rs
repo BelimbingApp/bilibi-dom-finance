@@ -4093,6 +4093,7 @@ fn duties_reopen(
 }
 
 mod party_links;
+pub use bilibi_tenancy::PartyIdentity;
 pub use party_links::{PartyFacts, PartyLinks, PartyTarget};
 
 mod party_picker;

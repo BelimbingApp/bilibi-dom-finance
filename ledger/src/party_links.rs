@@ -6,9 +6,10 @@ use bilibi_database::{Error, MutationTransaction};
 use bilibi_party::PersonInput;
 use bilibi_party_ids::{OrganisationId, PersonId};
 use bilibi_records::Records;
-use bilibi_tenancy::{PartyProofs, Scope};
+use bilibi_tenancy::{PartyIdentity, PartyProofs, Scope};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashSet;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PartyFacts {
@@ -122,14 +123,20 @@ impl<'a> PartyLinks<'a> {
         kind: &str,
         id: i64,
     ) -> Result<PartyFacts> {
-        party_id(kind, id)?;
-        let mut readable = false;
+        let identity = self
+            .parties
+            .party_identity(client, scope, party_id(kind, id)?)
+            .await
+            .map_err(|e| match e {
+                Error::NotFound => invalid("record_id", "the linked Core party is not available"),
+                other => other.into(),
+            })?;
         let mut facts = PartyFacts {
             kind: kind.into(),
             id,
-            code: String::new(),
-            name: String::new(),
-            status: String::new(),
+            code: identity.code,
+            name: identity.name,
+            status: identity.status,
             path: format!(
                 "/{}/{id}",
                 if kind == "person" {
@@ -145,26 +152,8 @@ impl<'a> PartyLinks<'a> {
             restricted: Vec::new(),
         };
         if kind == "company" {
-            if let Some(named) = self
-                .parties
-                .organisation_name(
-                    client,
-                    scope,
-                    OrganisationId::new(id).map_err(|_| Error::Invalid)?,
-                )
-                .await?
-            {
-                facts.name = named.name;
-                facts.status = named.status;
-            }
             match bilibi_company::detail(client, scope, id).await {
                 Ok((company, masked)) => {
-                    readable = true;
-                    if facts.status.is_empty() {
-                        facts.name = company.display_name();
-                        facts.status = company.status;
-                    }
-                    facts.code = company.code;
                     for (key, value) in [
                         ("tax_id", Some(company.tax_id)),
                         ("registration_number", company.registration_number),
@@ -184,7 +173,11 @@ impl<'a> PartyLinks<'a> {
                         }
                     }
                 }
-                Err(Error::Forbidden | Error::NotFound) => {}
+                Err(Error::Forbidden | Error::NotFound) => {
+                    facts.restricted = ["tax_id", "registration_number", "email", "phone"]
+                        .map(String::from)
+                        .into();
+                }
                 Err(error) => return Err(error.into()),
             }
         } else {
@@ -196,30 +189,34 @@ impl<'a> PartyLinks<'a> {
             .await
             {
                 Ok(person) => {
-                    readable = true;
-                    facts.name = person.name;
-                    facts.code = person.code;
-                    facts.status = if person.retired_at.is_some() {
-                        "retired"
-                    } else {
-                        "active"
-                    }
-                    .into();
                     facts.email = person.email;
                     facts.phone = person.phone;
                     facts.restricted = person.restricted;
                 }
-                Err(Error::Forbidden | Error::NotFound) => {}
+                Err(Error::Forbidden | Error::NotFound) => {
+                    facts.restricted = ["email", "phone"].map(String::from).into();
+                }
                 Err(error) => return Err(error.into()),
             }
         }
-        if !readable {
-            return Err(invalid(
-                "record_id",
-                "the linked Core party is not available to you",
-            ));
-        }
         Ok(facts)
+    }
+
+    /// Core identities for exact stored codes, in one call for the whole set.
+    /// A blank or unusable code matches nothing; the caller keeps each result's
+    /// kind and id together and reports an unmatched code against its own row.
+    pub async fn by_codes(
+        &self,
+        client: &dyn OperationClient,
+        scope: &Scope,
+        codes: &HashSet<String>,
+    ) -> Result<Vec<PartyIdentity>> {
+        let codes: Vec<String> = codes
+            .iter()
+            .filter(|c| !c.is_empty() && c.chars().count() <= 255 && !c.contains('\0'))
+            .cloned()
+            .collect();
+        Ok(self.parties.parties_by_codes(client, scope, &codes).await?)
     }
 
     /// Exactly one permanent party reference or one requested Core creation.

@@ -3,7 +3,7 @@
 use crate::*;
 use bilibi_agent_api::OperationClient;
 use bilibi_database::Change;
-use bilibi_finance_ledger::{EntryOwner, Money, OpeningContext};
+use bilibi_finance_ledger::{EntryOwner, Money, OpeningContext, PartyLinks};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 
@@ -186,13 +186,30 @@ impl Receivables {
             .skip(1)
             .filter_map(|row| row.get(1).map(|v| v.trim().to_owned()))
             .collect();
+        let identities = PartyLinks::new(&self.parties)
+            .by_codes(c, s, &requested)
+            .await?;
+        let kinds: Vec<&str> = identities.iter().map(|i| i.record_kind()).collect();
+        let ids: Vec<String> = identities
+            .iter()
+            .map(|i| i.record_id().to_string())
+            .collect();
         let mut customers = std::collections::HashMap::new();
-        for row in store::list(c, store::CUSTOMERS, s.tenant(), company).await? {
-            let customer = self.customer(c, s, row).await?;
-            if customer.active && requested.contains(&customer.code) {
+        for row in c
+            .query(
+                "SELECT id, record_kind, record_id FROM finance_receivables_customers WHERE tenant_id=$1 AND company_id=$2 AND active AND (record_kind, record_id) IN (SELECT * FROM unnest($3::text[], $4::text[]))",
+                &[&s.tenant(), &company, &kinds, &ids],
+            )
+            .await?
+        {
+            let (id, kind, record): (i64, String, String) = (row.get(0), row.get(1), row.get(2));
+            if let Some(party) = identities
+                .iter()
+                .find(|i| i.record_kind() == kind && i.record_id().to_string() == record)
+            {
                 customers.insert(
-                    (customer.party.kind.clone(), customer.code.clone()),
-                    json!(customer),
+                    (kind, party.code.clone()),
+                    json!({"id":id,"code":party.code,"name":party.name,"record_kind":party.record_kind(),"record_id":party.record_id()}),
                 );
             }
         }

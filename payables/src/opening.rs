@@ -2,7 +2,7 @@
 //! recording purchases, tax or a second control-account posting.
 use crate::*;
 use bilibi_database::Change;
-use bilibi_finance_ledger::{EntryOwner, OpeningContext};
+use bilibi_finance_ledger::{EntryOwner, OpeningContext, PartyLinks};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 
@@ -141,18 +141,28 @@ impl Payables {
             .skip(1)
             .filter_map(|row| row.get(1).map(|v| v.trim().to_owned()))
             .collect();
+        let identities = PartyLinks::new(&self.parties)
+            .by_codes(c, s, &codes)
+            .await?;
+        let kinds: Vec<&str> = identities.iter().map(|i| i.record_kind()).collect();
+        let ids: Vec<String> = identities
+            .iter()
+            .map(|i| i.record_id().to_string())
+            .collect();
         let mut vendor_ids = std::collections::HashMap::new();
-        let mut after = 0;
-        loop {
-            let batch = self.vendors_on(c, s, company, after, 500).await?;
-            if batch.is_empty() {
-                break;
-            }
-            after = batch.last().ok_or(Error::Internal)?.id;
-            for vendor in batch {
-                if codes.contains(&vendor.code) {
-                    vendor_ids.insert((vendor.party.kind.clone(), vendor.code.clone()), vendor.id);
-                }
+        for row in c
+            .query(
+                "SELECT id, record_kind, record_id FROM finance_payables_vendors WHERE tenant_id=$1 AND company_id=$2 AND (record_kind, record_id) IN (SELECT * FROM unnest($3::text[], $4::text[]))",
+                &[&s.tenant(), &company, &kinds, &ids],
+            )
+            .await?
+        {
+            let (id, kind, record): (i64, String, String) = (row.get(0), row.get(1), row.get(2));
+            if let Some(party) = identities
+                .iter()
+                .find(|i| i.record_kind() == kind && i.record_id().to_string() == record)
+            {
+                vendor_ids.insert((kind, party.code.clone()), id);
             }
         }
         let mut loaded = std::collections::HashMap::new();
