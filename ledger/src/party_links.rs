@@ -19,7 +19,6 @@ pub struct PartyFacts {
     pub name: String,
     pub status: String,
     pub path: String,
-    pub readable: bool,
     pub tax_id: Option<String>,
     pub registration_number: Option<String>,
     pub email: Option<String>,
@@ -124,17 +123,13 @@ impl<'a> PartyLinks<'a> {
         id: i64,
     ) -> Result<PartyFacts> {
         party_id(kind, id)?;
+        let mut readable = false;
         let mut facts = PartyFacts {
             kind: kind.into(),
             id,
             code: String::new(),
-            name: if kind == "person" {
-                "Person unavailable"
-            } else {
-                "Company unavailable"
-            }
-            .into(),
-            status: "unavailable".into(),
+            name: String::new(),
+            status: String::new(),
             path: format!(
                 "/{}/{id}",
                 if kind == "person" {
@@ -143,7 +138,6 @@ impl<'a> PartyLinks<'a> {
                     "companies"
                 }
             ),
-            readable: false,
             tax_id: None,
             registration_number: None,
             email: None,
@@ -165,7 +159,11 @@ impl<'a> PartyLinks<'a> {
             }
             match bilibi_company::detail(client, scope, id).await {
                 Ok((company, masked)) => {
-                    facts.readable = true;
+                    readable = true;
+                    if facts.status.is_empty() {
+                        facts.name = company.display_name();
+                        facts.status = company.status;
+                    }
                     facts.code = company.code;
                     for (key, value) in [
                         ("tax_id", Some(company.tax_id)),
@@ -198,7 +196,7 @@ impl<'a> PartyLinks<'a> {
             .await
             {
                 Ok(person) => {
-                    facts.readable = true;
+                    readable = true;
                     facts.name = person.name;
                     facts.code = person.code;
                     facts.status = if person.retired_at.is_some() {
@@ -214,6 +212,12 @@ impl<'a> PartyLinks<'a> {
                 Err(Error::Forbidden | Error::NotFound) => {}
                 Err(error) => return Err(error.into()),
             }
+        }
+        if !readable {
+            return Err(invalid(
+                "record_id",
+                "the linked Core party is not available to you",
+            ));
         }
         Ok(facts)
     }
@@ -289,20 +293,15 @@ impl<'a> PartyLinks<'a> {
             .await?
             .map_err(|e| invalid("record_id", e.message()))?;
         let facts = self.summary(client, scope, kind, id).await?;
-        if matches!(
-            facts.status.as_str(),
-            "archived" | "retired" | "unavailable"
-        ) {
+        if matches!(facts.status.as_str(), "archived" | "retired") {
             return Err(invalid(
                 "record_id",
                 format!(
                     "is {} {}",
                     if facts.status == "archived" {
                         "an archived"
-                    } else if facts.status == "retired" {
-                        "a retired"
                     } else {
-                        "an unavailable"
+                        "a retired"
                     },
                     if kind == "company" {
                         "company"
@@ -480,12 +479,6 @@ impl<'a> PartyLinks<'a> {
         include_contacts: bool,
     ) -> Result<Value> {
         let facts = self.summary(client, scope, kind, id).await?;
-        if !facts.readable || facts.code.is_empty() {
-            return Err(invalid(
-                field,
-                "needs permission to read the linked Core party's details",
-            ));
-        }
         let required = if include_contacts {
             &["tax_id", "registration_number", "email", "phone"][..]
         } else {

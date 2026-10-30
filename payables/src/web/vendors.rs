@@ -265,8 +265,7 @@ impl Vendors {
                     ("email", "Email", &v.party.email),
                     ("phone", "Phone", &v.party.phone),
                 ] {
-                    let value = if !v.party.readable || v.party.restricted.iter().any(|r| r == key)
-                    {
+                    let value = if v.party.restricted.iter().any(|r| r == key) {
                         render(Restricted::new(format!("vendor-{}-{key}-restricted", v.id)))?
                     } else {
                         Html::text(value.as_deref().unwrap_or("—"))

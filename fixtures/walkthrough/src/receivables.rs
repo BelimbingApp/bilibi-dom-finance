@@ -235,7 +235,7 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         ("company_010", 10, "active")
     );
     assert_eq!(customer.name, company.name);
-    assert!(company.readable && company.email.is_some() && company.tax_id.is_some());
+    assert!(company.email.is_some() && company.tax_id.is_some());
     field(
         ar.update_customer(&manager, 1, customer.id, &json!({"name":"New name"}))
             .await,

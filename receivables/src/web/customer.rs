@@ -228,19 +228,13 @@ impl Customer {
     }
 
     /// A fact of the company as the reader may see it: the value, a
-    /// restricted marker, or that Companies view is needed.
+    /// restricted marker.
     fn company_fact(
         &self,
         company: &PartyFacts,
         key: &str,
         value: &Option<String>,
     ) -> Result<Html> {
-        if !company.readable {
-            return render(
-                Restricted::new(format!("receivables-customer-company-{key}-restricted"))
-                    .reason("Not visible to you: viewing this Core party needs permission."),
-            );
-        }
         if company.restricted.iter().any(|r| r == key) {
             return render(Restricted::new(format!(
                 "receivables-customer-company-{key}-restricted"

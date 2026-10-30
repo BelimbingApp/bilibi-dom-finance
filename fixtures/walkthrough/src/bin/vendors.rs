@@ -60,7 +60,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let id = vendor(&db, services, &manager, 1, "VEN-A", "Vendor company").await?;
     let v = p.get_vendor(&manager, 1, id).await?;
     assert_eq!(v.record_kind, "company");
-    assert!(v.party.readable);
     let account = |code: &str| {
         installed
             .accounts
