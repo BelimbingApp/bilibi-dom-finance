@@ -626,7 +626,7 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         "DELETE FROM finance_receivables_documents WHERE tenant_id=1 AND company_id=1",
         "UPDATE finance_receivables_series SET prefix='changed' WHERE tenant_id=1 AND company_id=1",
         "UPDATE finance_receivables_tax_codes SET rate=20 WHERE tenant_id=1 AND company_id=1",
-        
+
         "UPDATE finance_receivables_customers SET record_id='15' WHERE tenant_id=1 AND company_id=1 AND record_id='12'",
         "TRUNCATE finance_receivables_document_lines",
     ] { let error = client.batch_execute(sql).await.expect_err("database must refuse"); println!("database refused: {}", error.as_db_error().map(|e| e.message()).unwrap_or("database error")); }

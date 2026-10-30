@@ -7,7 +7,7 @@
 //! every customer permanently names a Core Company or Person.
 use super::{
     company_pick::{self, Relation},
-    format::{self as f, Errors},
+    format::{self as f},
     render, Flash, Pages, Written, CUSTOMERS, INVOICES, RECEIPTS,
 };
 use crate::{Customer as Record, Document, PartyFacts, Payment, MANAGE_CUSTOMERS};
@@ -16,9 +16,9 @@ use bilibi_records::{Reference, Resolved};
 use bilibi_tenancy::Scope;
 use bilibi_ui::{
     page::{LiveBody, LiveFuture, LiveInput, LiveRequest, LiveState},
-    params, BackLink, Button, ButtonVariant, Card, Cell, CommitStates, CommitStatus, EmptyState,
-    Facts, Field, FlexRow, Form, Header, Html, InlineChoice, InlineEdit, InputKind, ListColumns,
-    ModalWidth, PageVariant, Restricted, SectionHeading, StatusKind,
+    params, BackLink, Button, Card, Cell, CommitStates, CommitStatus, EmptyState, Facts, Field,
+    FlexRow, Header, Html, InlineChoice, InlineEdit, InputKind, ListColumns, PageVariant,
+    Restricted, SectionHeading, StatusKind,
 };
 use serde_json::{json, Value};
 use std::collections::HashMap;

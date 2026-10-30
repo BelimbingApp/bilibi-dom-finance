@@ -4,7 +4,7 @@
 
 ## Vendors
 
-Add suppliers by picking one or several companies from Companies in the Add suppliers dialog, or creating one through the shared company picker. Each picked company is a row with its own vendor code (offered from the company's code, editable) and one payment terms for all rows; each row is added through its own `vendor.create` write, so a refused row says why without losing the others. Finance keeps the vendor code, payment terms, payable account, default expense account, default tax code and availability for the current company. Core owns its identity, tax and registration numbers, contacts and status. The company link is permanent and checked through Base Records. Search marks companies already linked to a supplier and links to the matching vendor; they cannot be selected. A company can be both a customer and a vendor.
+Add suppliers by picking Companies or People in the shared Add suppliers dialog, or creating either kind there. Each selected party shows its fixed Core code; payment terms apply to every selected row. Each row uses `vendor.create`, so a refusal keeps that row and its message. Core creation, the permanent Base Records reference, the vendor relationship and Finance settings commit together. Finance owns no vendor code: the party's Core code is used in lists, search, bills, reports and evidence. Finance keeps terms, account and tax defaults, and availability. Core owns identity, contact details and status. A Company or Person can be both customer and supplier. Already linked parties are disabled and link to their Finance record.
 
 The Vendors page records the vendor relationship through Core's reviewed contract. Each step is audited by its owner. If company creation succeeds but adding the vendor or recording the relationship is refused, the company remains in Companies; choose it again and complete the missing step. Core does not yet expose these writes on Finance's transaction (BelimbingApp/bilibi#231).
 
@@ -24,8 +24,8 @@ All keys below start with `finance.payables.` and take `company_id`.
 
 | Contract | Input |
 | --- | --- |
-| `vendor.create` | `code`, `core_company_id`; optional `payment_terms_days` (default 0), `active` (default true) and `payable_account_id`, `expense_account_id`, `tax_code_id` |
-| `vendor.update` | `vendor_id` and the settings to change; omissions preserve values, `clear_payable_account`, `clear_expense_account` or `clear_tax_code` clears a default; code and company cannot change |
+| `vendor.create` | Exactly one of `record_kind` (`company` or `person`) with `record_id`, `new_company`, or `new_person`; optional `payment_terms_days` (default 0), `active` (default true) and `payable_account_id`, `expense_account_id`, `tax_code_id` |
+| `vendor.update` | `vendor_id` and the settings to change; omissions preserve values, `clear_payable_account`, `clear_expense_account` or `clear_tax_code` clears a default; the Core party cannot change; no Finance code is accepted |
 | `vendor.get` | `vendor_id` |
 | `vendor.list` | `after_id`, `page_size`; returns `records`, `next_after_id` |
 | `vendor.supplier_keys` | Historical snapshot groups and confirmed mappings |
@@ -192,10 +192,10 @@ Import the complete supplier outstanding register against an approved opening tr
 The UTF-8 CSV header is:
 
 ```csv
-source_id,vendor_code,vendor_name,document_reference,document_date,due_date,original_total,outstanding,control_account_code
+source_id,vendor_code,vendor_name,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind
 ```
 
-Create the linked Finance vendors first. `vendor_code` must name an active vendor of the current company whose Core company is active. `vendor_name` preserves the historical source name; it does not create or rename a vendor. The recorded bill freezes the linked Core company's permitted identity facts and uses the vendor's canonical settlement key. A code cannot identify different source names within one export. The source document reference must be unique for that vendor and cannot duplicate a recorded bill. Use original gross totals and the positive residual at cut-off, including partially settled bills. Preserve historical document and due dates; document dates precede the conversion date, which is the first day Bilibi owns processing.
+Create the linked Finance vendors first. `vendor_code` is the fixed Core code, and `party_kind` (`company` or `person`) distinguishes the Core kind. They must name an active supplier of the current company with an active Core party. `vendor_name` preserves the historical source name; it does not create or rename a vendor. The recorded bill freezes the linked Core company's permitted identity facts and uses the vendor's canonical settlement key. A Core kind and code cannot identify different source names within one export. The source document reference must be unique for that vendor and cannot duplicate a recorded bill. Use original gross totals and the positive residual at cut-off, including partially settled bills. Preserve historical document and due dates; document dates precede the conversion date, which is the first day Bilibi owns processing.
 
 **Preview import** shows the source items and exact reconciliation to the configured opening control balance. **Approve import** records the complete register and source evidence in one audited transaction without posting purchases, tax or the control balance again. Approval uses Ledger's impersonation-aware duty separation against the opening journal's source preparer; an authorized exception requires its reason. The import and its source opening entry are permanent dependencies, so the opening entry cannot subsequently be reversed.
 

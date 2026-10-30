@@ -181,14 +181,14 @@ impl Payables {
                 ));
             }
             if vendors
-                .insert(row[1].to_owned(), row[2].to_owned())
+                .insert((row[9].to_owned(), row[1].to_owned()), row[2].to_owned())
                 .is_some_and(|name| name != row[2])
             {
                 return Err(fail("vendor_code identifies more than one name"));
             }
             if row[3].is_empty()
                 || row[3].chars().count() > 100
-                || !docs.insert((row[1].to_owned(), row[3].to_owned()))
+                || !docs.insert((row[9].to_owned(), row[1].to_owned(), row[3].to_owned()))
             {
                 return Err(fail(
                     "document_reference must contain 1 to 100 characters and be unique for the vendor",

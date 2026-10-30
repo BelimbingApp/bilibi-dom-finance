@@ -247,18 +247,15 @@ they govern this code and are not copied here.
 - Register assets through `FixedAssets`, never by posting or claiming their
   acquisition entry: ordinary acquisitions freeze one whole source debit and its revision; opening registers use `import_opening_register` against approved aggregate balances, preserving source accumulation and prospective remaining life;
   projected schedules are not posted depreciation (see `fixed_assets/README.md`).
-- A customer or vendor is a Finance record linked to a
-  Core company through Base Records (`record_kind`/`record_id`, checked with
-  `Records::check` on the write's own connection), never a copy of the
-  company's name, tax ID, contact details or address: read them on the handed
-  connection as `ledger/src/company_links.rs` does (`PartyProofs::organisation_name`
-  for name and status, `bilibi_company::detail` for facts under Core's own
-  view capability and masks). Receivables previews and freezes these facts and
-  the dated `bilibi_address::billing_address` on the handed connection, refusing
-  a masked fact. Its `customer.create` and `customer.link` compose Core's
-  `preview_create`, `create` and `assign_relationship` in the Finance transaction
-  (`receivables/src/companies.rs`); the vendor picker still uses separate Core
-  contracts (`ledger/src/company_picker.rs`). Never work around Core with SQL.
+- A customer or supplier permanently links at creation to a Core Company or
+  Person through Base Records (`record_kind`/`record_id`). Finance owns no party
+  code or copied identity fields: use `PartyLinks` (`ledger/src/party_links.rs`)
+  for the immutable Core code and permitted facts on the handed connection,
+  never Core SQL. Both Add dialogs use `MultiPartyChooser`
+  (`ledger/src/party_picker.rs`) and the owning Finance create contract, which
+  commits Core creation, the relationship and Finance record together. Never
+  create a Core party and link it in a second write. Receivables freezes the
+  Core facts and dated billing address at issue, refusing masked facts.
 - Never offer or accept an account receipts were paid into (`finance_receivables_payments.deposit_account_id`) as the receivable control account, nor the current control account, or an allocated invoice's saved control, as a receipt's deposit: `prepare_setup` (`receivables/src/configuration.rs`) and `record_payment` (`receivables/src/posting.rs`) refuse them for a person and an agent alike, and the settings page and receipt dialog leave them out of their choices. Receivables knows no account as "bank" beyond its own receipts.
 - Change receivable drafts through `Receivables`, not its tables: null/missing
   lines preserve snapshots, an array replaces them atomically, and discard

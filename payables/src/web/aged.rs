@@ -143,29 +143,32 @@ impl Aged {
             let mut row = FlexRow::new(d.id.to_string());
             row.dom_id = Some(format!("{prefix}-{}", d.id));
             rows.push(
-                row.cell("party", Cell::text(&d.party_name))
-                    .slot(
-                        "bill",
-                        render(BillLink {
-                            id: d.id,
-                            text: format!("Bill #{}", d.document_number),
-                        })?,
-                    )
-                    .cell(
-                        "party_number",
-                        Cell::text(f::optional(&d.party_document_number)),
-                    )
-                    .cell("date", Cell::text(d.document_date.to_string()))
-                    .cell("due", Cell::text(d.due_date.to_string()))
-                    .cell(
-                        "late",
-                        Cell::text(if d.days_overdue > 0 {
-                            d.days_overdue.to_string()
-                        } else {
-                            "—".into()
-                        }),
-                    )
-                    .cell("outstanding", Cell::text(d.outstanding.display(self.units))),
+                row.cell(
+                    "party",
+                    Cell::text(format!("{} · {}", d.party_code, d.party_name)),
+                )
+                .slot(
+                    "bill",
+                    render(BillLink {
+                        id: d.id,
+                        text: format!("Bill #{}", d.document_number),
+                    })?,
+                )
+                .cell(
+                    "party_number",
+                    Cell::text(f::optional(&d.party_document_number)),
+                )
+                .cell("date", Cell::text(d.document_date.to_string()))
+                .cell("due", Cell::text(d.due_date.to_string()))
+                .cell(
+                    "late",
+                    Cell::text(if d.days_overdue > 0 {
+                        d.days_overdue.to_string()
+                    } else {
+                        "—".into()
+                    }),
+                )
+                .cell("outstanding", Cell::text(d.outstanding.display(self.units))),
             );
         }
         Ok(rows)
@@ -226,7 +229,7 @@ impl Aged {
             row.dom_id = Some(format!("payables-aged-party-{}", p.party_key));
             row = row.cell(
                 "party",
-                Cell::text(format!("{} · {}", p.party_key, p.party_name)),
+                Cell::text(format!("{} · {}", p.party_code, p.party_name)),
             );
             for (i, amount) in p.buckets.iter().enumerate() {
                 row = row.cell(&format!("b{i}"), Cell::text(amount.display(self.units)));

@@ -954,10 +954,10 @@ impl Payables {
         let search = q.search.trim();
         // Bilimbi page_documents: literal substring search in the party's
         // snapshot and own number, then clamp before reading the last page.
-        let total: i64=c.query_one("SELECT count(*) FROM finance_payables_documents WHERE tenant_id=$1 AND company_id=$2 AND ($3::text IS NULL OR document_type=$3) AND ($4::text IS NULL OR status=$4) AND (strpos(lower(party_name),lower($5))>0 OR strpos(lower(COALESCE(party_document_number,'')),lower($5))>0)",&[&s.tenant(),&company,&q.document_type,&q.status,&search]).await?.get(0);
+        let total: i64=c.query_one("SELECT count(*) FROM finance_payables_documents WHERE tenant_id=$1 AND company_id=$2 AND ($3::text IS NULL OR document_type=$3) AND ($4::text IS NULL OR status=$4) AND (strpos(lower(party_code),lower($5))>0 OR strpos(lower(party_name),lower($5))>0 OR strpos(lower(COALESCE(party_document_number,'')),lower($5))>0)",&[&s.tenant(),&company,&q.document_type,&q.status,&search]).await?.get(0);
         let page = q.page.min(((total + q.page_size - 1) / q.page_size).max(1));
         let offset = (page - 1) * q.page_size;
-        let rows=c.query("SELECT id FROM finance_payables_documents WHERE tenant_id=$1 AND company_id=$2 AND ($3::text IS NULL OR document_type=$3) AND ($4::text IS NULL OR status=$4) AND (strpos(lower(party_name),lower($5))>0 OR strpos(lower(COALESCE(party_document_number,'')),lower($5))>0) ORDER BY document_date DESC,id DESC LIMIT $6 OFFSET $7",&[&s.tenant(),&company,&q.document_type,&q.status,&search,&q.page_size,&offset]).await?;
+        let rows=c.query("SELECT id FROM finance_payables_documents WHERE tenant_id=$1 AND company_id=$2 AND ($3::text IS NULL OR document_type=$3) AND ($4::text IS NULL OR status=$4) AND (strpos(lower(party_code),lower($5))>0 OR strpos(lower(party_name),lower($5))>0 OR strpos(lower(COALESCE(party_document_number,'')),lower($5))>0) ORDER BY document_date DESC,id DESC LIMIT $6 OFFSET $7",&[&s.tenant(),&company,&q.document_type,&q.status,&search,&q.page_size,&offset]).await?;
         let mut documents = Vec::new();
         for row in rows {
             documents.push(

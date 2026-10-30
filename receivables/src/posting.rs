@@ -46,6 +46,7 @@ const ISSUED: Table = Table {
         "document_reference",
         "receivable_account_id",
         "due_date",
+        "party_code",
         "party_name",
         "party_tax_identifier",
         "party_registration_identifier",

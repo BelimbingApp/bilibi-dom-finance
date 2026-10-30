@@ -155,3 +155,5 @@ that loads `/`). Bump that revision to build against a newer Platform.
 ## License
 
 [MIT](LICENSE).
+
+Customers and suppliers permanently link to a Core Company or Person at creation. Finance owns no party codes: every page, agent operation, report and document uses the fixed Core code. The shared party picker and transaction helpers live in Ledger ([party controls](ledger/README.md#shared-party-controls)).
