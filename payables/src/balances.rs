@@ -31,6 +31,7 @@ pub struct AgedDocument {
     pub document_number: i64,
     pub party_key: String,
     pub party_name: String,
+    pub party_code: String,
     pub party_document_number: Option<String>,
     #[serde(serialize_with = "date_text", deserialize_with = "read_date")]
     pub document_date: Date,
@@ -49,6 +50,7 @@ pub struct AgedParty {
     pub vendor_id: Option<i64>,
     pub party_key: String,
     pub party_name: String,
+    pub party_code: String,
     pub documents: Vec<AgedDocument>,
     #[serde(deserialize_with = "read_money_list")]
     pub buckets: Vec<Money>,
@@ -198,7 +200,7 @@ impl Payables {
         }
         let opening_pin = crate::opening::pin(c, s, company, q.through_opening_batch_id).await?;
         let through=match q.through_entry_number {Some(n)=>n,None=>c.query_one("SELECT greatest(COALESCE((SELECT max(entry_number) FROM finance_payables_documents WHERE tenant_id=$1 AND company_id=$2),0),COALESCE((SELECT max(entry_number) FROM finance_payables_payments WHERE tenant_id=$1 AND company_id=$2),0))",&[&s.tenant(),&company]).await?.get(0)};
-        let rows=c.query(&format!("SELECT b.id,b.document_number,b.party_key,b.party_name,b.party_document_number,b.document_date::text,b.due_date::text,b.currency_code,b.total,o.owed FROM ({OWED}) o JOIN finance_payables_documents b ON b.id=o.id AND b.tenant_id=$1 AND b.company_id=$2 WHERE o.owed<>0 AND NOT EXISTS(SELECT 1 FROM finance_payables_opening_items i WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=b.id AND (i.batch_id>$5 OR EXISTS(SELECT 1 FROM finance_payables_opening_decisions own WHERE own.tenant_id=$1 AND own.company_id=$2 AND own.batch_id=i.batch_id AND own.effective_date>$3::text::date) OR EXISTS(SELECT 1 FROM finance_payables_opening_decisions x WHERE x.tenant_id=$1 AND x.company_id=$2 AND x.replaces_batch_id=i.batch_id AND x.effective_date<=$3::text::date AND x.batch_id<=$5))) ORDER BY b.party_key,b.due_date,b.id"),&[&s.tenant(),&company,&as_of.to_string(),&through,&opening_pin]).await?;
+        let rows=c.query(&format!("SELECT b.id,b.document_number,b.party_key,b.party_name,b.party_document_number,b.document_date::text,b.due_date::text,b.currency_code,b.total,o.owed,b.party_code FROM ({OWED}) o JOIN finance_payables_documents b ON b.id=o.id AND b.tenant_id=$1 AND b.company_id=$2 WHERE o.owed<>0 AND NOT EXISTS(SELECT 1 FROM finance_payables_opening_items i WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=b.id AND (i.batch_id>$5 OR EXISTS(SELECT 1 FROM finance_payables_opening_decisions own WHERE own.tenant_id=$1 AND own.company_id=$2 AND own.batch_id=i.batch_id AND own.effective_date>$3::text::date) OR EXISTS(SELECT 1 FROM finance_payables_opening_decisions x WHERE x.tenant_id=$1 AND x.company_id=$2 AND x.replaces_batch_id=i.batch_id AND x.effective_date<=$3::text::date AND x.batch_id<=$5))) ORDER BY b.party_key,b.due_date,b.id"),&[&s.tenant(),&company,&as_of.to_string(),&through,&opening_pin]).await?;
         let empty = vec![Money::ZERO; q.bucket_days.len() + 2];
         let mut parties: BTreeMap<String, AgedParty> = BTreeMap::new();
         let mut latest: BTreeMap<String, (Date, i64)> = BTreeMap::new();
@@ -223,6 +225,7 @@ impl Payables {
                 document_number: r.get(1),
                 party_key: r.get(2),
                 party_name: r.get(3),
+                party_code: r.get(10),
                 party_document_number: r.get(4),
                 document_date: r.get::<_, String>(5).parse().map_err(|_| Error::Invalid)?,
                 due_date: due,
@@ -242,6 +245,7 @@ impl Payables {
                     vendor_id: None,
                     party_key: d.party_key.clone(),
                     party_name: d.party_name.clone(),
+                    party_code: d.party_code.clone(),
                     documents: vec![],
                     buckets: empty.clone(),
                     total: Money::ZERO,
@@ -259,6 +263,7 @@ impl Payables {
         for p in &mut parties {
             p.vendor_id = vendors::mapped(c, s.tenant(), company, &p.party_key).await?;
         }
+        parties.sort_by(|a, b| (&a.party_code, &a.party_key).cmp(&(&b.party_code, &b.party_key)));
         let mut buckets = empty;
         for p in &parties {
             for (i, a) in p.buckets.iter().enumerate() {

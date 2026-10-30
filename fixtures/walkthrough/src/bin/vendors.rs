@@ -60,7 +60,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let id = vendor(&db, services, &manager, 1, "VEN-A", "Vendor company").await?;
     let v = p.get_vendor(&manager, 1, id).await?;
     assert_eq!(v.record_kind, "company");
-    assert!(v.company.readable);
     let account = |code: &str| {
         installed
             .accounts
@@ -87,10 +86,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .create_customer(
             &manager,
             1,
-            &serde_json::json!({"code":"BOTH-ROLES","core_company_id":v.company.id}),
+            &serde_json::json!({"record_kind":"company","record_id":v.party.id}),
         )
         .await?;
-    assert_eq!(customer.company.map(|c| c.id), Some(v.company.id));
+    assert_eq!(Some(customer.party.id), Some(v.party.id));
 
     let expense = account("5000")?;
     let bank = account("1000")?;
@@ -112,8 +111,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             &manager,
             2,
             &VendorInput {
-                code: "BEFORE-BOOK".into(),
-                core_company_id: v.company.id,
+                record_kind: Some("company".into()),
+                record_id: Some(v.party.id),
+                new_company: None,
+                new_person: None,
                 payment_terms_days: 7,
                 payable_account_id: None,
                 expense_account_id: None,
@@ -134,8 +135,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "this company",
     );
     let input = VendorInput {
-        code: "VEN-A".into(),
-        core_company_id: v.company.id,
+        record_kind: Some("company".into()),
+        record_id: Some(v.party.id),
+        new_company: None,
+        new_person: None,
         payment_terms_days: 30,
         payable_account_id: Some(vendor_control.id),
         expense_account_id: Some(expense),
@@ -147,25 +150,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     inactive.active = false;
     p.update_vendor(&manager, 1, id, &inactive).await?;
 
-    refused(p.create_vendor(&manager, 1, &input).await, "code", "taken");
+    refused(
+        p.create_vendor(&manager, 1, &input).await,
+        "record_id",
+        "already a supplier",
+    );
     let mut invalid = input.clone();
-    invalid.code = "SELF".into();
-    invalid.core_company_id = 1;
+
+    invalid.record_id = Some(1);
     refused(
         p.create_vendor(&manager, 1, &invalid).await,
-        "core_company_id",
+        "record_id",
         "itself",
     );
-    invalid.core_company_id = 100;
+    invalid.record_id = Some(100);
     refused(
         p.create_vendor(&manager, 1, &invalid).await,
-        "core_company_id",
+        "record_id",
         "",
     );
-    invalid.core_company_id = 999999;
+    invalid.record_id = Some(999999);
     refused(
         p.create_vendor(&manager, 1, &invalid).await,
-        "core_company_id",
+        "record_id",
         "",
     );
     invalid = input.clone();
@@ -215,7 +222,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .await?
             .execute(
                 "UPDATE companies SET status=$2 WHERE id=$1",
-                &[&v.company.id, &status],
+                &[&v.party.id, &status],
             )
             .await?;
         refused(
@@ -225,7 +232,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             status,
         );
     }
-    db.get().await?.execute("UPDATE companies SET status='active',tax_id='CORE-TAX',registration_number='CORE-REG' WHERE id=$1",&[&v.company.id]).await?;
+    db.get().await?.execute("UPDATE companies SET status='active',tax_id='CORE-TAX',registration_number='CORE-REG' WHERE id=$1",&[&v.party.id]).await?;
     let grants = services.get::<bilibi_authz::grants::Grants>("base/authz.grants")?;
     grants
         .set_direct(&reviewer, manager.user(), bilibi_company::VIEW, Some(false))
@@ -384,7 +391,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?
         .execute(
             "UPDATE companies SET status='suspended' WHERE id=$1",
-            &[&v.company.id],
+            &[&v.party.id],
         )
         .await?;
     p.reverse_payment(&reviewer, 1, payment.id, date(2026, 10, 13), None)
@@ -450,7 +457,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?
         .execute(
             "UPDATE companies SET status='active' WHERE id=$1",
-            &[&v.company.id],
+            &[&v.party.id],
         )
         .await?;
     println!("Vendors: Core links and statuses; defaults; frozen facts; explicit historical collisions; unchanged snapshots and keys; duplicate protection; legacy payment approval, reversal and debit notes; separate aged groups; evidence and SQL guards proved.");

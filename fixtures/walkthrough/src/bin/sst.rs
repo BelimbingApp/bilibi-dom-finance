@@ -501,7 +501,7 @@ async fn run(db: &Db, services: &Services) -> Outcome<()> {
         .create_customer(
             &admin,
             COMPANY,
-            &json!({"code":"C-SST","core_company_id":22,"payment_terms_days":30}),
+            &json!({"record_kind":"company","record_id":22,"payment_terms_days":30}),
         )
         .await?
         .id;

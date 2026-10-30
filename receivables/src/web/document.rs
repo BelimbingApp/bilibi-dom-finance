@@ -11,7 +11,7 @@ use super::{
 use crate::{Customer, Document as Record, Payment, Series, TaxCode, ISSUE, MANAGE_DOCUMENTS};
 use bilibi_database::{Error, Result};
 use bilibi_datetime::DisplayContext;
-use bilibi_finance_ledger::{CompanyReview, Money};
+use bilibi_finance_ledger::{Money, PartyReview};
 use bilibi_tenancy::Scope;
 use bilibi_ui::{
     page::{LiveBody, LiveFuture, LiveInput, LiveRequest, LiveState, PanelSpec},
@@ -503,6 +503,7 @@ impl Document {
             Some(render(Facts {
                 id: "receivables-invoice-party",
                 items: vec![
+                    f::fact("Core code", f::optional(&d.party_code)),
                     f::fact("Name", f::optional(&d.party_name)),
                     f::fact("Tax ID", f::optional(&d.party_tax_identifier)),
                     f::fact(
@@ -782,6 +783,7 @@ impl Document {
                         .as_ref()
                         .map(|(_, review)| &review["changes"]["after"]);
                     let items = [
+                        ("party_code", "Core code"),
                         ("party_name", "Name"),
                         ("party_tax_identifier", "Tax ID"),
                         ("party_registration_identifier", "Registration number"),
@@ -1107,7 +1109,7 @@ impl Document {
                     input["company_id"] = json!(Pages::company(scope));
                     match self
                         .pages
-                        .company_picker()
+                        .party_picker()
                         .review_core(
                             scope,
                             credential,
@@ -1117,7 +1119,7 @@ impl Document {
                         )
                         .await?
                     {
-                        CompanyReview::Valid { code, review } => {
+                        PartyReview::Valid { code, review } => {
                             self.issue_banner = self
                                 .pages
                                 .plans
@@ -1128,12 +1130,10 @@ impl Document {
                             self.issue_review = Some((code, review));
                             self.dialog = Some(Dialog::Issue);
                         }
-                        CompanyReview::Invalid(fields) => {
+                        PartyReview::Invalid(fields) => {
                             self.flash.set(StatusKind::Error, f::sentences(&fields))
                         }
-                        CompanyReview::Refused(message) => {
-                            self.flash.set(StatusKind::Error, message)
-                        }
+                        PartyReview::Refused(message) => self.flash.set(StatusKind::Error, message),
                     }
                 } else {
                     self.flash.set(

@@ -46,25 +46,7 @@ pub(crate) const TAX: Table = Table {
 pub(crate) const CUSTOMERS: Table = Table {
     name: "finance_receivables_customers",
     kind: "finance.receivables.customer",
-    columns: &[
-        "code",
-        "name",
-        "tax_identifier",
-        "registration_identifier",
-        "email",
-        "phone",
-        "line1",
-        "line2",
-        "line3",
-        "locality",
-        "postcode",
-        "admin1_code",
-        "country_iso",
-        "payment_terms_days",
-        "active",
-        "record_kind",
-        "record_id",
-    ],
+    columns: &["payment_terms_days", "active", "record_kind", "record_id"],
     timestamps: true,
 };
 pub(crate) const DOCUMENTS: Table = Table {
@@ -178,10 +160,15 @@ pub(crate) async fn list(
     tenant: i64,
     company: i64,
 ) -> Result<Vec<Value>> {
+    let order = if table.name == CUSTOMERS.name {
+        "id"
+    } else {
+        "code"
+    };
     Ok(client
         .query(
             &format!(
-                "SELECT to_jsonb(r) FROM {} r WHERE tenant_id=$1 AND company_id=$2 ORDER BY code",
+                "SELECT to_jsonb(r) FROM {} r WHERE tenant_id=$1 AND company_id=$2 ORDER BY {order}",
                 table.name
             ),
             &[&tenant, &company],

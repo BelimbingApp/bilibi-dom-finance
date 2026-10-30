@@ -157,7 +157,6 @@ inventory::submit! { Contribution::new(PAGE_WRITES, PAGES, Provenance { module: 
         ("save_write_off", "finance.receivables.write_off.reverse"),
         ("create_customer", "finance.receivables.customer.create"),
         ("save_customer", "finance.receivables.customer.update"),
-        ("link_customer", "finance.receivables.customer.link"),
         ("record_relationship", "core.company.relationship.assign"),
         ("create_draft", "finance.receivables.draft.create"),
         ("save_draft", "finance.receivables.draft.update"),
@@ -178,8 +177,8 @@ inventory::submit! { Contribution::new(PAGE_WRITES, PAGES, Provenance { module: 
 }) }
 
 impl Pages {
-    pub(super) fn company_picker(&self) -> bilibi_finance_ledger::CompanyPickerContext {
-        bilibi_finance_ledger::CompanyPickerContext {
+    pub(super) fn party_picker(&self) -> bilibi_finance_ledger::PartyPickerContext {
+        bilibi_finance_ledger::PartyPickerContext {
             records: self.records.clone(),
             contracts: self.contracts.clone(),
             service: PAGES,

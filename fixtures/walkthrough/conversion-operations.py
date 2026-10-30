@@ -120,12 +120,12 @@ accounts={r["code"]:r["id"] for r in trial["rows"]}
 series=read(channel,"finance.receivables.series.list",company,"approver")["records"]
 invoice_series=next(r["id"] for r in series if r["code"]=="OPENING")
 payment_series=next(r["id"] for r in series if r["code"]=="RECEIPT")
-customer=next(r for r in read(channel,"finance.receivables.customer.list",company,"approver")["records"] if r["code"]=="CONVERSION-CUSTOMER")
-vendor=next(r for r in read(channel,"finance.payables.vendor.list",company,"approver")["records"] if r["code"]=="CONVERSION-VENDOR")
+customer=next(r for r in read(channel,"finance.receivables.customer.list",company,"approver")["records"] if r["code"]=="company_010")
+vendor=next(r for r in read(channel,"finance.payables.vendor.list",company,"approver")["records"] if r["code"]=="company_010")
 asset_context=read(channel,"finance.fixed_assets.opening.context",company,"approver")
 revision=next(r["id"] for r in asset_context["category_revisions"] if r["category_name"]=="Conversion assets")
-ar_csv="source_id,customer_code,document_reference,document_date,due_date,original_total,outstanding,control_account_code\ninvoice-17,CONVERSION-CUSTOMER,OLD-INV-17,2026-05-15,2026-06-30,5000,3000,1100\n"
-ap_csv="source_id,vendor_code,vendor_name,document_reference,document_date,due_date,original_total,outstanding,control_account_code\nbill-29,CONVERSION-VENDOR,Conversion vendor,OLD-BILL-29,2026-05-01,2026-06-15,2500,1500,2000\n"
+ar_csv="source_id,customer_code,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind\ninvoice-17,company_010,OLD-INV-17,2026-05-15,2026-06-30,5000,3000,1100,company\n"
+ap_csv="source_id,vendor_code,vendor_name,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind\nbill-29,company_010,Conversion vendor,OLD-BILL-29,2026-05-01,2026-06-15,2500,1500,2000,company\n"
 asset_csv=f"source_id,description,category_revision_id,acquisition_date,in_service_date,cost,accumulated_depreciation,remaining_life_months,residual_value\nasset-3,Source register asset,{revision},2024-06-01,2024-07-01,12000,1800,96,0\n"
 before_import={module:read(channel,f"finance.{module}.aging.get",company,"approver",as_of="2026-07-01",through_entry_number=trial["through_entry_number"]) for module in ["receivables","payables"]}
 inputs={"receivables":{"source_reference":"AR-SOURCE","currency_code":"MYR","series_id":invoice_series,"csv":ar_csv},"payables":{"source_reference":"AP-SOURCE","currency_code":"MYR","csv":ap_csv},"fixed_assets":{"source_reference":"ASSET-SOURCE","currency_code":"MYR","csv":asset_csv}}

@@ -158,7 +158,7 @@ impl Bill {
             id: "payables-bill-party-facts",
             items: vec![
                 f::fact("Name", &d.party.name),
-                f::fact("Key", &d.party.key),
+                f::fact("Core code", &d.party.code),
                 f::fact("Tax ID", f::optional(&d.party.tax_id)),
                 f::fact("Registration", f::optional(&d.party.registration_id)),
                 f::fact("Address", f::optional(&d.party.address)),

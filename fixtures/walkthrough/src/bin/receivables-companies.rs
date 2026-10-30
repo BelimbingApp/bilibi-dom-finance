@@ -5,7 +5,7 @@ use bilibi_address::{AddressInput, AddressKind, AddressService, AttachmentInput}
 use bilibi_agent_api::{Handler, Registry, WriteHandler};
 use bilibi_company::CompanyService;
 use bilibi_database::{pool, MutationBoundary};
-use bilibi_finance_ledger::Ledger;
+use bilibi_finance_ledger::{Ledger, LedgerError};
 use bilibi_finance_receivables::{ReceivableError, Receivables};
 use bilibi_finance_walkthrough_fixture::{install, sign_in};
 use bilibi_party::{CalendarDate, EffectiveDates, OrganisationId, PartyId};
@@ -32,8 +32,22 @@ fn day(s: &str) -> CalendarDate {
     s.to_owned().try_into().expect("fixture date")
 }
 fn refused<T: std::fmt::Debug>(answer: Result<T, ReceivableError>, field: &str, words: &str) {
+    // A refusal Receivables decides, or one Core's composed write raises through the ledger.
+    let refusals: Vec<(String, String)> = match &answer {
+        Err(ReceivableError::Invalid(errors)) => errors
+            .iter()
+            .map(|e| (e.field.to_string(), e.message.to_string()))
+            .collect(),
+        Err(ReceivableError::Ledger(LedgerError::Invalid(errors))) => errors
+            .iter()
+            .map(|e| (e.field.to_string(), e.message.to_string()))
+            .collect(),
+        _ => Vec::new(),
+    };
     assert!(
-        matches!(answer, Err(ReceivableError::Invalid(ref errors)) if errors.iter().any(|e| e.field == field && e.message.contains(words))),
+        refusals
+            .iter()
+            .any(|(f, m)| f == field && m.contains(words)),
         "{answer:?}"
     );
     println!("PASS: refusal at {field}: {words}");
@@ -82,7 +96,7 @@ async fn main() -> Outcome<()> {
     let series = ar.create_series(&manager,1,&json!({"code":"CUSTOMER-INV","name":"Customer invoices","kind":"invoice","prefix":"CU-","number_width":4})).await?;
     let create_key = "finance.receivables.customer.create";
     let create = handler(&registry, create_key);
-    let input = json!({"company_id":1,"code":"ATOMIC","new_company":{"name":"Orchid Atelier","tax_id":"C909090","registration_number":"20269999","email":"finance@orchid.example.test","phone":"+6031234567"},"payment_terms_days":30});
+    let input = json!({"company_id":1,"new_company":{"name":"Orchid Atelier","tax_id":"C909090","registration_number":"20269999","email":"finance@orchid.example.test","phone":"+6031234567"},"payment_terms_days":30});
     let mut raw = db.get().await?;
     let mut tx = mutations
         .begin(&mut raw, manager.mutation_context("walkthrough.customer"))
@@ -103,7 +117,7 @@ async fn main() -> Outcome<()> {
     let customer_id = answer["result"]["record"]["id"].as_i64().unwrap();
     tx.commit().await?;
     let customer = ar.get_customer(&manager, 1, customer_id).await?;
-    let company = customer.company.as_ref().unwrap().id;
+    let company = customer.party.id;
     let owner = PartyId::Organisation(OrganisationId::new(company)?);
     let source = OrganisationId::new(1)?;
     let role = bilibi_company::relationship_role_by_code(&**raw, &manager, "customer")
@@ -138,7 +152,8 @@ async fn main() -> Outcome<()> {
 
     // Duplicate suggestions are Core's own masked review, and its policy
     // refuses a second company unless the matching ids and reason are reviewed.
-    let duplicate = json!({"company_id":1,"code":"DUPLICATE","new_company":{"name":"Orchid Atelier","code":"orchid-second"}});
+    let duplicate =
+        json!({"company_id":1,"new_company":{"name":"Orchid Atelier","code":"orchid-second"}});
     let tx = mutations
         .begin(&mut raw, manager.mutation_context("walkthrough.duplicate"))
         .await?;
@@ -172,7 +187,7 @@ async fn main() -> Outcome<()> {
         .create_customer(
             &manager,
             1,
-            &json!({"code":"ROLLBACK","new_company":{"name":"Violet Observatory"}}),
+            &json!({"new_company":{"name":"Violet Observatory"}}),
         )
         .await;
     raw.batch_execute("DROP TRIGGER customer_capture_fault ON base_audit_mutations; DROP FUNCTION customer_capture_fault()").await?;
@@ -188,51 +203,15 @@ async fn main() -> Outcome<()> {
         .create_customer(
             &manager,
             1,
-            &json!({"code":"EXISTING","core_company_id":10}),
+            &json!({"record_kind":"company","record_id":10}),
         )
         .await?;
-    assert_eq!(existing.company.unwrap().id, 10);
-    raw.execute("INSERT INTO finance_receivables_customers(tenant_id,company_id,code,name,payment_terms_days,active,inserted_at,updated_at) VALUES(1,1,'LEGACY-CUSTOMER','Historical customer',0,true,now(),now())",&[]).await?;
-    let legacy = ar
-        .list_customers(&manager, 1)
-        .await?
-        .into_iter()
-        .find(|c| c.code == "LEGACY-CUSTOMER")
-        .unwrap();
-    grants
-        .set_direct(&admin, manager.user(), bilibi_company::UPDATE, Some(false))
-        .await?;
-    refused(
-        ar.link_customer(
-            &manager,
-            1,
-            legacy.id,
-            &json!({"new_company":{"name":"Cedar Cartography"}}),
-        )
-        .await,
-        "base",
-        "Companies update permission",
-    );
-    assert!(ar
-        .get_customer(&manager, 1, legacy.id)
-        .await?
-        .company
-        .is_none());
-    grants
-        .set_direct(&admin, manager.user(), bilibi_company::UPDATE, None)
-        .await?;
-    let linked = ar
-        .link_customer(
-            &manager,
-            1,
-            legacy.id,
-            &json!({"new_company":{"name":"Cedar Cartography"}}),
-        )
-        .await?;
-    assert!(linked.company.is_some());
-    println!(
-        "PASS: existing company create and historical customer link compose their relationships; denied link leaves history unlinked"
-    );
+    assert_eq!(existing.party.id, 10);
+    // A consumer is created in Core in the same transaction as its customer.
+    let consumer = ar.create_customer(&manager, 1, &json!({"new_person":{"name":"TV consumer","kind":"human","email":"consumer@example.test","phone":""}})).await?;
+    assert_eq!(consumer.party.kind, "person");
+    assert_eq!(consumer.code, consumer.party.code);
+    assert!(!consumer.code.is_empty());
 
     let invoice = |date: &str| json!({"kind":"invoice","series_id":series.id,"customer_id":customer.id,"issue_date":date,"lines":[{"description":"Professional services","quantity":"1","unit_price":"100"}]});
     let draft = ar.create_draft(&manager, 1, &invoice("2026-08-31")).await?;
@@ -467,8 +446,6 @@ async fn main() -> Outcome<()> {
             > 0
     );
     println!("PASS: address-view denial leaves the invoice unissued");
-    // Keep a historical customer for the browser's Link to company dialog.
-    raw.execute("INSERT INTO finance_receivables_customers(tenant_id,company_id,code,name,payment_terms_days,active,inserted_at,updated_at) VALUES(1,1,'BROWSER-LEGACY','Browser historical customer',0,true,now(),now())",&[]).await?;
     println!(
         "PASS: all customer composition checks completed; invoice {} customer {}",
         draft.id, customer.id

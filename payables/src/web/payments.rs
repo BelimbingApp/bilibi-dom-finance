@@ -225,7 +225,10 @@ impl Payments {
                         })?,
                     )
                     .cell("payment_date", Cell::text(r.payment_date.to_string()))
-                    .cell("party", Cell::text(&r.party_name))
+                    .cell(
+                        "party",
+                        Cell::text(format!("{} · {}", r.party_code, r.party_name)),
+                    )
                     .cell("paid_from", Cell::text(account))
                     .slot(
                         "amount",

@@ -101,8 +101,8 @@ impl crate::Einvoice {
             .map_err(|_| bilibi_database::Error::Internal)?
             .map_err(bilibi_database::Error::from)?;
         crate::authorize(&**client, scope, company_id, crate::VIEW).await?;
-        let party = bilibi_finance_ledger::CompanyLinks::new(&self.parties)
-            .frozen_party(&**client, scope, counterparty_id, "buyer", true)
+        let party = bilibi_finance_ledger::PartyLinks::new(&self.parties)
+            .frozen_party(&**client, scope, "company", counterparty_id, "buyer", true)
             .await
             .map_err(|error| match error {
                 bilibi_finance_ledger::LedgerError::Invalid(fields) => {

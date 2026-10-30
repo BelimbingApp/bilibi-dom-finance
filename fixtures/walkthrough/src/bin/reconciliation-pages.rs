@@ -288,7 +288,7 @@ async fn line_id(
 
 async fn affiliate(db: &Db) -> Outcome<()> {
     // Same disposable affiliation facts as the NC3 walkthrough.
-    db.get().await?.batch_execute("INSERT INTO persons(id,tenant_id,name,kind,email) VALUES(4,1,'Lee Viewer','human','lee@example.test'),(5,1,'Sam Staff','human','sam@example.test') ON CONFLICT DO NOTHING;
+    db.get().await?.batch_execute("INSERT INTO persons(id,tenant_id,code,name,kind,email) VALUES(4,1,'person_4','Lee Viewer','human','lee@example.test'),(5,1,'person_5','Sam Staff','human','sam@example.test') ON CONFLICT DO NOTHING;
         INSERT INTO person_affiliations(id,tenant_id,person_id,organisation_id,title,work_email) VALUES(3,1,4,1,'Reviewer','viewer@example.test'),(4,1,5,1,'Clerk','staff@example.test') ON CONFLICT DO NOTHING;
         UPDATE users SET person_id=4,affiliation_id=3,organisation_id=1 WHERE tenant_id=1 AND id=2 AND person_id IS NULL;
         UPDATE users SET person_id=5,affiliation_id=4,organisation_id=1 WHERE tenant_id=1 AND id=3 AND person_id IS NULL;

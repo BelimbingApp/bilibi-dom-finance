@@ -131,17 +131,6 @@ const DATASETS: &[(&str, &str, &[&str])] = &[
             "company_id",
             "code",
             "name",
-            "tax_identifier",
-            "registration_identifier",
-            "email",
-            "phone",
-            "line1",
-            "line2",
-            "line3",
-            "locality",
-            "postcode",
-            "admin1_code",
-            "country_iso",
             "payment_terms_days",
             "active",
             "inserted_at",
@@ -172,6 +161,7 @@ const DATASETS: &[(&str, &str, &[&str])] = &[
             "total",
             "document_number",
             "document_reference",
+            "party_code",
             "party_name",
             "party_tax_identifier",
             "party_registration_identifier",
@@ -418,14 +408,20 @@ impl Receivables {
         // All identifiers come exclusively from the private frozen catalog.
         let select = fields
             .iter()
-            .map(|field| column(field))
+            .map(|field| {
+                if dataset == "customer" && matches!(*field, "code" | "name") {
+                    "NULL::text".into()
+                } else {
+                    column(field)
+                }
+            })
             .collect::<Vec<_>>()
             .join(",");
         let records = client.query(
             &format!("SELECT json_build_array({select}) FROM {table} r WHERE r.tenant_id=$1 AND r.company_id=$2 AND r.id>$3 ORDER BY r.id LIMIT $4"),
             &[&scope.tenant(), &company_id, &after, &limit],
         ).await.map_err(Error::from)?;
-        let rows: Vec<Vec<Value>> = records
+        let mut rows: Vec<Vec<Value>> = records
             .iter()
             .map(|row| {
                 let Value::Array(values) = row.get::<_, Value>(0) else {
@@ -434,6 +430,26 @@ impl Receivables {
                 values
             })
             .collect();
+        if dataset == "customer" {
+            let at = |field| {
+                fields
+                    .iter()
+                    .position(|f| *f == field)
+                    .expect("customer evidence field")
+            };
+            for row in &mut rows {
+                let kind = row[at("record_kind")].as_str().ok_or(Error::Internal)?;
+                let id = row[at("record_id")]
+                    .as_str()
+                    .and_then(|s| s.parse().ok())
+                    .ok_or(Error::Internal)?;
+                let party = bilibi_finance_ledger::PartyLinks::new(&self.parties)
+                    .summary(client, scope, kind, id)
+                    .await?;
+                row[at("code")] = serde_json::json!(party.code);
+                row[at("name")] = serde_json::json!(party.name);
+            }
+        }
         let next = (rows.len() as i64 == limit)
             .then(|| {
                 rows.last()

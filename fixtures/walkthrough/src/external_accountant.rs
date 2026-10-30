@@ -20,7 +20,7 @@ type Outcome<T> = Result<T, Box<dyn std::error::Error>>;
 pub async fn run(db: &Db, services: &Services, root: &str, full_pack: &str) -> Outcome<()> {
     // Identity-only fixture rows, as in ledger-ui; no Finance business tables.
     db.get().await?.batch_execute(
-        "INSERT INTO persons(id,tenant_id,name,kind,email) VALUES(4,1,'Lee Accountant','human','viewer@example.test'),(5,1,'Sam Accountant','human','staff@example.test') ON CONFLICT DO NOTHING;
+        "INSERT INTO persons(id,tenant_id,code,name,kind,email) VALUES(4,1,'person_4','Lee Accountant','human','viewer@example.test'),(5,1,'person_5','Sam Accountant','human','staff@example.test') ON CONFLICT DO NOTHING;
          INSERT INTO person_affiliations(id,tenant_id,person_id,organisation_id,title) VALUES(3,1,4,1,'Accountant'),(4,1,5,1,'Accountant') ON CONFLICT DO NOTHING;
          UPDATE users SET person_id=4,affiliation_id=3,organisation_id=1 WHERE tenant_id=1 AND id=2 AND person_id IS NULL;
          UPDATE users SET person_id=5,affiliation_id=4,organisation_id=1 WHERE tenant_id=1 AND id=3 AND person_id IS NULL;
@@ -44,7 +44,8 @@ pub async fn run(db: &Db, services: &Services, root: &str, full_pack: &str) -> O
         [
             "finance.ledger.journals.submit",
             "finance.ledger.view",
-            "finance.reports.reports-export"
+            "finance.reports.reports-export",
+            "workflow.approvals.view"
         ]
     );
     let old_roles: Vec<(i64, i64)> = c

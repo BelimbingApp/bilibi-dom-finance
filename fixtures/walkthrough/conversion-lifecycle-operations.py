@@ -118,10 +118,10 @@ for module in ["receivables", "payables", "fixed_assets"]:
     if module == "receivables":
         series=read(channel,"finance.receivables.series.list",company,"approver")["records"]
         series_id=next(r["id"] for r in series if r["code"]=="OPENING")
-        csv="source_id,customer_code,document_reference,document_date,due_date,original_total,outstanding,control_account_code\ninvoice-17,CONVERSION-CUSTOMER,OLD-INV-17,2026-05-15,2026-06-30,5000,3000,1100\n"
+        csv="source_id,customer_code,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind\ninvoice-17,company_010,OLD-INV-17,2026-05-15,2026-06-30,5000,3000,1100,company\n"
         values={"source_reference":"AR-SOURCE","currency_code":"MYR","series_id":series_id,"csv":csv}
     elif module == "payables":
-        csv="source_id,vendor_code,vendor_name,document_reference,document_date,due_date,original_total,outstanding,control_account_code\nbill-29,CONVERSION-VENDOR,Conversion vendor,OLD-BILL-29,2026-05-01,2026-06-15,2500,1500,2000\n"
+        csv="source_id,vendor_code,vendor_name,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind\nbill-29,company_010,Conversion vendor,OLD-BILL-29,2026-05-01,2026-06-15,2500,1500,2000,company\n"
         values={"source_reference":"AP-SOURCE","currency_code":"MYR","csv":csv}
     else:
         revision=next(r["id"] for r in context["category_revisions"] if r["category_name"]=="Conversion assets")

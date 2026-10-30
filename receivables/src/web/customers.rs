@@ -1,6 +1,6 @@
 //! The customers list and its Add customer dialog. Reads
 //! `finance.receivables.customer.list`; Add chooses or creates the Core
-//! company (`company_pick`) and submits `customer.create`, which records
+//! Company or Person (`company_pick`) and submits `customer.create`, which records
 //! the company, Finance customer and relationship in one transaction.
 use super::{
     company_pick::Submitted,
@@ -9,7 +9,7 @@ use super::{
 };
 use crate::Customer;
 use bilibi_database::{Error, Result};
-use bilibi_finance_ledger::MultiCompanyChooser;
+use bilibi_finance_ledger::MultiPartyChooser;
 use bilibi_tenancy::Scope;
 use bilibi_ui::{
     page::{LiveBody, LiveFuture, LiveInput, LiveRequest, LiveState},
@@ -32,7 +32,7 @@ static SPEC: LazyLock<Arc<ListSpec>> = LazyLock::new(|| {
         page_sizes: SIZES.to_vec(),
         filters: [(
             "status".into(),
-            Filter::one_of(&["", "active", "inactive", "unlinked"], ""),
+            Filter::one_of(&["", "active", "inactive"], ""),
         )]
         .into(),
         omit_defaults: true,
@@ -44,31 +44,21 @@ static SPEC: LazyLock<Arc<ListSpec>> = LazyLock::new(|| {
 
 /// The customer's own fields in the Add customer form:
 /// `(key, label, kind, maximum, required, hint)`.
-pub(super) const FIELDS: &[(&str, &str, InputKind, &str, bool, &str)] = &[
-    (
-        "code",
-        "Code",
-        InputKind::Text,
-        "50",
-        true,
-        "A short name for this customer in Finance. It cannot be changed later.",
-    ),
-    (
-        "payment_terms_days",
-        "Payment terms (days)",
-        InputKind::Number,
-        "4",
-        false,
-        "Days after the invoice date that payment is due. Leave empty for due on issue.",
-    ),
-];
+pub(super) const FIELDS: &[(&str, &str, InputKind, &str, bool, &str)] = &[(
+    "payment_terms_days",
+    "Payment terms (days)",
+    InputKind::Number,
+    "4",
+    false,
+    "Days after the invoice date that payment is due. Leave empty for due on issue.",
+)];
 const FORM: &str = "customer";
 const PREFIX: &str = "receivables-customer-new";
 
 /// The Add customer dialog while it is open.
 struct Create {
     values: HashMap<String, String>,
-    chooser: MultiCompanyChooser,
+    chooser: MultiPartyChooser,
     errors: Errors,
 }
 
@@ -89,7 +79,7 @@ impl Customers {
         let columns = vec![
             BuiltinColumn::new("code", "Code").sortable("code"),
             BuiltinColumn::new("name", "Name").sortable("name"),
-            BuiltinColumn::new("company", "Company"),
+            BuiltinColumn::new("company", "Core status"),
             BuiltinColumn::new("email", "Email"),
             BuiltinColumn::new("phone", "Phone"),
             BuiltinColumn::new("terms", "Terms").right(),
@@ -121,7 +111,7 @@ impl Customers {
                 scope,
                 "finance.receivables.customer.list",
                 json!({}),
-                ("after_code", "next_after_code"),
+                ("after", "next_after_id"),
             )
             .await?;
         self.can_add = self.pages.allowed(scope, crate::MANAGE_CUSTOMERS).await?;
@@ -138,7 +128,6 @@ impl Customers {
             .filter(|c| match status.as_str() {
                 "active" => c.active,
                 "inactive" => !c.active,
-                "unlinked" => c.company.is_none(),
                 _ => true,
             })
             .filter(|c| {
@@ -202,7 +191,6 @@ impl Customers {
                             ("All customers", ""),
                             ("Active", "active"),
                             ("Inactive", "inactive"),
-                            ("Not linked to a company", "unlinked"),
                         ]
                         .map(|(l, v)| Choice::new(l, v))
                         .to_vec(),
@@ -331,7 +319,7 @@ impl Customers {
         }
         body.push(&f::group(
             "receivables-customer-company",
-            "Company",
+            "Company or person",
             create.chooser.render(&create.errors)?,
         )?);
         body.push(&f::group("receivables-customer-terms", "In Finance", own)?);
@@ -379,18 +367,7 @@ impl Customers {
 
     /// The dialog's own values and the company chooser's, from a posted form.
     async fn take_form(&mut self, _scope: &Scope, v: &serde_json::Value) -> Result<()> {
-        let mut form = params::form_values(v, FORM);
-        if let Some(create) = &self.create {
-            for row in create.chooser.rows() {
-                let key = format!("code_{}", row.id);
-                if let Some(value) = v[format!("{FORM}[{key}]")].as_str() {
-                    if value.len() > 1024 {
-                        return Err(Error::Invalid);
-                    }
-                    form.insert(key, value.to_owned());
-                }
-            }
-        }
+        let form = params::form_values(v, FORM);
         if form.is_empty() {
             return Ok(());
         }
@@ -428,19 +405,18 @@ impl Customers {
             create
                 .errors
                 .0
-                .insert("base".into(), vec!["Choose a company.".into()]);
+                .insert("base".into(), vec!["Choose a company or person.".into()]);
             return Ok(None);
         }
         let mut added = 0;
         let mut pending_new = false;
         if create.chooser.is_new() {
-            let input =
-                json!({"code": f::posted(&create.values, "code"), "payment_terms_days": days});
+            let input = json!({"payment_terms_days":days});
             match create
                 .chooser
                 .chooser()
                 .submit_composed(
-                    &pages.company_picker(),
+                    &pages.party_picker(),
                     scope,
                     credential,
                     "create_customer",
@@ -473,14 +449,14 @@ impl Customers {
             .iter()
             .map(|r| (r.id.clone(), r.code.clone()))
             .collect();
-        for (id, code) in rows {
+        for (id, _code) in rows {
             create.chooser.activate(&id)?;
-            let input = json!({"code": code, "payment_terms_days": days});
+            let input = json!({"payment_terms_days":days});
             match create
                 .chooser
                 .chooser()
                 .submit_composed(
-                    &pages.company_picker(),
+                    &pages.party_picker(),
                     scope,
                     credential,
                     "create_customer",
@@ -555,21 +531,21 @@ impl Customers {
                             scope,
                             "finance.receivables.customer.list",
                             json!({}),
-                            ("after_code", "next_after_code"),
+                            ("after", "next_after_id"),
                         )
                         .await?;
                     let existing = customers
                         .into_iter()
-                        .filter_map(|customer| {
-                            Some((
-                                customer.company?.id.to_string(),
+                        .map(|customer| {
+                            (
+                                customer.party.reference(),
                                 format!("/finance/receivables/customers/{}", customer.id),
-                            ))
+                            )
                         })
                         .collect();
                     self.create = Some(Create {
                         values: HashMap::new(),
-                        chooser: MultiCompanyChooser::new(PREFIX, FORM).existing(
+                        chooser: MultiPartyChooser::new(PREFIX, FORM).existing(
                             "Already a customer",
                             "View customer",
                             existing,
@@ -587,7 +563,7 @@ impl Customers {
                     create
                         .chooser
                         .search(
-                            &pages.company_picker(),
+                            &pages.party_picker(),
                             scope,
                             v["query"].as_str().unwrap_or(""),
                         )
@@ -599,7 +575,7 @@ impl Customers {
                     create
                         .chooser
                         .pick(
-                            &pages.company_picker(),
+                            &pages.party_picker(),
                             scope,
                             v["value"].as_str().ok_or(Error::Invalid)?,
                         )
@@ -629,7 +605,7 @@ impl Customers {
                     create
                         .chooser
                         .use_candidate(
-                            &pages.company_picker(),
+                            &pages.party_picker(),
                             scope,
                             v["company"].as_str().ok_or(Error::Invalid)?,
                         )
@@ -654,31 +630,20 @@ impl Customers {
     }
 }
 
-/// The customer's email: its company's, or its own before linking.
 fn email(c: &Customer) -> Option<&String> {
-    c.company
-        .as_ref()
-        .map_or(c.email.as_ref(), |company| company.email.as_ref())
+    c.party.email.as_ref()
 }
-
 fn phone(c: &Customer) -> Option<&String> {
-    c.company
-        .as_ref()
-        .map_or(c.phone.as_ref(), |company| company.phone.as_ref())
+    c.party.phone.as_ref()
 }
-
-/// The company's status in Core, or that the customer has no company yet.
 pub(super) fn company_badge(c: &Customer) -> Result<Html> {
     use bilibi_ui::BadgeKind;
-    match &c.company {
-        None => f::badge("Not linked", BadgeKind::Warning),
-        Some(company) => match company.status.as_str() {
-            "active" => f::badge("Active", BadgeKind::Success),
-            "pending" => f::badge("Pending", BadgeKind::Warning),
-            "suspended" => f::badge("Suspended", BadgeKind::Warning),
-            "archived" => f::badge("Archived", BadgeKind::Neutral),
-            _ => f::badge("Unavailable", BadgeKind::Neutral),
-        },
+    match c.party.status.as_str() {
+        "active" => f::badge("Active", BadgeKind::Success),
+        "pending" => f::badge("Pending", BadgeKind::Warning),
+        "suspended" => f::badge("Suspended", BadgeKind::Warning),
+        "archived" | "retired" => f::badge("Unavailable", BadgeKind::Neutral),
+        _ => f::badge("No access", BadgeKind::Neutral),
     }
 }
 

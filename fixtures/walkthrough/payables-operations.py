@@ -149,7 +149,7 @@ for channel, company in [("api", 1), ("mcp", 2)]:
     print("settings omissions, explicit clears, conflicting clear refusal; tax create/update no-op and immutable code", flush=True)
 
     # Company 025 is an active Core company in the disposable Platform fixture.
-    vendor = write(channel, "vendor.create", company, code="PARTY-A", core_company_id=25, payment_terms_days=0, active=True)
+    vendor = write(channel, "vendor.create", company, record_kind="company", record_id=25, payment_terms_days=0, active=True)
     draft = {"vendor_id": vendor["id"], "party_document_number": "SOURCE-1", "document_date": "2026-01-10", "lines": [
         {"description": "Net", "account_id": accounts["X"], "amount": "100.05", "tax_code_id": tax["id"]},
         {"description": "Fraction", "account_id": accounts["X"], "amount": "0.05", "tax_code_id": tax["id"]},

@@ -22,9 +22,6 @@ pub(super) struct Prepared {
     pub target: Option<companies::Target>,
 }
 
-/// What `customer.create` and `customer.link` name the Core company by.
-pub(crate) const LINK_FIELD: &str = "core_company_id";
-
 impl Receivables {
     pub async fn get_setup(&self, scope: &Scope, company: i64) -> Result<Setup> {
         let client = self.db.get().await.map_err(Error::from)?;
@@ -202,6 +199,7 @@ impl Receivables {
         for row in store::list(&**client, CUSTOMERS, scope.tenant(), company).await? {
             customers.push(self.customer(&**client, scope, row).await?);
         }
+        customers.sort_by(|a, b| a.code.cmp(&b.code).then(a.id.cmp(&b.id)));
         Ok(customers)
     }
     pub async fn get_customer(&self, scope: &Scope, company: i64, id: i64) -> Result<Customer> {
@@ -212,7 +210,7 @@ impl Receivables {
             .ok_or(R::CustomerNotFound)?;
         self.customer(&**client, scope, row).await
     }
-    /// Creates a customer for `core_company_id` or `new_company`. Core company
+    /// Creates a customer for a Core Company or Person reference or new party. Core
     /// creation (with duplicate review), the customer and its current customer
     /// relationship share one transaction. Finance retains only code and terms.
     pub async fn create_customer(
@@ -223,8 +221,8 @@ impl Receivables {
     ) -> Result<Customer> {
         self.save_customer(scope, company, None, attrs).await
     }
-    /// Changes payment terms or availability; the party fields of a customer
-    /// recorded before linking stay editable until it is linked.
+    /// Changes payment terms or availability; the linked Core party's facts
+    /// are refused here.
     pub async fn update_customer(
         &self,
         scope: &Scope,
@@ -234,35 +232,6 @@ impl Receivables {
     ) -> Result<Customer> {
         self.save_customer(scope, company, Some(id), attrs).await
     }
-    /// Links a customer recorded before this module read Core to its company
-    /// (`core_company_id` or `new_company`), recording its customer relationship
-    /// in the same transaction. The link is permanent; the party fields it was
-    /// captured with stay on the row as history and the company's facts
-    /// take over.
-    pub async fn link_customer(
-        &self,
-        scope: &Scope,
-        company: i64,
-        id: i64,
-        attrs: &Value,
-    ) -> Result<Customer> {
-        let mut client = self.db.get().await.map_err(Error::from)?;
-        let mut tx = self
-            .write(
-                &mut client,
-                scope,
-                company,
-                MANAGE_CUSTOMERS,
-                "finance.receivables.link_customer",
-            )
-            .await?;
-        let record = self
-            .link_customer_on(&mut tx, scope, company, id, attrs)
-            .await?;
-        tx.commit().await?;
-        Ok(record)
-    }
-
     async fn save_customer(
         &self,
         scope: &Scope,
@@ -303,69 +272,6 @@ impl Receivables {
     ) -> Result<Customer> {
         let row = self
             .save_code_on(tx, scope, company, CUSTOMERS, id, attrs)
-            .await?;
-        self.customer(tx.sql(), scope, row).await
-    }
-
-    /// The link a customer recorded before linking will get: the row as it
-    /// is, then the proven company reference. Refused once linked.
-    pub(super) async fn prepare_link(
-        &self,
-        client: &dyn OperationClient,
-        scope: &Scope,
-        company: i64,
-        id: i64,
-        attrs: &Value,
-    ) -> Result<Prepared> {
-        self.join(client, scope, company, MANAGE_CUSTOMERS).await?;
-        let old = store::find(client, CUSTOMERS, scope.tenant(), company, Some(id))
-            .await?
-            .ok_or(R::CustomerNotFound)?;
-        if companies::linked(&old).is_some() {
-            return Err(invalid(
-                LINK_FIELD,
-                "is already linked; a customer's company never changes",
-            ));
-        }
-        let target = self.prepare_target(client, scope, company, attrs).await?;
-        let mut data = old.clone();
-        data["record_kind"] = json!(companies::KIND);
-        data["record_id"] = json!(target.id.map(|id| id.to_string()));
-        Ok(Prepared {
-            before: Some(old),
-            after: data,
-            accounts: Vec::new(),
-            target: Some(target),
-        })
-    }
-
-    pub(super) async fn link_customer_on(
-        &self,
-        tx: &mut MutationTransaction<'_>,
-        scope: &Scope,
-        company: i64,
-        id: i64,
-        attrs: &Value,
-    ) -> Result<Customer> {
-        let Prepared {
-            before: old,
-            after: mut data,
-            ..
-        } = self
-            .prepare_link(tx.sql(), scope, company, id, attrs)
-            .await?;
-        self.compose_target(tx, scope, company, attrs, &mut data)
-            .await?;
-        let tenant = scope.tenant();
-        let row = tx
-            .mutate(move |sql| {
-                Box::pin(async move {
-                    let mut changes = Vec::new();
-                    let new = store::save(sql, CUSTOMERS, tenant, company, old, data, &mut changes)
-                        .await?;
-                    Ok((new, changes))
-                })
-            })
             .await?;
         self.customer(tx.sql(), scope, row).await
     }
@@ -488,58 +394,52 @@ impl Receivables {
                 }
             }
         }
-        v::text(&mut data, "code", true, 50)?;
+        if !customer {
+            v::text(&mut data, "code", true, 50)?;
+        }
         v::flag(&mut data, "active")?;
         let mut chart = Vec::new();
         let mut target = None;
         if customer {
-            // The link is the create's; `customer.link` sets it later for a
-            // customer recorded before this module read Core. Once linked,
-            // the party fields are Core's and are not accepted here.
-            let linked = match old.as_ref() {
-                Some(old) => companies::linked(old),
-                None => {
-                    let prepared = self.prepare_target(client, scope, company, attrs).await?;
-                    data["record_kind"] = json!(companies::KIND);
-                    data["record_id"] = json!(prepared.id.map(|id| id.to_string()));
-                    target = Some(prepared);
-                    None
-                }
-            };
-            if linked.is_some() || target.is_some() {
-                if let Some(field) = companies::PARTY
-                    .iter()
-                    .find(|f| attrs.get(**f).is_some_and(|v| !v.is_null()))
-                {
-                    return Err(invalid(field, "is read from the linked company"));
-                }
-                for field in companies::PARTY {
-                    data[field] = old.as_ref().map_or(Value::Null, |o| o[field].clone());
-                }
-            } else {
-                v::text(&mut data, "name", true, 200)?;
-            }
-            for (field, max) in [
-                ("tax_identifier", 50),
-                ("registration_identifier", 50),
-                ("email", 255),
-                ("phone", 50),
-                ("line1", 255),
-                ("line2", 255),
-                ("line3", 255),
-                ("locality", 100),
-                ("postcode", 20),
-                ("admin1_code", 20),
-                ("country_iso", 2),
+            for field in [
+                "name",
+                "tax_identifier",
+                "registration_identifier",
+                "email",
+                "phone",
+                "line1",
+                "line2",
+                "line3",
+                "locality",
+                "postcode",
+                "admin1_code",
+                "country_iso",
             ] {
-                v::text(&mut data, field, false, max)?;
-            }
-            if let Some(country) = data["country_iso"].as_str() {
-                let country = country.to_uppercase();
-                if country.len() != 2 || !country.bytes().all(|b| b.is_ascii_uppercase()) {
-                    return Err(invalid("country_iso", "has invalid format"));
+                if attrs.get(field).is_some() {
+                    return Err(invalid(field, "is read from the linked Core party"));
                 }
-                data["country_iso"] = json!(country);
+            }
+            if attrs.get("code").is_some() {
+                return Err(invalid(
+                    "code",
+                    "is read from the Core party and cannot be supplied",
+                ));
+            }
+            if let Some(old) = &old {
+                if attrs.get("record_kind").is_some()
+                    || attrs.get("record_id").is_some()
+                    || attrs.get("new_company").is_some()
+                    || attrs.get("new_person").is_some()
+                {
+                    return Err(invalid("record_id", "the linked Core party cannot change"));
+                }
+                data["record_kind"] = old["record_kind"].clone();
+                data["record_id"] = old["record_id"].clone();
+            } else {
+                let prepared = self.prepare_target(client, scope, company, attrs).await?;
+                data["record_kind"] = json!(prepared.kind);
+                data["record_id"] = json!(prepared.id.map(|id| id.to_string()));
+                target = Some(prepared);
             }
             v::range(&mut data, "payment_terms_days", 0, 3650)?;
         } else if tax {
@@ -564,7 +464,7 @@ impl Receivables {
             }
             v::range(&mut data, "number_width", 1, 12)?;
         }
-        if id.is_none() {
+        if id.is_none() && !customer {
             for field in if table.name == SERIES.name {
                 &["code", "prefix"][..]
             } else {
