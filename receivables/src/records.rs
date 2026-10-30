@@ -40,30 +40,14 @@ pub struct TaxCode {
     pub account_id: i64,
     pub active: bool,
 }
-/// A customer: the Finance record (code, payment terms, availability) and the
-/// Core company it is linked to. For a linked customer `name` is the company's
-/// display name and the party fields below are `None`: identity, tax and
-/// registration numbers, contact details and the billing address live in
-/// Core. A customer recorded before linking has no `company`; its party
-/// fields are its own until a person links it.
+/// Finance terms and availability, permanently linked to a Core Company or
+/// Person. Code/name are authorized Core read facts, never stored by Finance.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Customer {
     pub id: i64,
     pub code: String,
     pub name: String,
-    #[serde(default)]
-    pub company: Option<bilibi_finance_ledger::CompanyFacts>,
-    pub tax_identifier: Option<String>,
-    pub registration_identifier: Option<String>,
-    pub email: Option<String>,
-    pub phone: Option<String>,
-    pub line1: Option<String>,
-    pub line2: Option<String>,
-    pub line3: Option<String>,
-    pub locality: Option<String>,
-    pub postcode: Option<String>,
-    pub admin1_code: Option<String>,
-    pub country_iso: Option<String>,
+    pub party: bilibi_finance_ledger::PartyFacts,
     pub payment_terms_days: i32,
     pub active: bool,
 }
@@ -118,6 +102,7 @@ pub struct Document {
     pub outstanding: Option<Money>,
     pub document_number: Option<i64>,
     pub document_reference: Option<String>,
+    pub party_code: Option<String>,
     pub party_name: Option<String>,
     pub party_tax_identifier: Option<String>,
     pub party_registration_identifier: Option<String>,

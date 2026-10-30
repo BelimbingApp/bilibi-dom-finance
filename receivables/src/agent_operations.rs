@@ -1,10 +1,7 @@
 //! H2 reach for Bilimbi.Finance.Receivables's facade-only actions. Transport,
 //! consent codes and the outer audited commit belong to Base Agent API.
 use super::*;
-use crate::{
-    configuration::LINK_FIELD,
-    store::{self, Table, CUSTOMERS, HISTORY, SERIES, SETUPS, TAX},
-};
+use crate::store::{self, Table, CUSTOMERS, HISTORY, SERIES, SETUPS, TAX};
 use bilibi_agent_api::{
     Channels, Definitions, Guide, Handler, Operation, OperationClient, OperationFuture,
     ReadHandler, WriteHandler, DEFINITIONS,
@@ -72,7 +69,6 @@ fn id(input: &Value, field: &str) -> Result<i64> {
 enum Write {
     Configure,
     Code(Table, Option<&'static str>),
-    Link,
     Draft(bool),
     Discard,
     Issue,
@@ -91,7 +87,6 @@ impl Write {
                     MANAGE_SETUP
                 }
             }
-            Self::Link => MANAGE_CUSTOMERS,
             Self::Draft(_) | Self::Discard => MANAGE_DOCUMENTS,
             Self::Issue => ISSUE,
             Self::Payment | Self::Reverse => POST_PAYMENTS,
@@ -133,9 +128,6 @@ impl Write {
             }
             Self::Code(_, Some(_)) => {
                 "Change the customer's payment terms or availability; already issued documents retain their party snapshot."
-            }
-            Self::Link => {
-                "Create the company when requested and permanently link this customer with its current customer relationship in one transaction; historical party fields stay on record."
             }
             Self::Draft(false) => {
                 "Keep an unnumbered draft with rounded line and tax snapshots; no entry posts."
@@ -203,12 +195,6 @@ impl Write {
                     _ => unreachable!(),
                 };
                 json!({"before":p.before,"after":p.after,"accounts":p.accounts,"target":p.target})
-            }
-            Self::Link => {
-                let p = service
-                    .prepare_link(client, scope, company, id(input, "customer_id")?, input)
-                    .await?;
-                json!({"before":p.before,"after":p.after,"target":p.target})
             }
             Self::Draft(update) => {
                 let p = service
@@ -344,7 +330,6 @@ impl Write {
             Self::BadDebt(_) => json!(format!("{INVOICES}/{}", record["document_id"])),
             Self::Configure => json!(SETTINGS),
             Self::Code(table, _) if table.name == CUSTOMERS.name => record_page(CUSTOMER_PAGES),
-            Self::Link => record_page(CUSTOMER_PAGES),
             Self::Code(..) => json!(SETTINGS),
             Self::Draft(_) | Self::Discard | Self::Issue => record_page(INVOICES),
             Self::Payment | Self::Reverse => record_page(RECEIPTS),
@@ -423,11 +408,6 @@ impl WriteHandler for Write {
                             }
                         }
                     }
-                    Self::Link => json!(
-                        service
-                            .link_customer_on(tx, scope, company, id(input, "customer_id")?, input)
-                            .await?
-                    ),
                     Self::Draft(update) => json!(
                         service
                             .save_draft_on(
@@ -510,26 +490,19 @@ impl ReadHandler for Read {
                     Self::WriteOffAccounts => json!({"accounts":write_offs::eligible_offsets(client,service,scope,company).await?}),
                     Self::Setup => json!({"setup":store::find(client,SETUPS,tenant,company,None).await?.map(store::decode::<Setup>).transpose()?}),
                     Self::Codes(table) => {
-                        let cursor = input["after_code"].as_str();
-                        let sql = format!("SELECT to_jsonb(r) FROM {} r WHERE tenant_id=$1 AND company_id=$2 AND ($3::text IS NULL OR code>$3) ORDER BY code LIMIT $4",table.name);
-                        let mut rows:Vec<Value> = client.query(&sql,&[&tenant,&company,&cursor,&(limit+1)]).await?.iter().map(|r|r.get(0)).collect();
-                        let more = rows.len()>limit as usize;
-                        rows.truncate(limit as usize);
-                        let next = more.then(||rows.last().map(|r|r["code"].clone())).flatten();
-                        let records:Vec<Value> = if table.name==CUSTOMERS.name {
-                            // A read holds no company lock, so the facade's own
-                            // connection reads each linked company's facts.
-                            let pooled = service.db.get().await.map_err(Error::from)?;
-                            let mut records = Vec::with_capacity(rows.len());
-                            for row in rows { records.push(json!(service.customer(&**pooled, scope, row).await?)); }
-                            records
+                        let customer=table.name==CUSTOMERS.name;
+                        let mut rows:Vec<Value> = if customer {
+                            client.query("SELECT to_jsonb(r) FROM finance_receivables_customers r WHERE tenant_id=$1 AND company_id=$2 AND id>$3 ORDER BY id LIMIT $4",&[&tenant,&company,&after,&(limit+1)]).await?.iter().map(|r|r.get(0)).collect()
                         } else {
-                            rows.into_iter().map(|r| {
-                                if table.name==TAX.name {store::decode::<TaxCode>(r).map(|r|json!(r))}
-                                else {store::decode::<Series>(r).map(|r|json!(r))}
-                            }).collect::<std::result::Result<_,_>>()?
+                            let cursor=input["after_code"].as_str();
+                            let sql=format!("SELECT to_jsonb(r) FROM {} r WHERE tenant_id=$1 AND company_id=$2 AND ($3::text IS NULL OR code>$3) ORDER BY code LIMIT $4",table.name);
+                            client.query(&sql,&[&tenant,&company,&cursor,&(limit+1)]).await?.iter().map(|r|r.get(0)).collect()
                         };
-                        json!({"records":records,"next_after_code":next})
+                        let more=rows.len()>limit as usize;rows.truncate(limit as usize);
+                        let next=more.then(||rows.last().map(|r|r[if customer {"id"} else {"code"}].clone())).flatten();
+                        let mut records=Vec::with_capacity(rows.len());
+                        for row in rows {records.push(if customer {json!(service.customer(client,scope,row).await?)} else if table.name==TAX.name {json!(store::decode::<TaxCode>(row)?)} else {json!(store::decode::<Series>(row)?)});}
+                        if customer {json!({"records":records,"next_after_id":next})} else {json!({"records":records,"next_after_code":next})}
                     }
                     Self::Aging => {
                         let as_of: jiff::civil::Date = input["as_of"].as_str().ok_or(ReceivableError::InvalidOption)?.parse().map_err(|_| invalid("as_of", "is not a date"))?;
@@ -633,9 +606,6 @@ fn customer_own_fields() -> Value {
 }
 /// The party fields a customer recorded before Core companies still carries;
 /// a linked customer refuses them, its company holds the facts.
-fn customer_party_fields() -> Value {
-    json!({"name":string(200),"tax_identifier":string(50),"registration_identifier":string(50),"email":string(255),"phone":string(50),"line1":string(255),"line2":string(255),"line3":string(255),"locality":string(100),"postcode":string(20),"admin1_code":string(20),"country_iso":string(2)})
-}
 fn company_creation() -> Value {
     object(
         &["name"],
@@ -648,25 +618,29 @@ fn company_creation() -> Value {
         }),
     )
 }
+fn person_creation() -> Value {
+    object(
+        &["name", "kind"],
+        json!({"name":string(160),"kind":choice(&["human","agent"]),"email":string(254),"phone":string(64)}),
+    )
+}
 fn customer_create() -> Value {
     let mut p = customer_own_fields();
-    p["code"] = string(50);
-    p[LINK_FIELD] = json!({"type":"integer","minimum":1,"description":"The Core company this customer is (core.company.list, core.company.get); omit when supplying new_company. Never the company invoicing it."});
+    p["record_kind"] = choice(&["company", "person"]);
+    p["record_id"] = identifier();
     p["new_company"] = company_creation();
-    schema(&["code"], p)
+    p["new_person"] = person_creation();
+    schema(&[], p)
 }
 fn customer_update() -> Value {
     let mut p = customer_own_fields();
-    for (field, schema) in customer_party_fields().as_object().into_iter().flatten() {
-        p[field] = schema.clone();
-    }
     p["customer_id"] = identifier();
     schema(&["customer_id"], p)
 }
-fn customer_link() -> Value {
+fn customers() -> Value {
     schema(
-        &["customer_id"],
-        json!({"customer_id":identifier(),LINK_FIELD:{"type":"integer","minimum":1,"description":"The Core company this customer is; omit when supplying new_company."},"new_company":company_creation()}),
+        &[],
+        json!({"after":identifier(),"page_size":{"type":"integer","minimum":1,"maximum":100}}),
     )
 }
 fn draft_fields() -> Value {
@@ -779,7 +753,7 @@ inventory::submit! { Contribution::new(DEFINITIONS,"finance/receivables.operatio
         Operation {key:"finance.receivables.setup.changes",title:"Read setup history",summary:"Read account-default changes in ascending identifier order.",keywords:&[],capability:VIEW,input:history,output,handler:Handler::Read(&Read::History),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.series.list",title:"List numbering series",summary:"Read active and inactive series in code order with a bounded cursor.",keywords:&[],capability:VIEW,input:codes,output,handler:Handler::Read(&Read::Codes(SERIES)),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.tax_code.list",title:"List tax codes",summary:"Read code, frozen rate, posting account and active flag in code order.",keywords:&[],capability:VIEW,input:codes,output,handler:Handler::Read(&Read::Codes(TAX)),channels:Channels::Every,step_up:&[]},
-        Operation {key:"finance.receivables.customer.list",title:"List customers",summary:"Read customers in code order: Finance code, payment terms, availability and the linked Core company's name, status and the facts you may see.",keywords:&[],capability:VIEW,input:codes,output,handler:Handler::Read(&Read::Codes(CUSTOMERS)),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.receivables.customer.list",title:"List customers",summary:"Read customers in code order: Finance code, payment terms, availability and the linked Core company's name, status and the facts you may see.",keywords:&[],capability:VIEW,input:customers,output,handler:Handler::Read(&Read::Codes(CUSTOMERS)),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.customer.get",title:"Read a customer",summary:"Read one customer with its linked company (name, status, tax ID, registration number, email, phone as you may see them) and its own payment terms and availability.",keywords:&[],capability:VIEW,input:customer,output,handler:Handler::Read(&Read::Customer),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.document.list",title:"List receivables documents",summary:"Read drafts, issued invoices and credit notes, or discarded drafts by identifier with optional filters.",keywords:&[],capability:VIEW,input:documents,output,handler:Handler::Read(&Read::Documents),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.document.get",title:"Read a receivables document",summary:"Read saved lines, tax and party snapshots, entry identifiers and current outstanding.",keywords:&[],capability:VIEW,input:document,output,handler:Handler::Read(&Read::Document),channels:Channels::Every,step_up:&[]},
@@ -791,9 +765,8 @@ inventory::submit! { Contribution::new(DEFINITIONS,"finance/receivables.operatio
         Operation {key:"finance.receivables.series.update",title:"Change a numbering series",summary:"Change name or active flag; never change its code, kind, prefix or width.",keywords:&[],capability:MANAGE_SETUP,input:series_update,output,handler:Handler::SafeWrite(&Write::Code(SERIES,Some("series_id"))),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.tax_code.create",title:"Create a tax code",summary:"Create a percentage tax code on an active liability account. Also requires ledger view.",keywords:&[],capability:MANAGE_SETUP,input:tax_create,output,handler:Handler::SafeWrite(&Write::Code(TAX,None)),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.tax_code.update",title:"Change a tax code",summary:"Change name, account or active flag, preserving code and rate. Also requires ledger view.",keywords:&[],capability:MANAGE_SETUP,input:tax_update,output,handler:Handler::SafeWrite(&Write::Code(TAX,Some("tax_code_id"))),channels:Channels::Every,step_up:&[]},
-        Operation {key:"finance.receivables.customer.create",title:"Create a customer",summary:"Record a Core company as a customer of this company: a Finance code, payment terms and availability. Supply core_company_id or new_company (Core duplicate review applies). Creates the company when requested, links it and records the current customer relationship atomically.",keywords:&["company","party"],capability:MANAGE_CUSTOMERS,input:customer_create,output,handler:Handler::SafeWrite(&Write::Code(CUSTOMERS,None)),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.receivables.customer.create",title:"Create a customer",summary:"Add a Core Company or Person as a customer with payment terms and availability. Supply record_kind and record_id, new_company, or new_person. Use the Core party code everywhere. Party creation, permanent Finance link and customer relationship commit atomically.",keywords:&["company","party"],capability:MANAGE_CUSTOMERS,input:customer_create,output,handler:Handler::SafeWrite(&Write::Code(CUSTOMERS,None)),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.customer.update",title:"Change a customer",summary:"Change payment terms or availability; a customer recorded before Core companies may still change its own party fields. Code, link and issued-document snapshots never change.",keywords:&[],capability:MANAGE_CUSTOMERS,input:customer_update,output,handler:Handler::SafeWrite(&Write::Code(CUSTOMERS,Some("customer_id"))),channels:Channels::Every,step_up:&[]},
-        Operation {key:"finance.receivables.customer.link",title:"Link a customer to its company",summary:"Supply core_company_id or new_company to permanently link a historical customer. Company creation, link and customer relationship commit together; issued snapshots stay unchanged.",keywords:&["company","link"],capability:MANAGE_CUSTOMERS,input:customer_link,output,handler:Handler::SafeWrite(&Write::Link),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.draft.create",title:"Create a receivables draft",summary:"Save an unnumbered invoice or credit note with derived amounts. Also requires ledger view and configured setup.",keywords:&[],capability:MANAGE_DOCUMENTS,input:draft_create,output,handler:Handler::SafeWrite(&Write::Draft(false)),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.draft.update",title:"Change a receivables draft",summary:"Change header or atomically replace lines; omit lines to keep snapshots. Also requires ledger view.",keywords:&[],capability:MANAGE_DOCUMENTS,input:draft_update,output,handler:Handler::SafeWrite(&Write::Draft(true)),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.draft.discard",title:"Discard a receivables draft",summary:"Keep the draft and its lines permanently as discarded, without numbering or posting.",keywords:&[],capability:MANAGE_DOCUMENTS,input:document,output,handler:Handler::SafeWrite(&Write::Discard),channels:Channels::Every,step_up:&[]},

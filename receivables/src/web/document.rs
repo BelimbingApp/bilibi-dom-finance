@@ -11,7 +11,7 @@ use super::{
 use crate::{Customer, Document as Record, Payment, Series, TaxCode, ISSUE, MANAGE_DOCUMENTS};
 use bilibi_database::{Error, Result};
 use bilibi_datetime::DisplayContext;
-use bilibi_finance_ledger::{CompanyReview, Money};
+use bilibi_finance_ledger::{Money, PartyReview};
 use bilibi_tenancy::Scope;
 use bilibi_ui::{
     page::{LiveBody, LiveFuture, LiveInput, LiveRequest, LiveState, PanelSpec},
@@ -1107,7 +1107,7 @@ impl Document {
                     input["company_id"] = json!(Pages::company(scope));
                     match self
                         .pages
-                        .company_picker()
+                        .party_picker()
                         .review_core(
                             scope,
                             credential,
@@ -1117,7 +1117,7 @@ impl Document {
                         )
                         .await?
                     {
-                        CompanyReview::Valid { code, review } => {
+                        PartyReview::Valid { code, review } => {
                             self.issue_banner = self
                                 .pages
                                 .plans
@@ -1128,12 +1128,10 @@ impl Document {
                             self.issue_review = Some((code, review));
                             self.dialog = Some(Dialog::Issue);
                         }
-                        CompanyReview::Invalid(fields) => {
+                        PartyReview::Invalid(fields) => {
                             self.flash.set(StatusKind::Error, f::sentences(&fields))
                         }
-                        CompanyReview::Refused(message) => {
-                            self.flash.set(StatusKind::Error, message)
-                        }
+                        PartyReview::Refused(message) => self.flash.set(StatusKind::Error, message),
                     }
                 } else {
                     self.flash.set(

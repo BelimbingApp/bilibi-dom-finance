@@ -5,7 +5,7 @@ use crate::{
     settings::{account, string},
     store::Table,
 };
-use bilibi_finance_ledger::{AccountType, CompanyFacts, CompanyLinks};
+use bilibi_finance_ledger::{AccountType, PartyFacts, PartyLinks};
 use serde_json::{json, Value};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -19,15 +19,26 @@ pub struct Vendor {
     pub expense_account_id: Option<i64>,
     pub tax_code_id: Option<i64>,
     pub active: bool,
-    pub company: CompanyFacts,
+    pub party: PartyFacts,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct VendorInput {
-    pub code: String,
-    pub core_company_id: i64,
+    #[serde(default)]
+    pub record_kind: Option<String>,
+    #[serde(default)]
+    pub record_id: Option<i64>,
+    #[serde(default)]
+    pub new_company: Option<Value>,
+    #[serde(default)]
+    pub new_person: Option<Value>,
+    #[serde(default)]
     pub payment_terms_days: i32,
+    #[serde(default)]
     pub payable_account_id: Option<i64>,
+    #[serde(default)]
     pub expense_account_id: Option<i64>,
+    #[serde(default)]
     pub tax_code_id: Option<i64>,
     pub active: bool,
 }
@@ -66,21 +77,18 @@ impl Payables {
             .as_str()
             .and_then(|id| id.parse().ok())
             .ok_or(Error::Invalid)?;
-        value["company"] = json!(
-            CompanyLinks::new(&self.parties)
-                .company_summary(c, s, core_id)
-                .await?
-        );
+        let kind = value["record_kind"].as_str().ok_or(Error::Invalid)?;
+        let facts = PartyLinks::new(&self.parties)
+            .summary(c, s, kind, core_id)
+            .await?;
+        value["code"] = json!(facts.code);
+        value["party"] = json!(facts);
         serde_json::from_value(value).map_err(|_| Error::Invalid.into())
     }
     pub async fn get_vendor(&self, s: &Scope, company: i64, id: i64) -> Result<Vendor> {
         let c = self.db.get().await.map_err(Error::from)?;
         authorize(&**c, s, company, VIEW).await?;
-        let mut v = self.vendor_on(&**c, s, company, id).await?;
-        CompanyLinks::new(&self.parties)
-            .company_facts(&**c, s, &mut v.company)
-            .await?;
-        Ok(v)
+        self.vendor_on(&**c, s, company, id).await
     }
     pub async fn list_vendors(
         &self,
@@ -91,13 +99,7 @@ impl Payables {
     ) -> Result<Vec<Vendor>> {
         let c = self.db.get().await.map_err(Error::from)?;
         authorize(&**c, s, company, VIEW).await?;
-        let mut records = self.vendors_on(&**c, s, company, after, limit).await?;
-        for v in &mut records {
-            CompanyLinks::new(&self.parties)
-                .company_facts(&**c, s, &mut v.company)
-                .await?;
-        }
-        Ok(records)
+        self.vendors_on(&**c, s, company, after, limit).await
     }
     pub(crate) async fn vendors_on(
         &self,
@@ -122,38 +124,37 @@ impl Payables {
         id: Option<i64>,
         input: &VendorInput,
     ) -> Result<Value> {
-        let code = string(&input.code, "code", 50, true)?.ok_or(PayablesError::InvalidOption)?;
         if !(0..=3650).contains(&input.payment_terms_days) {
             return Err(invalid("payment_terms_days", "must be between 0 and 3650"));
         }
-        if let Some(id) = id {
+        let attrs = serde_json::to_value(input).map_err(|_| Error::Internal)?;
+        let (kind, party_id, target) = if let Some(id) = id {
             let old = self.vendor_on(c, s, company, id).await?;
-            if old.code != code || old.record_id != input.core_company_id.to_string() {
-                return Err(invalid(
-                    "vendor_id",
-                    "code and linked company cannot change",
-                ));
+            if input.new_company.is_some()
+                || input.new_person.is_some()
+                || input
+                    .record_kind
+                    .as_ref()
+                    .is_some_and(|k| k != &old.record_kind)
+                || input.record_id.is_some_and(|id| id != old.party.id)
+            {
+                return Err(invalid("record_id", "the linked Core party cannot change"));
             }
+            (old.record_kind, Some(old.party.id), Value::Null)
         } else {
-            if input.core_company_id == company {
-                return Err(invalid("core_company_id", "cannot be the company itself"));
-            }
-            self.records
-                .check(c, s, "company", &input.core_company_id.to_string())
-                .await?
-                .map_err(|e| invalid("core_company_id", e.message()))?;
-            let summary = CompanyLinks::new(&self.parties)
-                .company_summary(c, s, input.core_company_id)
+            let target = PartyLinks::new(&self.parties)
+                .prepare_target(&self.records, c, s, company, &attrs)
                 .await?;
-            if summary.status == "archived" {
-                return Err(invalid("core_company_id", "is an archived company"));
+            if let Some(id) = target.id {
+                if c.query_opt("SELECT id FROM finance_payables_vendors WHERE tenant_id=$1 AND company_id=$2 AND record_kind=$3 AND record_id=$4",&[&s.tenant(),&company,&target.kind,&id.to_string()]).await?.is_some(){return Err(invalid("record_id","is already a supplier of the current company"));}
             }
-            if summary.status == "unavailable" {
-                return Err(invalid("core_company_id", "does not exist"));
-            }
-            if c.query_opt("SELECT id FROM finance_payables_vendors WHERE tenant_id=$1 AND company_id=$2 AND code=$3", &[&s.tenant(),&company,&code]).await?.is_some() { return Err(invalid("code","has already been taken")); }
-            if c.query_opt("SELECT id FROM finance_payables_vendors WHERE tenant_id=$1 AND company_id=$2 AND record_id=$3", &[&s.tenant(),&company,&input.core_company_id.to_string()]).await?.is_some() { return Err(invalid("core_company_id","is already a vendor of this company")); }
-        }
+            let relationship = PartyLinks::new(&self.parties)
+                .relationship(c, s, company, &target.kind, target.id, "vendor")
+                .await?;
+            let mut review = json!(target);
+            review["relationship"] = relationship;
+            (target.kind, target.id, review)
+        };
         let accounts = self.ledger.list_accounts_on(c, s, company).await?;
         if let Some(id) = input.payable_account_id {
             account(
@@ -184,7 +185,7 @@ impl Payables {
             }
         }
         Ok(
-            json!({"tenant_id":s.tenant(),"company_id":company,"code":code,"record_kind":"company","record_id":input.core_company_id.to_string(),"payment_terms_days":input.payment_terms_days,"payable_account_id":input.payable_account_id,"expense_account_id":input.expense_account_id,"tax_code_id":input.tax_code_id,"active":input.active}),
+            json!({"tenant_id":s.tenant(),"company_id":company,"record_kind":kind,"record_id":party_id.map(|id|id.to_string()),"_target":target,"payment_terms_days":input.payment_terms_days,"payable_account_id":input.payable_account_id,"expense_account_id":input.expense_account_id,"tax_code_id":input.tax_code_id,"active":input.active}),
         )
     }
     pub async fn create_vendor(
@@ -235,6 +236,21 @@ impl Payables {
     ) -> Result<Vendor> {
         join(tx, s, company, MANAGE_SETTINGS).await?;
         let mut value = self.prepare_vendor(tx.sql(), s, company, id, input).await?;
+        if id.is_none() {
+            let attrs = serde_json::to_value(input).map_err(|_| Error::Internal)?;
+            let party = PartyLinks::new(&self.parties)
+                .compose_target(&self.records, tx, s, company, &attrs)
+                .await?;
+            PartyLinks::new(&self.parties)
+                .assign_relationship(tx, s, company, &party, "vendor")
+                .await?;
+            value["record_kind"] = json!(party.kind);
+            value["record_id"] = json!(party.id.to_string());
+        }
+        value
+            .as_object_mut()
+            .ok_or(Error::Internal)?
+            .remove("_target");
         let reserved = if id.is_none() {
             let reserved: i64 = tx
                 .sql()
@@ -246,7 +262,7 @@ impl Payables {
                 .get(0);
             let key = key(reserved);
             if tx.sql().query_opt("SELECT id FROM finance_payables_documents WHERE tenant_id=$1 AND company_id=$2 AND party_key=$3 LIMIT 1",&[&s.tenant(),&company,&key]).await?.is_some() {
-                return Err(invalid("code","the new vendor key collides with historical evidence; retry to allocate another identifier"));
+                return Err(invalid("base","the new vendor key collides with historical evidence; retry to allocate another identifier"));
             }
             value["id"] = json!(reserved);
             Some(reserved)
@@ -277,10 +293,11 @@ impl Payables {
         &self,
         c: &(impl GenericClient + Sync),
         s: &Scope,
-        core_company: i64,
+        kind: &str,
+        core_party: i64,
     ) -> Result<Value> {
-        let facts = bilibi_finance_ledger::CompanyLinks::new(&self.parties)
-            .frozen_party(c, s, core_company, "vendor_id", false)
+        let facts = bilibi_finance_ledger::PartyLinks::new(&self.parties)
+            .frozen_party(c, s, kind, core_party, "vendor_id", false)
             .await?;
         for (field, label, max) in [
             ("party_name", "name", 200),
@@ -293,7 +310,7 @@ impl Payables {
             {
                 return Err(invalid(
                     "vendor_id",
-                    format!("the company's {label} exceeds the document's {max} character limit"),
+                    format!("the party's {label} exceeds the document's {max} character limit"),
                 ));
             }
         }
@@ -303,7 +320,7 @@ impl Payables {
         if !v.active {
             return Err(invalid("vendor_id", "is an inactive vendor"));
         }
-        match v.company.status.as_str() {
+        match v.party.status.as_str() {
             "active" => Ok(()),
             "pending" => Err(invalid(
                 "vendor_id",

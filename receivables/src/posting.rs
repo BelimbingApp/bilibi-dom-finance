@@ -245,15 +245,12 @@ impl Receivables {
         data["issued_by_user_id"] = json!(scope.user());
         data["issued_by_impersonator_id"] = json!(scope.impersonator().map(|s| s.user()));
         // Preview and commit freeze the same Core facts on the handed connection.
-        for field in crate::companies::PARTY {
-            data[format!("party_{field}")] = customer_row[field].clone();
-        }
-        if let Some(linked) = crate::companies::linked(&customer_row) {
-            let day = date.to_string().try_into().map_err(|_| Error::Internal)?;
-            let party = self.frozen_party(client, scope, linked, &day).await?;
-            for (field, value) in party.as_object().into_iter().flatten() {
-                data[field] = value.clone();
-            }
+        let day = date.to_string().try_into().map_err(|_| Error::Internal)?;
+        let party = self
+            .frozen_party(client, scope, &customer.party, &day)
+            .await?;
+        for (field, value) in party.as_object().into_iter().flatten() {
+            data[field] = value.clone();
         }
         let mut lines = vec![if credit {
             NewLine::credit(control, draft.total)
@@ -296,7 +293,7 @@ impl Receivables {
             options,
             // The effective control is frozen in `after` and the posting;
             // unrelated defaults cannot change this saved draft's entry.
-            facts: json!({"draft":draft,"customer":customer,"linked_company_id":crate::companies::linked(&customer_row),"series":series,"credited_invoice":credited}),
+            facts: json!({"draft":draft,"customer":customer,"party":customer.party,"series":series,"credited_invoice":credited}),
         })
     }
 

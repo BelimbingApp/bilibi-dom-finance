@@ -446,7 +446,7 @@ impl Opening {
                             "vendor",
                             Cell::text(format!(
                                 "{} · {}",
-                                r["vendor"]["company"]["name"].as_str().unwrap_or(""),
+                                r["vendor"]["party"]["name"].as_str().unwrap_or(""),
                                 text("vendor_code")
                             )),
                         )

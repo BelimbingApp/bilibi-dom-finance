@@ -203,11 +203,17 @@ async fn vendor_input(
     v: &Value,
     update: bool,
 ) -> Result<VendorInput> {
+    if v.get("code").is_some() {
+        return Err(invalid(
+            "code",
+            "is read from the Core party and cannot be supplied",
+        ));
+    }
     let mut input = if update {
         let old = owner()?
             .vendor_on(c, s, company, id(v, "vendor_id")?)
             .await?;
-        json!({"code":old.code,"core_company_id":old.company.id,"payment_terms_days":old.payment_terms_days,"payable_account_id":old.payable_account_id,"expense_account_id":old.expense_account_id,"tax_code_id":old.tax_code_id,"active":old.active})
+        json!({"record_kind":old.record_kind,"record_id":old.party.id,"payment_terms_days":old.payment_terms_days,"payable_account_id":old.payable_account_id,"expense_account_id":old.expense_account_id,"tax_code_id":old.tax_code_id,"active":old.active})
     } else {
         json!({"payment_terms_days":0,"active":true})
     };
@@ -238,12 +244,14 @@ async fn vendor_input(
     serde_json::from_value(input).map_err(|_| invalid("base", "vendor settings are invalid"))
 }
 fn vendor_schema(update: bool) -> Value {
-    let mut props = json!({"code":string(50),"core_company_id":identifier(),"payment_terms_days":{"type":"integer","minimum":0,"maximum":3650},"payable_account_id":identifier(),"expense_account_id":identifier(),"tax_code_id":identifier(),"clear_payable_account":boolean(),"clear_expense_account":boolean(),"clear_tax_code":boolean(),"active":boolean()});
-    let mut required = if update {
-        vec![]
-    } else {
-        vec!["code", "core_company_id"]
-    };
+    let mut props = json!({"payment_terms_days":{"type":"integer","minimum":0,"maximum":3650},"payable_account_id":identifier(),"expense_account_id":identifier(),"tax_code_id":identifier(),"clear_payable_account":boolean(),"clear_expense_account":boolean(),"clear_tax_code":boolean(),"active":boolean()});
+    let mut required = vec![];
+    if !update {
+        props["record_kind"] = json!({"type":"string","enum":["company","person"]});
+        props["record_id"] = identifier();
+        props["new_company"] = json!({"type":"object","required":["name"],"properties":{"name":string(160),"registration_number":string(255),"tax_id":string(64),"email":string(254),"phone":string(64),"create_anyway":{"type":"object"}}});
+        props["new_person"] = json!({"type":"object","required":["name","kind"],"properties":{"name":string(160),"kind":json!({"type":"string","enum":["human","agent"]}),"email":string(254),"phone":string(64)}});
+    }
     if update {
         props["vendor_id"] = identifier();
         required.push("vendor_id");
@@ -407,7 +415,7 @@ impl Write {
                     Some(id) => json!(p.vendor_on(c, s, company, id).await?),
                     None => Value::Null,
                 };
-                json!({"before":before,"after":after})
+                json!({"before":before,"target":after["_target"],"after":after})
             }
             Self::MapKey => {
                 p.prepare_mapping(

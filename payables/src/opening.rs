@@ -352,11 +352,18 @@ impl Payables {
         let entry = p.context.entry;
         let mut rows = p.rows;
         for facts in &mut rows {
-            let core_company = facts["vendor"]["company"]["id"]
+            let core_company = facts["vendor"]["party"]["id"]
                 .as_i64()
                 .ok_or(Error::Invalid)?;
             facts["party"] = self
-                .frozen_vendor_party(tx.sql(), s, core_company)
+                .frozen_vendor_party(
+                    tx.sql(),
+                    s,
+                    facts["vendor"]["party"]["kind"]
+                        .as_str()
+                        .ok_or(Error::Invalid)?,
+                    core_company,
+                )
                 .await
                 .map_err(|e| {
                     vendor_refusal(
@@ -369,7 +376,7 @@ impl Payables {
             let (batch,change)=store::insert(sql,store::Table::OpeningBatch,json!({"tenant_id":tenant,"company_id":company,"source_reference":source,"source_csv":csv,"currency_code":entry.currency_code,"conversion_date":entry.entry_date.to_string(),"entry_id":entry.id,"entry_number":entry.entry_number,"recorded_by_user_id":actor,"recorded_by_impersonator_id":imp,"recorded_at":jiff::Timestamp::now().to_string()})).await?;
             let mut changes=vec![change];
             for facts in rows {
-                let (old,change)=store::insert(sql,store::Table::Documents,json!({"tenant_id":tenant,"company_id":company,"opening_batch_id":batch["id"],"document_type":"bill","status":"draft","party_key":facts["party_key"],"party_name":facts["party"]["party_name"],"party_tax_id":facts["party"]["party_tax_identifier"],"party_registration_id":facts["party"]["party_registration_identifier"],"party_document_number":facts["document_reference"],"document_date":facts["document_date"],"due_date":facts["due_date"],"currency_code":entry.currency_code,"description":"Opening outstanding balance; no new purchase","total_net":facts["outstanding"],"total_tax":"0","total":facts["outstanding"],"created_by_user_id":actor,"created_by_impersonator_id":imp})).await?;
+                let (old,change)=store::insert(sql,store::Table::Documents,json!({"tenant_id":tenant,"company_id":company,"opening_batch_id":batch["id"],"document_type":"bill","status":"draft","party_key":facts["party_key"],"party_code":party["party_code"],"party_name":facts["party"]["party_name"],"party_tax_id":facts["party"]["party_tax_identifier"],"party_registration_id":facts["party"]["party_registration_identifier"],"party_document_number":facts["document_reference"],"document_date":facts["document_date"],"due_date":facts["due_date"],"currency_code":entry.currency_code,"description":"Opening outstanding balance; no new purchase","total_net":facts["outstanding"],"total_tax":"0","total":facts["outstanding"],"created_by_user_id":actor,"created_by_impersonator_id":imp})).await?;
                 let id=old["id"].as_i64().ok_or(Error::Invalid)?;changes.push(change);
                 changes.push(store::insert(sql,store::Table::Lines,json!({"tenant_id":tenant,"company_id":company,"document_id":id,"line_number":1,"description":"Opening outstanding balance; no new purchase","account_id":control,"amount":facts["outstanding"]})).await?.1);
                 let approved:Value=sql.query_one("UPDATE finance_payables_documents d SET status='approved',approved_by_user_id=$4,approved_by_impersonator_id=$5 WHERE tenant_id=$1 AND company_id=$2 AND id=$3 RETURNING to_jsonb(d)",&[&tenant,&company,&id,&actor,&imp]).await?.get(0);

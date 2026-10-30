@@ -117,7 +117,7 @@ pub const SERVICE: &str = "finance/ledger.ledger";
 inventory::submit! {
     Module {
         id: MODULE, layer: Layer::Domains,
-        dependencies: &["base/agent_api", "base/authz", "base/database", "base/datetime", "base/locale", "base/menu", "base/party_ids", "base/records", "base/settings", "base/tenancy", "base/ui", "base/workflow", "core/company", "core/currency"],
+        dependencies: &["base/agent_api", "base/authz", "base/database", "base/datetime", "base/locale", "base/menu", "base/party_ids", "base/records", "base/settings", "base/tenancy", "base/ui", "base/workflow", "core/company", "core/person", "core/party", "core/currency"],
         migrations: &[
             ("finance-ledger-001-books-and-accounts", include_str!("../migrations/001-books-and-accounts.sql")),
             ("finance-ledger-002-entries", include_str!("../migrations/002-entries.sql")),
@@ -4092,15 +4092,13 @@ fn duties_reopen(
     }
 }
 
-mod company_links;
-pub use company_links::{CompanyFacts, CompanyLinks};
+mod party_links;
+pub use party_links::{PartyFacts, PartyLinks, PartyTarget};
 
-mod company_picker;
-pub use company_picker::{
-    record_relationship as record_company_relationship, relation as company_relation,
-    relationship_flash as company_relationship_flash, Chosen as ChosenCompany, CompanyChooser,
-    CompanyErrors, CompanyPickerContext, CompanySubmission, MultiCompanyChooser,
-    Relation as CompanyRelation, Reviewed as CompanyReview,
+mod party_picker;
+pub use party_picker::{
+    party_billing_lines, record_relationship as record_party_relationship,
+    relation as party_relation, relationship_flash as party_relationship_flash, MultiPartyChooser,
+    PartyChooser, PartyErrors, PartyPickerContext, PartySubmission, Relation as PartyRelation,
+    Reviewed as PartyReview,
 };
-
-pub use company_picker::company_billing_lines;

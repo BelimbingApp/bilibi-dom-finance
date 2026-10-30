@@ -64,6 +64,7 @@ inventory::submit! { Module {
         ("finance-payables-005-vendor-company-scope", include_str!("../migrations/005-vendor-company-scope.sql")),
         ("finance-payables-006-opening-items", include_str!("../migrations/006-opening-items.sql")),
             ("finance-payables-007-opening-lifecycle", include_str!("../migrations/007-opening-lifecycle.sql")),
+        ("finance-payables-008-core-party-code", include_str!("../migrations/008-core-party-code.sql")),
     ],
     services: &[Service {id:opening_web::PAGES,factory:|services| Ok(Arc::new(bilibi_ui::page::PageService::<Scope,Error>(Arc::new(opening_web::Pages {db:services.get::<Db>("base/database.pool")?.as_ref().clone(),contracts:services.get(bilibi_agent_api::page::SERVICE)?,plans:services.get("base/agent_api.plans")?}))))},Service { id: SERVICE, factory: |s| { let payables = Arc::new(Payables {
         db: s.get::<Db>("base/database.pool")?.as_ref().clone(),
@@ -199,6 +200,7 @@ pub struct HistoryPage {
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct Party {
     pub key: String,
+    pub code: String,
     pub name: String,
     pub tax_id: Option<String>,
     pub registration_id: Option<String>,

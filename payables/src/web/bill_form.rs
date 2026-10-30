@@ -189,7 +189,7 @@ impl BillForm {
                 .map_err(|_| Error::Forbidden)?;
             for v in answer["result"]["records"].as_array().into_iter().flatten() {
                 let v: Vendor = serde_json::from_value(v.clone()).map_err(|_| Error::Internal)?;
-                if v.active && v.company.status == "active" {
+                if v.active && v.party.status == "active" {
                     vendors.push(v);
                 }
             }
@@ -566,7 +566,7 @@ impl BillForm {
                     .options(
                         self.suppliers
                             .iter()
-                            .map(|v| Choice::new(&v.company.name, v.id.to_string()).detail(&v.code))
+                            .map(|v| Choice::new(&v.party.name, v.id.to_string()).detail(&v.code))
                             .collect(),
                     )
                     .errors(self.errors_for("payables-record-vendor")),

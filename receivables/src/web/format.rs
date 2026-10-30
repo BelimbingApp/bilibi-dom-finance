@@ -175,7 +175,7 @@ pub(super) fn link(href: &str, text: &str) -> Result<Html> {
 }
 
 /// What a refused write said, by field path (`lines.0.quantity`, `base`).
-pub(super) use bilibi_finance_ledger::CompanyErrors as Errors;
+pub(super) use bilibi_finance_ledger::PartyErrors as Errors;
 
 /// The text of one posted form value, trimmed.
 pub(super) fn posted<'a>(

@@ -4,13 +4,13 @@
 //! relationship, and the invoices and receipts that belong to it. Reads
 //! `customer.get`, `document.list`, `payment.list`, `core.address.company.list`
 //! and `core.company.relationship.list`; each edit calls `customer.update`;
-//! a customer recorded before Core companies links through `customer.link`.
+//! every customer permanently names a Core Company or Person.
 use super::{
-    company_pick::{self, Chooser, Relation, Submitted},
+    company_pick::{self, Relation},
     format::{self as f, Errors},
     render, Flash, Pages, Written, CUSTOMERS, INVOICES, RECEIPTS,
 };
-use crate::{CompanyFacts, Customer as Record, Document, Payment, MANAGE_CUSTOMERS};
+use crate::{Customer as Record, Document, PartyFacts, Payment, MANAGE_CUSTOMERS};
 use bilibi_database::{Error, Result};
 use bilibi_records::{Reference, Resolved};
 use bilibi_tenancy::Scope;
@@ -25,29 +25,9 @@ use std::collections::HashMap;
 
 /// `(key, label)` of the Finance facts a customer edits in place.
 const OWN: &[(&str, &str)] = &[("payment_terms_days", "Payment terms (days)")];
-/// The party facts a customer recorded before linking still edits itself.
-const DETAILS: &[(&str, &str)] = &[
-    ("name", "Name"),
-    ("email", "Email"),
-    ("phone", "Phone"),
-    ("tax_identifier", "Tax ID"),
-    ("registration_identifier", "Registration number"),
-];
-const ADDRESS: &[(&str, &str)] = &[
-    ("line1", "Address line 1"),
-    ("line2", "Address line 2"),
-    ("line3", "Address line 3"),
-    ("locality", "City"),
-    ("postcode", "Postcode"),
-    ("admin1_code", "State or region"),
-    ("country_iso", "Country code"),
-];
-const FORM: &str = "customer";
-const PREFIX: &str = "receivables-customer-link";
-
 /// What the page read from Core about the linked company.
 #[derive(Default)]
-struct CompanyView {
+struct PartyView {
     /// The reference as Base Records names it for this reader.
     resolved: Option<Resolved>,
     /// The company's current billing address, one line per row.
@@ -57,17 +37,11 @@ struct CompanyView {
     relation: Option<Relation>,
 }
 
-/// The Link to company dialog while it is open.
-struct Link {
-    chooser: Chooser,
-    errors: Errors,
-}
-
 pub(super) struct Customer {
     pages: Pages,
     id: i64,
     record: Option<Record>,
-    company: CompanyView,
+    company: PartyView,
     company_name: String,
     documents: Vec<Document>,
     payments: Vec<Payment>,
@@ -77,7 +51,6 @@ pub(super) struct Customer {
     figures: f::Figures,
     invoices: ListColumns,
     receipts: ListColumns,
-    link: Option<Link>,
     framed: bool,
 }
 
@@ -87,7 +60,7 @@ impl Customer {
             pages,
             id: params::positive_id(path.get("id").map(String::as_str)).unwrap_or(0),
             record: None,
-            company: CompanyView::default(),
+            company: PartyView::default(),
             company_name: String::new(),
             documents: vec![],
             payments: vec![],
@@ -118,7 +91,6 @@ impl Customer {
                 ],
                 &["amount"],
             )?,
-            link: None,
             framed,
         })
     }
@@ -149,8 +121,8 @@ impl Customer {
         self.can_edit = self.pages.allowed(scope, MANAGE_CUSTOMERS).await?;
         self.figures = self.pages.figures(scope).await;
         self.company_name = self.pages.company_name(scope).await;
-        self.company = CompanyView::default();
-        if let Some(company) = self.record.as_ref().and_then(|c| c.company.clone()) {
+        self.company = PartyView::default();
+        if let Some(company) = self.record.as_ref().map(|c| c.party.clone()) {
             self.company = self.read_company(scope, &company).await?;
         }
         if self.record.is_some() {
@@ -185,11 +157,14 @@ impl Customer {
     /// What Core says about the linked company for this reader: its name
     /// and page (Base Records), its current billing address (Core Address)
     /// and whether the current company records the relationship.
-    async fn read_company(&self, scope: &Scope, company: &CompanyFacts) -> Result<CompanyView> {
+    async fn read_company(&self, scope: &Scope, company: &PartyFacts) -> Result<PartyView> {
         let resolved = self
             .pages
             .records
-            .resolve(scope, &[Reference::new("company", company.id.to_string())])
+            .resolve(
+                scope,
+                &[Reference::new(&company.kind, company.id.to_string())],
+            )
             .await?
             .into_iter()
             .next();
@@ -198,8 +173,16 @@ impl Customer {
             .pages
             .read_core(
                 scope,
-                "core.address.company.list",
-                json!({"company_id": company.id}),
+                if company.kind == "person" {
+                    "core.address.person.list"
+                } else {
+                    "core.address.company.list"
+                },
+                if company.kind == "person" {
+                    json!({"person_id":company.id})
+                } else {
+                    json!({"company_id":company.id})
+                },
             )
             .await
         {
@@ -207,8 +190,9 @@ impl Customer {
             Err(Error::Forbidden | Error::Unauthorized) => (Vec::new(), true),
             Err(error) => return Err(error),
         };
-        let relation = Some(company_pick::relation(&self.pages, scope, company.id).await?);
-        Ok(CompanyView {
+        let relation =
+            Some(company_pick::relation(&self.pages, scope, &company.kind, company.id).await?);
+        Ok(PartyView {
             resolved,
             billing,
             addresses_hidden,
@@ -217,21 +201,8 @@ impl Customer {
     }
 
     fn value(c: &Record, key: &str) -> String {
-        let text = |t: &Option<String>| t.clone().unwrap_or_default();
         match key {
-            "name" => c.name.clone(),
-            "email" => text(&c.email),
-            "phone" => text(&c.phone),
             "payment_terms_days" => c.payment_terms_days.to_string(),
-            "tax_identifier" => text(&c.tax_identifier),
-            "registration_identifier" => text(&c.registration_identifier),
-            "line1" => text(&c.line1),
-            "line2" => text(&c.line2),
-            "line3" => text(&c.line3),
-            "locality" => text(&c.locality),
-            "postcode" => text(&c.postcode),
-            "admin1_code" => text(&c.admin1_code),
-            "country_iso" => text(&c.country_iso),
             _ => String::new(),
         }
     }
@@ -260,14 +231,14 @@ impl Customer {
     /// restricted marker, or that Companies view is needed.
     fn company_fact(
         &self,
-        company: &CompanyFacts,
+        company: &PartyFacts,
         key: &str,
         value: &Option<String>,
     ) -> Result<Html> {
         if !company.readable {
             return render(
                 Restricted::new(format!("receivables-customer-company-{key}-restricted"))
-                    .reason("Not visible to you: viewing companies needs permission."),
+                    .reason("Not visible to you: viewing this Core party needs permission."),
             );
         }
         if company.restricted.iter().any(|r| r == key) {
@@ -278,7 +249,7 @@ impl Customer {
         Ok(Html::text(f::optional(value)))
     }
 
-    fn company_card(&self, c: &Record, company: &CompanyFacts) -> Result<Html> {
+    fn company_card(&self, c: &Record, company: &PartyFacts) -> Result<Html> {
         let name = match &self.company.resolved {
             Some(resolved) if resolved.label.is_some() => {
                 render(resolved.pill("receivables-customer-company-pill", self.framed))?
@@ -286,8 +257,8 @@ impl Customer {
             _ => Html::text(&company.name),
         };
         let mut items = vec![
-            f::fact_html("Company", name),
-            f::fact_html("Company status", super::customers::company_badge(c)?),
+            f::fact_html("Core party", name),
+            f::fact_html("Core status", super::customers::company_badge(c)?),
             f::fact_html(
                 "Tax ID",
                 self.company_fact(company, "tax_id", &company.tax_id)?,
@@ -347,7 +318,7 @@ impl Customer {
             }
             Some(Relation::Hidden) | None => render(
                 Restricted::new("receivables-customer-relationship-restricted")
-                    .reason("Not visible to you: viewing companies needs permission."),
+                    .reason("Not visible to you: viewing this Core party needs permission."),
             )?,
         };
         items.push(f::fact_html("Relationship", relation));
@@ -357,7 +328,7 @@ impl Customer {
             class: "mt-4",
             body: {
                 let mut b = render(SectionHeading {
-                    title: "Company",
+                    title: "Core party",
                     description: "Read from Companies. Invoices issued from now on carry these details; invoices already issued keep the details they were issued with.",
                     ..SectionHeading::default()
                 })?;
@@ -369,52 +340,6 @@ impl Customer {
             },
             ..Card::default()
         })
-    }
-
-    fn link_dialog(&self, link: &Link) -> Result<Html> {
-        let labels = link.chooser.labels();
-        let mut body = render(link.errors.summary(&format!("{PREFIX}-errors"), &labels))?;
-        body.push(&f::group(
-            "receivables-customer-link-company",
-            "Company",
-            link.chooser.render(&link.errors, self.framed)?,
-        )?);
-        let actions = {
-            let mut a = render(Button {
-                id: &format!("{PREFIX}-cancel"),
-                button_type: "button",
-                event: "cancel_link",
-                body: Html::text("Cancel"),
-                ..Button::default()
-            })?;
-            a.push(&render(Button {
-                id: &format!("{PREFIX}-save"),
-                button_type: "button",
-                event: "link_customer",
-                variant: ButtonVariant::Primary,
-                working: "Linking…",
-                body: Html::text("Link customer"),
-                ..Button::default()
-            })?);
-            f::actions(a)?
-        };
-        let form = render(Form {
-            id: &format!("{PREFIX}-form"),
-            event: "link_change",
-            change: true,
-            class: "mt-4",
-            body,
-            actions,
-        })?;
-        f::modal(
-            "receivables-customer-link-modal",
-            "Link to company",
-            "This customer was recorded before Finance read companies from Companies. Link it to the company it is; the link is permanent, and invoices already issued keep their details.",
-            "cancel_link",
-            ModalWidth::Wide,
-            &self.flash,
-            form,
-        )
     }
 
     fn body(&self) -> Result<String> {
@@ -509,53 +434,7 @@ impl Customer {
             },
             ..Card::default()
         })?];
-        match &c.company {
-            Some(company) => parts.push(self.company_card(c, company)?),
-            None => {
-                let mut heading = render(SectionHeading {
-                    title: "Details",
-                    description: "Recorded before Finance read companies from Companies. Link this customer to its company to invoice it again; until then these details stay editable here.",
-                    ..SectionHeading::default()
-                })?;
-                if self.can_edit {
-                    heading.push(&render(Button {
-                        id: "receivables-customer-link",
-                        button_type: "button",
-                        event: "show_link",
-                        variant: ButtonVariant::Primary,
-                        class: "mt-2",
-                        body: Html::text("Link to company"),
-                        ..Button::default()
-                    })?);
-                }
-                parts.push(render(Card {
-                    id: "receivables-customer-party",
-                    role: "region",
-                    class: "mt-4",
-                    body: {
-                        let mut b = heading;
-                        b.push(&self.facts(c, "receivables-customer-party-facts", DETAILS)?);
-                        b
-                    },
-                    ..Card::default()
-                })?);
-                parts.push(render(Card {
-                    id: "receivables-customer-address",
-                    role: "region",
-                    class: "mt-4",
-                    body: {
-                        let mut b = render(SectionHeading {
-                            title: "Address",
-                            description: "Printed on credit notes you issue from now on. Documents already issued keep the address they were issued with.",
-                            ..SectionHeading::default()
-                        })?;
-                        b.push(&self.facts(c, "receivables-customer-address-facts", ADDRESS)?);
-                        b
-                    },
-                    ..Card::default()
-                })?);
-            }
-        }
+        parts.push(self.company_card(c, &c.party)?);
         let mut invoice_rows = Vec::new();
         for d in &self.documents {
             let mut row = FlexRow::new(d.id.to_string());
@@ -647,16 +526,12 @@ impl Customer {
         for part in parts {
             body.push(&part);
         }
-        let modal = match &self.link {
-            Some(link) => Some(self.link_dialog(link)?),
-            None => None,
-        };
         f::frame(
             "receivables-customer",
             PageVariant::Detail,
             &self.flash,
             body,
-            modal,
+            None,
         )
     }
 
@@ -664,8 +539,6 @@ impl Customer {
         let key = v["field"].as_str().ok_or(Error::Invalid)?;
         let label = OWN
             .iter()
-            .chain(DETAILS)
-            .chain(ADDRESS)
             .find(|(k, _)| *k == key)
             .map(|(_, l)| *l)
             .or((key == "active").then_some("Status"))
@@ -717,59 +590,6 @@ impl Customer {
         Ok(())
     }
 
-    /// The Link dialog's posted values.
-    async fn take_form(&mut self, scope: &Scope, v: &Value) -> Result<()> {
-        let form = params::form_values(v, FORM);
-        if form.is_empty() {
-            return Ok(());
-        }
-        let pages = self.pages.clone();
-        if let Some(link) = self.link.as_mut() {
-            if link.chooser.read(&form) {
-                link.chooser.search(&pages.company_picker(), scope).await?;
-            }
-        }
-        Ok(())
-    }
-
-    async fn link_now(&mut self, scope: &Scope, credential: &str) -> Result<()> {
-        let pages = self.pages.clone();
-        let Some(link) = self.link.as_mut() else {
-            return Ok(());
-        };
-        match link
-            .chooser
-            .submit_composed(
-                &pages.company_picker(),
-                scope,
-                credential,
-                "link_customer",
-                "finance.receivables.customer.link",
-                json!({"customer_id": self.id}),
-            )
-            .await?
-        {
-            Submitted::Review => {
-                link.errors = Errors::default();
-            }
-            Submitted::Done(_) => {
-                self.link = None;
-                self.flash.set(StatusKind::Success, "Customer linked.");
-            }
-            Submitted::Invalid(fields) => {
-                link.errors = fields;
-            }
-            Submitted::Refused(message) => {
-                self.link = None;
-                self.flash.set(
-                    StatusKind::Error,
-                    super::worded(message, "You do not have permission to change customers."),
-                );
-            }
-        }
-        Ok(())
-    }
-
     async fn event(&mut self, scope: &Scope, credential: &str, v: &Value) -> Result<()> {
         let pages = self.pages.clone();
         match v["type"].as_str().ok_or(Error::Invalid)? {
@@ -781,56 +601,19 @@ impl Customer {
                 self.receipts.handle(&params::string_values(v));
             }
             "save_customer" => self.save_field(scope, credential, v).await?,
-            "show_link" => {
-                if self.can_edit && self.record.as_ref().is_some_and(|c| c.company.is_none()) {
-                    self.link = Some(Link {
-                        chooser: Chooser::new(PREFIX, FORM),
-                        errors: Errors::default(),
-                    });
-                } else {
-                    self.flash.set(StatusKind::Error, super::DENIED);
-                }
-            }
-            "cancel_link" => self.link = None,
-            "link_change" => self.take_form(scope, v).await?,
-            "pick_company" => {
-                let record = v["record"].as_str().ok_or(Error::Invalid)?;
-                if let Some(link) = self.link.as_mut() {
-                    link.chooser
-                        .pick(&pages.company_picker(), scope, record)
-                        .await?;
-                    link.errors.0.remove("company");
-                }
-            }
-            "clear_company" => {
-                if let Some(link) = self.link.as_mut() {
-                    link.chooser.clear();
-                }
-            }
-            "use_candidate" => {
-                let id = v["company"].as_str().ok_or(Error::Invalid)?;
-                if let Some(link) = self.link.as_mut() {
-                    link.chooser
-                        .use_candidate(&pages.company_picker(), scope, id)
-                        .await?;
-                }
-            }
-            "link_customer" => {
-                self.take_form(scope, v).await?;
-                self.link_now(scope, credential).await?;
-            }
             "record_relationship" => {
                 let target = self
                     .record
                     .as_ref()
-                    .and_then(|c| c.company.as_ref().map(|co| co.id));
+                    .map(|c| (c.party.kind.clone(), c.party.id));
                 match target {
-                    Some(target) if self.can_edit => {
+                    Some((target_kind, target)) if self.can_edit => {
                         let recorded = company_pick::record_relationship(
                             &pages,
                             scope,
                             credential,
                             "record_relationship",
+                            &target_kind,
                             target,
                         )
                         .await?;
@@ -855,7 +638,7 @@ impl Customer {
     }
 }
 
-use bilibi_finance_ledger::company_billing_lines as billing_lines;
+use bilibi_finance_ledger::party_billing_lines as billing_lines;
 
 #[derive(askama::Template)]
 #[template(

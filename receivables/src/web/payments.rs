@@ -146,7 +146,7 @@ impl Payments {
                 scope,
                 "finance.receivables.customer.list",
                 json!({}),
-                ("after_code", "next_after_code"),
+                ("after", "next_after_id"),
             )
             .await?
             .0;

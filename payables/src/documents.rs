@@ -184,10 +184,12 @@ impl Payables {
                 let v = vendor.as_ref().expect("new bill vendor");
                 Party {
                     key: vendors::key(v.id),
-                    name: v.company.name.clone(),
+                    code: v.code.clone(),
+                    name: v.party.name.clone(),
                     ..Party::default()
                 }
             });
+        let code = party.code;
         let key = party.key;
         let name = party.name;
         let tax_id = party.tax_id;
@@ -365,7 +367,7 @@ impl Payables {
             capacity["order_line_quantities"] = json!(quantity_capacity);
         }
         let kind = if bill.is_some() { "debit_note" } else { "bill" };
-        let header = json!({"tenant_id":tenant,"company_id":company,"document_type":kind,"status":"draft","corrects_document_id":bill,"party_key":key,"party_name":name,"party_tax_id":tax_id,"party_registration_id":registration,"party_address":address,"party_document_number":number,"document_date":input.document_date.to_string(),"due_date":due.to_string(),"currency_code":book.currency_code,"description":description,"total_net":net,"total_tax":tax_total,"total":total,"created_by_user_id":actor,"created_by_impersonator_id":imp});
+        let header = json!({"tenant_id":tenant,"company_id":company,"document_type":kind,"status":"draft","corrects_document_id":bill,"party_key":key,"party_code":code,"party_name":name,"party_tax_id":tax_id,"party_registration_id":registration,"party_address":address,"party_document_number":number,"document_date":input.document_date.to_string(),"due_date":due.to_string(),"currency_code":book.currency_code,"description":description,"total_net":net,"total_tax":tax_total,"total":total,"created_by_user_id":actor,"created_by_impersonator_id":imp});
         Ok((header, lines, taxes, capacity))
     }
     pub(super) async fn create_document_on(
@@ -392,8 +394,9 @@ impl Payables {
                 )
                 .await?;
             let facts = self
-                .frozen_vendor_party(tx.sql(), s, vendor.company.id)
+                .frozen_vendor_party(tx.sql(), s, &vendor.party.kind, vendor.party.id)
                 .await?;
+            header["party_code"] = facts["party_code"].clone();
             header["party_name"] = facts["party_name"].clone();
             header["party_tax_id"] = facts["party_tax_identifier"].clone();
             header["party_registration_id"] = facts["party_registration_identifier"].clone();

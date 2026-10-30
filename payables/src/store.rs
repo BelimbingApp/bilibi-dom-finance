@@ -232,6 +232,7 @@ pub(crate) async fn document_record(
         document_number: opt_int(&v, "document_number"),
         corrects_document_id: opt_int(&v, "corrects_document_id"),
         party: Party {
+            code: text(&v, "party_code")?,
             key: text(&v, "party_key")?,
             name: text(&v, "party_name")?,
             tax_id: opt_text(&v, "party_tax_id"),
