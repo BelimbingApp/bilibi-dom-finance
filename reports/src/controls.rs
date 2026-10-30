@@ -1162,6 +1162,7 @@ impl State {
             body: Html::text("Journal approval rules"),
             ..bilibi_ui::ActionLink::default()
         })?;
+        links.push(&Html::text(" · "));
         links.push(&html(bilibi_ui::ActionLink {
             id: "journal-approval-waiting",
             href: "/workflow/approvals",
