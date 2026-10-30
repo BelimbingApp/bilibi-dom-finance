@@ -63,7 +63,6 @@ static SPEC: LazyLock<Arc<ListSpec>> = LazyLock::new(|| {
             ("source".into(), Filter::string("")),
             ("account".into(), Filter::string("")),
             ("through".into(), Filter::string("")),
-            ("search".into(), Filter::string("")),
         ]),
         omit_defaults: true,
         ..ListSpec::default()
@@ -692,7 +691,7 @@ impl Journals {
         if let Ok(id) = self.filter("account").parse::<i64>() {
             input["account_id"] = json!(id);
         }
-        let search: String = self.filter("search").trim().chars().take(20).collect();
+        let search: String = self.list.search.trim().chars().take(20).collect();
         if !search.is_empty() {
             input["search"] = json!(search);
         }
