@@ -50,7 +50,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let company = ar
         .create_customer(&scope, 1, &json!({"record_kind":"company","record_id":10}))
         .await?;
-    let consumer = ar.create_customer(&scope,1,&json!({"new_person":{"name":"Jamie TV Consumer","kind":"human","email":"jamie@example.test"},"payment_terms_days":30})).await?;
+    // The agent door composes Core Person creation in the same audited write.
+    let registry = app
+        .services
+        .get::<bilibi_agent_api::Registry>("base/agent_api.registry")?;
+    let key = "finance.receivables.customer.create";
+    let bilibi_agent_api::Handler::SafeWrite(create) = registry.operations[key].definition.handler
+    else {
+        panic!("customer create must be reviewed")
+    };
+    let input = json!({"company_id":1,"new_person":{"name":"Jamie TV Consumer","kind":"human","email":"jamie@example.test"},"payment_terms_days":30});
+    let boundary = app
+        .services
+        .get::<bilibi_database::MutationBoundary>("base/database.mutations")?;
+    let mut client = db.get().await?;
+    let mut tx = boundary
+        .begin(
+            &mut client,
+            scope.mutation_context("walkthrough.party-code"),
+        )
+        .await?;
+    let review = create
+        .preview(tx.sql(), &scope, &input)
+        .await?
+        .envelope(key);
+    assert_eq!(
+        review["result"]["changes"]["target"]["creation"]["code"],
+        "jamie_tv_consumer"
+    );
+    let answer = create.commit(&mut tx, &scope, &input).await?.envelope(key);
+    let consumer_id = answer["result"]["record"]["id"]
+        .as_i64()
+        .expect("created customer");
+    tx.commit().await?;
+    drop(client);
+    let consumer = ar.get_customer(&scope, 1, consumer_id).await?;
     assert_eq!(company.code, company.party.code);
     assert_eq!(consumer.code, consumer.party.code);
     assert_eq!(consumer.party.kind, "person");
@@ -109,6 +143,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .find(|c| c.customer_id == consumer.id)
         .expect("consumer in aging");
     assert_eq!(aged.code, consumer.code);
+    let customer_evidence = ar
+        .evidence_page(&scope, 1, "customer", Some(500), None)
+        .await?;
+    let code_at = customer_evidence
+        .fields
+        .iter()
+        .position(|f| *f == "code")
+        .unwrap();
+    assert!(customer_evidence
+        .rows
+        .iter()
+        .any(|r| r[code_at] == consumer.code));
+    let supplier_evidence = ap
+        .evidence_page(&scope, 1, "vendor", Some(500), None)
+        .await?;
+    assert!(supplier_evidence
+        .rows
+        .iter()
+        .any(|r| r["code"] == consumer.code));
     println!("PASS: company customer {} code {}; person customer {} code {}; company supplier {} code {}; person supplier shares {}; TV invoice {} posted and aging carries {}",company.id,company.code,consumer.id,consumer.code,supplier.id,supplier.code,person_supplier.code,issued.id,aged.code);
     if std::env::var("PARTY_CODE_BROWSER").as_deref() == Ok("1") {
         let listener = tokio::net::TcpListener::bind(

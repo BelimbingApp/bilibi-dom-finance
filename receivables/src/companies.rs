@@ -116,7 +116,17 @@ impl Receivables {
         if !customer.party.active() {
             return Err(invalid(
                 "customer_id",
-                "the linked Core party is not active",
+                match (customer.party.kind.as_str(), customer.party.status.as_str()) {
+                    ("company", "pending") => {
+                        "is a pending company; activate it in Companies before invoicing"
+                    }
+                    ("company", "suspended") => {
+                        "is a suspended company; reactivate it in Companies before invoicing"
+                    }
+                    ("company", "archived") => "is an archived company",
+                    ("person", "retired") => "is a retired person",
+                    _ => "the linked Core party is not available",
+                },
             ));
         }
         let role = self.customer_role(client, scope).await?;
