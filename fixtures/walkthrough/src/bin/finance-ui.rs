@@ -330,6 +330,12 @@ async fn main() -> Outcome<()> {
                 .await?,
             );
         }
+        // A customer recorded before Finance read companies from Companies:
+        // only SQL can still make one, and the page offers to link it.
+        db.get().await?.execute(
+            "INSERT INTO finance_receivables_customers(tenant_id,company_id,code,name,email,line1,locality,postcode,country_iso,payment_terms_days,active,inserted_at,updated_at) VALUES(2,$1,'FAJAR','Fajar Logistics','ops@fajar.example.test','3 Jalan Lama','Melaka','75000','MY',21,true,now(),now())",
+            &[&COMPANY],
+        ).await?;
         let draft = |customer: i64, date: &str, lines: serde_json::Value| {
             let attrs = json!({"kind":"invoice","series_id":invoices.id,"customer_id":customer,"issue_date":date,"lines":lines});
             let (ar, manager) = (&ar, &manager);
