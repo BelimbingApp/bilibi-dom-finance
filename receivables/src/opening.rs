@@ -16,6 +16,7 @@ pub(super) const HEADER: &[&str] = &[
     "original_total",
     "outstanding",
     "control_account_code",
+    "party_kind",
 ];
 const BATCH: store::Table = store::Table {
     name: "finance_receivables_opening_batches",
@@ -180,13 +181,21 @@ impl Receivables {
                     "the receivables control account must be active and postable",
                 )
             })?;
-        let requested: Vec<String> = parsed
+        let requested: std::collections::HashSet<String> = parsed
             .iter()
             .skip(1)
-            .filter_map(|row| row.get(1).map(|code| code.trim().to_owned()))
+            .filter_map(|row| row.get(1).map(|v| v.trim().to_owned()))
             .collect();
-        let customers:std::collections::HashMap<String,Value>=c.query("SELECT to_jsonb(r) FROM finance_receivables_customers r WHERE tenant_id=$1 AND company_id=$2 AND active AND code=ANY($3)",&[&s.tenant(),&company,&requested]).await?.iter().map(|r|{let v:Value=r.get(0);(v["code"].as_str().unwrap_or("").to_owned(),v)}).collect();
-        let mut names = std::collections::HashMap::new();
+        let mut customers = std::collections::HashMap::new();
+        for row in store::list(c, store::CUSTOMERS, s.tenant(), company).await? {
+            let customer = self.customer(c, s, row).await?;
+            if customer.active && requested.contains(&customer.code) {
+                customers.insert(
+                    (customer.party.kind.clone(), customer.code.clone()),
+                    json!(customer),
+                );
+            }
+        }
         let mut seen = BTreeSet::new();
         let mut documents = BTreeSet::new();
         let mut rows = vec![];
@@ -206,15 +215,14 @@ impl Receivables {
             if row[2].is_empty() || row[2].chars().count() > 100 {
                 return Err(fail("document_reference must contain 1 to 100 characters"));
             }
-            let customer = customers.get(row[1]).ok_or_else(|| {
-                fail("customer_code must identify an active customer in the current company")
+            if !["company", "person"].contains(&row[8]) {
+                return Err(fail("party_kind must be company or person"));
+            }
+            let customer = customers.get(&(row[8].to_owned(),row[1].to_owned())).ok_or_else(|| {
+                fail("customer_code and party_kind must identify an active Core-linked customer in the current company")
             })?;
             let customer_id = customer["id"].as_i64().ok_or(Error::Internal)?;
-            // A linked customer's name is Core's (#75); the row keeps none.
-            if let std::collections::hash_map::Entry::Vacant(e) = names.entry(customer_id) {
-                e.insert(self.customer(c, s, customer.clone()).await?.name);
-            }
-            let customer_name = &names[&customer_id];
+            let customer_name = customer["name"].as_str().ok_or(Error::Internal)?;
             if !documents.insert((customer_id, row[2].to_owned())) {
                 return Err(fail("the customer document reference is duplicated"));
             }
@@ -248,7 +256,7 @@ impl Receivables {
             }
             balance = Money::new((balance + residual).amount(), book.minor_units)
                 .map_err(|e| fail(&e.to_string()))?;
-            rows.push(json!({"source_id":row[0],"customer_id":customer_id,"customer_code":row[1],"customer_name":customer_name,"customer":customer,"document_reference":row[2],"document_date":date.to_string(),"due_date":due.to_string(),"original_total":original,"outstanding":residual,"settled_before_conversion":original-residual,"account_id":control,"account_code":account.code}));
+            rows.push(json!({"source_id":row[0],"customer_id":customer_id,"customer_code":row[1],"party_kind":row[8],"customer_name":customer_name,"customer":customer,"document_reference":row[2],"document_date":date.to_string(),"due_date":due.to_string(),"original_total":original,"outstanding":residual,"settled_before_conversion":original-residual,"account_id":control,"account_code":account.code}));
         }
         let expected = context
             .balances
@@ -367,7 +375,7 @@ impl Receivables {
                 let number:i64=sql.query_one("SELECT COALESCE(max(document_number),0)+1 FROM finance_receivables_documents WHERE tenant_id=$1 AND company_id=$2 AND series_id=$3",&[&tenant,&company,&series["id"].as_i64().ok_or(Error::Invalid)?]).await?.get(0);
                 let reference=format!("{}{:0width$}",series["prefix"].as_str().unwrap_or(""),number,width=series["number_width"].as_u64().unwrap_or(1) as usize);
                 let name=facts["customer_name"].as_str().ok_or(Error::Invalid)?;
-                let row=sql.query_one("UPDATE finance_receivables_documents d SET status='issued',document_number=$4,document_reference=$5,receivable_account_id=$6,party_name=$7,issued_by_user_id=$8,issued_by_impersonator_id=$9,ledger_entry_id=$10,ledger_entry_number=$11 WHERE tenant_id=$1 AND company_id=$2 AND id=$3 RETURNING to_jsonb(d)",&[&tenant,&company,&id,&number,&reference,&control,&name,&actor,&imp,&entry.id,&entry.entry_number]).await?;
+                let row=sql.query_one("UPDATE finance_receivables_documents d SET status='issued',document_number=$4,document_reference=$5,receivable_account_id=$6,party_name=$7,party_code=$12,issued_by_user_id=$8,issued_by_impersonator_id=$9,ledger_entry_id=$10,ledger_entry_number=$11 WHERE tenant_id=$1 AND company_id=$2 AND id=$3 RETURNING to_jsonb(d)",&[&tenant,&company,&id,&number,&reference,&control,&name,&actor,&imp,&entry.id,&entry.entry_number,&facts["customer_code"].as_str().ok_or(Error::Invalid)?]).await?;
                 let new:Value=row.get(0);changes.push(Change{kind:store::DOCUMENTS.kind.into(),id,old,new});
                 store::save(sql,ITEM,tenant,company,None,json!({"batch_id":batch["id"],"source_id":facts["source_id"],"document_id":id,"source_facts":facts}),&mut changes).await?;
             }

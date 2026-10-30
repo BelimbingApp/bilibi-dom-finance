@@ -46,6 +46,7 @@ pub async fn vendor(
                 scope,
                 &bilibi_company::NewCompany {
                     name,
+                    code: Some(code.into()),
                     status: Some("active".into()),
                     ..bilibi_company::NewCompany::default()
                 },
@@ -62,8 +63,10 @@ pub async fn vendor(
         scope,
         company,
         &bilibi_finance_payables::VendorInput {
-            code: code.into(),
-            core_company_id,
+            record_kind: Some("company".into()),
+            record_id: Some(core_company_id),
+            new_company: None,
+            new_person: None,
             payment_terms_days: 0,
             payable_account_id: None,
             expense_account_id: None,

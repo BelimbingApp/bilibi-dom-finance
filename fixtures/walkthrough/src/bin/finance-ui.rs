@@ -325,7 +325,7 @@ async fn main() -> Outcome<()> {
                 ar.create_customer(
                     &manager,
                     COMPANY,
-                    &json!({"code": code, "core_company_id": created.id, "payment_terms_days": terms}),
+                    &json!({"record_kind":"company","record_id": created.id, "payment_terms_days": terms}),
                 )
                 .await?,
             );

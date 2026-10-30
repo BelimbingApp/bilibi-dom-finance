@@ -85,6 +85,7 @@ const DATASETS: &[(&str, &str, &[&str])] = &[
             "tenant_id",
             "company_id",
             "code",
+            "name",
             "record_kind",
             "record_id",
             "payment_terms_days",
@@ -137,6 +138,7 @@ const DATASETS: &[(&str, &str, &[&str])] = &[
             "document_number",
             "corrects_document_id",
             "party_key",
+            "party_code",
             "party_name",
             "party_tax_id",
             "party_registration_id",
@@ -286,6 +288,7 @@ const DATASETS: &[(&str, &str, &[&str])] = &[
             "payment_number",
             "payment_date",
             "party_key",
+            "party_code",
             "party_name",
             "paid_from_account_id",
             "amount",
@@ -310,6 +313,7 @@ const DATASETS: &[(&str, &str, &[&str])] = &[
             "request_number",
             "payment_date",
             "party_key",
+            "party_code",
             "party_name",
             "paid_from_account_id",
             "amount",
@@ -518,7 +522,16 @@ pub(crate) async fn page(
     if !(1..=MAX_LIMIT).contains(&limit) || after < 0 {
         return Err(PayablesError::InvalidOption);
     }
-    let select: Vec<String> = fields.iter().map(|field| column(field)).collect();
+    let select: Vec<String> = fields
+        .iter()
+        .map(|field| {
+            if dataset == "vendor" && matches!(*field, "code" | "name") {
+                format!("NULL::text AS {field}")
+            } else {
+                column(field)
+            }
+        })
+        .collect();
     let row = client
         .query_one(
             &format!(
@@ -572,6 +585,16 @@ impl Payables {
         after: Option<i64>,
     ) -> Result<EvidencePage> {
         authorize(c, s, company, VIEW).await?;
-        page(c, s.tenant(), company, dataset, limit, after).await
+        let mut page = page(c, s.tenant(), company, dataset, limit, after).await?;
+        if dataset == "vendor" {
+            for row in &mut page.rows {
+                let vendor = self
+                    .vendor_on(c, s, company, row["id"].as_i64().ok_or(Error::Internal)?)
+                    .await?;
+                row["code"] = serde_json::json!(vendor.code);
+                row["name"] = serde_json::json!(vendor.party.name);
+            }
+        }
+        Ok(page)
     }
 }

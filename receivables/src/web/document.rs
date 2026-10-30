@@ -503,6 +503,7 @@ impl Document {
             Some(render(Facts {
                 id: "receivables-invoice-party",
                 items: vec![
+                    f::fact("Core code", f::optional(&d.party_code)),
                     f::fact("Name", f::optional(&d.party_name)),
                     f::fact("Tax ID", f::optional(&d.party_tax_identifier)),
                     f::fact(

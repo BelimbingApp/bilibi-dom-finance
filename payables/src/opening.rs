@@ -16,6 +16,7 @@ pub(super) const HEADER: &[&str] = &[
     "original_total",
     "outstanding",
     "control_account_code",
+    "party_kind",
 ];
 pub(super) struct Prepared {
     pub review: Value,
@@ -135,17 +136,25 @@ impl Payables {
         let mut seen = BTreeSet::new();
         let mut docs = BTreeSet::new();
         let mut vendors = std::collections::BTreeMap::new();
-        let codes: Vec<String> = parsed
+        let codes: std::collections::HashSet<String> = parsed
             .iter()
             .skip(1)
-            .filter_map(|row| row.get(1).map(|code| code.trim().to_owned()))
+            .filter_map(|row| row.get(1).map(|v| v.trim().to_owned()))
             .collect();
-        let vendor_ids: std::collections::HashMap<String, i64> = c
-            .query("SELECT code,id FROM finance_payables_vendors WHERE tenant_id=$1 AND company_id=$2 AND code=ANY($3)", &[&s.tenant(), &company, &codes])
-            .await?
-            .iter()
-            .map(|r| (r.get(0), r.get(1)))
-            .collect();
+        let mut vendor_ids = std::collections::HashMap::new();
+        let mut after = 0;
+        loop {
+            let batch = self.vendors_on(c, s, company, after, 500).await?;
+            if batch.is_empty() {
+                break;
+            }
+            after = batch.last().ok_or(Error::Internal)?.id;
+            for vendor in batch {
+                if codes.contains(&vendor.code) {
+                    vendor_ids.insert((vendor.party.kind.clone(), vendor.code.clone()), vendor.id);
+                }
+            }
+        }
         let mut loaded = std::collections::HashMap::new();
         let mut recorded: Vec<(i64, String, String, i32)> = vec![];
         let mut rows = vec![];
@@ -163,12 +172,12 @@ impl Payables {
                 ));
             }
             if row[1].is_empty()
-                || row[1].chars().count() > 50
+                || row[1].chars().count() > 255
                 || row[2].is_empty()
                 || row[2].chars().count() > 200
             {
                 return Err(fail(
-                    "vendor_code and vendor_name are required, at most 50 and 200 characters",
+                    "vendor_code and vendor_name are required, at most 255 and 200 characters",
                 ));
             }
             if vendors
@@ -185,8 +194,11 @@ impl Payables {
                     "document_reference must contain 1 to 100 characters and be unique for the vendor",
                 ));
             }
-            let vendor_id = *vendor_ids.get(row[1]).ok_or_else(|| {
-                fail("vendor_code must identify an existing vendor of the current company")
+            if !["company", "person"].contains(&row[9]) {
+                return Err(fail("party_kind must be company or person"));
+            }
+            let vendor_id = *vendor_ids.get(&(row[9].to_owned(),row[1].to_owned())).ok_or_else(|| {
+                fail("vendor_code and party_kind must identify an existing Core-linked vendor of the current company")
             })?;
             if let std::collections::hash_map::Entry::Vacant(e) = loaded.entry(vendor_id) {
                 e.insert(self.vendor_on(c, s, company, vendor_id).await?);
@@ -230,7 +242,7 @@ impl Payables {
             }
             balance = Money::new((balance + residual).amount(), book.minor_units)
                 .map_err(|e| fail(&e.to_string()))?;
-            rows.push(json!({"source_id":row[0],"vendor_code":row[1],"vendor_name":row[2],"vendor_id":vendor_id,"vendor":vendor,"party_key":party_key,"document_reference":row[3],"document_date":date.to_string(),"due_date":due.to_string(),"original_total":original,"outstanding":residual,"settled_before_conversion":original-residual,"account_id":control,"account_code":account.code}));
+            rows.push(json!({"source_id":row[0],"vendor_code":row[1],"party_kind":row[9],"vendor_name":row[2],"vendor_id":vendor_id,"vendor":vendor,"party_key":party_key,"document_reference":row[3],"document_date":date.to_string(),"due_date":due.to_string(),"original_total":original,"outstanding":residual,"settled_before_conversion":original-residual,"account_id":control,"account_code":account.code}));
         }
         if !recorded.is_empty() {
             let (ids, keys, numbers, rows_at): (Vec<i64>, Vec<String>, Vec<String>, Vec<i32>) =
@@ -376,7 +388,7 @@ impl Payables {
             let (batch,change)=store::insert(sql,store::Table::OpeningBatch,json!({"tenant_id":tenant,"company_id":company,"source_reference":source,"source_csv":csv,"currency_code":entry.currency_code,"conversion_date":entry.entry_date.to_string(),"entry_id":entry.id,"entry_number":entry.entry_number,"recorded_by_user_id":actor,"recorded_by_impersonator_id":imp,"recorded_at":jiff::Timestamp::now().to_string()})).await?;
             let mut changes=vec![change];
             for facts in rows {
-                let (old,change)=store::insert(sql,store::Table::Documents,json!({"tenant_id":tenant,"company_id":company,"opening_batch_id":batch["id"],"document_type":"bill","status":"draft","party_key":facts["party_key"],"party_code":party["party_code"],"party_name":facts["party"]["party_name"],"party_tax_id":facts["party"]["party_tax_identifier"],"party_registration_id":facts["party"]["party_registration_identifier"],"party_document_number":facts["document_reference"],"document_date":facts["document_date"],"due_date":facts["due_date"],"currency_code":entry.currency_code,"description":"Opening outstanding balance; no new purchase","total_net":facts["outstanding"],"total_tax":"0","total":facts["outstanding"],"created_by_user_id":actor,"created_by_impersonator_id":imp})).await?;
+                let (old,change)=store::insert(sql,store::Table::Documents,json!({"tenant_id":tenant,"company_id":company,"opening_batch_id":batch["id"],"document_type":"bill","status":"draft","party_key":facts["party_key"],"party_code":facts["party"]["party_code"],"party_name":facts["party"]["party_name"],"party_tax_id":facts["party"]["party_tax_identifier"],"party_registration_id":facts["party"]["party_registration_identifier"],"party_document_number":facts["document_reference"],"document_date":facts["document_date"],"due_date":facts["due_date"],"currency_code":entry.currency_code,"description":"Opening outstanding balance; no new purchase","total_net":facts["outstanding"],"total_tax":"0","total":facts["outstanding"],"created_by_user_id":actor,"created_by_impersonator_id":imp})).await?;
                 let id=old["id"].as_i64().ok_or(Error::Invalid)?;changes.push(change);
                 changes.push(store::insert(sql,store::Table::Lines,json!({"tenant_id":tenant,"company_id":company,"document_id":id,"line_number":1,"description":"Opening outstanding balance; no new purchase","account_id":control,"amount":facts["outstanding"]})).await?.1);
                 let approved:Value=sql.query_one("UPDATE finance_payables_documents d SET status='approved',approved_by_user_id=$4,approved_by_impersonator_id=$5 WHERE tenant_id=$1 AND company_id=$2 AND id=$3 RETURNING to_jsonb(d)",&[&tenant,&company,&id,&actor,&imp]).await?.get(0);

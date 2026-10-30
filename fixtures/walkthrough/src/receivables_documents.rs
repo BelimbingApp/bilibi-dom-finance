@@ -83,10 +83,10 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         .create_customer(
             &admin,
             1,
-            &json!({"code":"R2-customer","core_company_id":20,"payment_terms_days":30}),
+            &json!({"record_kind":"company","record_id":20,"payment_terms_days":30}),
         )
         .await?;
-    let party = customer.company.clone().expect("linked to Company 020");
+    let party = customer.party.clone();
     let prefill = einvoice.prefill_party(&admin, 1, party.id).await?;
     let registry = services.get::<bilibi_agent_api::Registry>("base/agent_api.registry")?;
     let key = "finance.einvoice.party.prefill";
@@ -216,9 +216,9 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
     assert_eq!(
         ar.get_customer(&admin, 1, customer.id)
             .await?
-            .company
-            .map(|c| c.restricted),
-        Some(vec!["tax_id".to_owned()])
+            .party
+            .restricted,
+        vec!["tax_id".to_owned()]
     );
     client.execute("DELETE FROM field_restrictions WHERE tenant_id=1 AND role_id=4 AND table_id='companies' AND field_id='tax_id'", &[]).await?;
     ar.update_tax_code(&admin, 1, tax.id, &json!({"name":"R2 renamed tax"}))
@@ -1269,26 +1269,6 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         .await?;
     assert!(matches!(refused, Err(R::CompanyArchived)));
     assert!(readable.is_ok());
-    let linked_legacy = ar
-        .list_customers(&admin, 1)
-        .await?
-        .into_iter()
-        .find(|c| c.code == "LEGACY")
-        .expect("legacy customer linked in the setup walkthrough");
-    let linked_company = linked_legacy.company.clone().expect("linked");
-    let legacy_draft = ar
-        .create_draft(
-            &admin,
-            1,
-            &json!({"kind":"invoice","series_id":series[0].id,"customer_id":linked_legacy.id,"issue_date":"2026-08-31","lines":[{"description":"R2 linked legacy line","quantity":"1","unit_price":"5"}]}),
-        )
-        .await?;
-    let legacy_invoice = ar.issue_document(&admin, 1, legacy_draft.id).await?;
-    assert_eq!(
-        legacy_invoice.party_name.as_deref(),
-        Some(linked_company.name.as_str())
-    );
-    assert!(legacy_invoice.party_line1.is_none() && legacy_invoice.party_country_iso.is_none());
     let waiting = ar
         .create_draft(&admin, 1, &invoice(Some("2026-10-08"), "1"))
         .await?;

@@ -401,6 +401,23 @@ impl Receivables {
         let mut chart = Vec::new();
         let mut target = None;
         if customer {
+            for field in [
+                "name",
+                "tax_identifier",
+                "registration_identifier",
+                "email",
+                "phone",
+                "line1",
+                "line2",
+                "city",
+                "postal_code",
+                "country_iso",
+                "state_code",
+            ] {
+                if attrs.get(field).is_some() {
+                    return Err(invalid(field, "is read from the linked Core party"));
+                }
+            }
             if attrs.get("code").is_some() {
                 return Err(invalid(
                     "code",

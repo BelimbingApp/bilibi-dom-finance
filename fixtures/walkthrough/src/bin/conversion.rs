@@ -34,8 +34,8 @@ roles!(
 );
 type Outcome<T> = Result<T, Box<dyn std::error::Error>>;
 const SOURCE: &str = "source_id,account_code,debit,credit\nbank,1000,10000,\nreceivables,1100,3000,\nasset-cost,1200,12000,\nytd-cost,5000,2000,\npayables,2000,,1500\naccumulation,1290,,1800\ncapital,3000,,18200\nytd-sales,4000,,5500\n";
-const AR: &str = "source_id,customer_code,document_reference,document_date,due_date,original_total,outstanding,control_account_code\ninvoice-17,CONVERSION-CUSTOMER,OLD-INV-17,2026-05-15,2026-06-30,5000,3000,1100\n";
-const AP: &str = "source_id,vendor_code,vendor_name,document_reference,document_date,due_date,original_total,outstanding,control_account_code\nbill-29,CONVERSION-VENDOR,Conversion vendor,OLD-BILL-29,2026-05-01,2026-06-15,2500,1500,2000\n";
+const AR: &str = "source_id,customer_code,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind\ninvoice-17,company_010,OLD-INV-17,2026-05-15,2026-06-30,5000,3000,1100,company\n";
+const AP: &str = "source_id,vendor_code,vendor_name,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind\nbill-29,company_010,Conversion vendor,OLD-BILL-29,2026-05-01,2026-06-15,2500,1500,2000,company\n";
 async fn setup(db: &Db, services: &Services, company: i64) -> Outcome<Value> {
     let admin = sign_in(db, services, 1, 4).await?;
     let manager = sign_in(db, services, 1, 1).await?;
@@ -111,13 +111,13 @@ async fn setup(db: &Db, services: &Services, company: i64) -> Outcome<Value> {
         ar.create_series(&admin,company,&json!({"code":"RECEIPT","name":"Receipts","kind":"payment","prefix":"REC-","number_width":4})).await?
     };
     let customers = ar.list_customers(&admin, company).await?;
-    let customer = if let Some(c) = customers.iter().find(|c| c.code == "CONVERSION-CUSTOMER") {
+    let customer = if let Some(c) = customers.iter().find(|c| c.code == "company_010") {
         c.clone()
     } else {
         ar.create_customer(
             &admin,
             company,
-            &json!({"code":"CONVERSION-CUSTOMER","core_company_id":10,"payment_terms_days":30}),
+            &json!({"record_kind":"company","record_id":10,"payment_terms_days":30}),
         )
         .await?
     };
@@ -135,15 +135,17 @@ async fn setup(db: &Db, services: &Services, company: i64) -> Outcome<Value> {
     )
     .await?;
     let vendors = ap.list_vendors(&admin, company, 0, 500).await?;
-    let vendor = if let Some(vendor) = vendors.iter().find(|v| v.code == "CONVERSION-VENDOR") {
+    let vendor = if let Some(vendor) = vendors.iter().find(|v| v.code == "company_010") {
         vendor.clone()
     } else {
         ap.create_vendor(
             &admin,
             company,
             &VendorInput {
-                code: "CONVERSION-VENDOR".into(),
-                core_company_id: 10,
+                record_kind: Some("company".into()),
+                record_id: Some(10),
+                new_company: None,
+                new_person: None,
                 payment_terms_days: 30,
                 payable_account_id: None,
                 expense_account_id: None,
@@ -287,7 +289,7 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
     let a = ar.import_opening_invoices(&s, company, &ar_input).await?;
     assert_eq!(a, ar.import_opening_invoices(&s, company, &ar_input).await?);
     let mut unknown_vendor = ap_input.clone();
-    unknown_vendor["csv"] = json!(AP.replace("CONVERSION-VENDOR", "MISSING-VENDOR"));
+    unknown_vendor["csv"] = json!(AP.replace("company_010", "MISSING-VENDOR"));
     assert!(ap
         .import_opening_bills(&s, company, &unknown_vendor)
         .await
@@ -296,8 +298,10 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         .get_vendor(&s, company, config["vendor_id"].as_i64().unwrap())
         .await?;
     let mut vendor_input = VendorInput {
-        code: vendor.code.clone(),
-        core_company_id: vendor.company.id,
+        record_kind: Some("company".into()),
+        record_id: Some(vendor.party.id),
+        new_company: None,
+        new_person: None,
         payment_terms_days: vendor.payment_terms_days,
         payable_account_id: vendor.payable_account_id,
         expense_account_id: vendor.expense_account_id,

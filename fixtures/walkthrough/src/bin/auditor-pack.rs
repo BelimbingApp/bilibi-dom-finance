@@ -258,19 +258,16 @@ async fn main() -> Outcome<()> {
             None,
         )
         .await?;
-    // A pre-link customer represents an existing Finance record. Evidence is
-    // a snapshot of records at export time, independently of the entry pin.
-    let raw = db.get().await?;
-    raw.execute("INSERT INTO finance_receivables_customers(tenant_id,company_id,code,name,payment_terms_days,active,inserted_at,updated_at) VALUES(1,$1,'PACK-LEGACY','Pack legacy',0,true,now(),now())", &[&COMPANY]).await?;
-    drop(raw);
+    // Core facts are included in the evidence snapshot independently of entry pins.
     let ar = services
         .get::<bilibi_finance_receivables::Receivables>(bilibi_finance_receivables::SERVICE)?;
-    let legacy = ar
-        .list_customers(&admin, COMPANY)
-        .await?
-        .into_iter()
-        .find(|c| c.code == "PACK-LEGACY")
-        .expect("legacy customer");
+    let customer = ar
+        .create_customer(
+            &admin,
+            COMPANY,
+            &json!({"record_kind":"company","record_id":20}),
+        )
+        .await?;
     let before_link = reports
         .export_auditor_pack(&admin, COMPANY, date(2026, 3, 31))
         .await?;
@@ -297,9 +294,14 @@ async fn main() -> Outcome<()> {
         .ends_with("record_kind,record_id"));
     assert!(before_csv
         .lines()
-        .any(|row| row.contains("PACK-LEGACY") && row.ends_with(",\"\",\"\"")));
-    ar.link_customer(&admin, COMPANY, legacy.id, &json!({"core_company_id":20}))
-        .await?;
+        .any(|row| row.contains(&customer.code) && row.ends_with(",\"company\",\"20\"")));
+    ar.update_customer(
+        &admin,
+        COMPANY,
+        customer.id,
+        &json!({"payment_terms_days":30}),
+    )
+    .await?;
     let trial_after = ledger
         .trial_balance(&admin, COMPANY, date(2026, 3, 31), Some(report_pin))
         .await?;
@@ -385,7 +387,7 @@ async fn main() -> Outcome<()> {
     let customer_csv = String::from_utf8(files["receivables-customer.csv"].clone())?;
     assert!(customer_csv
         .lines()
-        .any(|row| row.contains("PACK-LEGACY") && row.ends_with(",\"company\",\"20\"")));
+        .any(|row| row.contains(&customer.code) && row.ends_with(",\"company\",\"20\"")));
     assert_eq!(manifest["through_entry_number"], pin + 1);
     for (name, count) in [
         ("ledger-entry.csv", 503),

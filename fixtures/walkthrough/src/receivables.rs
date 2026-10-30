@@ -206,111 +206,69 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         )
         .await?;
     assert_eq!(unchanged.rate.normalize().to_string(), "10");
-    // A customer is a Core company (#75): the Finance record keeps a code,
-    // payment terms and availability; the business is read from Core.
+    // Finance stores terms and availability; the immutable identity belongs to Core.
     field(
-        ar.create_customer(&manager, 1, &json!({"code":"A"})).await,
-        "core_company_id",
-        "can't be blank",
+        ar.create_customer(&manager, 1, &json!({})).await,
+        "record_id",
+        "choose one",
     );
-    field(
-        ar.create_customer(&manager, 1, &json!({"code":"A","core_company_id":1}))
-            .await,
-        "core_company_id",
-        "cannot be the company itself",
-    );
-    field(
-        ar.create_customer(&manager, 1, &json!({"code":"A","core_company_id":999_999}))
-            .await,
-        "core_company_id",
-        "does not exist",
-    );
-    field(
-        ar.create_customer(&manager, 1, &json!({"code":"A","core_company_id":100}))
-            .await,
-        "core_company_id",
-        "does not exist",
-    );
+    for id in [1, 999_999, 100] {
+        assert!(ar
+            .create_customer(
+                &manager,
+                1,
+                &json!({"record_kind":"company","record_id":id})
+            )
+            .await
+            .is_err());
+    }
     let customer = ar
         .create_customer(
             &manager,
             1,
-            &json!({"code":" A ","core_company_id":"10","payment_terms_days":"30"}),
+            &json!({"record_kind":"company","record_id":"10","payment_terms_days":"30"}),
         )
         .await?;
-    let company = customer.company.clone().expect("linked to a company");
+    let company = customer.party.clone();
     assert_eq!(
         (customer.code.as_str(), company.id, company.status.as_str()),
-        ("A", 10, "active")
+        ("company_010", 10, "active")
     );
     assert_eq!(customer.name, company.name);
     assert!(company.readable && company.email.is_some() && company.tax_id.is_some());
-    assert!(customer.line1.is_none() && customer.email.is_none());
     field(
         ar.update_customer(&manager, 1, customer.id, &json!({"name":"New name"}))
             .await,
         "name",
-        "is read from the linked company",
+        "is read from the linked Core party",
     );
-    let unchanged = ar
-        .update_customer(
+    field(
+        ar.update_customer(&manager, 1, customer.id, &json!({"code":"OTHER"}))
+            .await,
+        "code",
+        "cannot be supplied",
+    );
+    field(
+        ar.update_customer(
             &manager,
             1,
             customer.id,
-            &json!({"code":{},"core_company_id":11}),
+            &json!({"record_kind":"company","record_id":11}),
         )
-        .await?;
-    assert_eq!(unchanged.code, "A");
-    assert_eq!(unchanged.company.as_ref().map(|c| c.id), Some(10));
-    field(
-        ar.create_customer(&manager, 1, &json!({"code":"A2","core_company_id":10}))
-            .await,
-        "core_company_id",
-        "is already a customer of this company",
+        .await,
+        "record_id",
+        "cannot change",
     );
     field(
-        ar.link_customer(&manager, 1, customer.id, &json!({"core_company_id":11}))
-            .await,
-        "core_company_id",
-        "is already linked; a customer's company never changes",
-    );
-    // A customer recorded before this module read Core keeps its own party
-    // fields, reads as not linked, and is linked once, for good.
-    client.execute("INSERT INTO finance_receivables_customers(tenant_id,company_id,code,name,line1,country_iso,payment_terms_days,active,inserted_at,updated_at) VALUES(1,1,'LEGACY','Legacy party','Old street','MY',0,true,now(),now())", &[]).await?;
-    let legacy = ar
-        .list_customers(&manager, 1)
-        .await?
-        .into_iter()
-        .find(|c| c.code == "LEGACY")
-        .expect("legacy customer");
-    assert!(legacy.company.is_none() && legacy.line1.as_deref() == Some("Old street"));
-    let renamed = ar
-        .update_customer(
+        ar.create_customer(
             &manager,
             1,
-            legacy.id,
-            &json!({"name":" Legacy renamed ","country_iso":" my "}),
+            &json!({"record_kind":"company","record_id":10}),
         )
-        .await?;
-    assert_eq!(
-        (renamed.name.as_str(), renamed.country_iso.as_deref()),
-        ("Legacy renamed", Some("MY"))
+        .await,
+        "record_id",
+        "already a customer",
     );
-    field(
-        ar.update_customer(&manager, 1, legacy.id, &json!({"country_iso":"M1"}))
-            .await,
-        "country_iso",
-        "has invalid format",
-    );
-    let still_legacy = ar
-        .update_customer(
-            &manager,
-            1,
-            legacy.id,
-            &json!({"record_kind":"company","record_id":"10"}),
-        )
-        .await?;
-    assert!(still_legacy.company.is_none());
     ar.update_customer(&manager, 1, customer.id, &json!({"active":false}))
         .await?;
     let defaults = ar
@@ -339,12 +297,6 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         "payment_terms_days",
         "can't be blank",
     );
-    field(
-        ar.create_customer(&manager, 1, &json!({"code":"A","core_company_id":11}))
-            .await,
-        "code",
-        "has already been taken",
-    );
     assert!(matches!(
         ar.get_customer(&viewer, 1, customer.id).await,
         Err(R::Unauthorized)
@@ -353,40 +305,25 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         ar.get_customer(&manager, 1, customer.id).await?.name,
         company.name
     );
-    assert_eq!(ar.list_customers(&manager, 1).await?.len(), 2);
+    assert_eq!(ar.list_customers(&manager, 1).await?.len(), 1);
     assert_eq!(ar.list_tax_codes(&manager, 1).await?.len(), 1);
     println!(
         "code lists: uniqueness, immutable identities, tax precision and flat customer addresses"
     );
 
-    // New invoices need a customer linked to an active company; a customer
-    // recorded before linking, a pending company and a suspended company
-    // are each refused in their own words, and linking is permanent.
-    field(
-        ar.create_draft(
+    // A pending linked company cannot be invoiced until it is active.
+    let pending = ar
+        .create_customer(
             &manager,
             1,
-            &json!({"kind":"invoice","series_id":series.id,"customer_id":legacy.id}),
+            &json!({"record_kind":"company","record_id":12}),
         )
-        .await,
-        "customer_id",
-        "is not linked to a company; link it before invoicing",
-    );
-    let linked = ar
-        .link_customer(&manager, 1, legacy.id, &json!({"core_company_id":12}))
         .await?;
-    let linked_company = linked.company.clone().expect("linked");
-    assert_eq!(
-        (linked_company.id, linked_company.status.as_str()),
-        (12, "pending")
-    );
-    assert_eq!(linked.name, linked_company.name);
-    assert!(linked.line1.is_none());
     field(
         ar.create_draft(
             &manager,
             1,
-            &json!({"kind":"invoice","series_id":series.id,"customer_id":legacy.id}),
+            &json!({"kind":"invoice","series_id":series.id,"customer_id":pending.id}),
         )
         .await,
         "customer_id",
@@ -407,7 +344,7 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         ar.create_draft(
             &manager,
             1,
-            &json!({"kind":"invoice","series_id":series.id,"customer_id":legacy.id}),
+            &json!({"kind":"invoice","series_id":series.id,"customer_id":pending.id}),
         )
         .await,
         "customer_id",
@@ -420,11 +357,11 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         .create_draft(
             &manager,
             1,
-            &json!({"kind":"invoice","series_id":series.id,"customer_id":legacy.id}),
+            &json!({"kind":"invoice","series_id":series.id,"customer_id":pending.id}),
         )
         .await?;
     ar.discard_draft(&manager, 1, reopened.id).await?;
-    println!("customers: linked to Core companies, pending and suspended companies refused for new invoices, a legacy customer linked once");
+    println!("customers: linked to Core companies, pending and suspended companies refused for new invoices, permanent Core links");
 
     let header = json!({"kind":"invoice","series_id":series.id,"customer_id":customer.id});
     let empty = ar.create_draft(&manager, 1, &header).await?;
@@ -676,8 +613,8 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         .await,
         Err(R::InvalidOption)
     ));
-    let race_a = json!({"code":"RACE","core_company_id":13});
-    let race_b = json!({"code":"RACE","core_company_id":14});
+    let race_a = json!({"record_kind":"company","record_id":13});
+    let race_b = race_a.clone();
     let (a, b) = tokio::join!(
         ar.create_customer(&manager, 1, &race_a),
         ar.create_customer(&manager, 1, &race_b)
@@ -689,8 +626,8 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         "DELETE FROM finance_receivables_documents WHERE tenant_id=1 AND company_id=1",
         "UPDATE finance_receivables_series SET prefix='changed' WHERE tenant_id=1 AND company_id=1",
         "UPDATE finance_receivables_tax_codes SET rate=20 WHERE tenant_id=1 AND company_id=1",
-        "UPDATE finance_receivables_customers SET code='changed' WHERE tenant_id=1 AND company_id=1",
-        "UPDATE finance_receivables_customers SET record_id='15' WHERE tenant_id=1 AND company_id=1 AND code='LEGACY'",
+        
+        "UPDATE finance_receivables_customers SET record_id='15' WHERE tenant_id=1 AND company_id=1 AND record_id='12'",
         "TRUNCATE finance_receivables_document_lines",
     ] { let error = client.batch_execute(sql).await.expect_err("database must refuse"); println!("database refused: {}", error.as_db_error().map(|e| e.message()).unwrap_or("database error")); }
     let audit: i64 = client.query_one("SELECT count(*) FROM base_audit_mutations WHERE auditable_type LIKE 'finance.receivables.%'", &[]).await?.get(0);
@@ -698,27 +635,23 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
     println!("receivables audit mutations: {audit}; concurrent duplicate serialized to one success and one field refusal");
     // Uniqueness is per operating company, not per Core counterparty.
     let other_customer = ar
-        .create_customer(
-            &admin,
-            3,
-            &json!({"code":"shared-company","core_company_id":10}),
-        )
+        .create_customer(&admin, 3, &json!({"record_kind":"company","record_id":10}))
         .await?;
-    assert_eq!(other_customer.company.as_ref().map(|c| c.id), Some(10));
+    assert_eq!(Some(other_customer.party.id), Some(10));
     assert_ne!(other_customer.id, customer.id);
     // Company 3 is disposable and later walkthroughs already expect it archived.
     client
         .batch_execute("UPDATE companies SET status='archived' WHERE tenant_id=1 AND id=3")
         .await?;
     assert!(matches!(
-        ar.create_customer(&admin, 3, &json!({"code":"X","core_company_id":10}))
+        ar.create_customer(&admin, 3, &json!({"record_kind":"company","record_id":10}))
             .await,
         Err(R::CompanyArchived)
     ));
     field(
-        ar.create_customer(&manager, 1, &json!({"code":"X","core_company_id":3}))
+        ar.create_customer(&manager, 1, &json!({"record_kind":"company","record_id":3}))
             .await,
-        "core_company_id",
+        "record_id",
         "is an archived company",
     );
     println!("NR1 proof passed: setup, code lists, arithmetic, drafts, isolation, paging, concurrent writes, archival, SQL guards and audit");

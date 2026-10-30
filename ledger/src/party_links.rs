@@ -96,6 +96,9 @@ fn person_error(error: bilibi_person::WriteError) -> LedgerError {
                 .map(|f| FieldError::new(prefixed("new_person", f.field), f.message))
                 .collect(),
         ),
+        bilibi_person::WriteError::Backend(Error::Forbidden) => {
+            invalid("new_person", "needs People create permission")
+        }
         bilibi_person::WriteError::Backend(error) => error.into(),
         other => invalid("new_person", other.to_string()),
     }
@@ -239,7 +242,11 @@ impl<'a> PartyLinks<'a> {
                 serde_json::from_value(attrs["new_company"].clone())
                     .map_err(|_| invalid("new_company", "is invalid"))?;
             let preview = bilibi_company::preview_create(client, scope, &new)
-                .await?
+                .await
+                .map_err(|error| match error {
+                    Error::Forbidden => invalid("new_company", "needs Companies create permission"),
+                    other => other.into(),
+                })?
                 .map_err(company_fields)?;
             return Ok(PartyTarget {
                 kind: "company".into(),
@@ -381,7 +388,13 @@ impl<'a> PartyLinks<'a> {
             if role.retired() {
                 return Err(invalid("base", "the relationship role is retired"));
             }
-            bilibi_company::authorize_target(client, scope, source, bilibi_company::UPDATE)
+            self.parties
+                .organisation_target(
+                    client,
+                    scope,
+                    OrganisationId::new(source).map_err(|_| Error::Invalid)?,
+                    bilibi_company::UPDATE,
+                )
                 .await
                 .map_err(|e| match e {
                     Error::Forbidden => invalid(
