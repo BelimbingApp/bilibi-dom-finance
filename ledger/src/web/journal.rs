@@ -514,7 +514,12 @@ impl Journal {
         let mut page = render(Header {
             title: Html::text(&name),
             subtitle: &subtitle,
-            title_actions: super::record_pin("ledger-journal-pin", "journal", &name, &url)?,
+            title_actions: super::record_pin(
+                "ledger-journal-pin",
+                "journal",
+                &format!("Journal · Request {}", journal.journal_number),
+                &url,
+            )?,
             actions,
         })?;
         page.push(&render(Announce {

@@ -531,6 +531,7 @@ impl Journals {
     pub(super) fn new(pages: Pages, query: &HashMap<String, String>, framed: bool) -> Result<Self> {
         let columns = vec![
             BuiltinColumn::new("number", "Number"),
+            BuiltinColumn::new("request", "Request"),
             BuiltinColumn::new("date", "Date"),
             BuiltinColumn::new("description", "Description"),
             BuiltinColumn::new("source", "Source"),
@@ -878,7 +879,12 @@ impl Journals {
                     body,
                 })
             };
-            let mut row = FlexRow::new(&key).cell("date", Cell::text(&record.date));
+            let mut row = FlexRow::new(&key)
+                .cell(
+                    "request",
+                    Cell::text(record.request.map(|n| n.to_string()).unwrap_or_default()),
+                )
+                .cell("date", Cell::text(&record.date));
             row = match record.number {
                 Some(number) => row
                     .slot("number", link(Html::text(&number.to_string()))?)
@@ -1327,6 +1333,7 @@ struct ListRow {
     kind: String,
     stamp: String,
     number: Option<i64>,
+    request: Option<i64>,
     date: String,
     description: String,
     source: String,

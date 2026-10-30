@@ -339,10 +339,14 @@ impl Entry {
             Some(request) => format!("Request {request} · {}", entry.description),
             None => entry.description.clone(),
         };
+        let pin = match entry.request_number {
+            Some(request) => format!("Journal · Request {request}"),
+            None => name.clone(),
+        };
         let mut page = render(Header {
             title: Html::text(&name),
             subtitle: &subtitle,
-            title_actions: super::record_pin("ledger-entry-pin", "entry", &name, &url)?,
+            title_actions: super::record_pin("ledger-entry-pin", "entry", &pin, &url)?,
             actions,
         })?;
         page.push(&render(Announce {
