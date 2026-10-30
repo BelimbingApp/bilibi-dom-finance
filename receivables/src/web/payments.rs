@@ -173,10 +173,10 @@ impl Payments {
     }
 
     fn customer_name(&self, id: i64) -> String {
-        self.customers
-            .iter()
-            .find(|c| c.id == id)
-            .map_or_else(|| format!("Customer #{id}"), |c| c.name.clone())
+        self.customers.iter().find(|c| c.id == id).map_or_else(
+            || format!("Customer #{id}"),
+            |c| format!("{} · {}", c.code, c.name),
+        )
     }
 
     fn shown(&mut self) -> (Vec<Payment>, u64) {

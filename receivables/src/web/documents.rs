@@ -153,15 +153,18 @@ impl Documents {
     }
 
     fn customer_name(&self, d: &Document) -> String {
-        d.party_name.clone().unwrap_or_else(|| {
-            self.customers
-                .iter()
-                .find(|c| c.id == d.customer_id)
-                .map_or_else(
-                    || format!("Customer #{}", d.customer_id),
-                    |c| c.name.clone(),
-                )
-        })
+        let customer = self.customers.iter().find(|c| c.id == d.customer_id);
+        let name = d
+            .party_name
+            .as_deref()
+            .or(customer.map(|c| c.name.as_str()))
+            .unwrap_or("Customer unavailable");
+        let code = d
+            .party_code
+            .as_deref()
+            .or(customer.map(|c| c.code.as_str()))
+            .unwrap_or("");
+        format!("{code} · {name}")
     }
 
     fn shown(&mut self) -> (Vec<Document>, u64) {

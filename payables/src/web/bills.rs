@@ -211,7 +211,10 @@ impl Bills {
                         "document_type",
                         format::badge(format::kind(&d.document_type), BadgeKind::Neutral, false)?,
                     )
-                    .cell("party", Cell::text(&d.party.name))
+                    .cell(
+                        "party",
+                        Cell::text(format!("{} · {}", d.party.code, d.party.name)),
+                    )
                     .cell(
                         "party_document_number",
                         Cell::text(format::optional(&d.party_document_number)),

@@ -183,7 +183,7 @@ impl Request {
             );
         let amount = format!("{} {}", r.amount.display(self.units), r.currency_code);
         let mut items = vec![
-            f::fact("Supplier", &format!("{} · {}", r.party_key, r.party_name)),
+            f::fact("Supplier", &format!("{} · {}", r.party_code, r.party_name)),
             f::fact("Payment date", &r.payment_date.to_string()),
             f::fact("Paid from", &account),
             f::fact("Amount", &amount),

@@ -40,6 +40,7 @@ pub struct PaymentRequest {
     pub payment_date: Date,
     pub party_key: String,
     pub party_name: String,
+    pub party_code: String,
     pub paid_from_account_id: i64,
     pub amount: Money,
     pub currency_code: String,
@@ -70,6 +71,7 @@ pub struct Payment {
     pub payment_date: Date,
     pub party_key: String,
     pub party_name: String,
+    pub party_code: String,
     pub paid_from_account_id: i64,
     pub amount: Money,
     pub currency_code: String,
@@ -586,10 +588,10 @@ impl Payables {
             return Err(PayablesError::InvalidOption);
         }
         let search = q.search.trim();
-        let total: i64=c.query_one("SELECT count(*) FROM finance_payables_payment_requests r LEFT JOIN finance_payables_payment_request_events e ON e.tenant_id=r.tenant_id AND e.company_id=r.company_id AND e.request_id=r.id WHERE r.tenant_id=$1 AND r.company_id=$2 AND ($3::text IS NULL OR COALESCE(e.event,'submitted')=$3) AND (strpos(lower(r.party_name),lower($4))>0 OR strpos(lower(r.party_key),lower($4))>0 OR strpos(lower(COALESCE(r.reference,'')),lower($4))>0 OR strpos(r.request_number::text,$4)>0)",&[&s.tenant(),&company,&q.status,&search]).await?.get(0);
+        let total: i64=c.query_one("SELECT count(*) FROM finance_payables_payment_requests r LEFT JOIN finance_payables_payment_request_events e ON e.tenant_id=r.tenant_id AND e.company_id=r.company_id AND e.request_id=r.id WHERE r.tenant_id=$1 AND r.company_id=$2 AND ($3::text IS NULL OR COALESCE(e.event,'submitted')=$3) AND (strpos(lower(r.party_name),lower($4))>0 OR EXISTS(SELECT 1 FROM finance_payables_payment_request_allocations a JOIN finance_payables_documents d ON d.tenant_id=a.tenant_id AND d.company_id=a.company_id AND d.id=a.document_id WHERE a.tenant_id=r.tenant_id AND a.company_id=r.company_id AND a.request_id=r.id AND strpos(lower(d.party_code),lower($4))>0) OR strpos(lower(COALESCE(r.reference,'')),lower($4))>0 OR strpos(r.request_number::text,$4)>0)",&[&s.tenant(),&company,&q.status,&search]).await?.get(0);
         let page = q.page.min(((total + q.page_size - 1) / q.page_size).max(1));
         let offset = (page - 1) * q.page_size;
-        let rows=c.query("SELECT r.id FROM finance_payables_payment_requests r LEFT JOIN finance_payables_payment_request_events e ON e.tenant_id=r.tenant_id AND e.company_id=r.company_id AND e.request_id=r.id WHERE r.tenant_id=$1 AND r.company_id=$2 AND ($3::text IS NULL OR COALESCE(e.event,'submitted')=$3) AND (strpos(lower(r.party_name),lower($4))>0 OR strpos(lower(r.party_key),lower($4))>0 OR strpos(lower(COALESCE(r.reference,'')),lower($4))>0 OR strpos(r.request_number::text,$4)>0) ORDER BY r.request_number DESC LIMIT $5 OFFSET $6",&[&s.tenant(),&company,&q.status,&search,&q.page_size,&offset]).await?;
+        let rows=c.query("SELECT r.id FROM finance_payables_payment_requests r LEFT JOIN finance_payables_payment_request_events e ON e.tenant_id=r.tenant_id AND e.company_id=r.company_id AND e.request_id=r.id WHERE r.tenant_id=$1 AND r.company_id=$2 AND ($3::text IS NULL OR COALESCE(e.event,'submitted')=$3) AND (strpos(lower(r.party_name),lower($4))>0 OR EXISTS(SELECT 1 FROM finance_payables_payment_request_allocations a JOIN finance_payables_documents d ON d.tenant_id=a.tenant_id AND d.company_id=a.company_id AND d.id=a.document_id WHERE a.tenant_id=r.tenant_id AND a.company_id=r.company_id AND a.request_id=r.id AND strpos(lower(d.party_code),lower($4))>0) OR strpos(lower(COALESCE(r.reference,'')),lower($4))>0 OR strpos(r.request_number::text,$4)>0) ORDER BY r.request_number DESC LIMIT $5 OFFSET $6",&[&s.tenant(),&company,&q.status,&search,&q.page_size,&offset]).await?;
         let mut requests = Vec::new();
         for row in rows {
             requests.push(request(&**c, s.tenant(), company, row.get(0)).await?);
@@ -771,6 +773,22 @@ async fn allocations(
         })
         .collect()
 }
+// Codes are immutable Core facts already frozen on the allocated bills.
+async fn allocation_code(
+    c: &dyn OperationClient,
+    tenant: i64,
+    company: i64,
+    id: i64,
+    requests: bool,
+) -> Result<String> {
+    let (table, key) = if requests {
+        ("finance_payables_payment_request_allocations", "request_id")
+    } else {
+        ("finance_payables_payment_allocations", "payment_id")
+    };
+    let row=c.query_opt(&format!("SELECT d.party_code FROM {table} a JOIN finance_payables_documents d ON d.tenant_id=a.tenant_id AND d.company_id=a.company_id AND d.id=a.document_id WHERE a.tenant_id=$1 AND a.company_id=$2 AND a.{key}=$3 ORDER BY a.line_number LIMIT 1"),&[&tenant,&company,&id]).await?.ok_or(Error::Internal)?;
+    Ok(row.get(0))
+}
 pub(crate) async fn request(
     c: &dyn OperationClient,
     tenant: i64,
@@ -786,6 +804,7 @@ pub(crate) async fn request(
         payment_date: r.get::<_, String>(1).parse().map_err(|_| Error::Invalid)?,
         party_key: r.get(2),
         party_name: r.get(3),
+        party_code: allocation_code(c, tenant, company, id, true).await?,
         paid_from_account_id: r.get(4),
         amount: store::money(r.get(5))?,
         currency_code: r.get(6),
@@ -814,6 +833,14 @@ pub(crate) async fn payment(
         payment_date: r.get::<_, String>(1).parse().map_err(|_| Error::Invalid)?,
         party_key: r.get(2),
         party_name: r.get(3),
+        party_code: allocation_code(
+            c,
+            tenant,
+            company,
+            r.get::<_, Option<i64>>(9).unwrap_or(id),
+            false,
+        )
+        .await?,
         paid_from_account_id: r.get(4),
         amount: store::money(r.get(5))?,
         currency_code: r.get(6),

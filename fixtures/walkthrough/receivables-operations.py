@@ -164,7 +164,7 @@ for channel, company in [("api", 1), ("mcp", 2)]:
     require(customer["code"] == "company_025" and customer["party"]["id"] == 25 and customer["party"]["status"] == "active" and customer["name"] == customer["party"]["name"], "linked customer differs")
     require(customer["party"]["readable"] and customer["party"]["email"] and customer["party"]["tax_id"], "company facts not read")
     refused(channel, "customer.update", company, "name", customer_id=customer["id"], name="Customer at issue")
-    refused(channel, "customer.create", company, "is already a customer of this company", record_kind="company", record_id=25)
+    refused(channel, "customer.create", company, "is already a customer of the current company", record_kind="company", record_id=25)
     refused(channel, "customer.update", company, "record_id", customer_id=customer["id"], record_kind="company", record_id=26)
     customer = write(channel, "customer.update", company, customer_id=customer["id"], payment_terms_days=7)
     require(read(channel, "customer.get", company, customer_id=customer["id"]) == customer, "customer read differs")

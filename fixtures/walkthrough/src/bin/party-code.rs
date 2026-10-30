@@ -12,6 +12,7 @@ bilibi_finance_walkthrough_fixture::walkthrough_ledger_roles!();
 bilibi_finance_walkthrough_fixture::walkthrough_attachments_roles!();
 bilibi_finance_walkthrough_fixture::walkthrough_receivables_roles!();
 bilibi_finance_walkthrough_fixture::walkthrough_payables_roles!();
+inventory::submit! { bilibi_module_registry::Contribution::new(bilibi_authz::VOCABULARY,"walkthrough.fixture.party-code",bilibi_module_registry::Provenance {module:"finance/receivables",source:file!(),line:line!()},&bilibi_authz::VocabularyContribution {domains:&[],verbs:&[],capabilities:&[],system_principals:&[],roles:&[bilibi_authz::RoleDefinition{code:"manager",name:"manager",description:"Walkthrough fixture role",grant_all:false,capabilities:&bilibi_finance_receivables::CAPABILITIES}]}) }
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     bilibi_base::link();

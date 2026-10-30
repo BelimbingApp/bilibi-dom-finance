@@ -210,7 +210,7 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
     field(
         ar.create_customer(&manager, 1, &json!({})).await,
         "record_id",
-        "choose one",
+        "choose one existing company or person, or create one",
     );
     for id in [1, 999_999, 100] {
         assert!(ar
@@ -246,7 +246,7 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         ar.update_customer(&manager, 1, customer.id, &json!({"code":"OTHER"}))
             .await,
         "code",
-        "cannot be supplied",
+        "is read from the Core party and cannot be supplied",
     );
     field(
         ar.update_customer(
@@ -257,7 +257,7 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         )
         .await,
         "record_id",
-        "cannot change",
+        "the linked Core party cannot change",
     );
     field(
         ar.create_customer(
@@ -267,7 +267,7 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         )
         .await,
         "record_id",
-        "already a customer",
+        "is already a customer of the current company",
     );
     ar.update_customer(&manager, 1, customer.id, &json!({"active":false}))
         .await?;
