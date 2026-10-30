@@ -147,7 +147,7 @@ impl Journals {
                 if let Some(id) = e.ledger_entry_id {
                     history.push(&Html::text(" · "));
                     history.push(&f::link(
-                        &format!("/finance/ledger/entries/{id}"),
+                        &format!("/finance/ledger/journals/entry-{id}"),
                         &format!("Entry #{}", e.ledger_entry_number.unwrap_or_default()),
                     )?);
                 }

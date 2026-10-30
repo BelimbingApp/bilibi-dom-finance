@@ -248,7 +248,7 @@ impl Account {
         if Some(company) == Pages::company(scope) {
             content.push(&render(Button {
                 id: "ledger-account-entries",
-                href: &format!("/finance/ledger/entries?account={}", account.id),
+                href: &format!("/finance/ledger/journals?account={}", account.id),
                 class: "mt-4",
                 body: Html::text("See this account's entries"),
                 ..Button::default()

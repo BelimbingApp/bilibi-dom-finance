@@ -330,12 +330,6 @@ async fn main() -> Outcome<()> {
                 .await?,
             );
         }
-        // A customer recorded before Finance read companies from Companies:
-        // only SQL can still make one, and the page offers to link it.
-        db.get().await?.execute(
-            "INSERT INTO finance_receivables_customers(tenant_id,company_id,code,name,email,line1,locality,postcode,country_iso,payment_terms_days,active,inserted_at,updated_at) VALUES(2,$1,'FAJAR','Fajar Logistics','ops@fajar.example.test','3 Jalan Lama','Melaka','75000','MY',21,true,now(),now())",
-            &[&COMPANY],
-        ).await?;
         let draft = |customer: i64, date: &str, lines: serde_json::Value| {
             let attrs = json!({"kind":"invoice","series_id":invoices.id,"customer_id":customer,"issue_date":date,"lines":lines});
             let (ar, manager) = (&ar, &manager);
@@ -398,6 +392,37 @@ async fn main() -> Outcome<()> {
             "Receivables: /finance/receivables/invoices (first receipt {})",
             first.id
         );
+    }
+    if std::env::args().any(|arg| arg == "journals") {
+        bilibi_finance_walkthrough_fixture::initialize_journal_approvals(
+            &db, services, &manager, COMPANY,
+        )
+        .await?;
+        let payroll =
+            services.get::<bilibi_finance_payroll::Payroll>(bilibi_finance_payroll::SERVICE)?;
+        if !payroll
+            .list_postings(&manager, COMPANY)
+            .await?
+            .iter()
+            .any(|posting| posting.source_kind == "payroll_run" && posting.source_id == 9004)
+        {
+            historical_payroll(
+                &db,
+                &ledger,
+                &manager,
+                account("5000")?,
+                account("2000")?,
+                installed.book.minor_units,
+            )
+            .await?;
+        }
+        println!("Journals browser fixture: {origin}; manager@other.example.test and reviewer@other.example.test; walkthrough password");
+        axum::serve(
+            tokio::net::TcpListener::bind(std::env::var("BIND_ADDR")?).await?,
+            bilibi_web::router(app),
+        )
+        .await?;
+        return Ok(());
     }
     if std::env::args().any(|arg| arg == "serve") {
         let _authority = bilibi_finance_walkthrough_fixture::browser::prepare_einvoice(
@@ -571,13 +596,46 @@ async fn main() -> Outcome<()> {
         import_mapping:json!({"date":"Date","description":"Details","reference":"Ref","amount":"Amount","balance":"Balance"}),
     }).await?;
     println!("Bank account: /finance/reconciliation/accounts/{}", bank.id);
+    historical_payroll(
+        &db,
+        &ledger,
+        &manager,
+        account("5000")?,
+        account("2000")?,
+        installed.book.minor_units,
+    )
+    .await?;
+    // Existing authority stand-in creates documents and serves submit/poll locally.
+    let _authority = bilibi_finance_walkthrough_fixture::browser::prepare_einvoice(
+        &db, services, &manager, &operator, COMPANY,
+    )
+    .await?;
+    println!(
+        "Finance browser fixture: {origin}; manager@other.example.test, reviewer@other.example.test, viewer@other.example.test; walkthrough password"
+    );
+    axum::serve(
+        tokio::net::TcpListener::bind(std::env::var("BIND_ADDR")?).await?,
+        bilibi_web::router(app),
+    )
+    .await?;
+    Ok(())
+}
+
+async fn historical_payroll(
+    db: &bilibi_database::Db,
+    ledger: &Ledger,
+    manager: &bilibi_tenancy::Scope,
+    expense: i64,
+    liability: i64,
+    units: bilibi_finance_ledger::MinorUnits,
+) -> Outcome<()> {
     // A historical posting gives the browser a reversal to inspect while
     // People is unmounted, as in the payroll walkthrough's historical proof.
     let mut client = db.get().await?;
     let mut tx = ledger
         .write(
             &mut client,
-            &manager,
+            manager,
             COMPANY,
             &[bilibi_finance_payroll::POST_POSTINGS],
             "fixture.payroll.browser",
@@ -586,21 +644,15 @@ async fn main() -> Outcome<()> {
     let posting = ledger
         .post_entry_in(
             &mut tx,
-            &manager,
+            manager,
             COMPANY,
             &NewEntry {
                 entry_date: date(2026, 10, 15),
                 description: "Historical payroll fixture".into(),
                 reference: None,
                 lines: vec![
-                    NewLine::debit(
-                        account("5000")?,
-                        Money::parse("137.29", installed.book.minor_units)?,
-                    ),
-                    NewLine::credit(
-                        account("2000")?,
-                        Money::parse("137.29", installed.book.minor_units)?,
-                    ),
+                    NewLine::debit(expense, Money::parse("137.29", units)?),
+                    NewLine::credit(liability, Money::parse("137.29", units)?),
                 ],
             },
             &PostOptions {
@@ -618,18 +670,5 @@ async fn main() -> Outcome<()> {
         Ok(((), vec![bilibi_database::Change { kind: "finance.payroll.posting_event".into(), id, old: serde_json::Value::Null, new: value }]))
     })).await?;
     tx.commit().await?;
-    // Existing authority stand-in creates documents and serves submit/poll locally.
-    let _authority = bilibi_finance_walkthrough_fixture::browser::prepare_einvoice(
-        &db, services, &manager, &operator, COMPANY,
-    )
-    .await?;
-    println!(
-        "Finance browser fixture: {origin}; manager@other.example.test, reviewer@other.example.test, viewer@other.example.test; walkthrough password"
-    );
-    axum::serve(
-        tokio::net::TcpListener::bind(std::env::var("BIND_ADDR")?).await?,
-        bilibi_web::router(app),
-    )
-    .await?;
     Ok(())
 }

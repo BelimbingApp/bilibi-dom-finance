@@ -1167,6 +1167,7 @@ enum Read {
     Accounts,
     Journal,
     Journals,
+    JournalList,
     Entry,
     Entries,
     Years,
@@ -1263,6 +1264,27 @@ impl ReadHandler for Read {
                     .await
                     .map_err(invalid)?;
                     json!({"next_after":rows.last().map(|j|j.journal_number),"records":rows})
+                }
+                Self::JournalList => {
+                    let from = optional_date(input, "from").map_err(invalid)?;
+                    let to = optional_date(input, "to").map_err(invalid)?;
+                    if matches!((from, to), (Some(a), Some(b)) if a > b) {
+                        return Err(invalid(LedgerError::InvalidOption));
+                    }
+                    let cursor = (
+                        input["after_time"].as_str(),
+                        input["after_id"].as_i64(),
+                        input["after_kind"].as_str(),
+                    );
+                    match cursor {
+                        (None, None, None) => {}
+                        (Some(time), Some(id), Some(kind))
+                            if id > 0
+                                && matches!(kind, "entry" | "journal")
+                                && time.parse::<jiff::civil::DateTime>().is_ok() => {}
+                        _ => return Err(invalid(LedgerError::InvalidOption)),
+                    }
+                    journal_list::list(client, tenant, company, input, limit).await?
                 }
                 Self::Entry => json!(entries::find(
                     client,
@@ -1582,6 +1604,12 @@ fn journals_schema() -> Value {
         json!({"status":{"type":"string","enum":["submitted","approved","rejected","withdrawn"]},"after":{"type":"integer","minimum":0},"page_size":{"type":"integer","minimum":1,"maximum":100}}),
     )
 }
+fn journal_list_schema() -> Value {
+    schema(
+        &[],
+        json!({"from":day(),"to":day(),"status":string(32),"source":string(100),"after_time":string(32),"after_id":identifier(),"after_kind":string(16),"account_id":identifier(),"through_entry_number":{"type":"integer","minimum":0},"page_size":{"type":"integer","minimum":1,"maximum":100}}),
+    )
+}
 fn entry_schema() -> Value {
     schema(&["entry_id"], json!({"entry_id":identifier()}))
 }
@@ -1622,6 +1650,7 @@ inventory::submit! { Contribution::new(DEFINITIONS,"finance/ledger.operations",P
         Operation {key:"finance.ledger.chart_template.get",title:"Preview a starter chart",summary:"Read the exact groups and accounts a starter chart would create with the optional `sections` chosen, and any code the company's chart already uses.",keywords:&[],capability:VIEW,input:template_schema,output,handler:Handler::Read(&Read::ChartTemplate),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.journal.list",title:"List journals",summary:"Read journals by number, optionally by status, after a journal number.",keywords:&[],capability:VIEW,input:journals_schema,output,handler:Handler::Read(&Read::Journals),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.entry.get",title:"Read an entry",summary:"Read immutable lines, ownership and reversal identifiers.",keywords:&[],capability:VIEW,input:entry_schema,output,handler:Handler::Read(&Read::Entry),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.ledger.journals.list",title:"List postings and journals",summary:"Read a bounded, combined list of postings and unposted manual journals.",keywords:&[],capability:VIEW,input:journal_list_schema,output,handler:Handler::Read(&Read::JournalList),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.entry.list",title:"List entries",summary:"Read entries by date and identifier with date, account and pinned-entry bounds.",keywords:&[],capability:VIEW,input:entries_schema,output,handler:Handler::Read(&Read::Entries),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.fiscal_year.list",title:"List fiscal years and periods",summary:"Read years in date order with periods, statuses and closing entry identifiers.",keywords:&[],capability:VIEW,input:years_schema,output,handler:Handler::Read(&Read::Years),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.trial_balance.get",title:"Read the trial balance",summary:"Read every account with a posting on or before a date, with debit and credit totals and its balance on one side, counted through a pinned entry number that reproduces the figures later.",keywords:&[],capability:VIEW,input:trial_balance_schema,output,handler:Handler::Read(&Read::TrialBalance),channels:Channels::Every,step_up:&[]},

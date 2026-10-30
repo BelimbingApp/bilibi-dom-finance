@@ -10,7 +10,7 @@
 //! walkthrough password. Pass `empty` to stop before the book is opened, or
 //! `bare` to open it with an empty chart (the starter charts are offered).
 //! Pass `opening` for the chart and open periods with no posted entries.
-//! After seeding it drives the Journal entries page's period control through
+//! After seeding it drives the Journals page's period control through
 //! its real `LiveState` and prints one proof line.
 use bilibi_database::{pool, Error};
 use bilibi_finance_ledger::{
@@ -429,7 +429,7 @@ async fn mount(
     Ok(pages
         .0
         .mount(PageRequest {
-            operation: "entries",
+            operation: "journals",
             scope: Some(scope),
             path: &HashMap::new(),
             query,
@@ -468,16 +468,16 @@ fn all_dates(body: &LiveBody) {
 
 fn shows_all_dates(body: &LiveBody) {
     all_dates(body);
-    has(body, "ledger-entries-period-all");
-    lacks(body, "ledger-entries-period-clear");
+    has(body, "ledger-journals-period-all");
+    lacks(body, "ledger-journals-period-clear");
 }
 
-/// Journal entries' period control, through the page's own live state on the
+/// Journals' period control, through the page's own live state on the
 /// seeded entries: All dates by default, a preset, the custom range dialog
 /// (refused, cancelled, applied with both ends inclusive), the return to All
 /// dates, a `to`-only address, and the first-entry reset on every new period.
 async fn period_proof(services: &Services, scope: &Scope, account: i64, pin: i64) -> Outcome<()> {
-    const FILTER: &str = "ledger-entries-period";
+    const FILTER: &str = "ledger-journals-period";
     let last = jiff::Zoned::now().year() - 1;
     let none = HashMap::new();
     let select = |period: &str| json!({"type": format!("period_select:{FILTER}"), "period_filter[period]": period});
@@ -497,6 +497,23 @@ async fn period_proof(services: &Services, scope: &Scope, account: i64, pin: i64
     assert!(every.rows > 3 && every.rows < 100, "{} entries", every.rows);
     shows_all_dates(&every);
     has(&every, "All dates");
+    has(&every, "Accrue September audit fee");
+    has(&every, "Accrue October salaries");
+    has(&every, "Write off a receivable");
+    assert_eq!(
+        every.html.matches("Accrue September audit fee").count(),
+        1,
+        "approved journal must appear only as its entry"
+    );
+    let waiting_filter = json!({"type":"filters", "filters[status]":"submitted"});
+    let waiting = update(&mut state, scope, LiveInput::Event(&waiting_filter)).await?;
+    has(&waiting, "Accrue October salaries");
+    lacks(&waiting, "Accrue September audit fee");
+    let rejected_filter = json!({"type":"filters", "filters[status]":"rejected"});
+    let rejected = update(&mut state, scope, LiveInput::Event(&rejected_filter)).await?;
+    has(&rejected, "Write off a receivable");
+    lacks(&rejected, "Accrue October salaries");
+    update(&mut state, scope, LiveInput::Params(&none)).await?;
     let first_id = every
         .html
         .split("id=\"ledger-entry-")
@@ -506,7 +523,10 @@ async fn period_proof(services: &Services, scope: &Scope, account: i64, pin: i64
 
     // A later page (the address carries a cursor) starts again from the
     // first matching entry once a period is applied.
-    let after = HashMap::from([("after".to_owned(), format!("{last}-01-02:{first_id}"))]);
+    let after = HashMap::from([(
+        "after".to_owned(),
+        format!("2000-01-02T00:00:00.000000|{first_id}|entry"),
+    )]);
     let mut paged = mount(services, scope, &after).await?;
     let later = update(&mut paged, scope, LiveInput::Refresh).await?;
     assert!(later.query.contains_key("after"));
@@ -516,12 +536,12 @@ async fn period_proof(services: &Services, scope: &Scope, account: i64, pin: i64
     assert_eq!(today.query["from"], today.query["to"]);
     assert!(today.rows <= every.rows);
     address(&today);
-    has(&today, "ledger-entries-period-clear");
-    lacks(&today, "ledger-entries-period-all");
+    has(&today, "ledger-journals-period-clear");
+    lacks(&today, "ledger-journals-period-all");
 
     // A refused range and Cancel leave the applied preset as it was.
     let open = update(&mut paged, scope, LiveInput::Event(&select("custom"))).await?;
-    has(&open, "ledger-entries-period-range");
+    has(&open, "ledger-journals-period-range");
     address(&open);
     let refused = update(
         &mut paged,
@@ -533,14 +553,14 @@ async fn period_proof(services: &Services, scope: &Scope, account: i64, pin: i64
     assert_eq!(refused.query["period"], "today");
     assert_eq!(refused.query["from"], today.query["from"]);
     let cancelled = update(&mut paged, scope, LiveInput::Event(&cancel)).await?;
-    lacks(&cancelled, "ledger-entries-period-range");
+    lacks(&cancelled, "ledger-journals-period-range");
     assert_eq!(cancelled.query["period"], "today");
     assert_eq!(cancelled.query["from"], today.query["from"]);
 
     // From All dates the dialog opens on a recent range, not on the date
     // field's limits, and Cancel stays on All dates.
     let open = update(&mut state, scope, LiveInput::Event(&select("custom"))).await?;
-    has(&open, "ledger-entries-period-range");
+    has(&open, "ledger-journals-period-range");
     lacks(&open, "value=\"0001-01-01\"");
     lacks(&open, "value=\"9999-12-31\"");
     address(&open);
@@ -553,7 +573,7 @@ async fn period_proof(services: &Services, scope: &Scope, account: i64, pin: i64
     has(&refused, "Start date must be on or before end date.");
     all_dates(&refused);
     let cancelled = update(&mut state, scope, LiveInput::Event(&cancel)).await?;
-    lacks(&cancelled, "ledger-entries-period-range");
+    lacks(&cancelled, "ledger-journals-period-range");
     shows_all_dates(&cancelled);
 
     // Both ends of a custom range are inclusive.
@@ -634,7 +654,7 @@ async fn period_proof(services: &Services, scope: &Scope, account: i64, pin: i64
         assert!(!until.query.contains_key(key), "{key} is in the address");
     }
     address(&until);
-    has(&until, "ledger-entries-period-clear");
+    has(&until, "ledger-journals-period-clear");
     let mut bounded = mount(services, scope, &none).await?;
     let january = update(
         &mut bounded,
@@ -649,7 +669,7 @@ async fn period_proof(services: &Services, scope: &Scope, account: i64, pin: i64
     shows_all_dates(&everything);
 
     println!(
-        "Journal entries period proof: All dates by default and after Clear; preset restarts the list; refused range and Cancel keep the period; inclusive custom range; reload and Back; account and pin kept; to-only start open; no sentinel year in the address"
+        "Journals period proof: All dates by default and after Clear; preset restarts the list; refused range and Cancel keep the period; inclusive custom range; reload and Back; account and pin kept; to-only start open; no sentinel year in the address"
     );
     Ok(())
 }

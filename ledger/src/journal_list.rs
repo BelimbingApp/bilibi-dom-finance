@@ -1,0 +1,57 @@
+//! A bounded list of postings and manual journals awaiting or refused posting.
+use bilibi_agent_api::OperationClient;
+use bilibi_database::Result;
+use rust_decimal::Decimal;
+use serde_json::{json, Value};
+
+/// Approved journals are represented by their entry, so each posting appears once.
+pub(crate) async fn list(
+    client: &dyn OperationClient,
+    tenant: i64,
+    company: i64,
+    input: &Value,
+    limit: usize,
+) -> Result<Value> {
+    let from = input["from"].as_str();
+    let to = input["to"].as_str();
+    let status = input["status"].as_str();
+    let source = input["source"].as_str();
+    let after_time = input["after_time"].as_str();
+    let after_id = input["after_id"].as_i64();
+    let after_kind = input["after_kind"].as_str();
+    let account = input["account_id"].as_i64();
+    let through = input["through_entry_number"].as_i64();
+    let rows = client.query(
+        "WITH items AS (\
+         SELECT e.id, 'entry'::text AS kind, e.posted_at AS stamp, e.entry_number AS number, \
+          e.entry_date, e.description, COALESCE(e.owner_module,'manual') AS source, \
+          CASE WHEN EXISTS (SELECT 1 FROM finance_ledger_entries r WHERE r.tenant_id=e.tenant_id AND r.company_id=e.company_id AND r.reverses_entry_id=e.id) THEN 'reversed' \
+               WHEN e.reverses_entry_id IS NOT NULL THEN 'reversal' ELSE 'posted' END AS status, \
+          (SELECT COALESCE(sum(l.debit),0) FROM finance_ledger_entry_lines l WHERE l.tenant_id=e.tenant_id AND l.company_id=e.company_id AND l.entry_id=e.id) AS amount \
+         FROM finance_ledger_entries e WHERE e.tenant_id=$1 AND e.company_id=$2 \
+          AND ($10::bigint IS NULL OR e.entry_number <= $10) \
+          AND ($9::bigint IS NULL OR EXISTS (SELECT 1 FROM finance_ledger_entry_lines l WHERE l.tenant_id=e.tenant_id AND l.company_id=e.company_id AND l.entry_id=e.id AND l.account_id=$9)) \
+         UNION ALL \
+         SELECT j.id, 'journal', j.submitted_at, j.journal_number, j.entry_date, j.description, 'manual', \
+          COALESCE(ev.event,'submitted'), \
+          (SELECT COALESCE(sum(l.debit),0) FROM finance_ledger_journal_lines l WHERE l.tenant_id=j.tenant_id AND l.company_id=j.company_id AND l.journal_id=j.id) \
+         FROM finance_ledger_journals j LEFT JOIN finance_ledger_journal_events ev ON ev.journal_id=j.id AND ev.tenant_id=j.tenant_id AND ev.company_id=j.company_id \
+         WHERE j.tenant_id=$1 AND j.company_id=$2 AND COALESCE(ev.event,'submitted') <> 'approved' \
+          AND $10::bigint IS NULL \
+          AND ($9::bigint IS NULL OR EXISTS (SELECT 1 FROM finance_ledger_journal_lines l WHERE l.tenant_id=j.tenant_id AND l.company_id=j.company_id AND l.journal_id=j.id AND l.account_id=$9)) \
+         ) SELECT id,kind,to_char(stamp,'YYYY-MM-DD\"T\"HH24:MI:SS.US'),number,entry_date::text,description,source,status,amount \
+         FROM items WHERE ($3::text IS NULL OR entry_date >= $3::text::date) AND ($4::text IS NULL OR entry_date <= $4::text::date) \
+          AND ($5::text IS NULL OR status=$5) AND ($6::text IS NULL OR source=$6) \
+          AND ($7::text IS NULL OR (stamp,id,kind) > ($7::text::timestamp,$8::bigint,$11::text)) \
+         ORDER BY stamp,id,kind LIMIT $12",
+        &[&tenant,&company,&from,&to,&status,&source,&after_time,&after_id,&account,&through,&after_kind,&((limit + 1) as i64)]
+    ).await?;
+    let more = rows.len() > limit;
+    let records: Vec<_> = rows.into_iter().take(limit).map(|r| json!({
+        "id":r.get::<_,i64>(0), "kind":r.get::<_,String>(1), "stamp":r.get::<_,String>(2),
+        "number":r.get::<_,i64>(3), "date":r.get::<_,String>(4), "description":r.get::<_,String>(5),
+        "source":r.get::<_,String>(6), "status":r.get::<_,String>(7), "amount":r.get::<_,Decimal>(8).to_string()
+    })).collect();
+    let sources: Vec<String> = client.query("SELECT DISTINCT owner_module FROM finance_ledger_entries WHERE tenant_id=$1 AND company_id=$2 AND owner_module IS NOT NULL ORDER BY owner_module", &[&tenant,&company]).await?.into_iter().map(|r| r.get(0)).collect();
+    Ok(json!({"records":records,"more":more,"sources":sources}))
+}
