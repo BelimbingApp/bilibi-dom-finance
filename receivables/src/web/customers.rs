@@ -415,6 +415,7 @@ impl Customers {
         let Some(create) = self.create.as_mut() else {
             return Ok(None);
         };
+        create.errors = Errors::default();
         let terms = f::posted(&create.values, "payment_terms_days");
         let days = if terms.is_empty() {
             0
@@ -607,6 +608,7 @@ impl Customers {
                             v["value"].as_str().ok_or(Error::Invalid)?,
                         )
                         .await?;
+                    create.errors = Errors::default();
                 }
             }
             "remove_company" => {

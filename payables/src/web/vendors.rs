@@ -787,6 +787,7 @@ impl Vendors {
                     c.chooser
                         .pick(&context, s, v["value"].as_str().ok_or(Error::Invalid)?)
                         .await?;
+                    c.errors = CompanyErrors::default();
                 }
             }
             "remove_company" => {
@@ -825,6 +826,7 @@ impl Vendors {
             "create_vendor" => {
                 self.take(s, v).await?;
                 if let Some(c) = &mut self.create {
+                    c.errors = CompanyErrors::default();
                     let terms = c
                         .values
                         .get("payment_terms_days")
