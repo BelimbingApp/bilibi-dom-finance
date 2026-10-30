@@ -14,8 +14,7 @@ bridge: a validated document's one owned entry and a cancelled one's
 reversal, retried from the reconciliation read, source links to the entry
 Receivables or Payables already posted, the monthly consolidated document,
 the printable PDF with its validation link's QR code, and the auditor's
-evidence datasets. The documents pages are available; consolidation,
-reconciliation and setup pages follow in NE6. Other modules and
+evidence datasets. The documents, consolidation, reconciliation and setup pages are available. Other modules and
 Domains never read its tables.
 
 ## Reviewed operations (H4)
@@ -307,7 +306,7 @@ Five keys, verbatim from Bilimbi, under the `finance` domain, all granted to
 `tenant_owner`: `finance.einvoice.view`, `.documents.issue`,
 `.documents.submit`, `.documents.cancel` and `.settings.manage`. The module
 declares the verbs `issue`, `submit` and `cancel` (Bilibi merges verbs across
-modules). It contributes the two queue workers above and has no pages, menu items or agent operations yet. It depends on `finance/ledger` (posting, reversal, source entries) and `base/artifacts` (the PDF), where Bilimbi has the same edges.
+modules). It contributes queue workers, pages, menu items and reviewed agent operations. It depends on `finance/ledger` (posting, reversal, source entries) and `base/artifacts` (the PDF), where Bilimbi has the same edges.
 
 ## Settings
 
@@ -456,7 +455,7 @@ PDF, links Company 001's documents to Receivables' and Payables' entries, and
 pages the evidence. Its e-invoice section prints the facade's answers, the
 drafts accepted and refused, the payload a recorded document becomes (unsigned
 and signed, verified, and tampered) and each database refusal. Its clearance
-section (last) serves a stand-in for the MyInvois API on the loopback for the
+section serves a stand-in for the MyInvois API on the loopback for the
 run, which checks each submission's hash and verifies its signature and
 answers by the code number, then clears Company 002's documents through the
 facade and the real submit and poll jobs: valid, refused, invalid, rate
@@ -497,7 +496,7 @@ FAKETIME='@2026-10-03 10:00:00' FAKETIME_DONT_FAKE_MONOTONIC=1 \
 target/debug/einvoice-pages
 ```
 
-The proof asserts later arrivals are excluded, competing consolidation is refused, drafts survive parameter changes, login feedback includes 429's 37-second delay, secrets never render, revoked grants cannot retry, and closed-period reversals fail then succeed after reopening. At the ordinary clock outside the window it instead checks the issue form is withheld. `--serve` continues into the composed app for browser inspection; `--serve-existing` reopens the prepared database without repeating proof writes, with the same settings encryption key and process clock. Set `APP_ORIGIN` to the exact browsed origin and `BIND_ADDR` to the listening address. Fixture accounts are `manager@example.test` and `viewer@example.test`, password `bilibi-dev`. Use September 2026 for the illustrated consolidation fixture; a deliberately missing revenue account leaves a real failed posting to retry. The server remains supervised with `amp orb service start` in an orb.
+The proof asserts later arrivals are excluded, competing consolidation is refused, drafts survive parameter changes, login feedback includes 429's 37-second delay, secrets never render, revoked grants cannot retry, and closed-period reversals fail then succeed after reopening. At the ordinary clock outside the window it instead checks the issue form is withheld. `--serve` continues into the composed app for browser inspection; `--serve-existing` reopens the prepared database without repeating proof writes, with the same settings encryption key and process clock. Set `APP_ORIGIN` to the exact browsed origin and `BIND_ADDR` to the listening address. Fixture accounts are `manager@example.test` and `viewer@example.test`, password `bilibi-dev`. Use September 2026 for the illustrated consolidation fixture; a deliberately missing revenue account leaves a real failed posting to retry.
 
 `evidence_page_on` is the same authorized evidence contract on a caller-supplied PostgreSQL client or transaction. Use it for every page of one repeatable-read export (Reports auditor pack); the pooled `evidence_page` wrapper is a live read per page. Schema helpers remain private.
 
