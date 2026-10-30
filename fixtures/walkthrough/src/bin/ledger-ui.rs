@@ -72,6 +72,10 @@ async fn main() -> Outcome<()> {
     let manager = sign_in(&db, services, 2, 5).await?;
     let reviewer = sign_in(&db, services, 2, 8).await?;
     let ledger = services.get::<Ledger>(bilibi_finance_ledger::SERVICE)?;
+    bilibi_finance_walkthrough_fixture::initialize_journal_approvals(
+        &db, services, &manager, COMPANY,
+    )
+    .await?;
 
     let unopened = matches!(
         ledger.get_book(&manager, COMPANY).await,

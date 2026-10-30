@@ -128,7 +128,7 @@ impl Journal {
                     return self.simple(
                         "Manual journal",
                         unavailable("ledger-journal-refused", "this journal", &Read::Failed)?,
-                    )
+                    );
                 }
             },
             Read::Failed | Read::Refused(_) => {
@@ -141,13 +141,13 @@ impl Journal {
                         )
                         .id("ledger-journal-missing"),
                     )?,
-                )
+                );
             }
             other => {
                 return self.simple(
                     "Manual journal",
                     unavailable("ledger-journal-refused", "this journal", &other)?,
-                )
+                );
             }
         };
         let state = self.pages.book(scope).await?.ok();
@@ -155,11 +155,6 @@ impl Journal {
             .as_ref()
             .and_then(|s| s.book.as_ref())
             .map_or(2, |b| b.minor_units);
-        let required = state
-            .as_ref()
-            .and_then(|s| s.duty_separation.as_ref())
-            .and_then(|c| c.required)
-            .unwrap_or(true);
         let chart = self.pages.chart(scope).await?.unwrap_or_default();
         let display = self.pages.display(scope).await?;
         let can_decide = self.pages.allowed(scope, APPROVE_JOURNALS).await?;
@@ -174,13 +169,7 @@ impl Journal {
 
         let mut content = Html::EMPTY;
         if waiting && mine {
-            let approval = if required {
-                "Someone else must approve it before it posts."
-            } else if can_decide {
-                "Approval is required before it posts. Self-approval is permitted under the company policy and records an approval exception."
-            } else {
-                "Approval is required before it posts. An authorized person may approve their own work; this records an approval exception."
-            };
+            let approval = "Approval follows the company's journal rules. Eligible decisions are listed in Waiting for my approval.";
             content.push(&render(Alert {
                 id: "ledger-journal-own",
                 kind: StatusKind::Info,
@@ -511,18 +500,13 @@ impl Journal {
             record_id: &format!("journal-{}", journal.id),
         })?);
         page.push(&content);
-        if let Some(review) = &self.approving {
-            let exception = review.facts["approval_exception"].as_bool() == Some(true);
+        if self.approving.is_some() {
             page.push(&render(ConfirmDialog {
                 id: "ledger-journal-confirm",
-                consequence: &format!("Approve journal {} and post it?", journal.journal_number),
-                detail: if exception {
-                    "It posts as an entry that cannot be edited. Your company does not separate duties, so the ledger also records an approval exception for an independent reviewer."
-                } else {
-                    "It posts as an entry that cannot be edited. To undo it later, reverse the entry."
-                },
-                confirm: "Approve and post",
-                working: "Posting…",
+                consequence: &format!("Approve journal {}?", journal.journal_number),
+                detail: "Your decision is recorded under the journal's approval rules. The final required approval posts an immutable entry; a posted entry is corrected by reversal.",
+                confirm: "Approve",
+                working: "Recording…",
                 confirm_event: "approve",
                 cancel_event: "cancel_approve",
             })?);
@@ -651,7 +635,7 @@ impl Journal {
             )
             .await?
         {
-            Ok(_) => self.flash.success("The journal is approved and posted."),
+            Ok(_) => self.flash.success("Your approval is recorded."),
             Err(failure) => self.flash.error(failure.text("The journal")),
         }
         Ok(())

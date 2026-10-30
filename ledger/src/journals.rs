@@ -3,13 +3,13 @@
 //! lines until one event decides it. Its lines obey the rules of the entry it
 //! becomes, so submission validates it as `entries::validate` does. The
 //! database numbers and stamps a journal and its event, refuses a line added
-//! after submission, an unbalanced journal at commit, a second decision, and
-//! an approval by the submitter without its same-person exception (see
-//! `005-journals.sql`). The facade authorizes and holds the company lock;
+//! after submission, an unbalanced journal at commit, and a second decision.
+//! Workflow proves approval eligibility; its adapter writes the one final
+//! journal decision and entry (see `012-workflow-approvals.sql`). The facade authorizes and holds the company lock;
 //! these run inside it.
 use crate::{
-    entries::ValidEntry, Approval, EntryLine, FieldError, Journal, JournalDecision, JournalQuery,
-    JournalStatus, LedgerError, Money, NewEntry, NewLine, Preparer,
+    entries::ValidEntry, EntryLine, FieldError, Journal, JournalDecision, JournalQuery,
+    JournalStatus, LedgerError, Money, NewEntry, NewLine,
 };
 use bilibi_agent_api::OperationClient;
 use bilibi_database::{Change, Result};
@@ -205,26 +205,6 @@ pub(crate) async fn link(
         old: Value::Null,
         new: json!({"journal_id": journal_id, "replaced_journal_id": replaced_id}),
     })
-}
-
-/// The approval `check_approval` decides for the journal: its submitter
-/// prepared it.
-pub(crate) fn approval(journal: &Journal) -> Approval {
-    Approval {
-        source: crate::MODULE.into(),
-        action: "journal_approval".into(),
-        subject_type: "journal".into(),
-        subject_id: journal.id,
-        subject: format!(
-            "Journal {}: {}",
-            journal.journal_number, journal.description
-        ),
-        prepared_by: vec![Preparer {
-            user_id: journal.submitted_by_user_id,
-            impersonator_id: journal.submitted_by_impersonator_id,
-        }],
-        override_reason: None,
-    }
 }
 
 /// The entry an approval posts: the journal's date, description, reference

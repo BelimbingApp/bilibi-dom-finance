@@ -83,3 +83,13 @@ inventory::submit! { Contribution::new(VOCABULARY, "finance/ledger", provenance!
     }],
     system_principals: &[],
 }) }
+
+// The shared projection still checks each owner's visibility; this permission
+// only opens the common list/history pages for the existing Finance roles.
+inventory::submit! { Contribution::new(VOCABULARY,"finance/ledger.approval-pages",provenance!(),&VocabularyContribution {
+    domains:&[],verbs:&[],capabilities:&[],system_principals:&[],
+    roles:&[
+        RoleDefinition {code:"tenant_owner",name:"Tenant Owner",description:"Contributed system role; reconciled explicitly",grant_all:false,capabilities:&["workflow.approvals.view"]},
+        RoleDefinition {code:"external_accountant",name:"External accountant",description:"Read and submit Finance records",grant_all:false,capabilities:&["workflow.approvals.view"]},
+    ],
+}) }

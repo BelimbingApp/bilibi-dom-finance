@@ -62,7 +62,7 @@ records (`Book`, `Account`, `Entry`, `FiscalYear`, `Period`, `ClosingEvent`,
 | `list_controlled_bookkeeping_changes` | `finance.ledger.view` | Every change, oldest first |
 | `list_late_recordings` | `finance.ledger.view` | Entries recorded 45 or more days after their date, with their reviews (see Late recordings) |
 | `record_late_recording_review` | `finance.ledger.late-recordings.review` | An independent reviewer's `reason` for one late entry |
-| `get_duty_separation` | `finance.ledger.view` | Whether the company requires separation of duties, and its latest change |
+| `get_duty_separation` | `finance.ledger.view` | Whether other Finance approvals require separation of duties, and its latest change |
 | `set_duty_separation` | `finance.ledger.duty-separation.manage` | Turns it on, or off with a `reason`; a call that changes nothing records nothing |
 | `list_duty_separation_changes` | `finance.ledger.view` | Every change, oldest first |
 | `check_approval` | `finance.ledger.view` | A Finance module's approval, inside its own transaction: refused as `SamePerson` or recorded as an approval exception (see Separation of duties) |
@@ -111,7 +111,7 @@ H1 makes the facade-only writes reachable through the Platform's shared `/api/v1
 | `book.open` (`minor_units` optional), `account.create`, `account.update` | Reviewed book/chart changes; account update preserves omitted fields and uses `clear_parent` to remove a grouping |
 | `account_group.create`, `account_group.update` | Reviewed changes to account groups; update takes the group's id as `account_id` |
 | `chart_template.apply` | `sections` names the optional parts to include (none by default). The review lists every group and account to be created; a chart that already has any is refused and never changed |
-| `journal.submit`, `journal.approve`, `journal.reject` | Submission does not post; approval posts once with separation of duties; rejection records a reason without posting. A line may carry `balance: true` instead of `debit` and `credit` (on at most one line): the preview and the commit give it the debit or credit that balances the other lines at the book's minor units, and refuse `balance` beside a `debit` or `credit`, on a second line, or when the other lines already match |
+| `journal.submit`, `journal.approve`, `journal.reject` | Submission does not post; the final Workflow approval posts once, by independent approvers under the company's published journal rules; rejection records a reason without posting. A line may carry `balance: true` instead of `debit` and `credit` (on at most one line): the preview and the commit give it the debit or credit that balances the other lines at the book's minor units, and refuse `balance` beside a `debit` or `credit`, on a second line, or when the other lines already match |
 | `journal.withdraw`, `journal.replace` | Only the journal's submitter, while it waits: withdrawal records an optional `reason` and posts nothing; replacement takes the `journal.submit` fields (including `balance`) plus `journal_id`, withdraws it and submits the correction, which needs its own approval |
 | `opening_balances.get` | Latest opening submission with journal number, conversion date, status, posted entry and reversal identifiers; `opening: null` before submission |
 | `opening_balances.submit` | Reviewed CSV mapping to one opening journal; source reference and exact CSV are retained; optional `replaces_journal_id` withdraws the submitter's waiting opening journal and takes its place; approval is separate |
@@ -147,7 +147,7 @@ The ledger has pages so a person without an AI agent can do the same daily work.
 
 | Menu (Finance, under Bookkeeping) | Route | What a person does there |
 | --- | --- | --- |
-| Book | `/finance/ledger/book` | Names the current company. Reads the currency and decimal places. Opens the book once: pick the currency from a searchable list (the company's base currency is proposed), review its decimal places, then confirm and choose who approves. Sees whether controlled bookkeeping and separation of duties are on. |
+| Book | `/finance/ledger/book` | Names the current company. Reads the currency and decimal places. Opens the book once: pick the currency from a searchable list (the company's base currency is proposed), review its decimal places, then confirm and choose the separation rule for other Finance approvals. Manual journals are configured on Approval rules. Sees whether controlled bookkeeping and other Finance separation are on. |
 | Company books | `/finance/ledger/books` | Lists every company the person may work in with its book (open, not open, no access), currency, latest fiscal year and earliest open period, and links each row to that company's fiscal years. See [Current company](#current-company-and-company-books). |
 | Chart of accounts | `/finance/ledger/accounts` | Filters authorized companies' charts (default: current company), identifies each row's company and currency, and shows each account's balance and each group's total. Select one company to add an account in its named dialog. With an empty chart it offers the starter charts: preview, tick the optional sections that apply, then apply, or start empty. |
 | Account groups | `/finance/ledger/account-groups` | Lists the groups with what each holds and its total, adds a group in a dialog. |
@@ -277,6 +277,8 @@ the owner's record, and the owner's tie-out shows the difference.
 
 ## Separation of duties
 
+This section covers Finance consumers still using `check_approval`; manual journals use the shared case below.
+
 A company requires separation of duties unless it turns it off. The setting
 is the latest of its append-only changes (`DutySeparationChange`); with none,
 separation is required. `set_duty_separation(scope, company_id, required,
@@ -312,20 +314,15 @@ characters.
 
 ## Manual journals
 
-`submit_journal(scope, company_id, &NewEntry)` keeps a journal for approval:
-the same fields and refusals as `post_entry` (balanced, active accounts of the
-company, an open period), numbered per company and stamped by the database,
-with the submitter and any impersonator. Nothing posts until
-`approve_journal`, which posts it as an entry on its date, by the approver,
-and records the `approved` decision naming the entry. The entry is checked
-again when it is approved: a period closed or an account deactivated since is
-`Invalid`, and the journal stays submitted. The approver must not overlap the
-submitter (`SamePerson`) unless separation is off, when the approval is
-recorded as a same-person exception (`journal_approval`, subject `Journal
-<number>: <description>`). `reject_journal(.., reason)` needs a reason
-(`reason is required to reject a journal`). Anything but a submitted journal
-is `JournalDecided`. `list_journals` filters by `status` and pages like the
-exceptions.
+Manual journals use Workflow's shared approval cases. Open **Approval rules**, choose the current company and **Manual journals**, review the proposed rules and publish them with a reason. This is an explicit setup action; boot, opening a book and submission do not install a policy. The initial proposal needs one independent holder of `finance.ledger.journals.approve`. Rules can add stages, named reviewers, cover, amount conditions and reminders. Amount conditions use the book's currency and the journal's total debits.
+
+`submit_journal(scope, company_id, &NewEntry)` validates and keeps immutable lines, then creates the Workflow round in that same transaction. The journal's ID identifies its immutable revision. Workflow keeps the preparer account and impersonator, resolves their Person identities, and checks both at decision time. An agent represents its account holder and never supplies another independent approval.
+
+**Waiting for my approval** at `/workflow/approvals` lists eligible decisions. `approve_journal` and `reject_journal` enter the same coordinator; the existing Finance operation contracts retain their business names. A journal with several stages or eligible seats, or a required approval reason, is decided from the shared list, where the step, seat and reason are explicit. A person with no eligible seat (the preparer, an impersonator or an agent acting for them) is told another eligible person must decide, in preview and on commit alike, not sent to a list that will not show the journal. A vote can leave a multi-stage journal waiting. Only the final accepted approval calls Ledger's adapter to recheck accounts, amounts and periods, post one entry and append the final journal decision, all inside Workflow's handed audited transaction. A posting refusal leaves the vote unaccepted and the journal waiting. Duplicate shared commits replay their result and never post twice.
+
+Strict independence is the default. A journal rule can deliberately permit preparer approval, with the published policy's reason recorded in the shared exception register. The Finance **Approval exceptions** page reads those rows through `base.workflow.approvals.exceptions`; the shared review contract checks every participant and the reviewer's live permission. The older Finance separation setting and `check_approval` remain authoritative for Payables, Payroll and the other unconverted consumers. They neither approve journals nor receive copies of journal exceptions.
+
+Rejection needs a trimmed reason of at most 500 characters and never posts. Recall is available to the submitter while the round waits. The existing `withdraw_journal` and `replace_journal` calls coordinate recall through Workflow. Their immutable journal and replacement records remain in Ledger. Read-only previews use Workflow on the handed connection, and keep the rule, request, subject, stage, seat and routing fences in the reviewed contract.
 
 A submitted journal is never edited. Its submitter (the same user; a person
 with `finance.ledger.journals.submit`, else `Unauthorized`; anyone else is
@@ -338,8 +335,7 @@ transaction, checked and numbered as a submission, and names it in
 `replaces_journal_id` and `replaces_journal_number` (and the old one in
 `replaced_by_journal_id` and `replaced_by_journal_number`). Either
 refusal rolls both back, so a refused correction leaves the journal waiting.
-The correction is a new journal that needs its own approval, by the same
-separation of duties. An approval racing a withdrawal or replacement is
+The correction is a new journal that needs a fresh Workflow round under the current rules. An approval racing a withdrawal or replacement is
 serialized by the company lock and by the one decision per journal: exactly
 one wins, and the loser is `JournalDecided`, so a withdrawn journal's content
 never posts. Posted entries are untouched; they are only reversed. The
@@ -364,7 +360,7 @@ Retain the approved source trial balance, chart mapping, source system/export da
 2. Open **Bookkeeping → Opening balances**. Enter the conversion date, book currency and permanent source reference. Paste the source CSV after mapping its account codes to Bilibi's existing chart.
 3. Choose **Preview opening balances**. Check every source ID, mapped account and amount against the source closing trial balance. An unmapped/inactive account, duplicate source ID, wrong currency, invalid precision or unbalanced total refuses the entire submission. No suspense line or currency conversion is added.
 4. Choose **Submit for approval**. This keeps one immutable journal and its source evidence; it posts nothing. The returned journal appears in Manual journals.
-5. An independent authorized reviewer opens that journal, chooses Approve and reviews **Approve and post**. The ordinary period, account and duty-separation controls still apply. Where separation is disabled by an authorized company decision, same-person approval records an approval exception.
+5. An independent authorized reviewer opens that journal, chooses Approve and reviews the approval decision. The ordinary period, account and Workflow independence controls still apply. Where the journal rules permit preparer approval, it records an exception in Workflow for independent review.
 6. Read the trial balance as of conversion and record its entry-number pin. Reconcile each mapped account and debit/credit totals to the source, then retain the reviewed reconciliation report. Submission and posting are recorded states; reconciliation sign-off remains an external accountant-reviewed record in this slice.
 
 The file is UTF-8 CSV with commas, optional BOM, quoted fields and CRLF/LF/CR line endings. Use this exact header, unique source row identifiers and ungrouped positive amounts on one side of each row:
@@ -607,7 +603,7 @@ objects) and `next`, the last id when the page was full; `limit` is 1 to 500
 (500 when absent) and `after` the previous page's `next`. An unknown dataset
 or an option out of range is `InvalidOption`. The datasets are `account`,
 `approval_exception`, `approval_exception_review`, `book`,
-`bookkeeping_change`, `chart_template`, `closing_event`, `duty_separation_change`, `entry`,
+`bookkeeping_change`, `chart_template`, `closing_event`, `duty_separation_change`, `entry`, `journal_approval`,
 `fiscal_year`, `journal`, `journal_event`, `journal_line`,
 `journal_replacement`, `late_recording_review`, `line`, `opening_balances`, `opening_recognition`, `opening_recognition_replacement` and `period`. Existing datasets mirror Bilimbi's field lists (`src/evidence.rs`), less the entry's `legacy` and plus the account's `is_group`; `opening_balances` exports the retained source reference, CSV and journal link; `opening_recognition` exports each owner's recognition of an opening account; `opening_recognition_replacement` links a recognition to the one it replaces. Dates are `YYYY-MM-DD`,
 instants ISO 8601 UTC with microseconds and amounts the column's exact text
@@ -655,9 +651,8 @@ review by anyone overlapping the approver or preparer.
 `finance_ledger_journal_events` (all append-only): the database numbers and
 stamps a journal, refuses a line added after the submitting transaction and,
 deferred to commit, a journal with no lines or out of balance; a journal is
-decided once, an approval names its entry and a rejection its reason, and an
-approval by its submitter (or anyone overlapping them) is refused unless the
-same transaction recorded its same-person exception.
+decided once, and an approval names its entry and a rejection its reason.
+Bilimbi's database guard against approval by the submitter is replaced by 012.
 
 006 (a port addition, no Bilimbi counterpart) lets the event be `withdrawn`,
 which the database allows only to whoever submitted the journal, and adds the
@@ -678,6 +673,12 @@ and a posting line on a group is refused (trigger on entry lines).
 009 adds the append-only `finance_ledger_chart_templates`: a saved reusable chart, one
 per tenant and `saved:<key>`, refused any update or delete.
 
+012 (a port addition) adds the append-only `finance_ledger_journal_approvals`, one
+durable reference from a journal to its Workflow request, and replaces the journal
+event trigger: a decision now requires that reference, and no longer refuses the
+submitter by itself. Workflow proves independence and records any permitted
+exception once; the unique journal event stays the fence against posting twice.
+
 ## Standards addressed
 
 A book is opened once with its currency fixed; an account keeps its code and
@@ -689,8 +690,7 @@ its poster; a posted entry is corrected only by a reversal, once, and an owned
 one only through its owner; the person who prepares a record does not
 approve it unless the company has turned separation off, and every such
 approval and every override is listed for an independent reviewer; a manual
-journal posts only once it is approved, by someone independent while
-separation of duties is required; any past trial balance or
+journal posts only when its Workflow round has every required approval, with its saved independence rules and current safety floors; any past trial balance or
 account total reproduces exactly from its `through_entry_number`; every
 table is exported to the auditor field by field; every write is attributed
 to the signed-in actor and any impersonator through the Platform's audit
@@ -698,7 +698,7 @@ capture.
 
 `evidence_page_on` is the same authorized evidence contract on a caller-supplied PostgreSQL client or transaction. Use it for every page of one repeatable-read export (Reports auditor pack); the pooled `evidence_page` wrapper is a live read per page. Schema helpers remain private.
 
-Opening a book through `finance.ledger.book.open` may include `separation_required: false` and `approval_reason` for a one-person company. That choice also requires `finance.ledger.duty-separation.manage`, records the duty-separation change in the same transaction and keeps every later same-person approval in Approval exceptions. Omitting it leaves the approval control unchanged; independent approval is the default. The Book page asks who approves before opening. A same-person refusal names the control and the Approval exceptions address.
+Opening a book through `finance.ledger.book.open` may include `separation_required: false` and `approval_reason` for a one-person company. That choice also requires `finance.ledger.duty-separation.manage`, records the duty-separation change in the same transaction and keeps every later same-person approval by an unconverted Finance consumer in Approval exceptions. It does not relax manual journals, which follow their published Workflow rules. Omitting it leaves the approval control unchanged; independent approval is the default. The Book page asks about other Finance approvals before opening. A same-person refusal names the control and the Approval exceptions address.
 
 `Money::display` formats a page amount with thousands separators and the book's decimal places. `Money::shown` remains plain decimal notation for editable values.
 
@@ -753,3 +753,15 @@ The initial bounded imports have explicit follow-ups: [credits and historical co
 `CompanyChooser` picks one company (a customer's Link to company). The Add customers and Add suppliers dialogs use `MultiCompanyChooser`: one searchable multi-select (`SearchMultiSelect`) over Companies where each picked company becomes a row with its own Finance code, offered from the company's Core code and editable, and a last "Create company" option opens the new-company fields with the duplicate review. A company that is already a customer or supplier is listed disabled as "Already a customer" or "Already a supplier" with a link to that record, and `pick` refuses it, as `choose` refuses an already linked duplicate candidate. The page submits each row through the same owning operation, so a refused row keeps its own message and the others still commit; added rows leave the dialog.
 
 Picking an existing company offers its Core code as the Finance code (`CompanyChooser::offer_code` for the single chooser; a row's starting code in `MultiCompanyChooser`): it fills a blank field or replaces the code offered for the company picked before, never what the person typed, and the facade still validates it is unique.
+
+### Shared journal approval proof
+
+Use a fresh disposable database and the mounted walkthrough:
+
+```sh
+BILIBI_DISPOSABLE_APPROVALS=yes DATABASE_URL=… \
+APP_ORIGIN=http://127.0.0.1:43171 BIND_ADDR=127.0.0.1:43171 \
+cargo run -p bilibi-finance-walkthrough-fixture --bin approval-journals -- --serve
+```
+
+The proof exercises direct, impersonated and live OAuth agent self-approval refusals, an independent approval, replay with one posting, a permitted preparer exception and independent review, recall and atomic correction, a closed period, and a stale real reviewed plan. It leaves a waiting journal and an unreviewed exception for the shared waiting list and Finance page browser proof. No import is provided: Finance is under development with no users or production data. Existing development databases are disposable.

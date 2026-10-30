@@ -232,7 +232,7 @@ impl Book {
         let mut controls = render(SectionHeading {
             id: "ledger-book-controls-heading",
             title: "Controls",
-            description: "Controlled bookkeeping restricts posting to open periods. Separation of duties requires independent approval. Manage these on Bookkeeping and Approval exceptions.",
+            description: "Controlled bookkeeping restricts posting to open periods. Manage other Finance approvals on Approval exceptions, and manual journals on Approval rules.",
             ..SectionHeading::default()
         })?;
         controls.push(&render(Facts {
@@ -244,7 +244,7 @@ impl Book {
                     value: yes_no(controlled, "On", "Off")?,
                 },
                 Fact {
-                    title: "Separation of duties",
+                    title: "Other Finance separation",
                     id: "ledger-book-separation",
                     value: yes_no(required, "Required", "Not required")?,
                 },
@@ -407,14 +407,14 @@ impl Book {
         body.push(&render(
             Field::in_form("book", "approver")
                 .id("ledger-book-approver")
-                .label("Approval policy")
+                .label("Other Finance approvals")
                 .kind(InputKind::Select)
                 .value(&self.approver)
                 .options(vec![
                     Choice::new("Independent approval required", "someone_else"),
                     Choice::new("Self-approval permitted", "one_person"),
                 ])
-                .hint("Approval is still required. An authorized person may approve their own work; this records an exception for independent review."),
+                .hint("This controls other Finance approvals. Manual journals follow their rules on Approval rules."),
         )?);
         if self.approver == "one_person" {
             body.push(&render(
@@ -476,7 +476,7 @@ impl Book {
                     "The currency list has not been imported, so {code} was not checked against ISO 4217. "
                 ));
             }
-            detail.push_str(if self.approver == "one_person" { "The currency and decimal places are permanent. Approval is still required. An authorized person may approve their own work; this records an approval exception." } else { "The currency and decimal places are permanent. Someone else must approve your work." });
+            detail.push_str(if self.approver == "one_person" { "The currency and decimal places are permanent. Other Finance approvals permit preparer approval and record exceptions. Manual journal rules are set separately on Approval rules." } else { "The currency and decimal places are permanent. Other Finance approvals require another person. Manual journal rules are set separately on Approval rules." });
             html.push(&render(ConfirmDialog {
                 id: "ledger-book-confirm",
                 consequence: &format!("Open the book in {label} with {units} decimal places?"),

@@ -47,10 +47,10 @@
 //! A company requires separation of duties unless it turns it off: the person
 //! who approves a record, or whoever impersonated them, is not the person who
 //! prepared it, nor anyone they impersonated. [`Ledger::check_approval`] is how
-//! every Finance approval asks, inside the approving transaction, and it
+//! Finance approvals outside manual journals ask, inside the approving transaction, and it
 //! records what an independent reviewer reads: a same-person approval while
 //! separation is off, and an override of a control. A manual journal is
-//! submitted and posts only once someone approves it
+//! submitted to Workflow and posts only once its shared approval round completes
 //! ([`Ledger::submit_journal`], [`Ledger::approve_journal`]); its submitter may
 //! withdraw or correct it while it waits ([`Ledger::withdraw_journal`],
 //! [`Ledger::replace_journal`]).
@@ -74,6 +74,7 @@ mod duties;
 mod entries;
 mod evidence;
 mod groups;
+mod journal_approvals;
 mod journals;
 mod late_recordings;
 mod money;
@@ -115,7 +116,7 @@ pub const SERVICE: &str = "finance/ledger.ledger";
 inventory::submit! {
     Module {
         id: MODULE, layer: Layer::Domains,
-        dependencies: &["base/agent_api", "base/authz", "base/database", "base/datetime", "base/locale", "base/menu", "base/party_ids", "base/records", "base/settings", "base/tenancy", "base/ui", "core/company", "core/currency"],
+        dependencies: &["base/agent_api", "base/authz", "base/database", "base/datetime", "base/locale", "base/menu", "base/party_ids", "base/records", "base/settings", "base/tenancy", "base/ui", "base/workflow", "core/company", "core/currency"],
         migrations: &[
             ("finance-ledger-001-books-and-accounts", include_str!("../migrations/001-books-and-accounts.sql")),
             ("finance-ledger-002-entries", include_str!("../migrations/002-entries.sql")),
@@ -128,9 +129,11 @@ inventory::submit! {
             ("finance-ledger-009-chart-templates", include_str!("../migrations/009-chart-templates.sql")),
             ("finance-ledger-010-opening-recognitions", include_str!("../migrations/010-opening-recognitions.sql")),
             ("finance-ledger-011-opening-replacements", include_str!("../migrations/011-opening-replacements.sql")),
+            ("finance-ledger-012-workflow-approvals", include_str!("../migrations/012-workflow-approvals.sql")),
         ],
         services: &[Service { id: SERVICE, factory: |services| {
             agent_operations::bind(services.get("base/tenancy.parties")?)?;
+            journal_approvals::bind(services.get(bilibi_workflow::SERVICE)?)?;
             saved_templates::bind(services.get("base/settings.store")?)?;
             currency::bind(
                 services.get("core/currency.currencies")?,
@@ -243,6 +246,10 @@ pub enum LedgerError {
         "Someone else must approve this because the company requires separation of duties, including when impersonating. For a one-person company, change Separation of duties on Approval exceptions: /finance/reports/approval-exceptions"
     )]
     SamePerson,
+    #[error("Set up manual journal approval rules on Approval rules before submitting a journal.")]
+    ApprovalNotConfigured,
+    #[error("{0}")]
+    ApprovalRefused(String),
     #[error("Not found")]
     ExceptionNotFound,
     #[error("Not found")]
@@ -2452,6 +2459,7 @@ impl Ledger {
         )
         .await?
         .map_err(LedgerError::Invalid)?;
+        journal_approvals::submission_policy(tx.sql(), scope, company_id).await?;
         let submitter = people(scope);
         let journal = tx
             .mutate(move |sql| {
@@ -2468,6 +2476,7 @@ impl Ledger {
                 })
             })
             .await?;
+        journal_approvals::submit(tx, scope, company_id, journal.id).await?;
         Ok(journal)
     }
 
@@ -2476,11 +2485,11 @@ impl Ledger {
     /// records the `approved` decision naming the entry. The entry is checked
     /// as [`Ledger::post_entry`] checks one, now: a period closed or an
     /// account deactivated since submission is [`LedgerError::Invalid`], and
-    /// the journal stays submitted. The approver differs from the submitter
-    /// (`SamePerson`) unless the company has turned separation of duties off,
-    /// when the approval is recorded as an approval exception (see
-    /// [`Ledger::check_approval`]). Anything but a submitted journal is
-    /// `JournalDecided`.
+    /// the journal stays submitted. Workflow proves live eligibility and
+    /// independence under the journal's saved rules and current safety floors.
+    /// A permitted preparer approval records one Workflow exception. An
+    /// intermediate vote leaves the journal waiting; only the final vote posts.
+    /// Anything but a submitted journal is `JournalDecided`.
     pub async fn approve_journal(
         &self,
         scope: &Scope,
@@ -2508,6 +2517,15 @@ impl Ledger {
         company_id: i64,
         journal_id: i64,
     ) -> Result<Journal> {
+        journal_approvals::decide(tx, scope, company_id, journal_id, true, "").await
+    }
+
+    async fn apply_journal_approval_on(
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company_id: i64,
+        journal_id: i64,
+    ) -> Result<Journal> {
         join(tx, scope, company_id, APPROVE_JOURNALS).await?;
         let tenant = scope.tenant();
         let book = books::find(tx.sql(), tenant, company_id)
@@ -2515,14 +2533,6 @@ impl Ledger {
             .ok_or(LedgerError::BookNotOpen)?;
         let journal = submitted_journal(tx.sql(), tenant, company_id, journal_id).await?;
         let approver = people(scope);
-        let exception = duties::decide(
-            tx.sql(),
-            tenant,
-            company_id,
-            approver,
-            &journals::approval(&journal),
-        )
-        .await?;
         let valid = entries::validate(
             tx.sql(),
             tenant,
@@ -2537,12 +2547,6 @@ impl Ledger {
         tx.mutate(move |sql| {
             Box::pin(async move {
                 let mut changes = Vec::new();
-                if let Some(exception) = exception {
-                    changes.push(
-                        duties::record_exception(sql, tenant, company_id, approver, &exception)
-                            .await?,
-                    );
-                }
                 let posted = entries::insert(
                     sql,
                     tenant,
@@ -2606,6 +2610,17 @@ impl Ledger {
     }
 
     async fn reject_journal_on(
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company_id: i64,
+        journal_id: i64,
+        reason: &str,
+    ) -> Result<Journal> {
+        journals::validate_reason(reason).map_err(LedgerError::Invalid)?;
+        journal_approvals::decide(tx, scope, company_id, journal_id, false, reason).await
+    }
+
+    async fn apply_journal_rejection_on(
         tx: &mut MutationTransaction<'_>,
         scope: &Scope,
         company_id: i64,
@@ -2688,6 +2703,16 @@ impl Ledger {
     }
 
     async fn record_withdrawal(
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company_id: i64,
+        journal_id: i64,
+        reason: Option<String>,
+    ) -> Result<()> {
+        journal_approvals::recall(tx, scope, company_id, journal_id, reason.as_deref()).await
+    }
+
+    async fn apply_journal_withdrawal_on(
         tx: &mut MutationTransaction<'_>,
         scope: &Scope,
         company_id: i64,

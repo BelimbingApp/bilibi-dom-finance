@@ -21,6 +21,7 @@ bilibi-records.workspace = true
 bilibi-settings.workspace = true
 bilibi-tenancy.workspace = true
 bilibi-ui.workspace = true
+bilibi-workflow.workspace = true
 inventory.workspace = true
 jiff = "0.2.38"
 rust_decimal.workspace = true
