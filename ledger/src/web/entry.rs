@@ -335,9 +335,13 @@ impl Entry {
         })?);
         let name = format!("Journal {}", entry.entry_number);
         let url = format!("/finance/ledger/journals/entry-{}", entry.id);
+        let subtitle = match entry.request_number {
+            Some(request) => format!("Request {request} · {}", entry.description),
+            None => entry.description.clone(),
+        };
         let mut page = render(Header {
             title: Html::text(&name),
-            subtitle: &entry.description,
+            subtitle: &subtitle,
             title_actions: super::record_pin("ledger-entry-pin", "entry", &name, &url)?,
             actions,
         })?;

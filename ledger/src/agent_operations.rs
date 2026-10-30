@@ -1286,14 +1286,26 @@ impl ReadHandler for Read {
                     }
                     journal_list::list(client, tenant, company, input, limit).await?
                 }
-                Self::Entry => json!(entries::find(
-                    client,
-                    tenant,
-                    company,
-                    id(input, "entry_id").map_err(invalid)?
-                )
-                .await?
-                .ok_or(bilibi_agent_api::Error::NotFound)?),
+                Self::Entry => {
+                    let entry = entries::find(
+                        client,
+                        tenant,
+                        company,
+                        id(input, "entry_id").map_err(invalid)?,
+                    )
+                    .await?
+                    .ok_or(bilibi_agent_api::Error::NotFound)?;
+                    let request = client
+                        .query_opt(
+                            "SELECT j.journal_number FROM finance_ledger_journal_events v JOIN finance_ledger_journals j ON j.id=v.journal_id AND j.tenant_id=v.tenant_id AND j.company_id=v.company_id WHERE v.tenant_id=$1 AND v.company_id=$2 AND v.entry_id=$3",
+                            &[&tenant, &company, &entry.id],
+                        )
+                        .await?
+                        .map(|row| row.get::<_, i64>(0));
+                    let mut value = json!(entry);
+                    value["request_number"] = json!(request);
+                    value
+                }
                 Self::Entries => {
                     let after =
                         if input.get("after_id").is_some() || input.get("after_date").is_some() {
@@ -1607,7 +1619,7 @@ fn journals_schema() -> Value {
 fn journal_list_schema() -> Value {
     schema(
         &[],
-        json!({"from":day(),"to":day(),"status":string(32),"source":string(100),"after_time":string(32),"after_id":identifier(),"after_kind":string(16),"account_id":identifier(),"through_entry_number":{"type":"integer","minimum":0},"page_size":{"type":"integer","minimum":1,"maximum":100}}),
+        json!({"from":day(),"to":day(),"status":string(32),"source":string(100),"after_time":string(32),"after_id":identifier(),"after_kind":string(16),"account_id":identifier(),"through_entry_number":{"type":"integer","minimum":0},"search":string(20),"page_size":{"type":"integer","minimum":1,"maximum":100}}),
     )
 }
 fn entry_schema() -> Value {
@@ -1649,8 +1661,8 @@ inventory::submit! { Contribution::new(DEFINITIONS,"finance/ledger.operations",P
         Operation {key:"finance.ledger.chart_template.list",title:"List starter charts",summary:"Read the starter charts a company can start from, its optional sections, how many core groups and accounts each creates, how far an accountant has reviewed it, and whether it can be applied to this company now.",keywords:&[],capability:VIEW,input:target_schema,output,handler:Handler::Read(&Read::ChartTemplates),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.chart_template.get",title:"Preview a starter chart",summary:"Read the exact groups and accounts a starter chart would create with the optional `sections` chosen, and any code the company's chart already uses.",keywords:&[],capability:VIEW,input:template_schema,output,handler:Handler::Read(&Read::ChartTemplate),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.journal.list",title:"List journals",summary:"Read journals by number, optionally by status, after a journal number.",keywords:&[],capability:VIEW,input:journals_schema,output,handler:Handler::Read(&Read::Journals),channels:Channels::Every,step_up:&[]},
-        Operation {key:"finance.ledger.entry.get",title:"Read an entry",summary:"Read immutable lines, ownership and reversal identifiers.",keywords:&[],capability:VIEW,input:entry_schema,output,handler:Handler::Read(&Read::Entry),channels:Channels::Every,step_up:&[]},
-        Operation {key:"finance.ledger.journals.list",title:"List postings and journals",summary:"Read a bounded, combined list of postings and unposted manual journals.",keywords:&[],capability:VIEW,input:journal_list_schema,output,handler:Handler::Read(&Read::JournalList),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.ledger.entry.get",title:"Read an entry",summary:"Read immutable lines, ownership and reversal identifiers, and request_number, the manual journal request it was posted from (null for other sources).",keywords:&[],capability:VIEW,input:entry_schema,output,handler:Handler::Read(&Read::Entry),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.ledger.journals.list",title:"List postings and journals",summary:"Read a bounded, combined list of postings and unposted manual journals. number is the book's entry number, null until posted; request is the manual journal's request number, null for other sources; search matches either exactly.",keywords:&[],capability:VIEW,input:journal_list_schema,output,handler:Handler::Read(&Read::JournalList),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.entry.list",title:"List entries",summary:"Read entries by date and identifier with date, account and pinned-entry bounds.",keywords:&[],capability:VIEW,input:entries_schema,output,handler:Handler::Read(&Read::Entries),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.fiscal_year.list",title:"List fiscal years and periods",summary:"Read years in date order with periods, statuses and closing entry identifiers.",keywords:&[],capability:VIEW,input:years_schema,output,handler:Handler::Read(&Read::Years),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.trial_balance.get",title:"Read the trial balance",summary:"Read every account with a posting on or before a date, with debit and credit totals and its balance on one side, counted through a pinned entry number that reproduces the figures later.",keywords:&[],capability:VIEW,input:trial_balance_schema,output,handler:Handler::Read(&Read::TrialBalance),channels:Channels::Every,step_up:&[]},

@@ -216,7 +216,7 @@ impl Journal {
         let total: Decimal = journal.lines.iter().map(|l| view::decimal(&l.debit)).sum();
         let mut facts = vec![
             Fact {
-                title: "Number",
+                title: "Request",
                 id: "ledger-journal-number",
                 value: Html::text(&journal.journal_number.to_string()),
             },
@@ -487,11 +487,33 @@ impl Journal {
             title: "Back to Journals",
             ..BackLink::default()
         })?);
-        let name = format!("Journal {}", journal.journal_number);
+        let posted = match journal.decision.as_ref().and_then(|d| d.entry_id) {
+            Some(entry_id) => match self
+                .pages
+                .read(
+                    scope,
+                    "finance.ledger.entry.get",
+                    json!({"entry_id": entry_id}),
+                )
+                .await?
+            {
+                Read::Found(value) => view::parse::<view::Entry>(value).map(|e| e.entry_number),
+                _ => None,
+            },
+            None => None,
+        };
+        let name = match posted {
+            Some(number) => format!("Journal {number}"),
+            None => "Draft journal".to_owned(),
+        };
         let url = format!("/finance/ledger/journals/{}", journal.id);
+        let subtitle = format!(
+            "Request {} · {}",
+            journal.journal_number, journal.description
+        );
         let mut page = render(Header {
             title: Html::text(&name),
-            subtitle: &journal.description,
+            subtitle: &subtitle,
             title_actions: super::record_pin("ledger-journal-pin", "journal", &name, &url)?,
             actions,
         })?;

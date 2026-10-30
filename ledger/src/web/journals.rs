@@ -63,6 +63,7 @@ static SPEC: LazyLock<Arc<ListSpec>> = LazyLock::new(|| {
             ("source".into(), Filter::string("")),
             ("account".into(), Filter::string("")),
             ("through".into(), Filter::string("")),
+            ("search".into(), Filter::string("")),
         ]),
         omit_defaults: true,
         ..ListSpec::default()
@@ -690,6 +691,10 @@ impl Journals {
         if let Ok(id) = self.filter("account").parse::<i64>() {
             input["account_id"] = json!(id);
         }
+        let search: String = self.filter("search").trim().chars().take(20).collect();
+        if !search.is_empty() {
+            input["search"] = json!(search);
+        }
         if let Ok(n) = self.filter("through").parse::<i64>() {
             input["through_entry_number"] = json!(n);
         }
@@ -728,6 +733,13 @@ impl Journals {
         let toolbar = render(FilterToolbar::new(
             "ledger-journals-filters",
             vec![
+                ToolbarControl::search(
+                    "ledger-journals-search",
+                    "search",
+                    "Search",
+                    &form["search"],
+                    "Entry or request number",
+                ),
                 ToolbarControl::select(
                     "ledger-journals-status",
                     "status",
@@ -856,20 +868,26 @@ impl Journals {
                 "withdrawn" => Badge::status(BadgeKind::Neutral, "Withdrawn"),
                 _ => Badge::status(BadgeKind::Warning, "Waiting for approval"),
             };
-            let mut row = FlexRow::new(&key)
-                .slot(
-                    "number",
-                    render(RecordLink {
-                        workspace: self.framed,
-                        kind: crate::MODULE,
-                        record_id: &record_id,
-                        href: &href,
-                        class: "font-medium text-ink-strong hover:underline",
-                        body: Html::text(&record.number.to_string()),
-                    })?,
-                )
-                .cell("date", Cell::text(&record.date))
-                .cell("description", Cell::text(&record.description))
+            let link = |body: Html| {
+                render(RecordLink {
+                    workspace: self.framed,
+                    kind: crate::MODULE,
+                    record_id: &record_id,
+                    href: &href,
+                    class: "font-medium text-ink-strong hover:underline",
+                    body,
+                })
+            };
+            let mut row = FlexRow::new(&key).cell("date", Cell::text(&record.date));
+            row = match record.number {
+                Some(number) => row
+                    .slot("number", link(Html::text(&number.to_string()))?)
+                    .cell("description", Cell::text(&record.description)),
+                None => row
+                    .cell("number", Cell::text(""))
+                    .slot("description", link(Html::text(&record.description))?),
+            };
+            row = row
                 .cell(
                     "source",
                     Cell::text(if record.source == "manual" {
@@ -1308,7 +1326,7 @@ struct ListRow {
     id: i64,
     kind: String,
     stamp: String,
-    number: i64,
+    number: Option<i64>,
     date: String,
     description: String,
     source: String,
