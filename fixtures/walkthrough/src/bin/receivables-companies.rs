@@ -432,7 +432,6 @@ async fn main() -> Outcome<()> {
             > 0
     );
     println!("PASS: address-view denial leaves the invoice unissued");
-    // Keep a historical customer for the browser's Link to company dialog.
     println!(
         "PASS: all customer composition checks completed; invoice {} customer {}",
         draft.id, customer.id

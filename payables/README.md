@@ -10,7 +10,7 @@ The Vendors page records the vendor relationship through Core's reviewed contrac
 
 New bills take `vendor_id`, including replacement drafts. Both Finance availability and an active company are required. Pending, suspended and archived companies are refused by name. Due date defaults to the document date plus the vendor's payment terms; the form offers its expense and tax defaults. Posting uses the vendor's payable account when configured, otherwise the company default. Posted bills retain their original control account for payments and debit notes.
 
-The bill freezes the company's name, tax ID and registration number at commit under the recorder's Companies view permission. A restricted fact refuses the write. The shared `CompanyLinks` reader and `CompanyChooser` in the ledger serve both customers and vendors. Preview can read the name and status; full facts need the committing connection. No billing address is frozen until Core offers the read on that connection (BelimbingApp/bilibi#231); the company link opens Core's current facts and billing addresses.
+The bill freezes the Core party code, name and permitted tax and registration facts at commit under Core's view permissions. A restricted fact refuses the write. The shared `PartyLinks` reader and `PartyChooser` in the ledger serve both customers and vendors. Preview can read the name and status; full facts need the committing connection. No billing address is frozen until Core offers the read on that connection (BelimbingApp/bilibi#231); the company link opens Core's current facts and billing addresses.
 
 ### Historical supplier keys
 
