@@ -299,7 +299,7 @@ impl Vendors {
                             &self.pages.today(s).await?.to_string(),
                         );
                         Html::text(&if lines.is_empty() {
-                            "No billing address in Companies".into()
+                            "No billing address in Core".into()
                         } else {
                             lines.join(", ")
                         })
@@ -317,7 +317,7 @@ impl Vendors {
                 });
                 company_body.push(&render(Fold {
                     id: &format!("vendor-{}-company-details", v.id),
-                    title: "Company details",
+                    title: "Core party details",
                     summary: "",
                     open: false,
                     body: render(Facts {
@@ -493,7 +493,7 @@ impl Vendors {
         table.add_query = &self.columns.add_query;
         table.empty = Some(TableEmpty::Content(render(EmptyState::missing(
             "No vendors",
-            "Add a linked company before recording a new bill.",
+            "Add a supplier linked to a Core Company or Person before recording a bill.",
         ))?));
         body.push(&render(table)?);
         body.push(&render(Pagination::new(

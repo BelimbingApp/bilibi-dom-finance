@@ -1,6 +1,6 @@
 //! The customers list and its Add customer dialog. Reads
 //! `finance.receivables.customer.list`; Add chooses or creates the Core
-//! company (`company_pick`) and submits `customer.create`, which records
+//! Company or Person (`company_pick`) and submits `customer.create`, which records
 //! the company, Finance customer and relationship in one transaction.
 use super::{
     company_pick::Submitted,
@@ -191,7 +191,6 @@ impl Customers {
                             ("All customers", ""),
                             ("Active", "active"),
                             ("Inactive", "inactive"),
-                            ("Not linked to a company", "unlinked"),
                         ]
                         .map(|(l, v)| Choice::new(l, v))
                         .to_vec(),

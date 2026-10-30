@@ -295,7 +295,21 @@ impl<'a> PartyLinks<'a> {
         ) {
             return Err(invalid(
                 "record_id",
-                "is an archived, retired or unavailable party",
+                format!(
+                    "is {} {}",
+                    if facts.status == "archived" {
+                        "an archived"
+                    } else if facts.status == "retired" {
+                        "a retired"
+                    } else {
+                        "an unavailable"
+                    },
+                    if kind == "company" {
+                        "company"
+                    } else {
+                        "person"
+                    }
+                ),
             ));
         }
         Ok(PartyTarget {
@@ -477,15 +491,16 @@ impl<'a> PartyLinks<'a> {
         } else {
             &["tax_id", "registration_number"][..]
         };
-        if facts
-            .restricted
-            .iter()
-            .any(|f| required.contains(&f.as_str()))
+        if let Some((_, label)) = [
+            ("tax_id", "tax ID"),
+            ("registration_number", "registration number"),
+            ("email", "email"),
+            ("phone", "phone"),
+        ]
+        .iter()
+        .find(|(key, _)| required.contains(key) && facts.restricted.iter().any(|f| f == key))
         {
-            return Err(invalid(
-                field,
-                "the party has restricted facts, so they cannot be frozen on the document",
-            ));
+            return Err(invalid(field, format!("the {}'s {label} is restricted for you, so it cannot be frozen on the document", if kind=="company" {"company"} else {"person"})));
         }
         let name = if kind == "company" {
             let (company, masked) = bilibi_company::detail(client, scope, id).await?;

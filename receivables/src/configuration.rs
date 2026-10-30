@@ -210,7 +210,7 @@ impl Receivables {
             .ok_or(R::CustomerNotFound)?;
         self.customer(&**client, scope, row).await
     }
-    /// Creates a customer for `core_company_id` or `new_company`. Core company
+    /// Creates a customer for a Core Company or Person reference or new party. Core
     /// creation (with duplicate review), the customer and its current customer
     /// relationship share one transaction. Finance retains only code and terms.
     pub async fn create_customer(
