@@ -24,10 +24,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     bilibi_database::migrate(&db, &bilibi_module_registry::discover()?).await?;
     let app = bilibi_web::App::new(db.clone(), &origin)?;
     bilibi_finance_walkthrough_fixture::without_step_up(&app.services)?;
+    let restore = std::env::args().any(|arg| arg == "--restore-identities");
+    if restore {
+        // Identity-fixture SQL only, guarded by this proof's issued invoice.
+        // The launcher retires known demo users; no business rows are changed.
+        let client = db.get().await?;
+        let proof:bool=client.query_one("SELECT EXISTS(SELECT 1 FROM finance_receivables_documents WHERE tenant_id=1 AND company_id=1 AND party_code='jamie_tv_consumer' AND status='issued')",&[]).await?.get(0);
+        if !proof {
+            return Err(
+                "restore identities requires the completed disposable party-code proof".into(),
+            );
+        }
+        client.batch_execute("INSERT INTO persons(id,tenant_id,code,name,kind,email) VALUES(1,1,'ada_manager','Ada Manager','human','manager@example.test') ON CONFLICT DO NOTHING;
+            INSERT INTO person_affiliations(id,tenant_id,person_id,organisation_id,title) VALUES(1,1,1,1,'Manager') ON CONFLICT DO NOTHING;
+            INSERT INTO users(id,tenant_id,name,email,password_hash,person_id,affiliation_id,organisation_id) SELECT 1,1,'Ada Manager','manager@example.test',password_hash,1,1,1 FROM users WHERE email='ai@agent.my' ON CONFLICT DO NOTHING;").await?;
+    }
     let installed = install(&db, &app.services).await?;
     // The normal launcher retires demo identities at startup. Restore only the
     // walkthrough installation after that seed, without replaying Finance writes.
-    if std::env::args().any(|arg| arg == "--restore-identities") {
+    if restore {
         println!("PASS: walkthrough identities restored for launcher browser proof");
         return Ok(());
     }

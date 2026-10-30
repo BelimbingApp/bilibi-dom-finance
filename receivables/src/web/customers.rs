@@ -536,11 +536,11 @@ impl Customers {
                         .await?;
                     let existing = customers
                         .into_iter()
-                        .filter_map(|customer| {
-                            Some((
+                        .map(|customer| {
+                            (
                                 customer.party.reference(),
                                 format!("/finance/receivables/customers/{}", customer.id),
-                            ))
+                            )
                         })
                         .collect();
                     self.create = Some(Create {
