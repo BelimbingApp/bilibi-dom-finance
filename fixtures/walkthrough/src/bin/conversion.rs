@@ -293,13 +293,27 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
     // A blank, unknown or wrong-kind Core code is a refusal of its row, never a
     // match to a customer or supplier whose Core party cannot be read.
     for (csv, words) in [
-        (AR.replace("invoice-17,company_010", "invoice-17,"), "customer_code is required"),
-        (AR.replace("company_010", "MISSING-CUSTOMER"), "customer_code and party_kind"),
-        (AR.replace(",company\n", ",person\n"), "customer_code and party_kind"),
+        (
+            AR.replace("invoice-17,company_010", "invoice-17,"),
+            "customer_code is required",
+        ),
+        (
+            AR.replace("company_010", "MISSING-CUSTOMER"),
+            "customer_code and party_kind",
+        ),
+        (
+            AR.replace(",company\n", ",person\n"),
+            "customer_code and party_kind",
+        ),
     ] {
         let mut bad = ar_input.clone();
         bad["csv"] = json!(csv);
-        let refusal = format!("{:?}", ar.import_opening_invoices(&s, company, &bad).await.unwrap_err());
+        let refusal = format!(
+            "{:?}",
+            ar.import_opening_invoices(&s, company, &bad)
+                .await
+                .unwrap_err()
+        );
         assert!(refusal.contains(words), "{refusal}");
     }
     for csv in [

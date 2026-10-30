@@ -45,7 +45,9 @@ fn refused<T: std::fmt::Debug>(answer: Result<T, ReceivableError>, field: &str, 
         _ => Vec::new(),
     };
     assert!(
-        refusals.iter().any(|(f, m)| f == field && m.contains(words)),
+        refusals
+            .iter()
+            .any(|(f, m)| f == field && m.contains(words)),
         "{answer:?}"
     );
     println!("PASS: refusal at {field}: {words}");
