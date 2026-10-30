@@ -4,7 +4,8 @@ use super::{company, render, Pages, Written, PAGES};
 use crate::{SupplierHistory, Vendor, MANAGE_SETTINGS};
 use bilibi_database::{Error, Result};
 use bilibi_finance_ledger::{
-    record_company_relationship, ChosenCompany, CompanyChooser, CompanyErrors, CompanyPickerContext,
+    record_company_relationship, ChosenCompany, CompanyErrors, CompanyPickerContext,
+    MultiCompanyChooser,
 };
 use bilibi_tenancy::Scope;
 use bilibi_ui::{
@@ -21,7 +22,7 @@ const FORM: &str = "vendor";
 static SPEC: LazyLock<Arc<ListSpec>> =
     LazyLock::new(|| ListSpec::default().shared().expect("vendor list"));
 struct Create {
-    chooser: CompanyChooser,
+    chooser: MultiCompanyChooser,
     values: HashMap<String, String>,
     errors: CompanyErrors,
 }
@@ -596,14 +597,14 @@ impl Vendors {
             "Payment terms".into(),
         ));
         let mut body = render(c.errors.summary("vendor-errors", &labels))?;
-        body.push(&c.chooser.render(&c.errors, false)?);
-        if c.chooser.created.is_some() {
-            body.push(&render(Alert{id:"vendor-company-created",kind:StatusKind::Warning,body:Html::text("The company exists in Companies. Complete the vendor settings to add it as a vendor."),..Alert::default()})?);
-        }
+        body.push(&c.chooser.render(&c.errors)?);
         for (key, label) in [
             ("code", "Code"),
             ("payment_terms_days", "Payment terms (days)"),
         ] {
+            if key == "code" && !c.chooser.is_new() {
+                continue;
+            }
             let field = Field::in_form(FORM, key)
                 .id(format!("vendor-{key}"))
                 .label(label)
@@ -622,10 +623,14 @@ impl Vendors {
         }
         self.modal(
             "vendor-new-modal",
-            "Add vendor",
+            "Add suppliers",
             body,
             "create_vendor",
-            "Add vendor",
+            if c.chooser.count() == 1 {
+                "Add supplier"
+            } else {
+                "Add suppliers"
+            },
         )
     }
     fn map_dialog(
@@ -682,15 +687,22 @@ impl Vendors {
             "Confirm match",
         )
     }
-    async fn take(&mut self, s: &Scope, v: &Value) -> Result<()> {
-        let form = params::form_values(v, FORM);
-        let context = self.context();
+    async fn take(&mut self, _s: &Scope, v: &Value) -> Result<()> {
+        let mut form = params::form_values(v, FORM);
+        if let Some(c) = &self.create {
+            for row in c.chooser.rows() {
+                let key = format!("code_{}", row.id);
+                if let Some(value) = v[format!("{FORM}[{key}]")].as_str() {
+                    if value.len() > 1024 {
+                        return Err(Error::Invalid);
+                    }
+                    form.insert(key, value.to_owned());
+                }
+            }
+        }
         if let Some(c) = &mut self.create {
             c.values.extend(form.clone());
-            if c.chooser.read(&form) {
-                c.chooser.search(&context, s).await?;
-            }
-            c.chooser.offer_code(&mut c.values);
+            c.chooser.read(&form);
         }
         if let Some((_, values, _)) = &mut self.mapping {
             values.extend(form);
@@ -748,7 +760,7 @@ impl Vendors {
                         })
                         .collect();
                     self.create = Some(Create {
-                        chooser: CompanyChooser::new("vendor-new", FORM).existing(
+                        chooser: MultiCompanyChooser::new("vendor-new", FORM).existing(
                             "Already a supplier",
                             "View supplier",
                             existing,
@@ -763,20 +775,33 @@ impl Vendors {
                 self.mapping = None;
             }
             "vendor_change" => self.take(s, v).await?,
-            "pick_company" => {
+            "search_companies" => {
                 if let Some(c) = &mut self.create {
                     c.chooser
-                        .pick(&context, s, v["record"].as_str().ok_or(Error::Invalid)?)
+                        .search(&context, s, v["query"].as_str().unwrap_or(""))
                         .await?;
-                    c.chooser.offer_code(&mut c.values);
-                    c.errors.0.remove("company");
                 }
             }
-            "clear_company" => {
+            "pick_companies" => {
                 if let Some(c) = &mut self.create {
-                    c.chooser.clear();
-                    c.chooser.offer_code(&mut c.values);
-                    c.errors.0.remove("company");
+                    c.chooser
+                        .pick(&context, s, v["value"].as_str().ok_or(Error::Invalid)?)
+                        .await?;
+                }
+            }
+            "remove_company" => {
+                if let Some(c) = &mut self.create {
+                    c.chooser.remove(v["value"].as_str().ok_or(Error::Invalid)?);
+                }
+            }
+            "new_company" => {
+                if let Some(c) = &mut self.create {
+                    c.chooser.start_new(v["query"].as_str().unwrap_or(""));
+                }
+            }
+            "cancel_new_company" => {
+                if let Some(c) = &mut self.create {
+                    c.chooser.cancel_new();
                 }
             }
             "use_candidate" => {
@@ -784,7 +809,6 @@ impl Vendors {
                     c.chooser
                         .use_candidate(&context, s, v["company"].as_str().ok_or(Error::Invalid)?)
                         .await?;
-                    c.chooser.offer_code(&mut c.values);
                     c.errors = CompanyErrors::default();
                 }
             }
@@ -806,12 +830,12 @@ impl Vendors {
                         .get("payment_terms_days")
                         .map(String::as_str)
                         .unwrap_or("");
-                    let valid_terms = terms.is_empty()
-                        || terms
-                            .parse::<i32>()
-                            .ok()
-                            .is_some_and(|n| (0..=3650).contains(&n));
-                    if !valid_terms {
+                    let days = if terms.is_empty() {
+                        Some(0)
+                    } else {
+                        terms.parse::<i32>().ok().filter(|n| (0..=3650).contains(n))
+                    };
+                    let Some(days) = days else {
                         c.errors = CompanyErrors(BTreeMap::from([(
                             "payment_terms_days".into(),
                             vec!["must be between 0 and 3650".into()],
@@ -820,30 +844,77 @@ impl Vendors {
                             html: self.body(s).await?,
                             ..LiveBody::default()
                         });
-                    }
-                    let chosen = c.chooser.company(&context, s, credential, event).await?;
-                    match chosen {
-                        ChosenCompany::Company(target) => {
-                            let input = json!({"company_id":company(s),"core_company_id":target,"code":c.values.get("code").cloned().unwrap_or_default(),"payment_terms_days":c.values.get("payment_terms_days").and_then(|n|n.parse::<i32>().ok()).unwrap_or(0),"active":true});
-                            match self.pages.write(s,credential,event,"finance.payables.vendor.create",input).await? {
-                                Written::Done(_)=>{
-                                    let recorded=record_company_relationship(&context,s,credential,event,target).await?;
-                                    self.notice=Some(match recorded {
-                                        Ok(())=>(StatusKind::Success,"Vendor added. Vendor relationship recorded in Companies.".into()),
-                                        Err(reason)=>(StatusKind::Warning,format!("Vendor added. Relationship was not recorded: {reason}")),
-                                    });
-                                    self.create=None;
-                                },
-                                Written::Fields(e)=>c.errors=CompanyErrors(e.into_iter().map(|(key,messages)|(if key=="core_company_id" {"company".into()}else{key},messages)).collect()),
-                                _=>c.errors=CompanyErrors(BTreeMap::from([("base".into(),vec!["Vendor was not added. Check your permission and try again.".into()])])),
+                    };
+                    if c.chooser.count() == 0 {
+                        c.errors = CompanyErrors(BTreeMap::from([(
+                            "base".into(),
+                            vec!["Choose a company.".into()],
+                        )]));
+                    } else {
+                        if c.chooser.is_new() {
+                            match c
+                                .chooser
+                                .chooser()
+                                .company(&context, s, credential, event)
+                                .await?
+                            {
+                                ChosenCompany::Company(_) => {
+                                    c.chooser.capture_created(
+                                        c.values.get("code").map(String::as_str).unwrap_or(""),
+                                    )?;
+                                }
+                                ChosenCompany::Invalid(errors) => {
+                                    c.errors = errors;
+                                }
+                                ChosenCompany::Refused(message) => {
+                                    c.errors = CompanyErrors(BTreeMap::from([(
+                                        "base".into(),
+                                        vec![message],
+                                    )]));
+                                }
+                                ChosenCompany::Review => {
+                                    c.errors = CompanyErrors::default();
+                                }
                             }
                         }
-                        ChosenCompany::Invalid(errors) => c.errors = errors,
-                        ChosenCompany::Refused(message) => {
-                            c.errors =
-                                CompanyErrors(BTreeMap::from([("base".into(), vec![message])]))
+                        let rows: Vec<_> = c
+                            .chooser
+                            .rows()
+                            .iter()
+                            .map(|r| (r.id.clone(), r.code.clone()))
+                            .collect();
+                        let mut added = 0;
+                        let mut warnings = Vec::new();
+                        for (id, code) in rows {
+                            let target = id.parse::<i64>().map_err(|_| Error::Invalid)?;
+                            let input = json!({"company_id": company(s), "core_company_id": target, "code": code, "payment_terms_days": days, "active": true});
+                            match self.pages.write(s, credential, event, "finance.payables.vendor.create", input).await? {
+                                Written::Done(record) => {
+                                    added += 1;
+                                    if let Some(vendor_id) = super::record_id(&record) {
+                                        let query = url::form_urlencoded::Serializer::new(String::new()).append_pair("search", &code).finish();
+                                        c.chooser.mark_existing(&id, format!("/finance/payables/vendors?{query}#payables-vendors-table-row-{vendor_id}"));
+                                    }
+                                    c.chooser.remove(&id);
+                                    if let Err(reason) = record_company_relationship(&context, s, credential, event, target).await? { warnings.push(reason); }
+                                }
+                                Written::Fields(errors) => c.chooser.row_errors(&id, CompanyErrors(errors)),
+                                _ => c.chooser.row_errors(&id, CompanyErrors(BTreeMap::from([("base".into(), vec!["Supplier was not added. Check your permission and try again.".into()])]))),
+                            }
                         }
-                        ChosenCompany::Review => c.errors = CompanyErrors::default(),
+                        if added > 0 {
+                            self.notice = Some(if warnings.is_empty() {
+                                (StatusKind::Success, format!("{added} supplier(s) added."))
+                            } else {
+                                (
+                                    StatusKind::Warning,
+                                    format!("{added} supplier(s) added. {}", warnings.join("; ")),
+                                )
+                            });
+                        }
+                        if c.chooser.count() == 0 {
+                            self.create = None;
+                        }
                     }
                 }
             }
