@@ -282,7 +282,7 @@ impl Customer {
                     .reason("Not visible to you: viewing addresses needs permission."),
             )?
         } else if self.company.billing.is_empty() {
-            Html::text("No billing address in Companies yet.")
+            Html::text("No billing address in Core yet.")
         } else {
             render(Lines {
                 id: "receivables-customer-billing",
@@ -329,7 +329,7 @@ impl Customer {
             body: {
                 let mut b = render(SectionHeading {
                     title: "Core party",
-                    description: "Read from Companies. Invoices issued from now on carry these details; invoices already issued keep the details they were issued with.",
+                    description: "Read from Core. Invoices issued from now on carry these details; invoices already issued keep the details they were issued with.",
                     ..SectionHeading::default()
                 })?;
                 b.push(&render(Facts {

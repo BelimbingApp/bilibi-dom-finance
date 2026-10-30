@@ -25,6 +25,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = bilibi_web::App::new(db.clone(), &origin)?;
     bilibi_finance_walkthrough_fixture::without_step_up(&app.services)?;
     let installed = install(&db, &app.services).await?;
+    // The normal launcher retires demo identities at startup. Restore only the
+    // walkthrough installation after that seed, without replaying Finance writes.
+    if std::env::args().any(|arg| arg == "--restore-identities") {
+        println!("PASS: walkthrough identities restored for launcher browser proof");
+        return Ok(());
+    }
     let scope = sign_in(&db, &app.services, 1, 1).await?;
     let ar = app
         .services
