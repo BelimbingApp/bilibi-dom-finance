@@ -743,8 +743,7 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
                 .is_err());
         }
     }
-    let reconcile =
-        json!({"source_reference":"ASSET-SOURCE","currency_code":"MYR","csv":"","staged":true});
+    let reconcile = json!({"company_id":company,"source_reference":"ASSET-SOURCE","currency_code":"MYR","csv":"","staged":true});
     assert!(assets
         .import_opening_register(&manager, company, &reconcile)
         .await
