@@ -144,11 +144,12 @@ The wire walkthrough exercises all writes over both transports, observes preview
 
 ## Pages
 
+Company books is the only book list. Each company links to its book at `/finance/ledger/books/{company_id}`, including the reviewed open-book action. Viewing or opening another company’s book does not switch the current company. The list filters by company name, book state, currency and fiscal-year state.
+
 The ledger has pages so a person without an AI agent can do the same daily work. Bilimbi's ledger has none (`web: nil`), so these are this port's own. Reports keeps the older [Bookkeeping and Approval exceptions pages](../reports/README.md#bookkeeping-and-approval-exceptions-pages).
 
 | Menu (Finance, under Bookkeeping) | Route | What a person does there |
 | --- | --- | --- |
-| Book | `/finance/ledger/book` | Names the current company. Reads the currency and decimal places. Opens the book once: pick the currency from a searchable list (the company's base currency is proposed), review its decimal places, then confirm and choose the separation rule for other Finance approvals. Manual journals are configured on Approval rules. Sees whether controlled bookkeeping and other Finance separation are on. |
 | Company books | `/finance/ledger/books` | Lists every company the person may work in with its book (open, not open, no access), currency, latest fiscal year and earliest open period, and links each row to that company's fiscal years. See [Current company](#current-company-and-company-books). |
 | Chart of accounts | `/finance/ledger/accounts` | Filters authorized companies' charts (default: current company), identifies each row's company and currency, and shows each account's balance and each group's total. Select one company to add an account in its named dialog. With an empty chart it offers the starter charts: preview, tick the optional sections that apply, then apply, or start empty. |
 | Account groups | `/finance/ledger/account-groups` | Lists the groups with what each holds and its total, adds a group in a dialog. |

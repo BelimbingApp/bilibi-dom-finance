@@ -8,16 +8,49 @@ use super::{event_type, no_company, render, shell, view, Company, Flash, Pages, 
 use bilibi_database::{Error, Result};
 use bilibi_tenancy::Scope;
 use bilibi_ui::{
+    list_state::FILTERS_FORM,
     page::{LiveBody, LiveFuture, LiveInput, LiveRequest, LiveState},
-    params, Badge, BadgeKind, BuiltinColumn, Card, Cell, FlexRow, FlexTable, Header, Html,
-    ListColumns, PageVariant, TableEmpty,
+    params, Badge, BadgeKind, BuiltinColumn, Card, Cell, Choice, Filter, FilterToolbar, FlexRow,
+    FlexTable, Header, Html, ListColumns, ListSpec, ListState, PageVariant, RecordLink, TableEmpty,
+    ToolbarControl,
 };
 use jiff::civil::Date;
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::{Arc, LazyLock},
+};
+static SPEC: LazyLock<Arc<ListSpec>> = LazyLock::new(|| {
+    ListSpec {
+        filters: BTreeMap::from([
+            (
+                "book".into(),
+                Filter::one_of(
+                    &["all", "open", "not_open", "no_access", "unavailable"],
+                    "all",
+                ),
+            ),
+            ("currency".into(), Filter::string("")),
+            (
+                "year".into(),
+                Filter::one_of(
+                    &["all", "open", "closed", "none", "no_access", "unavailable"],
+                    "all",
+                ),
+            ),
+        ]),
+        omit_defaults: true,
+        ..ListSpec::default()
+    }
+    .shared()
+    .expect("company books list spec")
+});
 
 pub(super) struct Books {
     pages: Pages,
     flash: Flash,
     columns: Option<ListColumns>,
+    list: ListState,
+    framed: bool,
 }
 
 /// What a company's book answered.
@@ -96,12 +129,17 @@ struct Note;
 struct Line(String);
 
 impl Books {
-    pub(super) fn new(pages: Pages) -> Self {
-        Self {
+    fn filter(&self, key: &str) -> &str {
+        self.list.filters.get(key).map_or("", String::as_str)
+    }
+    pub(super) fn new(pages: Pages, query: &HashMap<String, String>, framed: bool) -> Result<Self> {
+        Ok(Self {
             pages,
             flash: Flash::default(),
             columns: None,
-        }
+            list: ListState::parse(query, SPEC.clone()).map_err(|_| Error::Internal)?,
+            framed,
+        })
     }
 
     /// One company's row. A company the person works in whose book the ledger
@@ -112,7 +150,7 @@ impl Books {
         company: &Company,
         current: Option<i64>,
         today: Date,
-    ) -> Result<FlexRow> {
+    ) -> Result<Option<FlexRow>> {
         let book = match self.pages.book_in(scope, company.id).await? {
             Ok(state) => match state.book {
                 Some(book) => Book::Open(book),
@@ -121,11 +159,40 @@ impl Books {
             Err(Read::Denied) => Book::NoAccess,
             Err(_) => Book::Unavailable,
         };
+        let state = match &book {
+            Book::Open(_) => "open",
+            Book::NotOpen => "not_open",
+            Book::NoAccess => "no_access",
+            Book::Unavailable => "unavailable",
+        };
+        let currency = match &book {
+            Book::Open(b) => b.currency_code.as_str(),
+            _ => "",
+        };
+        if (!self.list.search.is_empty()
+            && !company
+                .name
+                .to_lowercase()
+                .contains(&self.list.search.to_lowercase()))
+            || (self.filter("book") != "all" && self.filter("book") != state)
+            || (!self.filter("currency").is_empty()
+                && !currency.eq_ignore_ascii_case(self.filter("currency")))
+        {
+            return Ok(None);
+        }
+        let mut year_state = "none";
         let mut row = FlexRow::new(company.id.to_string()).slot(
             "company",
-            render(CompanyCell {
-                name: &company.name,
-                current: Some(company.id) == current,
+            render(RecordLink {
+                workspace: self.framed,
+                kind: "finance/ledger.book",
+                record_id: &company.id.to_string(),
+                href: &format!("/finance/ledger/books/{}", company.id),
+                class: "text-link hover:underline",
+                body: render(CompanyCell {
+                    name: &company.name,
+                    current: Some(company.id) == current,
+                })?,
             })?,
         );
         row.dom_id = Some(format!("ledger-books-{}", company.id));
@@ -152,6 +219,15 @@ impl Books {
                     }
                     Ok(years) => {
                         let calendar = Calendar::of(&years, today);
+                        year_state = if calendar
+                            .latest
+                            .as_ref()
+                            .is_some_and(|(_, _, closed)| *closed)
+                        {
+                            "closed"
+                        } else {
+                            "open"
+                        };
                         row = match calendar.latest {
                             Some((start, end, closed)) => row.cell(
                                 "year",
@@ -178,11 +254,13 @@ impl Books {
                         };
                     }
                     Err(Read::Denied) => {
+                        year_state = "no_access";
                         row = row
                             .cell("year", Cell::text("No access to fiscal years"))
                             .cell("open", dash());
                     }
                     Err(_) => {
+                        year_state = "unavailable";
                         row = row
                             .cell("year", Cell::text("Could not be read"))
                             .cell("open", dash());
@@ -232,21 +310,69 @@ impl Books {
         } else {
             row = row.cell("view", dash());
         }
-        Ok(row)
+        Ok((self.filter("year") == "all" || self.filter("year") == year_state).then_some(row))
     }
 
     async fn view(&mut self, scope: &Scope) -> Result<LiveBody> {
         let companies = self.pages.companies(scope).await?;
         let today = self.pages.today(scope).await?;
         let current = Pages::company(scope);
-        let mut body = Html::EMPTY;
+        let form = self.list.filters_form();
+        let mut body = render(FilterToolbar::new(
+            "ledger-books-filters",
+            vec![
+                ToolbarControl::search(
+                    "ledger-books-search",
+                    "search",
+                    "Company",
+                    &form["search"],
+                    "Company name",
+                ),
+                ToolbarControl::select(
+                    "ledger-books-state",
+                    "book",
+                    "Book",
+                    &form["book"],
+                    vec![
+                        Choice::new("All books", "all"),
+                        Choice::new("Open", "open"),
+                        Choice::new("Not open", "not_open"),
+                        Choice::new("No access", "no_access"),
+                        Choice::new("Could not be read", "unavailable"),
+                    ],
+                ),
+                ToolbarControl::search(
+                    "ledger-books-currency",
+                    "currency",
+                    "Currency",
+                    &form["currency"],
+                    "Currency code",
+                ),
+                ToolbarControl::select(
+                    "ledger-books-year",
+                    "year",
+                    "Fiscal year",
+                    &form["year"],
+                    vec![
+                        Choice::new("All states", "all"),
+                        Choice::new("Open", "open"),
+                        Choice::new("Closed", "closed"),
+                        Choice::new("None", "none"),
+                        Choice::new("No access", "no_access"),
+                        Choice::new("Could not be read", "unavailable"),
+                    ],
+                ),
+            ],
+        ))?;
         let mut shown = 0;
         if companies.is_empty() {
             body.push(&no_company("ledger-books-no-company")?);
         } else {
             let mut rows = Vec::new();
             for company in &companies {
-                rows.push(self.row(scope, company, current, today).await?);
+                if let Some(row) = self.row(scope, company, current, today).await? {
+                    rows.push(row);
+                }
             }
             shown = rows.len();
             if self.columns.is_none() {
@@ -293,6 +419,7 @@ impl Books {
         Ok(LiveBody {
             html: shell("ledger-books", PageVariant::List, &self.flash, page)?,
             rows: shown,
+            query: self.list.to_params(),
             ..LiveBody::default()
         })
     }
@@ -301,8 +428,15 @@ impl Books {
 impl LiveState<Scope, Error> for Books {
     fn update<'a>(&'a mut self, r: LiveRequest<'a, Scope>) -> LiveFuture<'a, Error> {
         Box::pin(async move {
+            if let LiveInput::Params(values) = r.input {
+                self.list = ListState::parse(values, SPEC.clone()).map_err(|_| Error::Internal)?;
+            }
             if let LiveInput::Event(value) = r.input {
                 match event_type(value)? {
+                    "filters" => {
+                        self.list
+                            .apply_filters(&params::form_values(value, FILTERS_FORM));
+                    }
                     "grid" => {
                         if let Some(columns) = &mut self.columns {
                             columns.handle(&params::string_values(value));

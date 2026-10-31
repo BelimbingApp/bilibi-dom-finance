@@ -73,7 +73,7 @@ route!(
     "/finance/ledger/opening-balances",
     "opening"
 );
-route!("finance/ledger.book", "/finance/ledger/book", "book");
+route!("finance/ledger.book", "/finance/ledger/books/{id}", "book");
 route!("finance/ledger.books", "/finance/ledger/books", "books");
 route!(
     "finance/ledger.accounts",
@@ -169,7 +169,6 @@ menu!(
     "/finance/ledger/opening-balances",
     11
 );
-menu!("finance.ledger.book", "Book", "/finance/ledger/book", 12);
 menu!(
     "finance.ledger.books",
     "Company books",
@@ -1113,8 +1112,8 @@ impl Pages {
         };
         Ok(match r.operation {
             "opening" => Box::new(opening::Opening::new(pages, r.query)),
-            "book" => Box::new(book::Book::new(pages)),
-            "books" => Box::new(books::Books::new(pages)),
+            "book" => Box::new(book::Book::new(pages, id_param(r.path)?)),
+            "books" => Box::new(books::Books::new(pages, r.query, r.framed)?),
             "accounts" => Box::new(accounts::Accounts::new(pages, r.query, r.framed)?),
             "account" => Box::new(account::Account::new(pages, id_param(r.path)?, company)),
             "groups" => Box::new(groups::Groups::new(pages, r.query, r.framed, company)?),
