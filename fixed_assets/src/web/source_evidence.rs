@@ -112,7 +112,7 @@ impl EvidenceView {
                                 }
                             })
                         };
-                        result = result.cell(*key, Cell::text(value));
+                        result = result.cell(key, Cell::text(value));
                     }
                     result
                 })
