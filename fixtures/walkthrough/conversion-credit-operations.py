@@ -114,6 +114,10 @@ for module in ["receivables", "payables"]:
     documents = {row["opening"]["source_id"]: row for row in records}
     credit, target = documents["credit"]["id"], documents["invoice"]["id"]
     before = aging(module)
+    wrong_party = operation(prefix + ".credit.apply", credit_document_id=documents["zero-credit"]["id"], target_document_id=documents["zero-invoice"]["id"], amount="1", effective_date="2026-07-10", reference="MCP-wrong-party")
+    require(preview(wrong_party).get("valid") is False, "different-party application accepted")
+    foreign = {"key": prefix + ".credit.apply", "input": {"company_id": 10, "credit_document_id": credit, "target_document_id": target, "amount": "1", "effective_date": "2026-07-10", "reference": "MCP-no-workplace"}}
+    require(preview(foreign).get("valid") is False, "application outside the person's workplaces accepted")
     common = {"credit_document_id": credit, "effective_date": "2026-07-10", "override_reason": exception}
     apply = operation(prefix + ".credit.apply", **common, target_document_id=target, amount="20", reference="MCP-same-control")
     review = preview(apply)
@@ -126,6 +130,9 @@ for module in ["receivables", "payables"]:
     require(succeeded(result), "same-control application failed")
     event = result["results"][0]["result"]["result"]["record"]
     require(event["entry_id"] is None, "same-control application created an entry")
+    require(write(apply)["id"] == event["id"], "identical settlement retry created another event")
+    changed = operation(prefix + ".credit.apply", **common, target_document_id=target, amount="1", reference="MCP-same-control")
+    require(preview(changed).get("valid") is False, "changed settlement retry accepted")
     require(not succeeded(commit(stale, stale_review)), "stale refund review double-spent a credit")
     after = aging(module)
     require(before["through_entry_number"] == after["through_entry_number"] and before["through_opening_batch_id"] == after["through_opening_batch_id"] and before["through_settlement_number"] < after["through_settlement_number"], "entryless application moved the wrong boundaries")
@@ -142,16 +149,20 @@ for module in ["receivables", "payables"]:
     backdated = operation(prefix + ".credit.apply", **(common | {"effective_date": "2026-07-12"}), target_document_id=target, amount="25", reference="MCP-backdated-overdraw")
     require(preview(backdated).get("valid") is False, "backdating ignored the later restoration")
     # Competing reviewed writes may commit only one reservation of the residual.
-    races = [operation(prefix + ".credit.apply", **common, target_document_id=target, amount="20", reference="MCP-race-" + str(i)) for i in range(2)]
+    races = [operation(prefix + ".credit.apply", **(common | {"effective_date": "2026-07-16"}), target_document_id=target, amount="20", reference="MCP-race-" + str(i)) for i in range(2)]
     reviews = [preview(op) for op in races]
     require(all(review.get("valid") is True for review in reviews), "race reviews refused before any commit")
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         results = list(executor.map(lambda pair: commit(*pair), zip(races, reviews)))
     require(sum(succeeded(result) for result in results) == 1, "competing reviews double-spent or both failed")
     winner = next(result["results"][0]["result"]["result"]["record"] for result in results if succeeded(result))
-    write(operation(prefix + ".settlement.reverse", settlement_id=winner["id"], effective_date="2026-07-15", reference="MCP-reverse-race", override_reason=exception))
+    write(operation(prefix + ".settlement.reverse", settlement_id=winner["id"], effective_date="2026-07-17", reference="MCP-reverse-race", override_reason=exception))
     transfer = write(operation(prefix + ".credit.apply", credit_document_id=documents["historical-credit"]["id"], target_document_id=target, amount="10", effective_date="2026-07-20", reference="MCP-transfer", override_reason=exception))
     require(transfer["entry_id"] is not None, "different-control application has no owned entry")
+    transferred=aging(module)
+    split=pins(transferred) | {"through_settlement_number": transfer["settlement_number"] - 1}
+    incompatible=invoke("read", {"key": prefix + ".aging.get", "input": {"company_id": company, "as_of": "2026-07-31", **split}})
+    require("error" in incompatible, "split entry/settlement pins accepted")
     tie(module)
     refund = write(operation(prefix + ".credit.refund", credit_document_id=credit, amount="5", cash_account_id=config["bank"], effective_date="2026-07-21", reference="MCP-refund", override_reason=exception))
     require(refund["entry_id"] is not None, "refund has no owned entry")
