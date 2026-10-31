@@ -189,12 +189,12 @@ impl Reports {
             ($key:literal,$owner:expr,$datasets:expr) => {{
                 let mut datasets=serde_json::Map::new();
                 for dataset in $datasets {
-                    let mut after=None; let mut rows=Vec::new(); let mut bytes=0usize;
+                    let mut after=None; let mut rows:Vec<Value>=Vec::new(); let mut bytes=0usize;
                     let fields=loop {
                         let page=$owner.evidence_page_on(c,s,company,dataset,Some(500),after).await.map_err(source_error)?;
                         bytes+=serde_json::to_vec(&page.rows).map_err(|_|Error::Internal)?.len();
                         if bytes>MAX_BYTES {return Err(ReportsError::InvalidOption);}
-                        rows.extend(page.rows);
+                        for row in page.rows { rows.push(evidence_row(&page.fields,&row)?); }
                         if page.next.is_none() {break page.fields;}
                         after=page.next;
                     };
@@ -564,4 +564,20 @@ fn source_error<E: std::fmt::Display>(error: E) -> ReportsError {
     ReportsError::Ledger(bilibi_finance_ledger::LedgerError::Invalid(vec![
         bilibi_finance_ledger::FieldError::new("base", error.to_string()),
     ]))
+}
+
+// Owners may export objects or field-ordered arrays. Keep one named, explicit
+// representation in the issued report without coupling to either storage.
+fn evidence_row(fields: &[&str], row: &impl serde::Serialize) -> Result<Value> {
+    match encode(row)? {
+        Value::Array(values) if values.len() == fields.len() => Ok(Value::Object(
+            fields
+                .iter()
+                .zip(values)
+                .map(|(k, v)| (k.to_string(), v))
+                .collect(),
+        )),
+        value @ Value::Object(_) => Ok(value),
+        _ => Err(ReportsError::ControlTotalsMismatch),
+    }
 }

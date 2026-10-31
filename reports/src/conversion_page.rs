@@ -201,7 +201,7 @@ impl State {
                         "report",
                         render(Button {
                             href: &format!("{PATH}/{id}"),
-                            body: Html::text(format!("Report {id}")),
+                            body: Html::text(&format!("Report {id}")),
                             ..Button::default()
                         })?,
                     )
@@ -264,7 +264,7 @@ impl State {
         table.zoom = self.account_columns.zoom;
         table.suggestions = self.account_columns.flex_suggestions();
         let mut body = render(table)?;
-        body.push(&render(Alert {id:"conversion-account-boundary",kind:StatusKind::Info,body:Html::text(format!("{} accounts; showing {}–{}. Movement includes legitimate target activity and is not itself an unresolved difference.",data.len(),if data.is_empty(){0}else{self.offset+1},(self.offset+100).min(data.len()))),..Alert::default()})?);
+        body.push(&render(Alert {id:"conversion-account-boundary",kind:StatusKind::Info,body:Html::text(&format!("{} accounts; showing {}–{}. Movement includes legitimate target activity and is not itself an unresolved difference.",data.len(),if data.is_empty(){0}else{self.offset+1},(self.offset+100).min(data.len()))),..Alert::default()})?);
         for (event, title, show) in [
             ("up", "Back to report", true),
             ("previous", "Previous accounts", self.offset > 0),
@@ -440,7 +440,7 @@ impl State {
                     } else {
                         &self.document
                     };
-                    body.push(&render(Alert {id:"conversion-summary",kind:StatusKind::Info,body:Html::text(format!("Conversion {} · reporting date {} · through entry {} · {} unresolved items. Review every difference, source and schedule limit.",content["conversion_date"].as_str().unwrap_or(""),content["as_of"].as_str().unwrap_or(""),content["through_entry_number"],content["unresolved_differences"].as_array().map_or(0,Vec::len))),..Alert::default()})?);
+                    body.push(&render(Alert {id:"conversion-summary",kind:StatusKind::Info,body:Html::text(&format!("Conversion {} · reporting date {} · through entry {} · {} unresolved items. Review every difference, source and schedule limit.",content["conversion_date"].as_str().unwrap_or(""),content["as_of"].as_str().unwrap_or(""),content["through_entry_number"],content["unresolved_differences"].as_array().map_or(0,Vec::len))),..Alert::default()})?);
                     body.push(&render(Button {
                         event: "accounts",
                         body: Html::text("Source and target balances"),
