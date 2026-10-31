@@ -245,13 +245,19 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
     let account = bill.lines[0].account_id;
     let payable = bill.payable_account_id.ok_or(Error::NotFound)?;
     let raw = |number: &str| {
-        format!("WITH d AS (INSERT INTO finance_payables_documents(tenant_id,company_id,document_type,status,party_key,party_name,party_document_number,document_date,due_date,currency_code,total_net,total_tax,total,created_by_user_id) VALUES(1,1,'bill','draft','raw-np2','Raw party','{number}','2026-12-20','2026-12-20','MYR',50,0,50,1) RETURNING id) INSERT INTO finance_payables_document_lines(tenant_id,company_id,document_id,line_number,description,account_id,amount,order_line_id,quantity) SELECT 1,1,id,1,'Raw line',{account},50,900001,5 FROM d; UPDATE finance_payables_documents SET status='approved',approved_by_user_id=1 WHERE party_document_number='{number}'")
+        format!(
+            "WITH d AS (INSERT INTO finance_payables_documents(tenant_id,company_id,document_type,status,party_key,party_name,party_document_number,document_date,due_date,currency_code,total_net,total_tax,total,created_by_user_id) VALUES(1,1,'bill','draft','raw-np2','Raw party','{number}','2026-12-20','2026-12-20','MYR',50,0,50,1) RETURNING id) INSERT INTO finance_payables_document_lines(tenant_id,company_id,document_id,line_number,description,account_id,amount,order_line_id,quantity) SELECT 1,1,id,1,'Raw line',{account},50,900001,5 FROM d; UPDATE finance_payables_documents SET status='approved',approved_by_user_id=1 WHERE party_document_number='{number}'"
+        )
     };
     let event = |number: &str, kind: &str| {
-        format!("WITH e AS (INSERT INTO finance_payables_match_events(tenant_id,company_id,document_id,event,actor_user_id) SELECT 1,1,id,'{kind}',1 FROM finance_payables_documents WHERE party_document_number='{number}' RETURNING id,document_id), l AS (INSERT INTO finance_payables_match_lines(tenant_id,company_id,event_id,document_id,line_number,order_line_id,billed_quantity,billed_unit_price,previously_billed_quantity) SELECT 1,1,id,document_id,1,900001,5,10,0 FROM e RETURNING id) INSERT INTO finance_payables_match_exceptions(tenant_id,company_id,match_line_id,code,detail) SELECT 1,1,id,'order_source_unavailable','no order source is installed to match against' FROM l")
+        format!(
+            "WITH e AS (INSERT INTO finance_payables_match_events(tenant_id,company_id,document_id,event,actor_user_id) SELECT 1,1,id,'{kind}',1 FROM finance_payables_documents WHERE party_document_number='{number}' RETURNING id,document_id), l AS (INSERT INTO finance_payables_match_lines(tenant_id,company_id,event_id,document_id,line_number,order_line_id,billed_quantity,billed_unit_price,previously_billed_quantity) SELECT 1,1,id,document_id,1,900001,5,10,0 FROM e RETURNING id) INSERT INTO finance_payables_match_exceptions(tenant_id,company_id,match_line_id,code,detail) SELECT 1,1,id,'order_source_unavailable','no order source is installed to match against' FROM l"
+        )
     };
     let post = |number: &str| {
-        format!("UPDATE finance_payables_documents SET status='posted',posted_by_user_id=1,payable_account_id={payable},entry_id=1,entry_number=1 WHERE party_document_number='{number}'")
+        format!(
+            "UPDATE finance_payables_documents SET status='posted',posted_by_user_id=1,payable_account_id={payable},entry_id=1,entry_number=1 WHERE party_document_number='{number}'"
+        )
     };
     db_refuses(
         &c,

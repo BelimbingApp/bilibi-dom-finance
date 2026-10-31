@@ -8,7 +8,7 @@ use bilibi_finance_einvoice::{
 };
 use bilibi_module_registry::Services;
 use bilibi_party_ids::OrganisationId;
-use bilibi_queue::execution::{Config, Executor};
+use bilibi_queue::{Config, Executor};
 use bilibi_settings::Target;
 use bilibi_tenancy::Scope;
 use bilibi_ui::{download::*, page::*};
@@ -205,7 +205,9 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<tokio::sync::watch::Se
         )
         .await
         .is_err());
-    println!("NE5 list: 31 documents; pages 25/6; clamp and empty; literal % _ backslash; buyer and self-billed supplier; combined filters; tenant isolation; invalid size refused");
+    println!(
+        "NE5 list: 31 documents; pages 25/6; clamp and empty; literal % _ backslash; buyer and self-billed supplier; combined filters; tenant isolation; invalid size refused"
+    );
     let executor = Executor::from_services(
         services,
         Config {
@@ -325,7 +327,9 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<tokio::sync::watch::Se
         "You do not have permission to submit documents.",
     );
     grants.set_direct(&admin, 1, SUBMIT, None).await?;
-    println!("NE5 actions: real queue submit/poll/refresh; PDF bytes; latest status ignores PDF; pending cancel revoked and refused, Unicode reason accepted; revoked PDF download and forged submit refused");
+    println!(
+        "NE5 actions: real queue submit/poll/refresh; PDF bytes; latest status ignores PDF; pending cancel revoked and refused, Unicode reason accepted; revoked PDF download and forged submit refused"
+    );
     // Leave a validated document and an issued document for the browser run.
     facade.submit_document(&manager, 1, ids[1]).await?;
     clearance::jobs_settle(&client).await?;

@@ -270,7 +270,7 @@ pub(crate) async fn find_submission(connection: &Connection<'_>, lookup: &Lookup
                         Failure::RateLimited(answer) => Search::RateLimited(answer),
                         Failure::Unavailable(answer) => Search::Unavailable(answer),
                         Failure::Refused(answer) => Search::Refused(answer),
-                    }
+                    };
                 }
             };
         let Some(results) = body.get("result").and_then(Value::as_array) else {

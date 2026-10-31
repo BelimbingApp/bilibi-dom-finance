@@ -24,12 +24,12 @@ const MAX_LIMIT: i64 = 500;
 
 /// The actor's current grant and company reach decide every call.
 pub(crate) async fn authorize(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     scope: &Scope,
     company_id: i64,
     capability: &str,
 ) -> Result<()> {
-    bilibi_company::authorize_target(client, scope, company_id, capability)
+    bilibi_company::authorize_work_target(client, scope, company_id, capability)
         .await
         .map(|_| ())
         .map_err(crate::refusal_of)
@@ -102,7 +102,7 @@ impl Attachments {
 
     pub(crate) async fn any_attachment(
         &self,
-        client: &impl GenericClient,
+        client: &(impl GenericClient + Sync),
         scope: &Scope,
         company_id: i64,
         attachment_id: i64,
@@ -133,7 +133,7 @@ impl Attachments {
 
     async fn standing_attachment(
         &self,
-        client: &impl GenericClient,
+        client: &(impl GenericClient + Sync),
         scope: &Scope,
         company_id: i64,
         attachment_id: i64,
@@ -177,7 +177,7 @@ impl Attachments {
 
     pub(crate) async fn retention_years(
         &self,
-        client: &impl GenericClient,
+        client: &(impl GenericClient + Sync),
         scope: &Scope,
         company_id: i64,
     ) -> Result<i32> {
@@ -928,7 +928,7 @@ pub(crate) async fn lock_writable(
 
 /// Refuses an archived company, optionally holding its row lock.
 pub(crate) async fn ensure_writable(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     scope: &Scope,
     company_id: i64,
     lock: bool,

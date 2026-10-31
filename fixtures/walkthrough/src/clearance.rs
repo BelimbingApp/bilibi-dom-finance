@@ -25,7 +25,7 @@ use bilibi_finance_einvoice::{
 };
 use bilibi_module_registry::Services;
 use bilibi_party_ids::OrganisationId;
-use bilibi_queue::execution::{Config, Executor};
+use bilibi_queue::{Config, Executor};
 use bilibi_settings::{Settings, Target};
 use bilibi_tenancy::Scope;
 use jiff::{SignedDuration, Timestamp};
@@ -1165,9 +1165,18 @@ pub async fn run(
         );
     }
     for (label, sql) in [
-        ("UPDATE a submission's payload", "UPDATE finance_einvoice_submissions SET payload = 'x' WHERE company_id = 2"),
-        ("DELETE a status event", "DELETE FROM finance_einvoice_status_events WHERE company_id = 2"),
-        ("INSERT a submission whose hash is not its bytes' hash", "INSERT INTO finance_einvoice_submissions (tenant_id, company_id, document_id, environment, format, document_version, payload, payload_sha256, actor_type, actor_user_id) SELECT tenant_id, company_id, id, environment, 'JSON', '1.1', 'abc', repeat('0', 64), 'user', 1 FROM finance_einvoice_documents WHERE company_id = 2 LIMIT 1"),
+        (
+            "UPDATE a submission's payload",
+            "UPDATE finance_einvoice_submissions SET payload = 'x' WHERE company_id = 2",
+        ),
+        (
+            "DELETE a status event",
+            "DELETE FROM finance_einvoice_status_events WHERE company_id = 2",
+        ),
+        (
+            "INSERT a submission whose hash is not its bytes' hash",
+            "INSERT INTO finance_einvoice_submissions (tenant_id, company_id, document_id, environment, format, document_version, payload, payload_sha256, actor_type, actor_user_id) SELECT tenant_id, company_id, id, environment, 'JSON', '1.1', 'abc', repeat('0', 64), 'user', 1 FROM finance_einvoice_documents WHERE company_id = 2 LIMIT 1",
+        ),
     ] {
         match raw.batch_execute(sql).await {
             Ok(()) => println!("{label}: accepted"),

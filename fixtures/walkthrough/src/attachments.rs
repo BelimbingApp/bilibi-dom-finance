@@ -13,7 +13,7 @@ use bilibi_finance_attachments::{
     REFRESH_PRINCIPAL, SERVICE,
 };
 use bilibi_module_registry::Services;
-use bilibi_queue::execution::{Config, Executor};
+use bilibi_queue::{Config, Executor};
 use bilibi_settings::{Settings, Target};
 use bilibi_tenancy::Scope;
 use jiff::civil::date;
@@ -904,7 +904,9 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
                 .release_hold(&manager, COMPANY, on_posted.id, "Case closed")
                 .await,
         );
-        println!("-- Base Artifacts changed out of band (an operator extends and holds; the module has no event yet)");
+        println!(
+            "-- Base Artifacts changed out of band (an operator extends and holds; the module has no event yet)"
+        );
         raw(
             &raw_client,
             "operator extends the artifact in Base and holds it",
@@ -961,7 +963,10 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         finalise(db, &boundary, &attachments, &manager, moving).await?,
     );
     records::set(db, moving, date(2026, 10, 1), true).await?;
-    show("viewer, who finalised the record and holds no attachments grant but reads the ledger, queues the refresh", finalise(db, &boundary, &attachments, &viewer, moving).await?);
+    show(
+        "viewer, who finalised the record and holds no attachments grant but reads the ledger, queues the refresh",
+        finalise(db, &boundary, &attachments, &viewer, moving).await?,
+    );
     println!("jobs:\n  {}", job_states(&raw_client).await?);
     let executor = Executor::from_services(
         services,
@@ -1033,7 +1038,12 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         false,
     )
     .await?;
-    show_attachment("administrator attaches to company 002 (Base Artifacts binds a person affiliated with Company 001 to it)", attachments.attach(&admin, 2, OPEN_SOURCE, archived_record, &pdf).await);
+    show_attachment(
+        "administrator attaches to company 002 (Base Artifacts binds a person affiliated with Company 001 to it)",
+        attachments
+            .attach(&admin, 2, OPEN_SOURCE, archived_record, &pdf)
+            .await,
+    );
     raw(
         &raw_client,
         "company 002 archived",

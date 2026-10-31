@@ -247,12 +247,21 @@ posting_account!(
     "Tax account",
     "Account code credited with the tax of a validated invoice or debit note."
 );
-posting_account!("settlement_account", "Settlement account",
-    "Account code credited by a validated refund note, in place of the receivable account, and debited by a self-billed refund note.");
-posting_account!("payable_account", "Payable account",
-    "Account code credited by a validated self-billed invoice or debit note and debited by a self-billed credit note.");
-posting_account!("expense_account", "Expense account",
-    "Account code debited with the tax-exclusive amount of a validated self-billed invoice or debit note.");
+posting_account!(
+    "settlement_account",
+    "Settlement account",
+    "Account code credited by a validated refund note, in place of the receivable account, and debited by a self-billed refund note."
+);
+posting_account!(
+    "payable_account",
+    "Payable account",
+    "Account code credited by a validated self-billed invoice or debit note and debited by a self-billed credit note."
+);
+posting_account!(
+    "expense_account",
+    "Expense account",
+    "Account code debited with the tax-exclusive amount of a validated self-billed invoice or debit note."
+);
 posting_account!(
     "purchase_tax_account",
     "Purchase tax account",
@@ -273,11 +282,19 @@ supplier_format!(
     FormatKind::TaxId,
     myinvois::TAX_ID_MESSAGE
 );
-supplier_format!("registration_type", "Supplier registration type",
+supplier_format!(
+    "registration_type",
+    "Supplier registration type",
     "The kind of registration number: BRN for a business, NRIC, PASSPORT, or ARMY for an individual. Blank means BRN.",
-    FormatKind::RegistrationType, myinvois::REGISTRATION_TYPE_MESSAGE);
-supplier_text!("registration_number", "Supplier registration number",
-    "The business registration number, as on the signing certificate, or the individual's identification number.", 20);
+    FormatKind::RegistrationType,
+    myinvois::REGISTRATION_TYPE_MESSAGE
+);
+supplier_text!(
+    "registration_number",
+    "Supplier registration number",
+    "The business registration number, as on the signing certificate, or the individual's identification number.",
+    20
+);
 supplier_text!(
     "sales_tax_registration",
     "Sales and service tax registration",
@@ -369,9 +386,12 @@ define!("finance.einvoice.sandbox.api_url", GLOBAL, ValueType::String,
     editor: (GROUP, "E-invoice sandbox API URL",
         "Base URL of the MyInvois sandbox API. Change it only when the authority publishes a new host.",
         OPERATOR));
-platform_url!("finance.einvoice.production.api_url", "https://api.myinvois.hasil.gov.my",
+platform_url!(
+    "finance.einvoice.production.api_url",
+    "https://api.myinvois.hasil.gov.my",
     "E-invoice production API URL",
-    "Base URL of the MyInvois production API. Change it only when the authority publishes a new host.");
+    "Base URL of the MyInvois production API. Change it only when the authority publishes a new host."
+);
 platform_url!(
     "finance.einvoice.sandbox.portal_url",
     "https://preprod.myinvois.hasil.gov.my",

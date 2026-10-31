@@ -459,7 +459,9 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         client.batch_execute("ROLLBACK").await?;
         assert!(refused, "accepted {sql}");
     }
-    println!("Payroll contracts passed: configuration/no-op, isolation, unavailable/no events, owner rollback, independent capability, historical reversal/race/mirror, five evidence datasets, audit and retention guards");
+    println!(
+        "Payroll contracts passed: configuration/no-op, isolation, unavailable/no events, owner rollback, independent capability, historical reversal/race/mirror, five evidence datasets, audit and retention guards"
+    );
     crate::payroll_ui::run(db, services, ids[2]).await?;
     Ok(())
 }

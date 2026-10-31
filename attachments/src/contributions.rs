@@ -12,10 +12,7 @@ use bilibi_authz::{
     VOCABULARY,
 };
 use bilibi_module_registry::{Contribution, Provenance};
-use bilibi_queue::{
-    execution::{HandlerBinding, HANDLERS},
-    Worker, WORKERS,
-};
+use bilibi_queue::{HandlerBinding, Worker, HANDLERS, WORKERS};
 
 /// Every attachments read.
 pub const VIEW: &str = "finance.attachments.view";

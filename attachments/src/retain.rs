@@ -16,7 +16,7 @@ use crate::{
 use bilibi_artifacts::RetentionEvent;
 use bilibi_database::{Error, MutationTransaction};
 use bilibi_party_ids::OrganisationId;
-use bilibi_queue::execution::Execution;
+use bilibi_queue::Execution;
 use bilibi_tenancy::Scope;
 use jiff::{civil::Date, Timestamp};
 use std::time::SystemTime;

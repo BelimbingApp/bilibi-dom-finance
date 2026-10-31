@@ -225,7 +225,10 @@ pub async fn reports(db: &Db, services: &Services) -> Outcome<()> {
         if actual != expected {
             return Err(Error::Internal.into());
         }
-        println!("cash membership for ledger viewer agrees with default/explicit choice: {actual:?}; totals {:?}",report.totals);
+        println!(
+            "cash membership for ledger viewer agrees with default/explicit choice: {actual:?}; totals {:?}",
+            report.totals
+        );
     }
     let mut tx = boundary
         .begin(
@@ -236,9 +239,11 @@ pub async fn reports(db: &Db, services: &Services) -> Outcome<()> {
     handler.preview(tx.sql(), &manager, &empty).await?;
     handler.preview(tx.sql(), &manager, &explicit).await?;
     handler.commit(&mut tx, &manager, &empty).await?;
-    match handler.commit(&mut tx,&manager,&explicit).await {
-        Err(bilibi_agent_api::Error::StalePlan)=>println!("two layout steps reviewed before execution: stale second step rolls the shared transaction back"),
-        _=>return Err(Error::Internal.into()),
+    match handler.commit(&mut tx, &manager, &explicit).await {
+        Err(bilibi_agent_api::Error::StalePlan) => println!(
+            "two layout steps reviewed before execution: stale second step rolls the shared transaction back"
+        ),
+        _ => return Err(Error::Internal.into()),
     }
     tx.rollback().await?;
     let after = registry

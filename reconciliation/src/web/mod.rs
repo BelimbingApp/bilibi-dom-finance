@@ -54,6 +54,7 @@ bilibi_menu::contribute!(
         "Bank reconciliation",
         "/finance/reconciliation"
     )
+    .company_scoped()
     .icon("gmdi-money-r")
     .under("finance.group.bank")
     .requires(bilibi_menu::Requirement::Capability(crate::VIEW))
@@ -64,7 +65,7 @@ macro_rules! route {
     ($id:literal, $path:literal, $op:literal) => {
         inventory::submit! { Contribution::new(ROUTES, $id,
         Provenance { module: MODULE, source: file!(), line: line!() },
-        &Route { method: Method::Get, path: $path, service: PAGES, operation: $op,
+        &Route { company_scope: bilibi_module_registry::contributions::CompanyScope::Company, method: Method::Get, path: $path, service: PAGES, operation: $op,
             access: Access::Capability(crate::VIEW), framed: true }) }
     };
 }
@@ -101,7 +102,8 @@ fn render(template: impl Template) -> Result<Html> {
 impl Pages {
     async fn allowed(&self, scope: &Scope, capability: &str) -> Result<bool> {
         let client = self.db.get().await?;
-        match bilibi_company::authorize_target(&**client, scope, company(scope)?, capability).await
+        match bilibi_company::authorize_work_target(&**client, scope, company(scope)?, capability)
+            .await
         {
             Ok(_) => Ok(true),
             Err(Error::Forbidden | Error::Unauthorized | Error::NotFound) => Ok(false),

@@ -145,7 +145,14 @@ impl Book {
         let template = &proposal["proposed"];
         let Some(name) = template["name"].as_str() else {
             return if proposal["configured"].is_string() {
-                render(Alert {id:"ledger-book-starter-unavailable",kind:StatusKind::Warning,body:Html::text("The proposed starter chart is unavailable. Choose another on Chart of accounts or ask an administrator to change the proposal."),..Alert::default()})
+                render(Alert {
+                    id: "ledger-book-starter-unavailable",
+                    kind: StatusKind::Warning,
+                    body: Html::text(
+                        "The proposed starter chart is unavailable. Choose another on Chart of accounts or ask an administrator to change the proposal.",
+                    ),
+                    ..Alert::default()
+                })
             } else {
                 Ok(Html::EMPTY)
             };

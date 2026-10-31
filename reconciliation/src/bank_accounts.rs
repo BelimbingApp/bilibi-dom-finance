@@ -11,8 +11,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use tokio_postgres::{GenericClient, Row};
 
-const COLUMNS: &str =
-    "id,name,ledger_account_id,charges_account_id,interest_account_id,match_window_days,import_mapping,active";
+const COLUMNS: &str = "id,name,ledger_account_id,charges_account_id,interest_account_id,match_window_days,import_mapping,active";
 const NAME_LIMIT: usize = 200;
 const REASON_LIMIT: usize = 500;
 const DEFAULT_WINDOW: i32 = 5;
@@ -21,7 +20,7 @@ const LOG_KIND: &str = "finance.reconciliation.bank_account_change";
 
 /// The company's bank accounts by name.
 pub(crate) async fn list(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
 ) -> Result<Vec<BankAccount>> {
@@ -39,7 +38,7 @@ pub(crate) async fn list(
 /// One bank account of the company, or `None` for a missing or other
 /// company's id.
 pub(crate) async fn find(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     bank_account_id: i64,
@@ -57,7 +56,7 @@ pub(crate) async fn find(
 
 /// The bank account's change log, oldest first.
 pub(crate) async fn log(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     bank_account_id: i64,
@@ -105,7 +104,7 @@ pub(crate) struct ValidNew {
 }
 
 pub(crate) async fn validate_new(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     chart: &HashMap<i64, Account>,
@@ -167,7 +166,7 @@ pub(crate) async fn validate_new(
 
 /// Adds the bank account and logs every value it was created with.
 pub(crate) async fn insert(
-    sql: &impl GenericClient,
+    sql: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     actor: i64,
@@ -257,7 +256,7 @@ pub(crate) struct Next {
 
 /// `None` when the change changes nothing.
 pub(crate) async fn validate_change(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     chart: &HashMap<i64, Account>,
@@ -352,7 +351,7 @@ pub(crate) async fn validate_change(
 
 /// Saves the change and logs every field that changed.
 pub(crate) async fn update(
-    sql: &impl GenericClient,
+    sql: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     actor: i64,
@@ -402,7 +401,7 @@ pub(crate) async fn update(
 
 /// Appends one logged field; the database stamps its time.
 async fn record(
-    sql: &impl GenericClient,
+    sql: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     bank_account_id: i64,
@@ -437,7 +436,7 @@ async fn record(
 const NAME_TAKEN: &str = "is already a bank account of this company";
 
 async fn name_taken(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     name: &str,

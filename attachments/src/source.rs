@@ -42,7 +42,7 @@ use tokio_postgres::{Client, Transaction};
 pub const SOURCES: &str = "finance/attachments.sources";
 
 /// The caller's connection: a pool connection or an open transaction.
-/// Expand it with [`on_source_client!`] to call a `&impl GenericClient` read.
+/// Expand it with [`on_source_client!`] to call a `&(impl GenericClient + Sync)` read.
 #[derive(Clone, Copy)]
 pub enum SourceClient<'a> {
     Client(&'a Client),

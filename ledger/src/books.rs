@@ -64,7 +64,7 @@ pub(crate) fn validate(new: &NewBook) -> std::result::Result<ValidBook, Vec<Fiel
 
 /// Inserts the book; the row id and the book as the facade shows it.
 pub(crate) async fn insert(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     book: &ValidBook,

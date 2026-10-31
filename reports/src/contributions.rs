@@ -48,11 +48,11 @@ inventory::submit! { Contribution::new(VOCABULARY, "finance/reports", provenance
 
 // Bilimbi reports/priv/web_routes.exs and Reports.Contributions.
 use bilibi_module_registry::contributions::{Access, Method, Route, ROUTES};
-inventory::submit! { Contribution::new(ROUTES, "finance/reports.index", provenance!(), &Route {
+inventory::submit! { Contribution::new(ROUTES, "finance/reports.index", provenance!(), &Route { company_scope: bilibi_module_registry::contributions::CompanyScope::Company,
     method: Method::Get, path: "/finance/reports", service: "finance/reports.pages",
     operation: "reports", access: Access::Capability(crate::VIEW), framed: true,
 }) }
-inventory::submit! { Contribution::new(ROUTES, "finance/reports.activity", provenance!(), &Route {
+inventory::submit! { Contribution::new(ROUTES, "finance/reports.activity", provenance!(), &Route { company_scope: bilibi_module_registry::contributions::CompanyScope::Company,
     method: Method::Get, path: "/finance/reports/accounts/{account_id}", service: "finance/reports.pages",
     operation: "activity", access: Access::Capability(crate::VIEW), framed: true,
 }) }
@@ -68,6 +68,7 @@ bilibi_menu::contribute!(
 bilibi_menu::contribute!(
     "finance/reports",
     bilibi_menu::MenuItem::page("finance.reports", "Reports", "/finance/reports")
+        .company_scoped()
         .icon("gmdi-money-r")
         .under("finance.group.bookkeeping")
         .requires(bilibi_menu::Requirement::Capability(crate::VIEW))
@@ -75,10 +76,10 @@ bilibi_menu::contribute!(
 );
 
 // Bilimbi Reports.Web.{BookkeepingLive,ApprovalExceptionsLive} routes/menu.
-inventory::submit! { Contribution::new(ROUTES, "finance/reports.bookkeeping", provenance!(), &Route {
+inventory::submit! { Contribution::new(ROUTES, "finance/reports.bookkeeping", provenance!(), &Route { company_scope: bilibi_module_registry::contributions::CompanyScope::Company,
     method: Method::Get, path: "/finance/reports/bookkeeping", service: "finance/reports.control-pages", operation: "bookkeeping", access: Access::Capability(crate::VIEW), framed: true,
 }) }
-inventory::submit! { Contribution::new(ROUTES, "finance/reports.approval-exceptions", provenance!(), &Route {
+inventory::submit! { Contribution::new(ROUTES, "finance/reports.approval-exceptions", provenance!(), &Route { company_scope: bilibi_module_registry::contributions::CompanyScope::Company,
     method: Method::Get, path: "/finance/reports/approval-exceptions", service: "finance/reports.control-pages", operation: "approval-exceptions", access: Access::Capability(crate::VIEW), framed: true,
 }) }
 bilibi_menu::contribute!(
@@ -88,6 +89,7 @@ bilibi_menu::contribute!(
         "Bookkeeping",
         "/finance/reports/bookkeeping"
     )
+    .company_scoped()
     .icon("gmdi-money-r")
     .under("finance.group.bookkeeping")
     .requires(bilibi_menu::Requirement::Capability(crate::VIEW))
@@ -100,6 +102,7 @@ bilibi_menu::contribute!(
         "Approval exceptions",
         "/finance/reports/approval-exceptions"
     )
+    .company_scoped()
     .icon("gmdi-money-r")
     .under("finance.group.bookkeeping")
     .requires(bilibi_menu::Requirement::Capability(crate::VIEW))
@@ -125,7 +128,7 @@ inventory::submit! { bilibi_module_registry::Contribution::new(bilibi_module_reg
     pending: bilibi_module_registry::contributions::Pending::Every { reason: "Controlled bookkeeping, fiscal years, duty separation and reviews write through the Ledger facade, not the finance.ledger contracts yet." },
 }) }
 
-inventory::submit! { Contribution::new(ROUTES, "finance/reports.sections", provenance!(), &Route {
+inventory::submit! { Contribution::new(ROUTES, "finance/reports.sections", provenance!(), &Route { company_scope: bilibi_module_registry::contributions::CompanyScope::Company,
     method:Method::Get,path:"/finance/reports/sections",service:"finance/reports.section-pages",operation:"sections",access:Access::Capability(bilibi_finance_ledger::MANAGE_ACCOUNTS),framed:true,
 }) }
 bilibi_menu::contribute!(
@@ -135,6 +138,7 @@ bilibi_menu::contribute!(
         "Report sections",
         "/finance/reports/sections"
     )
+    .company_scoped()
     .icon("gmdi-money-r")
     .under("finance.group.bookkeeping")
     .requires(bilibi_menu::Requirement::Capability(
@@ -148,7 +152,7 @@ inventory::submit! { Contribution::new(bilibi_module_registry::contributions::PA
 }) }
 
 // The Finance setup page: what the current company has set up and what remains.
-inventory::submit! { Contribution::new(ROUTES, "finance/reports.setup", provenance!(), &Route {
+inventory::submit! { Contribution::new(ROUTES, "finance/reports.setup", provenance!(), &Route { company_scope: bilibi_module_registry::contributions::CompanyScope::Tenant,
     method: Method::Get, path: "/finance/setup", service: crate::setup_page::PAGES,
     operation: "setup", access: Access::Capability(crate::VIEW), framed: true,
 }) }

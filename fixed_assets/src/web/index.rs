@@ -690,7 +690,17 @@ impl Index {
                     Ok(run) => {
                         self.flash = Some(
                             if let Some(r) = run.filter(|r| !r.exceptions.is_empty()) {
-                                (StatusKind::Error,format!("Recorded without asset {}: its acquisition entry was reversed. Void the acquisition from the asset page.",r.exceptions.iter().map(|e|format!("#{}",e.asset_number)).collect::<Vec<_>>().join(", ")))
+                                (
+                                    StatusKind::Error,
+                                    format!(
+                                        "Recorded without asset {}: its acquisition entry was reversed. Void the acquisition from the asset page.",
+                                        r.exceptions
+                                            .iter()
+                                            .map(|e| format!("#{}", e.asset_number))
+                                            .collect::<Vec<_>>()
+                                            .join(", ")
+                                    ),
+                                )
                             } else {
                                 (StatusKind::Success, "Recorded.".into())
                             },

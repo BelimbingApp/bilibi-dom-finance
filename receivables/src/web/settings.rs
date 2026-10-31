@@ -340,7 +340,9 @@ impl Settings {
                 .map(|(_, word)| word)
                 .collect();
             if self.accounts.is_empty() {
-                let mut line = Html::text("No accounts can be chosen yet: open the company's book and add its chart of accounts first, on ");
+                let mut line = Html::text(
+                    "No accounts can be chosen yet: open the company's book and add its chart of accounts first, on ",
+                );
                 line.push(&f::link(CHART, "Chart of accounts")?);
                 line.push(&Html::text("."));
                 lines.push(line);

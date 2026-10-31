@@ -63,7 +63,7 @@ impl Entry {
                     return self.simple(
                         "Journal",
                         unavailable("ledger-entry-refused", "this entry", &Read::Failed)?,
-                    )
+                    );
                 }
             },
             Read::Failed | Read::Refused(_) => {
@@ -76,13 +76,13 @@ impl Entry {
                         )
                         .id("ledger-entry-missing"),
                     )?,
-                )
+                );
             }
             other => {
                 return self.simple(
                     "Journal",
                     unavailable("ledger-entry-refused", "this entry", &other)?,
-                )
+                );
             }
         };
         let units = self

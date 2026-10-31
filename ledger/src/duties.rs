@@ -58,7 +58,7 @@ pub(crate) async fn latest_change(
 
 /// Every change of the company, oldest first.
 pub(crate) async fn changes(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
 ) -> Result<Vec<DutySeparationChange>> {
@@ -102,7 +102,7 @@ pub(crate) fn validate_change(
 /// Appends a change of the setting. The database numbers and stamps it and
 /// refuses one that changes nothing, so the caller decides that first.
 pub(crate) async fn record_change(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     actor: i64,
@@ -267,7 +267,7 @@ fn validate_exception(exception: &NewException) -> std::result::Result<(), Vec<F
 
 /// Appends the exception [`decide`] found; the database numbers and stamps it.
 pub(crate) async fn record_exception(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     approver: (i64, Option<i64>),
@@ -336,7 +336,7 @@ pub(crate) struct Override<'a> {
 /// Appends the override of a ledger control (a reopened period or fiscal
 /// year, controlled bookkeeping turned off): an exception with no preparer.
 pub(crate) async fn record_override(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     actor: i64,
@@ -384,7 +384,7 @@ fn exception_select() -> String {
 
 /// The company's exceptions, oldest number first, as the query bounds them.
 pub(crate) async fn exceptions(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     query: &ApprovalExceptionQuery,
@@ -426,7 +426,7 @@ pub(crate) async fn exceptions(
 
 /// One exception of the company with its review.
 pub(crate) async fn exception(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     exception_id: i64,
@@ -464,7 +464,7 @@ pub(crate) fn validate_note(
 /// Appends the review; the database stamps it and refuses a second one and a
 /// reviewer who overlaps the approver or the preparer.
 pub(crate) async fn record_review(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     exception_id: i64,

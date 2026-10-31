@@ -484,7 +484,9 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
             company_id,
             entry_number,
         })) => {
-            println!("the report's subscription hears: posted, company {company_id} entry {entry_number}")
+            println!(
+                "the report's subscription hears: posted, company {company_id} entry {entry_number}"
+            )
         }
         other => println!("the report's subscription hears: {other:?}"),
     }
@@ -653,7 +655,15 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         reports
             .balance_sheet(&manager, COMPANY, &[date(2026, 12, 31)], Some(pinned))
             .await
-            .map(|r| (r.total_assets, r.groups.iter().map(|g| g.sections.len()).collect::<Vec<_>>())),
+            .map(|r| {
+                (
+                    r.total_assets,
+                    r.groups
+                        .iter()
+                        .map(|g| g.sections.len())
+                        .collect::<Vec<_>>(),
+                )
+            }),
     );
     client
         .execute(
@@ -798,9 +808,18 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
             .map(|a| a.debits),
     );
     for (step, sql) in [
-        ("edits an issued report", "UPDATE finance_reports_issued SET kind='trial_balance'"),
-        ("deletes an issued report", "DELETE FROM finance_reports_issued"),
-        ("truncates the issued reports", "TRUNCATE finance_reports_issued"),
+        (
+            "edits an issued report",
+            "UPDATE finance_reports_issued SET kind='trial_balance'",
+        ),
+        (
+            "deletes an issued report",
+            "DELETE FROM finance_reports_issued",
+        ),
+        (
+            "truncates the issued reports",
+            "TRUNCATE finance_reports_issued",
+        ),
         (
             "inserts one with a negative entry number",
             "INSERT INTO finance_reports_issued(tenant_id,company_id,kind,implementation_version,through_entry_number,\
@@ -811,7 +830,9 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
             Ok(rows) => println!("the database {step}: {rows} rows"),
             Err(error) => println!(
                 "the database refuses when someone {step}: {}",
-                error.as_db_error().map_or(error.to_string(), |e| e.message().to_owned())
+                error
+                    .as_db_error()
+                    .map_or(error.to_string(), |e| e.message().to_owned())
             ),
         }
     }

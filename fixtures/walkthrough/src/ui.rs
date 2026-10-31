@@ -114,10 +114,10 @@ inventory::submit! {
         ],
     }
 }
-inventory::submit! { Contribution::new(ROUTES, "walkthrough.records.index", Provenance { module: MODULE, source: file!(), line: line!() }, &Route {
+inventory::submit! { Contribution::new(ROUTES, "walkthrough.records.index", Provenance { module: MODULE, source: file!(), line: line!() }, &Route { company_scope: bilibi_module_registry::contributions::CompanyScope::Company,
     method: Method::Get, path: "/walkthrough/records", service: PAGES, operation: "index", access: Access::SignedIn, framed: true,
 }) }
-inventory::submit! { Contribution::new(ROUTES, "walkthrough.records.record", Provenance { module: MODULE, source: file!(), line: line!() }, &Route {
+inventory::submit! { Contribution::new(ROUTES, "walkthrough.records.record", Provenance { module: MODULE, source: file!(), line: line!() }, &Route { company_scope: bilibi_module_registry::contributions::CompanyScope::Company,
     method: Method::Get, path: "/walkthrough/records/{id}", service: PAGES, operation: "record", access: Access::SignedIn, framed: true,
 }) }
 
@@ -198,7 +198,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .await?;
     }
     println!("storage root {root}; records {draft} (draft) and {posted} (final)");
-    println!("sign in as manager@example.test, staff@example.test or viewer@example.test, password {PASSWORD}");
+    println!(
+        "sign in as manager@example.test, staff@example.test or viewer@example.test, password {PASSWORD}"
+    );
 
     let listener = tokio::net::TcpListener::bind(bind)
         .await

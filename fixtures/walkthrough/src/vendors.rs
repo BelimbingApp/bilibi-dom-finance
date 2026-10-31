@@ -55,7 +55,7 @@ pub async fn vendor(
         {
             bilibi_company::CreateOutcome::Created(c) => c.id,
             bilibi_company::CreateOutcome::Refused(e) => {
-                return Err(format!("fixture company refused: {e:?}").into())
+                return Err(format!("fixture company refused: {e:?}").into());
             }
         }
     };

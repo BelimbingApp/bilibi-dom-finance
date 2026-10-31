@@ -1112,7 +1112,9 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
     for (step, sql) in [
         (
             "UPDATE a fiscal year's end",
-            format!("UPDATE finance_ledger_fiscal_years SET end_date=end_date+1 WHERE id={year_id}"),
+            format!(
+                "UPDATE finance_ledger_fiscal_years SET end_date=end_date+1 WHERE id={year_id}"
+            ),
         ),
         (
             "DELETE a period",
@@ -1140,7 +1142,11 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
             format!(
                 "INSERT INTO finance_ledger_fiscal_years(tenant_id,company_id,start_date,end_date,opened_by_user_id,opened_at) \
                  VALUES(1,{COMPANY},'{}','{}',1,now())",
-                second.end_date.checked_add(1.month())?.first_of_month().checked_add(1.month())?,
+                second
+                    .end_date
+                    .checked_add(1.month())?
+                    .first_of_month()
+                    .checked_add(1.month())?,
                 second.end_date.checked_add(2.months())?.last_of_month()
             ),
         ),
@@ -1225,7 +1231,9 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         ),
         (
             "UPDATE a late-recording review",
-            format!("UPDATE finance_ledger_late_recording_reviews SET reason='changed' WHERE entry_id={late_entry}"),
+            format!(
+                "UPDATE finance_ledger_late_recording_reviews SET reason='changed' WHERE entry_id={late_entry}"
+            ),
         ),
         (
             "DELETE an approval exception",

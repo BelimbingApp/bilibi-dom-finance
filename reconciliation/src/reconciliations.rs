@@ -152,7 +152,7 @@ pub(crate) async fn compute(
 /// date differs from its ledger side through the end date is a timing
 /// difference: money the books and the bank saw on either side of the date.
 async fn timing(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     bank_account_id: i64,
@@ -281,7 +281,7 @@ pub(crate) fn opening(
 /// One open reconciliation per bank account, each ending after the last
 /// finalised one; the database refuses the same.
 pub(crate) async fn check_open(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     bank_account_id: i64,
@@ -513,7 +513,7 @@ const COLUMNS: &str =
 
 /// One reconciliation of the company with its events, or `None`.
 pub(crate) async fn find(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     reconciliation_id: i64,
@@ -531,7 +531,7 @@ pub(crate) async fn find(
 
 /// The bank account's reconciliations by number, with their events.
 pub(crate) async fn list(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     bank_account_id: i64,
@@ -549,7 +549,7 @@ pub(crate) async fn list(
 
 /// A finalised reconciliation's stored items, by number.
 pub(crate) async fn items(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     reconciliation_id: i64,
@@ -580,7 +580,7 @@ pub(crate) async fn items(
 }
 
 async fn hydrate(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     rows: &[Row],

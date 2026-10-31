@@ -453,8 +453,13 @@ impl Payables {
             })
     }
 }
-async fn authorize(c: &impl GenericClient, s: &Scope, company: i64, cap: &str) -> Result<()> {
-    bilibi_company::authorize_target(c, s, company, cap)
+async fn authorize(
+    c: &(impl GenericClient + Sync),
+    s: &Scope,
+    company: i64,
+    cap: &str,
+) -> Result<()> {
+    bilibi_company::authorize_work_target(c, s, company, cap)
         .await
         .map(|_| ())
         .map_err(refusal)

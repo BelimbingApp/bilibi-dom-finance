@@ -18,7 +18,7 @@ const LINE_COLUMNS: &str =
 
 /// One statement of the company, with its lines in line order when asked.
 pub(crate) async fn find(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     statement_id: i64,
@@ -51,7 +51,7 @@ pub(crate) async fn find(
 /// The bank account's statements after the id `after`, oldest first, without
 /// their lines.
 pub(crate) async fn list(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     bank_account_id: i64,

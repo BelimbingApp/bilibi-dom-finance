@@ -140,12 +140,12 @@ fn refusal(error: Error) -> ReceivableError {
 }
 
 pub(crate) async fn authorize(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     scope: &Scope,
     company: i64,
     capability: &str,
 ) -> Result<()> {
-    bilibi_company::authorize_target(client, scope, company, capability)
+    bilibi_company::authorize_work_target(client, scope, company, capability)
         .await
         .map(|_| ())
         .map_err(refusal)

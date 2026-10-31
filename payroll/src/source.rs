@@ -197,14 +197,14 @@ pub(crate) struct Claim {
 }
 
 pub(crate) async fn runs(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     scope: &Scope,
     company: i64,
 ) -> Result<Vec<Value>> {
     Ok(client.query("SELECT jsonb_build_object('id',run_id,'reference',reference,'currency_code',currency_code,'pay_date',pay_date::text,'finalised',true,'status','approved') FROM finance_payroll_source_runs WHERE tenant_id=$1 AND company_id=$2 ORDER BY pay_date DESC,run_id DESC", &[&scope.tenant(),&company]).await?.iter().map(|r|r.get(0)).collect())
 }
 pub(crate) async fn run(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     scope: &Scope,
     company: i64,
     id: i64,
@@ -225,7 +225,7 @@ pub(crate) async fn run(
     })
 }
 pub(crate) async fn claims(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     scope: &Scope,
     company: i64,
 ) -> Result<Vec<Claim>> {

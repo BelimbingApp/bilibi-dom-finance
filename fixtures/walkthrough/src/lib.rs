@@ -324,7 +324,7 @@ pub mod records {
             company_id: i64,
             document_id: i64,
         ) -> Result<SourceDocument, SourceRefusal> {
-            bilibi_company::authorize_target(client, scope, company_id, self.view)
+            bilibi_company::authorize_work_target(client, scope, company_id, self.view)
                 .await
                 .map_err(|error| match error {
                     Error::Forbidden | Error::Unauthorized => SourceRefusal::Unauthorized,

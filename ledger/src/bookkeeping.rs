@@ -42,7 +42,7 @@ pub(crate) async fn latest(
 
 /// Every change of the company, oldest first.
 pub(crate) async fn changes(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
 ) -> Result<Vec<BookkeepingChange>> {
@@ -84,7 +84,7 @@ pub(crate) fn validate(
 /// refuses one that changes nothing, so the caller decides that first with
 /// [`controlled`]. Returns the row id and the change as audit records it.
 pub(crate) async fn record(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     actor: i64,

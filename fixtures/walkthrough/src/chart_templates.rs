@@ -394,7 +394,13 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         ledger.save_chart_template(&manager, 100, &racing),
         ledger.save_chart_template(&manager, targets[0], &racing)
     );
-    ensure(matches!((&left,&right),(Ok(_),Err(LedgerError::Invalid(_)))|(Err(LedgerError::Invalid(_)),Ok(_))),"concurrent same-key publications from different companies produce one snapshot and one field refusal")?;
+    ensure(
+        matches!(
+            (&left, &right),
+            (Ok(_), Err(LedgerError::Invalid(_))) | (Err(LedgerError::Invalid(_)), Ok(_))
+        ),
+        "concurrent same-key publications from different companies produce one snapshot and one field refusal",
+    )?;
     let rejected = db
         .get()
         .await?

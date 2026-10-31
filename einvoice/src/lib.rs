@@ -18,7 +18,7 @@
 //! Every function takes the sealed [`Scope`] it was handed and an explicit
 //! company id. Reads authorize their capability and writes theirs for the
 //! scope's actor and the target company at the moment they run, through Core
-//! Company's `authorize_target`: a missing grant, or a sibling company without
+//! Company's `authorize_work_target`: a missing grant, or a sibling company without
 //! tenant-wide reach, is [`EinvoiceError::Unauthorized`], and a company the
 //! scope cannot see is [`EinvoiceError::CompanyNotFound`]. A write then holds
 //! the company's row lock inside an audited mutation transaction, so an
@@ -713,7 +713,7 @@ pub(crate) fn text(value: &Value) -> Option<String> {
 }
 
 /// Whole days from the database's UTC date until `date` (`YYYY-MM-DD`).
-async fn days_until(client: &impl GenericClient, date: &str) -> Result<i64> {
+async fn days_until(client: &(impl GenericClient + Sync), date: &str) -> Result<i64> {
     let row = client
         .query_one(
             "SELECT ($1::text::date - (now() AT TIME ZONE 'UTC')::date)::bigint",
@@ -726,12 +726,12 @@ async fn days_until(client: &impl GenericClient, date: &str) -> Result<i64> {
 
 /// The actor's current grant and company reach decide every call.
 pub(crate) async fn authorize(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     scope: &Scope,
     company_id: i64,
     capability: &str,
 ) -> Result<()> {
-    bilibi_company::authorize_target(client, scope, company_id, capability)
+    bilibi_company::authorize_work_target(client, scope, company_id, capability)
         .await
         .map(|_| ())
         .map_err(refusal)

@@ -9,7 +9,7 @@
 //! snapshots and reads none of the ledger's tables. Every function takes the
 //! sealed [`Scope`] it was handed and an explicit company id, and authorizes
 //! the ledger's view capability (`finance.ledger.view`) for the scope's actor
-//! and that company when it runs, through Core Company's `authorize_target`: a
+//! and that company when it runs, through Core Company's `authorize_work_target`: a
 //! missing grant, or a sibling company without tenant-wide reach, is
 //! [`ReportsError::Unauthorized`], and a company the scope cannot see is
 //! [`ReportsError::CompanyNotFound`]. Issuing a report asks for
@@ -1114,12 +1114,12 @@ fn json(value: &impl Serialize) -> Result<Value> {
 
 /// The actor's current grant and company reach decide every call.
 async fn authorize(
-    client: &impl tokio_postgres::GenericClient,
+    client: &(impl tokio_postgres::GenericClient + Sync),
     scope: &Scope,
     company_id: i64,
     capability: &str,
 ) -> Result<()> {
-    bilibi_company::authorize_target(client, scope, company_id, capability)
+    bilibi_company::authorize_work_target(client, scope, company_id, capability)
         .await
         .map(|_| ())
         .map_err(refusal)

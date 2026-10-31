@@ -7,7 +7,7 @@ use bilibi_finance_ledger::Ledger;
 use bilibi_finance_payroll::{MappingChange, Payroll, PayrollError, SettingsChange};
 use bilibi_finance_walkthrough_fixture::{install, sign_in};
 use bilibi_module_registry::Services;
-use bilibi_queue::execution::{Config, Executor};
+use bilibi_queue::{Config, Executor};
 use bilibi_tenancy::Scope;
 use bilibi_ui::page::{LiveInput, LiveRequest, PageRequest, PageService};
 use serde_json::{json, Value};
@@ -284,7 +284,9 @@ async fn main() -> Outcome<()> {
     let c = db.get().await?;
     let audited:i64=c.query_one("SELECT count(*) FROM base_audit_mutations WHERE auditable_type LIKE 'finance.payroll.source_%'",&[]).await?.get(0);
     assert!(audited > 0);
-    println!("FY1: real approvals delivered, exact components retained, run and claim posted once; retry, permissions, audit and replay proved");
+    println!(
+        "FY1: real approvals delivered, exact components retained, run and claim posted once; retry, permissions, audit and replay proved"
+    );
     Ok(())
 }
 async fn page(services: &Services, scope: &Scope, event: Option<Value>) -> Outcome<String> {

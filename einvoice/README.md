@@ -75,8 +75,8 @@ and call it with a sealed `Scope` and an explicit company id.
 | `Einvoice::evidence_datasets`, `evidence_page` | `.view` | The auditor pack's frozen exports of this module's tables (see Evidence) |
 
 Every call authorizes its capability for the scope's actor and the target
-company at the moment it runs (Core Company's `authorize_target`): a missing
-grant, or a sibling company without `admin.company.tenant-wide.manage`, is
+company at the moment it runs (Core Company's `authorize_work_target`): a missing
+grant, or a company where the person has no desk, is
 `EinvoiceError::Unauthorized`; a company the scope cannot see is
 `CompanyNotFound`. A write then holds the company's row lock inside an audited
 `MutationBoundary` transaction, so an archived company is `CompanyArchived`.

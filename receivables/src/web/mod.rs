@@ -72,6 +72,7 @@ macro_rules! menu {
         bilibi_menu::contribute!(
             "finance/receivables",
             bilibi_menu::MenuItem::page($id, $label, $path)
+                .company_scoped()
                 .icon($icon)
                 .under("finance.group.receivables")
                 .requires(bilibi_menu::Requirement::Capability(VIEW))
@@ -118,7 +119,7 @@ menu!(
 macro_rules! route {
     ($key:literal, $path:expr, $operation:literal) => {
         inventory::submit! { Contribution::new(ROUTES, $key,
-        Provenance { module: MODULE, source: file!(), line: line!() }, &Route {
+        Provenance { module: MODULE, source: file!(), line: line!() }, &Route { company_scope: bilibi_module_registry::contributions::CompanyScope::Company,
             method: Method::Get, path: $path, service: PAGES,
             operation: $operation, access: Access::Capability(VIEW), framed: true,
         }) }

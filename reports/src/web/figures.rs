@@ -238,17 +238,40 @@ pub(super) fn header(
 }
 
 pub(super) fn notice() -> Result<Html> {
-    render(Alert { id: "management-report-notice", class: "mb-3", body: Html::text("Management reports for the company's own use, read live from its ledger. They are not statutory financial statements: there is no cash flow statement, statement of changes in equity or other comprehensive income, notes, or consolidation."), ..Alert::default() })
+    render(Alert {
+        id: "management-report-notice",
+        class: "mb-3",
+        body: Html::text(
+            "Management reports for the company's own use, read live from its ledger. They are not statutory financial statements: there is no cash flow statement, statement of changes in equity or other comprehensive income, notes, or consolidation.",
+        ),
+        ..Alert::default()
+    })
 }
 pub(super) fn live_warning() -> Result<Html> {
-    render(Alert { id: "report-live-warning", kind: StatusKind::Warning, body: Html::text("Posting notices are unavailable. Latest figures refresh periodically; reload to reconnect live updates."), ..Alert::default() })
+    render(Alert {
+        id: "report-live-warning",
+        kind: StatusKind::Warning,
+        body: Html::text(
+            "Posting notices are unavailable. Latest figures refresh periodically; reload to reconnect live updates.",
+        ),
+        ..Alert::default()
+    })
 }
 pub(super) fn refusal(error: &ReportsError, activity: bool) -> Result<Html> {
     let state = match error {
         ReportsError::Unauthorized => EmptyState::forbidden("view the ledger"),
-        _ if activity => EmptyState::missing("Account not found","This company's chart has no such account, or the link's options are not valid."),
-        ReportsError::BookNotOpen => EmptyState::missing("The ledger is not open","Reports read the company's book, which has not been opened yet."),
-        _ => EmptyState::missing("These figures cannot be shown","The company or the report options could not be read. Choose another period or reload the page."),
+        _ if activity => EmptyState::missing(
+            "Account not found",
+            "This company's chart has no such account, or the link's options are not valid.",
+        ),
+        ReportsError::BookNotOpen => EmptyState::missing(
+            "The ledger is not open",
+            "Reports read the company's book, which has not been opened yet.",
+        ),
+        _ => EmptyState::missing(
+            "These figures cannot be shown",
+            "The company or the report options could not be read. Choose another period or reload the page.",
+        ),
     };
     render(state.id(if activity {
         "activity-refusal"

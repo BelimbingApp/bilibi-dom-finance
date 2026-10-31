@@ -8,7 +8,7 @@
 //! Every function takes the sealed [`Scope`] it was handed and an explicit
 //! company id. Reads authorize `finance.ledger.view` and writes their own
 //! capability for the scope's actor and the target company at the moment
-//! they run, through Core Company's `authorize_target`: a missing grant, or a
+//! they run, through Core Company's `authorize_work_target`: a missing grant, or a
 //! sibling company without tenant-wide reach, is
 //! [`LedgerError::Unauthorized`], and a company the scope cannot see is
 //! [`LedgerError::CompanyNotFound`]. A write then holds the company's row
@@ -3953,12 +3953,12 @@ async fn separation_view(
 
 /// The actor's current grant and company reach decide every call.
 async fn authorize(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     scope: &Scope,
     company_id: i64,
     capability: &str,
 ) -> Result<()> {
-    bilibi_company::authorize_target(client, scope, company_id, capability)
+    bilibi_company::authorize_work_target(client, scope, company_id, capability)
         .await
         .map(|_| ())
         .map_err(refusal)

@@ -1072,7 +1072,7 @@ impl<'de> Deserialize<'de> for RunException {
             _ => {
                 return Err(serde::de::Error::custom(
                     "unknown depreciation exception reason",
-                ))
+                ));
             }
         };
         Ok(Self {

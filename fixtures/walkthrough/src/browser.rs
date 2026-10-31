@@ -4,7 +4,7 @@ use bilibi_database::Db;
 use bilibi_finance_einvoice::Einvoice;
 use bilibi_module_registry::Services;
 use bilibi_party_ids::OrganisationId;
-use bilibi_queue::execution::{Config, Executor};
+use bilibi_queue::{Config, Executor};
 use bilibi_settings::Target;
 use serde_json::json;
 use std::sync::Arc;
@@ -174,7 +174,9 @@ pub async fn prove_messages(
             .await?;
         assert!(!dismissed.html.contains("id=\"flash-error\""));
     }
-    println!("NU1: Fixed Assets list/detail refusals survive refresh and stale success dismissal; matching dismissal clears without an error");
+    println!(
+        "NU1: Fixed Assets list/detail refusals survive refresh and stale success dismissal; matching dismissal clears without an error"
+    );
     Ok(())
 }
 
@@ -235,7 +237,9 @@ async fn prove_document_messages(
         })
         .await?;
     assert!(!cleared.html.contains("id=\"flash-error\""));
-    println!("NU1: E-invoice refusal survives refresh and stale success dismissal; matching dismissal clears without an error");
+    println!(
+        "NU1: E-invoice refusal survives refresh and stale success dismissal; matching dismissal clears without an error"
+    );
     Ok(())
 }
 
@@ -374,6 +378,8 @@ async fn prove_payroll_messages(
         })
         .await?;
     assert!(!cleared.html.contains("id=\"flash-error\""));
-    println!("NU1: payroll setup and mapping use real facades; stale success dismissal retains the mapping refusal");
+    println!(
+        "NU1: payroll setup and mapping use real facades; stale success dismissal retains the mapping refusal"
+    );
     Ok(())
 }

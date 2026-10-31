@@ -33,13 +33,13 @@ fn refusal(error: Error) -> SourceRefusal {
 }
 
 async fn read(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     scope: &Scope,
     company_id: i64,
     id: i64,
     payment: bool,
 ) -> Result<SourceDocument, SourceRefusal> {
-    bilibi_company::authorize_target(client, scope, company_id, VIEW)
+    bilibi_company::authorize_work_target(client, scope, company_id, VIEW)
         .await
         .map_err(refusal)?;
     // SourceDocument requires a Date unlike Bilimbi's nullable date. For an

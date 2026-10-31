@@ -18,14 +18,14 @@ pub(crate) fn change(kind: &str, old: Value, new: Value) -> Change {
 }
 
 pub(crate) async fn settings(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company: i64,
 ) -> Result<Option<Value>> {
     Ok(client.query_opt("SELECT to_jsonb(s) FROM finance_payroll_settings s WHERE tenant_id=$1 AND company_id=$2", &[&tenant, &company]).await?.map(|r| r.get(0)))
 }
 pub(crate) async fn mappings(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company: i64,
 ) -> Result<Vec<Value>> {
@@ -36,7 +36,7 @@ pub(crate) fn decode<T: serde::de::DeserializeOwned>(value: Value) -> Result<T> 
 }
 
 async fn events(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company: i64,
     posting: Option<i64>,
@@ -110,7 +110,7 @@ fn view(post: &Value, events: &[Value]) -> Result<Posting> {
     })
 }
 pub(crate) async fn postings(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company: i64,
 ) -> Result<Vec<Posting>> {
@@ -123,7 +123,7 @@ pub(crate) async fn postings(
     Ok(result)
 }
 pub(crate) async fn posting(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company: i64,
     id: i64,
@@ -136,7 +136,7 @@ pub(crate) async fn posting(
     view(post, &rows)
 }
 pub(crate) async fn already_posted(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company: i64,
     kind: &str,

@@ -55,7 +55,7 @@ pub(crate) struct Prepared {
 /// imported, a file whose rows do not read through the mapping and a running
 /// balance that does not follow from the amounts.
 pub(crate) async fn prepare(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     account: &BankAccount,
@@ -97,7 +97,7 @@ pub(crate) async fn prepare(
 /// The duplicate checks again, under the company lock: another import may
 /// have landed since [`prepare`].
 pub(crate) async fn check_fresh(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     bank_account_id: i64,
@@ -116,7 +116,7 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 async fn fresh_file(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     sha256: &str,
@@ -364,7 +364,7 @@ fn fingerprinted(lines: Vec<Read>) -> Vec<Line> {
 }
 
 async fn fresh_lines(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     bank_account_id: i64,

@@ -157,7 +157,7 @@ impl ImportMapping {
                 return Err(
                     "names an amount column and debit or credit columns; use one or the other"
                         .into(),
-                )
+                );
             }
             (Some(_), None, None) | (None, Some(_), Some(_)) => {}
             _ => return Err("needs an amount column, or both a debit and a credit column".into()),

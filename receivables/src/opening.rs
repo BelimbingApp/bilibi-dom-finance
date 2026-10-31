@@ -162,7 +162,10 @@ impl Receivables {
         {
             return Err(invalid(
                 "csv",
-                format!("requires header {} and 1 to 500 rows directly, or up to 10000 rows from staged batches", HEADER.join(",")),
+                format!(
+                    "requires header {} and 1 to 500 rows directly, or up to 10000 rows from staged batches",
+                    HEADER.join(",")
+                ),
             ));
         }
         let setup = store::find(c, store::SETUPS, s.tenant(), company, None)
@@ -302,7 +305,10 @@ impl Receivables {
             let old_id = old["id"].as_i64().ok_or(Error::Invalid)?;
             let accounts=c.query("SELECT DISTINCT (source_facts->>'account_id')::bigint FROM finance_receivables_opening_items WHERE tenant_id=$1 AND company_id=$2 AND batch_id=$3",&[&s.tenant(),&company,&old_id]).await?;
             if accounts.iter().any(|r| r.get::<_, i64>(0) != control) {
-                return Err(invalid("csv","a correction must retain every previously recognized opening account and its balance"));
+                return Err(invalid(
+                    "csv",
+                    "a correction must retain every previously recognized opening account and its balance",
+                ));
             }
         }
         let approval = self

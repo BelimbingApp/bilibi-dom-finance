@@ -114,7 +114,7 @@ pub(crate) async fn insert(
 /// Appends the journal's one decision; the database stamps it.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn decide(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     journal_id: i64,
@@ -186,7 +186,7 @@ pub(crate) fn validate_withdrawal_reason(
 /// Records that `journal_id` was submitted to replace the withdrawn
 /// `replaced_id`; the database refuses it unless this transaction withdrew it.
 pub(crate) async fn link(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     journal_id: i64,

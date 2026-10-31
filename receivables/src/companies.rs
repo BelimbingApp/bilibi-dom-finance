@@ -142,7 +142,10 @@ impl Receivables {
             .await?
             .is_none()
         {
-            return Err(invalid("customer_id","has no current customer relationship from the current company; record it in Core before invoicing"));
+            return Err(invalid(
+                "customer_id",
+                "has no current customer relationship from the current company; record it in Core before invoicing",
+            ));
         }
         Ok(())
     }
@@ -250,7 +253,7 @@ impl Receivables {
                             .map(|f| f.message)
                             .collect::<Vec<_>>()
                             .join("; "),
-                    ))
+                    ));
                 }
             }
         }

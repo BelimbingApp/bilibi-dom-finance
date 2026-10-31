@@ -48,7 +48,7 @@ they govern this code and are not copied here.
 ## Facade rules
 
 - Authorize every facade call inside the facade with
-  `bilibi_company::authorize_target` and the scope it was
+  `bilibi_company::authorize_work_target` and the scope it was
   handed, and open every transaction it owns with `Ledger::write` (the capability, then the
   audited `MutationBoundary` transaction holding
   `bilibi_company::require_writable(.., lock = true)`), never a bare
@@ -274,7 +274,7 @@ they govern this code and are not copied here.
   and reformat numbers. Read a certificate's facts with `Certificate::parse`
   and report them, never the PEM.
 
-- A page acts on the session's current company: read it with `scope.current_company()` (each module's one `company()` function, `Pages::company` in the ledger), never `scope.actor().organisation()`, which is the affiliation and only decides reach (Bilibi ADR 09). Call it "current company" in visible words. It grants nothing: every read and write still names its `company_id` and the contract or facade proves the reach.
+- A page acts on the session's current company: read it with `scope.current_company()` (each module's one `company()` function, `Pages::company` in the ledger), never `scope.actor().organisation()`, which is portal business identity, not a staff workplace (Bilibi ADR 18). Call it "current company" in visible words. It grants nothing: every read and write still names its `company_id` and the contract or facade proves the reach.
 - A page that lists or filters several companies takes them from `Pages::companies` (`ledger/src/web/mod.rs`, the top bar's list) and reads each with an explicit company through `Pages::read_in`, `review_in`, `submit_in` or `book_in`, never a query across companies and never by switching the current company. Name the company in every row, action and confirmation; say "No access" (the contract refused) apart from "Not open" or "None"; leave a company the person cannot work in out of the list. Do not add figures across companies (`ledger/src/web/books.rs`, `years.rs`).
 - Put a view that spans Finance modules (the setup overview) in `reports`, the one module that depends on every sibling (`reports/src/setup.rs`), and read each area through its own facade; a module's own page names its own area and links, never reads a sibling. Show a status only where the owner can determine it (`not_tracked` otherwise), and a count only when every counted area was read.
 

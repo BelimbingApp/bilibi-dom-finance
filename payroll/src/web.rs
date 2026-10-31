@@ -485,7 +485,13 @@ impl State {
     async fn render(&mut self, scope: &Scope) -> Result<String> {
         let mut parts = Vec::new();
         let (title, subtitle, link_id, link, label) = if self.setup {
-            ("Payroll posting accounts", "Where net pay and approved claims are owed, and which accounts each payroll component and claim category posts to.", "payroll-setup-postings", "/finance/payroll", "Payroll and claims")
+            (
+                "Payroll posting accounts",
+                "Where net pay and approved claims are owed, and which accounts each payroll component and claim category posts to.",
+                "payroll-setup-postings",
+                "/finance/payroll",
+                "Payroll and claims",
+            )
         } else {
             (
                 "Payroll and claims",
@@ -851,7 +857,7 @@ impl State {
                 return Ok(vec![render(
                     EmptyState::forbidden("view payroll posting accounts")
                         .id("payroll-setup-forbidden"),
-                )?])
+                )?]);
             }
         };
         // Payroll-only readers still see their own records if Ledger is withheld.
@@ -950,7 +956,14 @@ impl State {
                     .id("payroll-settings-manage-forbidden"),
             )?);
         }
-        let mut parts = vec![section("payroll-settings", "payroll-settings-heading", "Owed to staff", "Liability accounts: a run's net pay is credited to the first, an approved claim to the second, until they are paid.", None, current)?];
+        let mut parts = vec![section(
+            "payroll-settings",
+            "payroll-settings-heading",
+            "Owed to staff",
+            "Liability accounts: a run's net pay is credited to the first, an approved claim to the second, until they are paid.",
+            None,
+            current,
+        )?];
         let mappings = payroll
             .list_mappings(scope, company)
             .await

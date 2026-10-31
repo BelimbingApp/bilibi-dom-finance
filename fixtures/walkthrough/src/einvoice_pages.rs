@@ -301,7 +301,9 @@ pub async fn run() -> Outcome<()> {
         json!("C2584563222"),
     )
     .await?;
-    println!("NE6 setup: missing/complete profile; missing/matching key; TIN mismatch; expiry; no secrets; missing/400/success/429 login feedback passed");
+    println!(
+        "NE6 setup: missing/complete profile; missing/matching key; TIN mismatch; expiry; no secrets; missing/400/success/429 login feedback passed"
+    );
 
     let source = issue(
         &einvoice,
@@ -410,7 +412,9 @@ pub async fn run() -> Outcome<()> {
         .await?;
         has(&refused, "can no longer be consolidated; reload the page.");
         assert!(!refused.html.contains("NE6-SALE-LATER"));
-        println!("NE6 consolidation: exact displayed snapshot excludes later arrivals; competing consolidation refused and refreshed; success redirect/flash passed");
+        println!(
+            "NE6 consolidation: exact displayed snapshot excludes later arrivals; competing consolidation refused and refreshed; success redirect/flash passed"
+        );
     } else {
         assert!(!loaded.html.contains("id=\"einvoice-consolidation-issue\""));
         println!("NE6 consolidation: closed window withheld; run at 2026-10-03 for issuance proof");
@@ -559,7 +563,9 @@ pub async fn run() -> Outcome<()> {
         .await?,
         "The entry was reversed.",
     );
-    println!("NE6 reconciliation: actual failed posting, grant revocation, successful posting, closed-period reversal failure and successful retry passed");
+    println!(
+        "NE6 reconciliation: actual failed posting, grant revocation, successful posting, closed-period reversal failure and successful retry passed"
+    );
     // Leave one actual failed posting and candidates for browser review.
     setting(
         &db,

@@ -401,7 +401,7 @@ impl Index {
                         (Some(retention), changes)
                     }
                     (Err(AttachmentError::Failed(e)), _) | (_, Err(AttachmentError::Failed(e))) => {
-                        return Err(e)
+                        return Err(e);
                     }
                     _ => (None, Vec::new()),
                 }

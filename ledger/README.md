@@ -83,8 +83,8 @@ records (`Book`, `Account`, `Entry`, `FiscalYear`, `Period`, `ClosingEvent`,
 | `Ledger::account_types`, `Ledger::late_recording_thresholds`, `Ledger::journal_statuses` | none | The five account types; the report's 45 and 60 days; `submitted`, `approved`, `rejected`, `withdrawn` |
 
 Every call authorizes the capability for the scope's actor and the target
-company at the moment it runs (Core Company's `authorize_target`): a missing
-grant, or a sibling company without `admin.company.tenant-wide.manage`, is
+company at the moment it runs (Core Company's `authorize_work_target`): a missing
+grant, or a company where the person has no desk, is
 `LedgerError::Unauthorized`; a company the scope cannot see is
 `CompanyNotFound`. A write then holds the company's row lock inside an audited
 `MutationBoundary` transaction, so an archived company is `CompanyArchived`

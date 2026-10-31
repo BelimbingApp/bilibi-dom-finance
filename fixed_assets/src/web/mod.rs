@@ -30,7 +30,7 @@ pub(crate) struct Pages {
 }
 macro_rules! route {
     ($op:literal, $path:literal) => {
-        inventory::submit! { Contribution::new(ROUTES, concat!("finance/fixed_assets.", $op), Provenance { module: MODULE, source: file!(), line: line!() }, &Route {
+        inventory::submit! { Contribution::new(ROUTES, concat!("finance/fixed_assets.", $op), Provenance { module: MODULE, source: file!(), line: line!() }, &Route { company_scope: bilibi_module_registry::contributions::CompanyScope::Company,
             method: Method::Get, path: $path, service: PAGES, operation: $op,
             access: Access::Capability(crate::VIEW), framed: true,
         }) }
@@ -58,6 +58,7 @@ macro_rules! menu {
                 $label,
                 concat!("/finance/fixed-assets/", $kind)
             )
+            .company_scoped()
             .icon("carbon-financial-assets")
             .under("finance.group.fixed-assets")
             .requires(bilibi_menu::Requirement::Capability(crate::VIEW))

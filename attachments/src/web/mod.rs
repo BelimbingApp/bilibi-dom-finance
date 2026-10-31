@@ -53,13 +53,14 @@ bilibi_menu::contribute!(
         "Source documents",
         "/finance/attachments"
     )
+    .company_scoped()
     .icon("gmdi-money-r")
     .under("finance.group.bookkeeping")
     .requires(bilibi_menu::Requirement::Capability(crate::VIEW))
     .order(2)
 );
 
-inventory::submit! { Contribution::new(ROUTES, "finance/attachments.index", provenance!(), &Route {
+inventory::submit! { Contribution::new(ROUTES, "finance/attachments.index", provenance!(), &Route { company_scope: bilibi_module_registry::contributions::CompanyScope::Company,
     method: Method::Get, path: "/finance/attachments", service: PAGES,
     operation: "index", access: Access::Capability(crate::VIEW), framed: true,
 }) }

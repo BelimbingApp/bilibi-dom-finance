@@ -39,17 +39,18 @@ bilibi_menu::contribute!(
         "E-invoices",
         "/finance/einvoice/documents"
     )
+    .company_scoped()
     .icon("vaadin-invoice")
     .under("finance.group.einvoicing")
     .requires(bilibi_menu::Requirement::Capability(crate::VIEW))
     .order(1)
 );
 
-inventory::submit! { Contribution::new(ROUTES, "finance/einvoice.documents", provenance!(), &Route {
+inventory::submit! { Contribution::new(ROUTES, "finance/einvoice.documents", provenance!(), &Route { company_scope: bilibi_module_registry::contributions::CompanyScope::Company,
     method: Method::Get, path: ADDRESS, service: PAGES, operation: "index",
     access: Access::Capability(crate::VIEW), framed: true,
 }) }
-inventory::submit! { Contribution::new(ROUTES, "finance/einvoice.document", provenance!(), &Route {
+inventory::submit! { Contribution::new(ROUTES, "finance/einvoice.document", provenance!(), &Route { company_scope: bilibi_module_registry::contributions::CompanyScope::Company,
     method: Method::Get, path: "/finance/einvoice/documents/{id}", service: PAGES, operation: "detail",
     access: Access::Capability(crate::VIEW), framed: true,
 }) }

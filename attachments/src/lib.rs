@@ -10,7 +10,7 @@
 //! `finance.attachments.retention.manage` to lengthen the company's retention
 //! or an attachment's, or to place and release a legal hold) for the scope's
 //! actor and the target company at the moment they run, through Core
-//! Company's `authorize_target`: a missing grant, or a sibling company
+//! Company's `authorize_work_target`: a missing grant, or a sibling company
 //! without tenant-wide reach, is [`AttachmentError::Unauthorized`], and a
 //! company the scope cannot see is [`AttachmentError::CompanyNotFound`]. A
 //! write then holds the company's row lock for its mutation transaction, so
@@ -86,7 +86,7 @@ pub use web::EMBED as PANEL_EMBED;
 use bilibi_artifacts::{Artifacts, Error as StorageError};
 use bilibi_database::{Db, Error, MutationBoundary};
 use bilibi_module_registry::{Catalog, Layer, Module, Service};
-use bilibi_queue::{execution::HandlerService, Queue};
+use bilibi_queue::{HandlerService, Queue};
 use bilibi_tenancy::{Authentication, Scope};
 use bilibi_ui::{download::DownloadService, page::PageService};
 use jiff::{civil::Date, Timestamp};
@@ -210,14 +210,18 @@ pub enum AttachmentError {
     #[error("Invalid option")]
     InvalidOption,
     /// An operator has not set Base Artifacts' storage root and retention.
-    #[error("Ask a server administrator to set Storage folder (artifacts.storage_root) and Document retention days (artifacts.retention_days) in Global settings: /system/settings")]
+    #[error(
+        "Ask a server administrator to set Storage folder (artifacts.storage_root) and Document retention days (artifacts.retention_days) in Global settings: /system/settings"
+    )]
     RetentionNotConfigured,
     /// The folder an administrator chose for Base Artifacts does not exist;
     /// the text is Base's own, naming the folder.
     #[error("{0} Global settings: /system/settings")]
     StorageFolderMissing(String),
     /// The Storage folder is empty or not an absolute, private folder.
-    #[error("Storage folder (artifacts.storage_root) must be the absolute path of an existing private folder (permission 0700). Ask a server administrator to set it in Global settings: /system/settings")]
+    #[error(
+        "Storage folder (artifacts.storage_root) must be the absolute path of an existing private folder (permission 0700). Ask a server administrator to set it in Global settings: /system/settings"
+    )]
     StorageFolderUnsafe,
     /// The file is larger than Base Artifacts' `artifacts.max_bytes`.
     #[error("The file is larger than the storage limit")]

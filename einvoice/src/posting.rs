@@ -495,7 +495,7 @@ impl Einvoice {
         }
         match bridge {
             Bridge::Post if !VALID_STATUSES.contains(&status) => {
-                return Err(EinvoiceError::NotPostable)
+                return Err(EinvoiceError::NotPostable);
             }
             Bridge::Reverse if status != "cancelled" => return Err(EinvoiceError::NotReversible),
             _ => {}

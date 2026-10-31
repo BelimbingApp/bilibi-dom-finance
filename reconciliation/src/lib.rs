@@ -9,7 +9,7 @@
 //! Every function takes the sealed [`Scope`] it was handed and an explicit
 //! company id. Reads authorize `finance.reconciliation.view` and writes their
 //! own capability for the scope's actor and the target company at the moment
-//! they run, through Core Company's `authorize_target`: a missing grant, or a
+//! they run, through Core Company's `authorize_work_target`: a missing grant, or a
 //! sibling company without tenant-wide reach, is
 //! [`ReconciliationError::Unauthorized`], and a company the scope cannot see
 //! is [`ReconciliationError::CompanyNotFound`]. A write then holds the
@@ -188,7 +188,9 @@ pub enum ReconciliationError {
     #[error("That ledger entry is already matched on this account.")]
     EntryMatched,
     /// The two sides of a match differ.
-    #[error("The sides do not agree: the statement lines sum to {statement_side} and the ledger entries to {ledger_side}.")]
+    #[error(
+        "The sides do not agree: the statement lines sum to {statement_side} and the ledger entries to {ledger_side}."
+    )]
     Unbalanced {
         statement_side: Money,
         ledger_side: Money,
@@ -208,10 +210,14 @@ pub enum ReconciliationError {
     ReconciliationAbandoned,
     /// The finaliser opened the reconciliation, impersonated whoever did, or
     /// was impersonated by them, while the company separates duties.
-    #[error("Someone else must finalise this because the company requires separation of duties. For a one-person company, change Separation of duties on Approval exceptions: /finance/reports/approval-exceptions")]
+    #[error(
+        "Someone else must finalise this because the company requires separation of duties. For a one-person company, change Separation of duties on Approval exceptions: /finance/reports/approval-exceptions"
+    )]
     SamePerson,
     /// A reconciliation is finalised only once its difference is zero.
-    #[error("The difference is {0}, not zero; match or post what is unmatched, or check the statement balance.")]
+    #[error(
+        "The difference is {0}, not zero; match or post what is unmatched, or check the statement balance."
+    )]
     Difference(Money),
     #[error("Choose whether the line is a charge or interest.")]
     InvalidKind,
@@ -1735,12 +1741,12 @@ impl Reconciliation {
 
 /// The actor's current grant and company reach decide every call.
 async fn authorize(
-    client: &impl tokio_postgres::GenericClient,
+    client: &(impl tokio_postgres::GenericClient + Sync),
     scope: &Scope,
     company_id: i64,
     capability: &str,
 ) -> Result<()> {
-    bilibi_company::authorize_target(client, scope, company_id, capability)
+    bilibi_company::authorize_work_target(client, scope, company_id, capability)
         .await
         .map(|_| ())
         .map_err(refusal)

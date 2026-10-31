@@ -658,18 +658,42 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
             "a file with unreadable rows",
             "Date,Details,Ref,Amount,Balance\n31/02/2026,Bad date,,5.00,5.00\n2026-02-01,   ,,5.00,10.00\n2026-02-02,Words,,twelve,10.00\n2026-02-03,Fine print,,10.123,20.00\n2026-02-04,Late,,5.00,\n",
         ),
-        ("a file lacking mapped columns", "Date,Details,Amount\n2026-02-01,Rent,5.00\n"),
-        ("a file with only a header", "Date,Details,Ref,Amount,Balance\n"),
-        ("a file with only zero rows", "Date,Details,Ref,Amount,Balance\n2026-02-01,Note,,0.00,10.00\n"),
+        (
+            "a file lacking mapped columns",
+            "Date,Details,Amount\n2026-02-01,Rent,5.00\n",
+        ),
+        (
+            "a file with only a header",
+            "Date,Details,Ref,Amount,Balance\n",
+        ),
+        (
+            "a file with only zero rows",
+            "Date,Details,Ref,Amount,Balance\n2026-02-01,Note,,0.00,10.00\n",
+        ),
         (
             "a balance column that follows from neither direction",
             "Date,Details,Ref,Amount,Balance\n2026-02-01,One,,5.00,5.00\n2026-02-02,Two,,5.00,99.00\n2026-02-03,Three,,5.00,15.00\n",
         ),
-        ("a quote in the middle of a field", "Date,Details,Ref,Amount,Balance\n2026-02-01,Bad \"quote\",,5.00,5.00\n"),
-        ("text after a closing quote", "Date,Details,Ref,Amount,Balance\n2026-02-01,\"Quoted\"junk,,5.00,5.00\n"),
-        ("a quote left open", "Date,Details,Ref,Amount,Balance\n2026-02-01,\"Never closed,,5.00,5.00\n"),
+        (
+            "a quote in the middle of a field",
+            "Date,Details,Ref,Amount,Balance\n2026-02-01,Bad \"quote\",,5.00,5.00\n",
+        ),
+        (
+            "text after a closing quote",
+            "Date,Details,Ref,Amount,Balance\n2026-02-01,\"Quoted\"junk,,5.00,5.00\n",
+        ),
+        (
+            "a quote left open",
+            "Date,Details,Ref,Amount,Balance\n2026-02-01,\"Never closed,,5.00,5.00\n",
+        ),
     ] {
-        show(step, reconciliation.import_statement(&manager, COMPANY, operating.id, &file("bad.csv", content)).await.map(|s| s.statement.statement_number));
+        show(
+            step,
+            reconciliation
+                .import_statement(&manager, COMPANY, operating.id, &file("bad.csv", content))
+                .await
+                .map(|s| s.statement.statement_number),
+        );
     }
     show(
         "a file that is not UTF-8 text",
@@ -728,7 +752,14 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
                        20/01/2026;Fee;2,00;\n20/01/2026;Fee;2,00;\n21/01/2026;Interest;;(0,50)\n22/01/2026;Salary;;1.500,00\n";
     imported(
         "debit and credit columns, semicolons, decimal commas, two header rows, two identical fees on one day",
-        reconciliation.import_statement(&manager, COMPANY, savings_account.id, &file("savings.csv", savings_csv)).await,
+        reconciliation
+            .import_statement(
+                &manager,
+                COMPANY,
+                savings_account.id,
+                &file("savings.csv", savings_csv),
+            )
+            .await,
     );
     show(
         "the same savings file again",
@@ -985,7 +1016,9 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         .iter()
         .map(|r| r.get(0))
         .collect();
-    println!("the company's statement numbers, with the refused attempts above leaving no gap: {numbers:?}");
+    println!(
+        "the company's statement numbers, with the refused attempts above leaving no gap: {numbers:?}"
+    );
 
     println!("\n== Audit");
     for kind in [

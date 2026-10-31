@@ -280,7 +280,9 @@ async fn main() -> Outcome<()> {
         )
         .await?;
     assert_eq!((page.page, page.total, page.documents.len()), (1, 0, 0));
-    println!("out-of-range pages: last nonempty page 2 (4 rows, ending NP4-002); empty page 1; 255-character search accepted");
+    println!(
+        "out-of-range pages: last nonempty page 2 (4 rows, ending NP4-002); empty page 1; 255-character search accepted"
+    );
 
     // Run actual mounted page states against the real database before serving.
     let pages = services.get::<PageService<Scope, Error>>("finance/payables.pages")?;
@@ -393,14 +395,16 @@ async fn main() -> Outcome<()> {
             "{operation} hides {marker} from a reader"
         );
     }
-    println!("recording pages: the recorder gets the bill, payment and setup forms; a reader gets none of their controls");
-    println!("Fixture accounts: manager@example.test (recorder), admin@example.test (independent reviewer), viewer@example.test (read only); the walkthrough fixture's password applies");
+    println!(
+        "recording pages: the recorder gets the bill, payment and setup forms; a reader gets none of their controls"
+    );
+    println!(
+        "Fixture accounts: manager@example.test (recorder), admin@example.test (independent reviewer), viewer@example.test (read only); the walkthrough fixture's password applies"
+    );
     // The real queue executor delivers mounted Supply Chain events into
     // Payables' own copy; the fixture never writes order or receipt facts.
-    let executor = bilibi_queue::execution::Executor::from_services(
-        services,
-        bilibi_queue::execution::Config::default(),
-    )?;
+    let executor =
+        bilibi_queue::Executor::from_services(services, bilibi_queue::Config::default())?;
     let (stop, shutdown) = tokio::sync::watch::channel(false);
     let worker = tokio::spawn(executor.run(shutdown));
     let listener = tokio::net::TcpListener::bind(

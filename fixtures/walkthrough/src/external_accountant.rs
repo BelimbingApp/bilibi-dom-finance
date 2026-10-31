@@ -214,16 +214,18 @@ pub async fn run(db: &Db, services: &Services, root: &str, full_pack: &str) -> O
         .as_str()
         .unwrap()
         .contains("Payroll source records"));
-    assert!(files.keys().all(|name| name.starts_with("ledger-")
-        || [
-            "manifest.json",
-            "general-ledger.csv",
-            "trial-balance.json",
-            "trial-balance.csv",
-            "issued-reports.csv",
-            "source-file-index.csv"
-        ]
-        .contains(&name.as_str())));
+    assert!(files.keys().all(|name| {
+        name.starts_with("ledger-")
+            || [
+                "manifest.json",
+                "general-ledger.csv",
+                "trial-balance.json",
+                "trial-balance.csv",
+                "issued-reports.csv",
+                "source-file-index.csv",
+            ]
+            .contains(&name.as_str())
+    }));
     assert!(std::str::from_utf8(&files["general-ledger.csv"])?.contains("Payroll component"));
     assert_eq!(
         manifest["control_totals"]["debits"],
@@ -258,7 +260,9 @@ pub async fn run(db: &Db, services: &Services, root: &str, full_pack: &str) -> O
     // Seed authority state for a real MCP wire proof and browser login. OAuth
     // secrets stay only in the task's private proof directory, never stdout.
     credentials(db, services, root).await?;
-    println!("External accountant: two affiliated people; complete mixed/payroll ledger, reports and scoped ZIP allowed; other companies, source evidence, settings, direct posting and approval refused; independent review and live revocation proved.");
+    println!(
+        "External accountant: two affiliated people; complete mixed/payroll ledger, reports and scoped ZIP allowed; other companies, source evidence, settings, direct posting and approval refused; independent review and live revocation proved."
+    );
     Ok(())
 }
 

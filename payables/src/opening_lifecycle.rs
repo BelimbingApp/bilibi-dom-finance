@@ -71,7 +71,10 @@ impl Payables {
             if stage_manifest(&existing) != stage_manifest(&payload)
                 || (row.get::<_, i32>(0) as i64 == part && existing != payload)
             {
-                return Err(invalid("source_reference","already identifies different source bytes or register instructions; use a new source reference"));
+                return Err(invalid(
+                    "source_reference",
+                    "already identifies different source bytes or register instructions; use a new source reference",
+                ));
             }
             retry |= row.get::<_, i32>(0) as i64 == part;
         }
@@ -223,16 +226,29 @@ impl Payables {
         input: &Value,
     ) -> Result<Option<Value>> {
         let current=c.query_opt("SELECT to_jsonb(b) FROM finance_payables_opening_batches b WHERE tenant_id=$1 AND company_id=$2 ORDER BY id DESC LIMIT 1",&[&s.tenant(),&company]).await?.map(|r|r.get::<_,Value>(0));
-        match (current,input["replaces_batch_id"].as_i64()) {
-            (None,None)=>Ok(None),
-            (Some(batch),Some(id)) if batch["id"]==id => {
-                if input["staged"]!=true {return Err(invalid("source_reference","stage the correction for independent approval before reconciliation"));}
-                let reason=input["reason"].as_str().unwrap_or("").trim();
-                if reason.is_empty() || reason.chars().count()>500 || reason.contains('\0') {return Err(invalid("reason","must contain 1 to 500 characters without null characters"));}
-                self.opening_dependents(c,s,company,id).await?;
+        match (current, input["replaces_batch_id"].as_i64()) {
+            (None, None) => Ok(None),
+            (Some(batch), Some(id)) if batch["id"] == id => {
+                if input["staged"] != true {
+                    return Err(invalid(
+                        "source_reference",
+                        "stage the correction for independent approval before reconciliation",
+                    ));
+                }
+                let reason = input["reason"].as_str().unwrap_or("").trim();
+                if reason.is_empty() || reason.chars().count() > 500 || reason.contains('\0') {
+                    return Err(invalid(
+                        "reason",
+                        "must contain 1 to 500 characters without null characters",
+                    ));
+                }
+                self.opening_dependents(c, s, company, id).await?;
                 Ok(Some(batch))
-            },
-            _=>Err(invalid("replaces_batch_id","must name the current register when correcting an import; retain the prior source and use a new source reference"))
+            }
+            _ => Err(invalid(
+                "replaces_batch_id",
+                "must name the current register when correcting an import; retain the prior source and use a new source reference",
+            )),
         }
     }
     pub(super) async fn record_opening_decision(

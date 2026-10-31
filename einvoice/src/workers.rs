@@ -17,7 +17,7 @@ use crate::contributions::provenance;
 use crate::{Einvoice, MODULE, SUBMIT};
 use bilibi_database::{Error, Result};
 use bilibi_module_registry::{Contribution, Provenance};
-use bilibi_queue::execution::{
+use bilibi_queue::{
     Execution, Handler, HandlerBinding, HandlerFuture, HandlerService, Identity, Outcome, HANDLERS,
 };
 use bilibi_queue::{Worker, WORKERS};

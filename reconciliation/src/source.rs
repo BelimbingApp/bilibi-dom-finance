@@ -47,7 +47,7 @@ async fn read(
     company_id: i64,
     statement_id: i64,
 ) -> Result<SourceDocument, SourceRefusal> {
-    bilibi_company::authorize_target(client, scope, company_id, VIEW)
+    bilibi_company::authorize_work_target(client, scope, company_id, VIEW)
         .await
         .map_err(|error| match error {
             Error::Forbidden | Error::Unauthorized => SourceRefusal::Unauthorized,
