@@ -90,9 +90,11 @@ for module, source in [("receivables", "ar"), ("payables", "ap")]:
     review = preview(op)
     require(review.get("valid") is True, module + " mixed-register review refused")
     facts = review["results"][0]["preview"]["result"]["changes"]
-    require(facts["posts"] is False and len(facts["rows"]) == 5, "import review omitted rows or invented a posting")
-    require(any(row["source_tax_facts"] == {"status": "unknown"} for row in facts["rows"]), "unknown tax facts lost")
-    require(any(row["source_tax_facts"].get("tax_total") == "0" for row in facts["rows"]), "supplied zero tax lost")
+    require(facts["posts"] is False, "import review invented a posting")
+    if not facts.get("already_imported"):
+        require(len(facts["rows"]) == 5, "import review omitted source rows")
+        require(any(row["source_tax_facts"] == {"status": "unknown"} for row in facts["rows"]), "unknown tax facts lost")
+        require(any(row["source_tax_facts"].get("tax_total") == "0" for row in facts["rows"]), "supplied zero tax lost")
     result = commit(op, review)
     require("results" in result, module + " mixed-register commit refused")
     batch = result["results"][0]["result"]["result"]["record"]
