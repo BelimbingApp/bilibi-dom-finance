@@ -192,7 +192,7 @@ try:
         raise RuntimeError("company row holder did not start")
     for key, args in [(prefix + "run.post", dict(period="2026-07-01")), (prefix + "category.save", category | {"name": "Locked category"}), (prefix + "opening.import", dict(source_reference="LOCKED", currency_code="MYR", csv=csv))]:
         body = plan(channel, [operation(key, company, **args)], "approver")
-        require(body.get("valid") is False and "plan_code" not in body and "record_changed" in json.dumps(body) and "error" not in body, f"{key}: lock contention must be a nonfatal retryable refusal: {body}")
+        require(body.get("valid") is False and "plan_code" not in body and "record_changed" in json.dumps(body) and "error" not in body, f"{key}: lock contention must be a nonfatal retryable record_changed refusal")
 finally:
     holder.kill()
     holder.wait()
