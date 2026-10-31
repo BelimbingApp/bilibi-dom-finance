@@ -107,7 +107,12 @@ def refused(channel, key, company, contains, who="manager", **values):
 
 
 def opening_classifications(context):
-    roles = {"1100": "receivables_control", "2000": "payables_control"}
+    roles = {
+        "1100": "receivables_control",
+        "1110": "receivables_control",
+        "2000": "payables_control",
+        "2010": "payables_control",
+    }
     return {str(account["id"]): roles.get(account["code"], "not_a_control") for account in context["opening_accounts"]}
 
 
@@ -119,6 +124,43 @@ for module in ["receivables", "payables", "fixed_assets"]:
     require(invoke(channel,"guide",{"key":key}), "missing conversion guide")
     context=read(channel,key+".context",company,"approver")
     require(context["batch"] is None and context["items"]==[], "needs a clean opening register")
+
+multi_company = 4
+multi_ar_context = read(channel, "finance.receivables.opening.context", multi_company, "approver")
+multi_ap_context = read(channel, "finance.payables.opening.context", multi_company, "approver")
+multi_series = read(channel, "finance.receivables.series.list", multi_company, "approver")["records"]
+multi_inputs = {
+    "receivables": {
+        "source_reference": "MULTI-AR",
+        "currency_code": "MYR",
+        "series_id": next(row["id"] for row in multi_series if row["code"] == "OPENING"),
+        "csv": "source_id,customer_code,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind\ninvoice-17,company_010,OLD-INV-17,2026-05-15,2026-06-30,5000,2500,1100,company\ninvoice-18,company_010,OLD-INV-18,2026-04-15,2026-05-31,1000,500,1110,company\n",
+        "opening_account_classifications": opening_classifications(multi_ar_context),
+    },
+    "payables": {
+        "source_reference": "MULTI-AP",
+        "currency_code": "MYR",
+        "csv": "source_id,vendor_code,vendor_name,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind\nbill-29,company_010,Conversion vendor,OLD-BILL-29,2026-05-01,2026-06-15,2500,1200,2000,company\nbill-30,company_010,Conversion vendor,OLD-BILL-30,2026-04-01,2026-05-15,900,300,2010,company\n",
+        "opening_account_classifications": opening_classifications(multi_ap_context),
+    },
+}
+for module, expected, omitted_code, omitted_amount in [
+    ("receivables", {"1100", "1110"}, "1110", "500.00"),
+    ("payables", {"2000", "2010"}, "2010", "-300.00"),
+]:
+    key = f"finance.{module}.opening.import"
+    review = plan(channel, [operation(key, multi_company, **multi_inputs[module])], "approver")
+    require(review.get("valid") is True, f"{module}: multi-control preview refused")
+    facts = review["results"][0]["preview"]["result"]["changes"]
+    require({row["account_code"] for row in facts["reconciliation"]} == expected, f"{module}: multi-control review is incomplete")
+    require(all(Decimal(row["difference"]) == 0 for row in facts["reconciliation"]), f"{module}: multi-control review does not reconcile")
+    require(facts["opening_account_classifications"] == multi_inputs[module]["opening_account_classifications"], f"{module}: reviewed classifications changed")
+    incomplete = multi_inputs[module] | {"opening_account_classifications": dict(multi_inputs[module]["opening_account_classifications"])}
+    omitted_id = next(str(account["id"]) for account in (multi_ar_context if module == "receivables" else multi_ap_context)["opening_accounts"] if account["code"] == omitted_code)
+    del incomplete["opening_account_classifications"][omitted_id]
+    refusal = plan(channel, [operation(key, multi_company, **incomplete)], "approver")
+    refusal_text = json.dumps(refusal)
+    require(refusal.get("valid") is False and omitted_code in refusal_text and omitted_amount in refusal_text, f"{module}: omitted historical control was not named")
 trial=read(channel,"finance.ledger.trial_balance.get",company,"approver",as_of="2026-07-01")
 require(Decimal(trial["total_debit"])==Decimal("27000"),"source trial balance")
 accounts={r["code"]:r["id"] for r in trial["rows"]}
@@ -146,7 +188,7 @@ review=plan(channel,ops+ops,"approver")
 require(review.get("valid") is True,"double-plan initial review")
 require(commit(channel,ops+ops,review,"approver").get("error")=="stale_plan","dependent import plan must roll back")
 require(sql("SELECT count(*) FROM finance_receivables_opening_batches WHERE company_id=2")=="0","dependent plan left import")
-print("MCP: schemas and guides discovered; all three mismatches and same-preparer approval refused; dependent import plan rolled back")
+print("MCP: schemas and guides discovered; two-account opening reviews and omissions proved; all three mismatches and same-preparer approval refused; dependent import plan rolled back")
 for module,values in inputs.items():
     key=f"finance.{module}.opening.import"
     record=write(channel,key,company,**values)

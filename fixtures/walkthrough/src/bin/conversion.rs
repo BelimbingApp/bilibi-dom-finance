@@ -1053,7 +1053,7 @@ async fn main() -> Outcome<()> {
         .set_direct(&admin, 1, "admin.company.tenant-wide.manage", Some(true))
         .await?;
     if std::env::args().any(|s| s == "serve") {
-        for company in [1, 2] {
+        for company in [1, 2, 4] {
             println!(
                 "Disposable conversion source: {}",
                 setup(&db, &app.services, company).await?
@@ -1064,7 +1064,7 @@ async fn main() -> Outcome<()> {
                 .await?;
         }
         println!(
-            "Conversion browser fixture at {origin}; independent reviewer admin@example.test; walkthrough password. Company 001 UI first, Company 002 MCP second."
+            "Conversion browser fixture at {origin}; independent reviewer admin@example.test; walkthrough password. Company 001 UI first, Company 002 MCP second, Company 004 multi-control preview."
         );
         axum::serve(
             tokio::net::TcpListener::bind(std::env::var("BIND_ADDR")?).await?,
