@@ -69,7 +69,7 @@ fn row(r: &tokio_postgres::Row) -> bilibi_database::Result<Mapping> {
 
 /// The last mapping number the company recorded, 0 for none.
 pub(crate) async fn last_number(
-    c: &impl GenericClient,
+    c: &(impl GenericClient + Sync),
     tenant: i64,
     company: i64,
 ) -> bilibi_database::Result<i64> {
@@ -83,7 +83,7 @@ pub(crate) async fn last_number(
 
 /// Each code's latest mapping numbered through `through`.
 pub(crate) async fn at(
-    c: &impl GenericClient,
+    c: &(impl GenericClient + Sync),
     tenant: i64,
     company: i64,
     through: i64,

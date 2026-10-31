@@ -209,7 +209,7 @@ pub(crate) fn identity(s: &Scope, company: i64) -> Value {
     json!({"tenant_id":s.tenant(),"company_id":company,"recorded_by_user_id":s.user(),"recorded_by_impersonator_id":s.impersonator().map(|p|p.user())})
 }
 pub(crate) async fn insert(
-    c: &impl GenericClient,
+    c: &(impl GenericClient + Sync),
     t: Table,
     mut value: Value,
 ) -> DbResult<(Value, Change)> {
@@ -229,7 +229,7 @@ pub(crate) async fn insert(
         },
     ))
 }
-pub(crate) async fn reserve(c: &impl GenericClient, t: Table) -> DbResult<i64> {
+pub(crate) async fn reserve(c: &(impl GenericClient + Sync), t: Table) -> DbResult<i64> {
     Ok(c.query_one(
         "SELECT nextval(pg_get_serial_sequence($1,'id'))",
         &[&t.name()],
@@ -397,7 +397,7 @@ pub(crate) fn datasets() -> Vec<&'static str> {
     ]
 }
 pub(crate) async fn page(
-    c: &impl GenericClient,
+    c: &(impl GenericClient + Sync),
     tenant: i64,
     company: i64,
     dataset: &str,

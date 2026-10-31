@@ -177,7 +177,7 @@ pub(crate) fn ledger_item(entry: &Entry, account_id: i64) -> Option<LedgerItem> 
 
 /// The company's latest match-event number, 0 before any.
 pub(crate) async fn last_event_number(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
 ) -> Result<i64> {
@@ -194,7 +194,7 @@ pub(crate) async fn last_event_number(
 
 /// The company's latest statement number, 0 before any.
 pub(crate) async fn last_statement_number(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
 ) -> Result<i64> {
@@ -250,7 +250,7 @@ pub(crate) async fn activity_boundary(
 /// The bank account's statement lines within `bounds`' date and statement
 /// number, by date, statement and line, each with its statement number.
 pub(crate) async fn statement_lines(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     bank_account_id: i64,
@@ -289,7 +289,7 @@ pub(crate) async fn statement_lines(
 
 /// One statement line of the company, or `None`.
 pub(crate) async fn find_line(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     line_id: i64,
@@ -325,7 +325,7 @@ fn line_from_row(row: &Row) -> Result<StatementLine> {
 /// The statement line ids and entry ids the bank account's standing matches
 /// hold at match-event number `through` (`None` for now).
 pub(crate) async fn taken(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     bank_account_id: i64,
@@ -659,7 +659,7 @@ pub(crate) async fn insert(
 /// Refuses an unmatch the database would: a match that no longer stands, or
 /// one a finalised reconciliation of its bank account counted.
 pub(crate) async fn check_unmatch(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     found: &Match,
@@ -759,7 +759,7 @@ const MATCH_COLUMNS: &str =
 /// One match of the company with its lines, entries, opening items and events,
 /// or `None`.
 pub(crate) async fn find(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     match_id: i64,
@@ -778,7 +778,7 @@ pub(crate) async fn find(
 /// The bank account's matches after the id `after`, standing or not, oldest
 /// first.
 pub(crate) async fn list(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     bank_account_id: i64,
@@ -799,7 +799,7 @@ pub(crate) async fn list(
 /// The bank account's matches standing at match-event number `through`
 /// (`None` for now), by match number, with their parts.
 pub(crate) async fn standing(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     bank_account_id: i64,
@@ -818,7 +818,7 @@ pub(crate) async fn standing(
 
 /// The bank account's standing match holding the statement line, or `None`.
 pub(crate) async fn standing_for_line(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     bank_account_id: i64,
@@ -844,7 +844,7 @@ pub(crate) async fn standing_for_line(
 /// The matches of `rows` with their statement lines, entries and opening items
 /// by number, and events by number, in the rows' order.
 async fn hydrate(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     rows: &[Row],

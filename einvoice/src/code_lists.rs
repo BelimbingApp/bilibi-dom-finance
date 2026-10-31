@@ -201,7 +201,7 @@ pub(crate) async fn validate(
 /// Writes the override; the row id. Nothing is written when it changes
 /// nothing, so the caller records no `Change` for it.
 pub(crate) async fn upsert(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     authority: &str,

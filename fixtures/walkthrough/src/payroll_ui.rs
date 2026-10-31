@@ -319,6 +319,8 @@ pub async fn run(db: &Db, services: &Services, historical: i64) -> Outcome<()> {
     assert!(refresh(setup.as_mut(), &manager)
         .await?
         .contains("Boundary 500"));
-    println!("Payroll UI contracts passed: People absent/no writes; form-change read-only; Unicode reason; inline errors/drafts; mapping upsert; independent columns; Ledger-withheld IDs; revoked settings and reversal grants; invalid date; confirmation cancel/single commit; complete history past 500");
+    println!(
+        "Payroll UI contracts passed: People absent/no writes; form-change read-only; Unicode reason; inline errors/drafts; mapping upsert; independent columns; Ledger-withheld IDs; revoked settings and reversal grants; invalid date; confirmation cancel/single commit; complete history past 500"
+    );
     Ok(())
 }

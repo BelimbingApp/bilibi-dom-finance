@@ -142,11 +142,11 @@ impl crate::PostingSubscription {
                     return Some(PostingEvent::Posted {
                         company_id,
                         entry_number,
-                    })
+                    });
                 }
                 Ok(Heard::Posted { .. }) => {}
                 Ok(Heard::Missed) | Err(broadcast::error::RecvError::Lagged(_)) => {
-                    return Some(PostingEvent::Refresh)
+                    return Some(PostingEvent::Refresh);
                 }
                 Err(broadcast::error::RecvError::Closed) => return None,
             }

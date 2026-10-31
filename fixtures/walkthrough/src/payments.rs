@@ -972,6 +972,8 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
     raw_refusal(&c,"late payment allocation",&format!("INSERT INTO finance_payables_payment_allocations(tenant_id,company_id,payment_id,line_number,document_id,amount) VALUES(1,1,{},99,{},1)",paid.id,b2.id)).await?;
     raw_refusal(&c,"late request allocation",&format!("INSERT INTO finance_payables_payment_request_allocations(tenant_id,company_id,request_id,line_number,document_id,amount) VALUES(1,1,{},99,{},1)",r.id,b2.id)).await?;
     raw_refusal(&c,"request amount differs from allocations",&format!("BEGIN; INSERT INTO finance_payables_payment_requests(tenant_id,company_id,payment_date,party_key,party_name,paid_from_account_id,amount,currency_code,submitted_by_user_id) VALUES(1,1,'2026-12-22','np3-party','Proof',{},10,'MYR',1); COMMIT",bank.id)).await?;
-    println!("NP3 complete: requests, independent approvals, concurrent balance refusal, reversals, temporal minima, inactive settlements, pinned aging/tax/tie-out, evidence, attachments and database guards");
+    println!(
+        "NP3 complete: requests, independent approvals, concurrent balance refusal, reversals, temporal minima, inactive settlements, pinned aging/tax/tie-out, evidence, attachments and database guards"
+    );
     Ok(())
 }

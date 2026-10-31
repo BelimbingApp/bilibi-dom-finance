@@ -189,7 +189,7 @@ pub(crate) async fn taken(
     Ok(client.query_opt(&format!("SELECT EXISTS(SELECT 1 FROM {} r WHERE tenant_id=$1 AND company_id=$2 AND to_jsonb(r)->$3=$4)", table.name), &[&tenant, &company, &field, value]).await?.ok_or(Error::Internal)?.get(0))
 }
 pub(crate) async fn save(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     table: Table,
     tenant: i64,
     company: i64,
@@ -237,7 +237,7 @@ pub(crate) async fn save(
     Ok(new)
 }
 pub(crate) async fn delete_children(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     table: Table,
     tenant: i64,
     company: i64,

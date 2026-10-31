@@ -51,7 +51,7 @@ pub(crate) fn identity(s: &Scope, company: i64) -> Value {
 /// Inserts `value` into `t` and returns the row as stored, numbered and
 /// stamped by the database, with its audit `Change`.
 pub(crate) async fn insert(
-    c: &impl GenericClient,
+    c: &(impl GenericClient + Sync),
     t: Table,
     value: Value,
 ) -> Result<(i64, Change)> {

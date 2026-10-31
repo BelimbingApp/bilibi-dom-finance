@@ -31,14 +31,7 @@ impl FixedAssets {
         company: i64,
         cap: &str,
     ) -> Result<()> {
-        self.parties
-            .organisation_target(
-                c,
-                s,
-                bilibi_party_ids::OrganisationId::new(company)
-                    .map_err(|_| FixedAssetsError::CompanyNotFound)?,
-                cap,
-            )
+        bilibi_company::authorize_work_target(c, s, company, cap)
             .await
             .map(|_| ())
             .map_err(|e| match e {
@@ -117,7 +110,10 @@ impl FixedAssets {
         {
             return Err(invalid(
                 "csv",
-                format!("requires header {} and 1 to 500 rows directly, or up to 10000 rows from staged batches", HEADER.join(",")),
+                format!(
+                    "requires header {} and 1 to 500 rows directly, or up to 10000 rows from staged batches",
+                    HEADER.join(",")
+                ),
             ));
         }
         let chart = self.ledger.list_accounts_on(c, s, company).await?;
@@ -283,7 +279,10 @@ impl FixedAssets {
                         .as_i64()
                         .is_some_and(|id| balances.contains_key(&id))
                     {
-                        return Err(invalid("csv","a correction must retain every previously recognized opening account and its balance"));
+                        return Err(invalid(
+                            "csv",
+                            "a correction must retain every previously recognized opening account and its balance",
+                        ));
                     }
                 }
             }

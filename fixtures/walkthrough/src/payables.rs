@@ -663,10 +663,14 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
     grants
         .set_direct(&admin, 3, bilibi_finance_ledger::VIEW, None)
         .await?;
-    println!("tax half rounds up, party tax overrides computed tax, payables-only reader needs no ledger grant");
+    println!(
+        "tax half rounds up, party tax overrides computed tax, payables-only reader needs no ledger grant"
+    );
     db_refuses(&c,"append to recorded draft",&format!("INSERT INTO finance_payables_document_lines(tenant_id,company_id,document_id,line_number,description,account_id,amount) VALUES(1,1,{},2,'Late draft line',{},1)",stated.id,expense)).await?;
     let header = |company: i64, number: &str| {
-        format!("INSERT INTO finance_payables_documents(tenant_id,company_id,document_type,status,party_key,party_name,party_document_number,document_date,due_date,currency_code,total_net,total_tax,total,created_by_user_id) VALUES(1,{company},'bill','draft','raw-party','Raw party','{number}','2026-12-15','2026-12-15','MYR',1,0,1,1)")
+        format!(
+            "INSERT INTO finance_payables_documents(tenant_id,company_id,document_type,status,party_key,party_name,party_document_number,document_date,due_date,currency_code,total_net,total_tax,total,created_by_user_id) VALUES(1,{company},'bill','draft','raw-party','Raw party','{number}','2026-12-15','2026-12-15','MYR',1,0,1,1)"
+        )
     };
     db_refuses(
         &c,

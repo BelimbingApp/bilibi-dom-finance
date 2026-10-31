@@ -89,7 +89,7 @@ fn row(r: &tokio_postgres::Row) -> bilibi_database::Result<Registration> {
 }
 
 async fn read(
-    c: &impl GenericClient,
+    c: &(impl GenericClient + Sync),
     filter: &str,
     params: &[&(dyn tokio_postgres::types::ToSql + Sync)],
 ) -> bilibi_database::Result<Vec<Registration>> {
@@ -102,7 +102,7 @@ async fn read(
 
 /// The latest version.
 pub(crate) async fn latest(
-    c: &impl GenericClient,
+    c: &(impl GenericClient + Sync),
     tenant: i64,
     company: i64,
 ) -> bilibi_database::Result<Option<Registration>> {
@@ -115,7 +115,7 @@ pub(crate) async fn latest(
 
 /// One version by id: the one a return was prepared under.
 pub(crate) async fn get(
-    c: &impl GenericClient,
+    c: &(impl GenericClient + Sync),
     tenant: i64,
     company: i64,
     id: i64,
@@ -125,7 +125,7 @@ pub(crate) async fn get(
 
 /// The latest version whose cycle starts on or before `date`.
 pub(crate) async fn governing(
-    c: &impl GenericClient,
+    c: &(impl GenericClient + Sync),
     tenant: i64,
     company: i64,
     date: Date,
@@ -141,7 +141,7 @@ pub(crate) async fn governing(
 
 /// The end of the latest period any finalised return reported.
 async fn reported_through(
-    c: &impl GenericClient,
+    c: &(impl GenericClient + Sync),
     tenant: i64,
     company: i64,
 ) -> bilibi_database::Result<Option<Date>> {

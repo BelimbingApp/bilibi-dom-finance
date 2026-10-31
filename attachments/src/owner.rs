@@ -76,8 +76,7 @@ impl Owner for ArtifactOwner {
                 return live(client, scope, company).await;
             }
             for capability in wanted {
-                if Directory
-                    .target(client, scope, company, capability)
+                if bilibi_company::authorize_work_target(client, scope, company.get(), capability)
                     .await
                     .is_ok()
                 {

@@ -93,7 +93,12 @@ impl Journals {
         } else {
             Html::EMPTY
         };
-        let mut body=render(SectionHeading {title:"Bad-debt journals",description:"Approved write-offs reduce the invoice balance without changing revenue or tax. Reverse before recording a recovery receipt.",actions,..SectionHeading::default()})?;
+        let mut body = render(SectionHeading {
+            title: "Bad-debt journals",
+            description: "Approved write-offs reduce the invoice balance without changing revenue or tax. Reverse before recording a recovery receipt.",
+            actions,
+            ..SectionHeading::default()
+        })?;
         let mut rows = vec![];
         for w in &d.write_offs {
             let mut buttons = Html::EMPTY;

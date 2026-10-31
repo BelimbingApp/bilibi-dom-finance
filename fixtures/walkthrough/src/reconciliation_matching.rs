@@ -1325,7 +1325,9 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         .iter()
         .map(|r| r.get(0))
         .collect();
-    println!("the company's match-event numbers, with the refused attempts above leaving no gap: {numbers:?}");
+    println!(
+        "the company's match-event numbers, with the refused attempts above leaving no gap: {numbers:?}"
+    );
 
     println!("\n== Audit and evidence");
     for kind in [

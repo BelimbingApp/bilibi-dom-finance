@@ -481,7 +481,7 @@ pub(crate) async fn release_designation(
 }
 
 pub(crate) async fn insert(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     account: &ValidAccount,
@@ -511,7 +511,7 @@ pub(crate) async fn insert(
 /// Writes the fields `update_changeset/2` may change; code and type are
 /// never sent, and the database refuses them anyway.
 pub(crate) async fn update(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     next: &Account,

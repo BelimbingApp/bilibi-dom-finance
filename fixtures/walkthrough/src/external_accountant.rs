@@ -22,8 +22,8 @@ pub async fn run(db: &Db, services: &Services, root: &str, full_pack: &str) -> O
     db.get().await?.batch_execute(
         "INSERT INTO persons(id,tenant_id,code,name,kind,email) VALUES(4,1,'person_4','Lee Accountant','human','viewer@example.test'),(5,1,'person_5','Sam Accountant','human','staff@example.test') ON CONFLICT DO NOTHING;
          INSERT INTO person_affiliations(id,tenant_id,person_id,organisation_id,title) VALUES(3,1,4,1,'Accountant'),(4,1,5,1,'Accountant') ON CONFLICT DO NOTHING;
-         UPDATE users SET person_id=4,affiliation_id=3,organisation_id=1 WHERE tenant_id=1 AND id=2 AND person_id IS NULL;
-         UPDATE users SET person_id=5,affiliation_id=4,organisation_id=1 WHERE tenant_id=1 AND id=3 AND person_id IS NULL;
+         UPDATE users SET person_id=4 WHERE tenant_id=1 AND id=2 AND person_id IS NULL; INSERT INTO user_desks(tenant_id,person_id,company_id) SELECT tenant_id,person_id,1 FROM users WHERE tenant_id=1 AND id=2 AND person_id IS NOT NULL ON CONFLICT DO NOTHING;
+         UPDATE users SET person_id=5 WHERE tenant_id=1 AND id=3 AND person_id IS NULL; INSERT INTO user_desks(tenant_id,person_id,company_id) SELECT tenant_id,person_id,1 FROM users WHERE tenant_id=1 AND id=3 AND person_id IS NOT NULL ON CONFLICT DO NOTHING;
          SELECT setval(pg_get_serial_sequence('persons','id'),(SELECT max(id) FROM persons));
          SELECT setval(pg_get_serial_sequence('person_affiliations','id'),(SELECT max(id) FROM person_affiliations))"
     ).await?;
@@ -214,16 +214,18 @@ pub async fn run(db: &Db, services: &Services, root: &str, full_pack: &str) -> O
         .as_str()
         .unwrap()
         .contains("Payroll source records"));
-    assert!(files.keys().all(|name| name.starts_with("ledger-")
-        || [
-            "manifest.json",
-            "general-ledger.csv",
-            "trial-balance.json",
-            "trial-balance.csv",
-            "issued-reports.csv",
-            "source-file-index.csv"
-        ]
-        .contains(&name.as_str())));
+    assert!(files.keys().all(|name| {
+        name.starts_with("ledger-")
+            || [
+                "manifest.json",
+                "general-ledger.csv",
+                "trial-balance.json",
+                "trial-balance.csv",
+                "issued-reports.csv",
+                "source-file-index.csv",
+            ]
+            .contains(&name.as_str())
+    }));
     assert!(std::str::from_utf8(&files["general-ledger.csv"])?.contains("Payroll component"));
     assert_eq!(
         manifest["control_totals"]["debits"],
@@ -258,7 +260,9 @@ pub async fn run(db: &Db, services: &Services, root: &str, full_pack: &str) -> O
     // Seed authority state for a real MCP wire proof and browser login. OAuth
     // secrets stay only in the task's private proof directory, never stdout.
     credentials(db, services, root).await?;
-    println!("External accountant: two affiliated people; complete mixed/payroll ledger, reports and scoped ZIP allowed; other companies, source evidence, settings, direct posting and approval refused; independent review and live revocation proved.");
+    println!(
+        "External accountant: two affiliated people; complete mixed/payroll ledger, reports and scoped ZIP allowed; other companies, source evidence, settings, direct posting and approval refused; independent review and live revocation proved."
+    );
     Ok(())
 }
 

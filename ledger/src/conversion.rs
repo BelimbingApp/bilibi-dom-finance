@@ -84,10 +84,21 @@ impl Ledger {
         }
         let tenant = scope.tenant();
         let existing=tx.sql().query_opt("SELECT r.id,r.owner_module,r.owner_record FROM finance_ledger_opening_recognitions r WHERE r.tenant_id=$1 AND r.company_id=$2 AND r.account_id=$3 AND NOT EXISTS(SELECT 1 FROM finance_ledger_opening_recognition_replacements x WHERE x.tenant_id=$1 AND x.company_id=$2 AND x.replaces_recognition_id=r.id)",&[&tenant,&company,&account]).await.map_err(Error::from)?;
-        let replaces=match (existing,replaces_record) {
-            (None,None)=>None,
-            (Some(row),Some(record)) if row.get::<_,String>(1)==owner.module && row.get::<_,String>(2)==record && record!=owner.record=>Some(row.get::<_,i64>(0)),
-            _=>return Err(LedgerError::Invalid(vec![FieldError::new("items","the opening account has already been imported; a replacement must name its current owner")])),
+        let replaces = match (existing, replaces_record) {
+            (None, None) => None,
+            (Some(row), Some(record))
+                if row.get::<_, String>(1) == owner.module
+                    && row.get::<_, String>(2) == record
+                    && record != owner.record =>
+            {
+                Some(row.get::<_, i64>(0))
+            }
+            _ => {
+                return Err(LedgerError::Invalid(vec![FieldError::new(
+                    "items",
+                    "the opening account has already been imported; a replacement must name its current owner",
+                )]));
+            }
         };
         let entry = context.entry.id;
         let module = owner.module.clone();

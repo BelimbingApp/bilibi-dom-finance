@@ -80,7 +80,7 @@ impl Table {
 /// All identifiers come from the private enum. Populate only this module's
 /// rows; every inserted row is returned verbatim for mutation capture.
 pub(crate) async fn insert(
-    c: &impl GenericClient,
+    c: &(impl GenericClient + Sync),
     table: Table,
     value: Value,
 ) -> DbResult<(Value, Change)> {
@@ -107,7 +107,7 @@ pub(crate) fn update_change(table: Table, id: i64, before: Value, after: Value) 
     }
 }
 pub(crate) async fn raw(
-    c: &impl GenericClient,
+    c: &(impl GenericClient + Sync),
     t: Table,
     tenant: i64,
     company: i64,
@@ -319,7 +319,7 @@ async fn match_events(
 /// transaction that decides it; the database stamps the time and checks the
 /// document's status. Returns every inserted row as a change.
 pub(crate) async fn record_match(
-    sql: &impl GenericClient,
+    sql: &(impl GenericClient + Sync),
     document: &Document,
     (tenant, company): (i64, i64),
     actor: (i64, Option<i64>),

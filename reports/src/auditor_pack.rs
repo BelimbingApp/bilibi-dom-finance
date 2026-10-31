@@ -863,11 +863,19 @@ impl Download<Scope, Error> for Downloads {
 // Bilimbi ReportsLive's refusal copy, including recoverable storage failures.
 pub(crate) fn export_refusal(error: &ReportsError) -> &'static str {
     match error {
-        ReportsError::SnapshotChanged => "The company changed while the pack was being generated. Generate it again.",
+        ReportsError::SnapshotChanged => {
+            "The company changed while the pack was being generated. Generate it again."
+        }
         ReportsError::Unauthorized => "You do not have permission to export this company’s ledger.",
-        ReportsError::InvalidSize => "The archive exceeds the configured download size limit. Ask your administrator to increase it.",
-        ReportsError::Artifact("policy") => "Document retention has not been configured. Ask your administrator to configure downloads.",
-        _ => "The auditor pack could not be generated. Retry or ask your administrator to check document storage.",
+        ReportsError::InvalidSize => {
+            "The archive exceeds the configured download size limit. Ask your administrator to increase it."
+        }
+        ReportsError::Artifact("policy") => {
+            "Document retention has not been configured. Ask your administrator to configure downloads."
+        }
+        _ => {
+            "The auditor pack could not be generated. Retry or ask your administrator to check document storage."
+        }
     }
 }
 

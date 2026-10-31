@@ -12,7 +12,7 @@
 //! tables. Every function takes the sealed [`Scope`] it was handed and an
 //! explicit company id, and authorizes
 //! the ledger's view capability (`finance.ledger.view`) for the scope's actor
-//! and that company when it runs, through Core Company's `authorize_target`: a
+//! and that company when it runs, through Core Company's `authorize_work_target`: a
 //! missing grant, or a sibling company without tenant-wide reach, is
 //! [`ReportsError::Unauthorized`], and a company the scope cannot see is
 //! [`ReportsError::CompanyNotFound`]. Issuing a report asks for
@@ -117,7 +117,7 @@ inventory::submit! {
                 sst: services.get(bilibi_finance_sst::SERVICE)?,
                 fixed_assets: services.get(bilibi_finance_fixed_assets::SERVICE)?,
             },
-        }); agent_operations::bind(reports.clone(), services.get("base/tenancy.parties")?)?; Ok(reports) } }, Service { id: "finance/reports.pages", factory: |services| {
+        }); agent_operations::bind(reports.clone())?; Ok(reports) } }, Service { id: "finance/reports.pages", factory: |services| {
             Ok(Arc::new(bilibi_ui::page::PageService::<Scope, Error>(Arc::new(web::Pages {
                 reports: services.get(SERVICE)?,
                 contracts: services.get(bilibi_agent_api::page::SERVICE)?,
@@ -1176,12 +1176,12 @@ fn json(value: &impl Serialize) -> Result<Value> {
 
 /// The actor's current grant and company reach decide every call.
 async fn authorize(
-    client: &impl tokio_postgres::GenericClient,
+    client: &(impl tokio_postgres::GenericClient + Sync),
     scope: &Scope,
     company_id: i64,
     capability: &str,
 ) -> Result<()> {
-    bilibi_company::authorize_target(client, scope, company_id, capability)
+    bilibi_company::authorize_work_target(client, scope, company_id, capability)
         .await
         .map(|_| ())
         .map_err(refusal)

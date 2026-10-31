@@ -102,7 +102,7 @@ pub(crate) async fn facts(
 
 /// The listed entries, oldest number first, each with its review or none.
 pub(crate) async fn list(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     query: &LateRecordingQuery,
@@ -166,7 +166,7 @@ pub(crate) fn validate(reason: &str) -> std::result::Result<String, Vec<FieldErr
 /// less than 45 days late, a second review and a reviewer who overlaps the
 /// poster.
 pub(crate) async fn insert_review(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     entry_id: i64,

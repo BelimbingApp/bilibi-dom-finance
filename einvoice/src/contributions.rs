@@ -50,12 +50,12 @@ inventory::submit! { Contribution::new(VOCABULARY, "finance/einvoice", provenanc
 use bilibi_module_registry::contributions::{Access, Method, Route, ROUTES};
 macro_rules! page {
     ($operation:literal, $path:literal, $label:literal, $capability:expr, $icon:literal, $order:expr) => {
-        inventory::submit! { Contribution::new(ROUTES, concat!("finance/einvoice.", $operation), provenance!(), &Route {
+        inventory::submit! { Contribution::new(ROUTES, concat!("finance/einvoice.", $operation), provenance!(), &Route { company_scope: bilibi_module_registry::contributions::CompanyScope::Company,
             method: Method::Get, path: $path, service: crate::web::control::SERVICE,
             operation: $operation, access: Access::Capability($capability), framed: true,
         }) }
         bilibi_menu::contribute!("finance/einvoice",
-            bilibi_menu::MenuItem::page(concat!("finance.einvoice.", $operation), $label, $path)
+            bilibi_menu::MenuItem::page(concat!("finance.einvoice.", $operation), $label, $path).company_scoped()
                 .under("finance.group.einvoicing").icon($icon)
                 .requires(bilibi_menu::Requirement::Capability($capability)).order($order)
         );

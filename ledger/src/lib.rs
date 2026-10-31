@@ -8,7 +8,7 @@
 //! Every function takes the sealed [`Scope`] it was handed and an explicit
 //! company id. Reads authorize `finance.ledger.view` and writes their own
 //! capability for the scope's actor and the target company at the moment
-//! they run, through Core Company's `authorize_target`: a missing grant, or a
+//! they run, through Core Company's `authorize_work_target`: a missing grant, or a
 //! sibling company without tenant-wide reach, is
 //! [`LedgerError::Unauthorized`], and a company the scope cannot see is
 //! [`LedgerError::CompanyNotFound`]. A write then holds the company's row
@@ -134,7 +134,6 @@ inventory::submit! {
             ("finance-ledger-013-journal-list", include_str!("../migrations/013-journal-list.sql")),
         ],
         services: &[Service { id: SERVICE, factory: |services| {
-            agent_operations::bind(services.get("base/tenancy.parties")?)?;
             journal_approvals::bind(services.get(bilibi_workflow::SERVICE)?)?;
             saved_templates::bind(services.get("base/settings.store")?)?;
             currency::bind(
@@ -3984,12 +3983,12 @@ async fn separation_view(
 
 /// The actor's current grant and company reach decide every call.
 async fn authorize(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     scope: &Scope,
     company_id: i64,
     capability: &str,
 ) -> Result<()> {
-    bilibi_company::authorize_target(client, scope, company_id, capability)
+    bilibi_company::authorize_work_target(client, scope, company_id, capability)
         .await
         .map(|_| ())
         .map_err(refusal)

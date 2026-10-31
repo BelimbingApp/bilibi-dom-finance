@@ -489,16 +489,14 @@ impl Request {
             .write(scope, credential, event, contract, input)
             .await?;
         self.flash = Some(match written {
-            Written::Done(_) => {
-                (
-                    StatusKind::Success,
-                    match event {
-                        "approve_payment" => "Payment approved and posted.".to_owned(),
-                        "reject_payment" => "Payment request rejected.".to_owned(),
-                        _ => "Payment reversed.".to_owned(),
-                    },
-                )
-            }
+            Written::Done(_) => (
+                StatusKind::Success,
+                match event {
+                    "approve_payment" => "Payment approved and posted.".to_owned(),
+                    "reject_payment" => "Payment request rejected.".to_owned(),
+                    _ => "Payment reversed.".to_owned(),
+                },
+            ),
             Written::Forbidden => (
                 StatusKind::Error,
                 match event {
@@ -510,7 +508,9 @@ impl Request {
             ),
             Written::Changed => (
                 StatusKind::Error,
-                format!("{doing} did not go through because the request changed. Review it and try again."),
+                format!(
+                    "{doing} did not go through because the request changed. Review it and try again."
+                ),
             ),
             Written::Fields(fields) => (StatusKind::Error, f::refused(doing, &fields)),
         });

@@ -220,7 +220,7 @@ impl Payroll {
 
     async fn source_standing(
         &self,
-        client: &impl GenericClient,
+        client: &(impl GenericClient + Sync),
         scope: &Scope,
         company: i64,
         kind: &str,
@@ -283,12 +283,12 @@ impl Payroll {
 }
 
 async fn authorize(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     scope: &Scope,
     company: i64,
     capability: &str,
 ) -> Result<()> {
-    bilibi_company::authorize_target(client, scope, company, capability)
+    bilibi_company::authorize_work_target(client, scope, company, capability)
         .await
         .map(|_| ())
         .map_err(|error| match error {

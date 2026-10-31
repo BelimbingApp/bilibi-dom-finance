@@ -60,20 +60,32 @@ pub(crate) struct Pages {
 }
 
 macro_rules! route {
-    ($key:literal, $path:literal, $operation:literal) => {
+    ($key:literal, $path:literal, $operation:literal) => { route!($key, $path, $operation, bilibi_module_registry::contributions::CompanyScope::Company); };
+    ($key:literal, $path:literal, $operation:literal, $coverage:expr) => {
         inventory::submit! { Contribution::new(ROUTES, $key,
-        Provenance { module: MODULE, source: file!(), line: line!() }, &Route {
+        Provenance { module: MODULE, source: file!(), line: line!() }, &Route { company_scope: $coverage,
             method: Method::Get, path: $path, service: PAGES,
             operation: $operation, access: Access::Capability(VIEW), framed: true,
         }) }
     };
 }
-route!("finance/ledger.book", "/finance/ledger/books/{id}", "book");
-route!("finance/ledger.books", "/finance/ledger/books", "books");
+route!(
+    "finance/ledger.book",
+    "/finance/ledger/books/{id}",
+    "book",
+    bilibi_module_registry::contributions::CompanyScope::Tenant
+);
+route!(
+    "finance/ledger.books",
+    "/finance/ledger/books",
+    "books",
+    bilibi_module_registry::contributions::CompanyScope::Tenant
+);
 route!(
     "finance/ledger.accounts",
     "/finance/ledger/accounts",
-    "accounts"
+    "accounts",
+    bilibi_module_registry::contributions::CompanyScope::Tenant
 );
 route!(
     "finance/ledger.account",
@@ -83,7 +95,8 @@ route!(
 route!(
     "finance/ledger.groups",
     "/finance/ledger/account-groups",
-    "groups"
+    "groups",
+    bilibi_module_registry::contributions::CompanyScope::Tenant
 );
 route!(
     "finance/ledger.group",
@@ -103,7 +116,8 @@ route!(
 route!(
     "finance/ledger.years",
     "/finance/ledger/fiscal-years",
-    "years"
+    "years",
+    bilibi_module_registry::contributions::CompanyScope::Tenant
 );
 route!(
     "finance/ledger.trial-balance",
@@ -113,13 +127,25 @@ route!(
 
 macro_rules! menu {
     ($id:literal, $label:literal, $path:literal, $order:literal) => {
+        menu!(
+            $id,
+            $label,
+            $path,
+            $order,
+            bilibi_module_registry::contributions::CompanyScope::Company
+        );
+    };
+    ($id:literal, $label:literal, $path:literal, $order:literal, $coverage:expr) => {
         bilibi_menu::contribute!(
             "finance/ledger",
-            bilibi_menu::MenuItem::page($id, $label, $path)
-                .under(GROUP)
-                .icon(ICON_MONEY)
-                .requires(bilibi_menu::Requirement::Capability(VIEW))
-                .order($order)
+            bilibi_menu::MenuItem {
+                company_scope: $coverage,
+                ..bilibi_menu::MenuItem::page($id, $label, $path)
+            }
+            .under(GROUP)
+            .icon(ICON_MONEY)
+            .requires(bilibi_menu::Requirement::Capability(VIEW))
+            .order($order)
         );
     };
 }
@@ -127,13 +153,15 @@ menu!(
     "finance.ledger.accounts",
     "Chart of accounts",
     "/finance/ledger/accounts",
-    5
+    5,
+    bilibi_module_registry::contributions::CompanyScope::Tenant
 );
 menu!(
     "finance.ledger.groups",
     "Account groups",
     "/finance/ledger/account-groups",
-    6
+    6,
+    bilibi_module_registry::contributions::CompanyScope::Tenant
 );
 menu!(
     "finance.ledger.journals",
@@ -145,7 +173,8 @@ menu!(
     "finance.ledger.years",
     "Fiscal years",
     "/finance/ledger/fiscal-years",
-    9
+    9,
+    bilibi_module_registry::contributions::CompanyScope::Tenant
 );
 menu!(
     "finance.ledger.trial-balance",
@@ -157,7 +186,8 @@ menu!(
     "finance.ledger.books",
     "Company books",
     "/finance/ledger/books",
-    13
+    13,
+    bilibi_module_registry::contributions::CompanyScope::Tenant
 );
 
 // Every write these pages make is a ledger contract (ADR 01).

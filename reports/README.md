@@ -60,9 +60,9 @@ report captures its own entry and source boundaries.
 ## Authorization and company scope
 
 Every function authorizes `finance.ledger.view` for the scope's actor and the
-target company when it runs, through Core Company's `authorize_target`, and the
+target company when it runs, through Core Company's `authorize_work_target`, and the
 ledger calls it makes authorize again: a missing grant or a sibling company
-without tenant-wide reach is `Unauthorized`, and a company the scope cannot see
+without a desk is `Unauthorized`, and a company the scope cannot see
 is `CompanyNotFound`. Issuing asks for `finance.reports.issue` as well, and
 runs in an audited mutation transaction holding the company's lock, so an
 archived company is `CompanyArchived`. `finance.reports.sign-off` records an

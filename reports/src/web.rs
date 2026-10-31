@@ -584,7 +584,8 @@ impl State {
             return Ok(false);
         };
         let client = self.pages.reports.db.get().await?;
-        match bilibi_company::authorize_target(&**client, scope, company, crate::EXPORT).await {
+        match bilibi_company::authorize_work_target(&**client, scope, company, crate::EXPORT).await
+        {
             Ok(_) => Ok(true),
             Err(Error::Forbidden | Error::Unauthorized | Error::NotFound) => Ok(false),
             Err(error) => Err(error),

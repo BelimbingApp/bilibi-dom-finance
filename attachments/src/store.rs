@@ -80,7 +80,10 @@ fn event(row: &Row) -> (i64, AttachmentEvent) {
 
 /// Attaches each attachment's events (oldest first) and derives what they
 /// decide: its standing, the retain-until in force and whether a hold stands.
-async fn with_events(client: &impl GenericClient, rows: Vec<Bare>) -> Result<Vec<Attachment>> {
+async fn with_events(
+    client: &(impl GenericClient + Sync),
+    rows: Vec<Bare>,
+) -> Result<Vec<Attachment>> {
     let ids: Vec<i64> = rows.iter().map(|Bare(a)| a.id).collect();
     let events = client
         .query(
@@ -104,7 +107,7 @@ async fn with_events(client: &impl GenericClient, rows: Vec<Bare>) -> Result<Vec
 }
 
 pub(crate) async fn fetch(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     id: i64,
@@ -122,7 +125,7 @@ pub(crate) async fn fetch(
 
 /// The standing attachments of one record, oldest first.
 pub(crate) async fn standing_for_record(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     source: &str,
@@ -150,7 +153,7 @@ pub(crate) struct Filter<'a> {
 }
 
 pub(crate) async fn list(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     filter: &Filter<'_>,
@@ -185,7 +188,7 @@ pub(crate) async fn list(
 /// The distinct sources the company has attachments for, whatever their
 /// standing.
 pub(crate) async fn sources(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
 ) -> Result<Vec<String>> {
@@ -221,7 +224,7 @@ pub(crate) struct NewAttachment<'a> {
 /// Inserts an attachment. The BEFORE INSERT trigger numbers and stamps it
 /// before NOT NULL is checked, so the number and time are sent as NULL.
 pub(crate) async fn insert(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     new: &NewAttachment<'_>,
@@ -268,7 +271,7 @@ pub(crate) struct NewEvent<'a> {
 }
 
 pub(crate) async fn insert_event(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     new: &NewEvent<'_>,
@@ -306,7 +309,7 @@ pub(crate) async fn insert_event(
 /// Locks an attachment's row so two writers appending its retention events
 /// serialize.
 pub(crate) async fn lock(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     id: i64,
@@ -333,7 +336,7 @@ fn change(row: &Row) -> RetentionChange {
 }
 
 pub(crate) async fn latest_change(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
 ) -> Result<Option<RetentionChange>> {
@@ -347,7 +350,7 @@ pub(crate) async fn latest_change(
 }
 
 pub(crate) async fn changes(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
 ) -> Result<Vec<RetentionChange>> {
@@ -363,7 +366,7 @@ pub(crate) async fn changes(
 }
 
 pub(crate) async fn insert_change(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     years: i32,

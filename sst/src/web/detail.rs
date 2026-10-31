@@ -470,7 +470,10 @@ impl Return {
                     rows.push(row);
                 }
                 Some(ItemsView {
-                    description: format!("In {}. Items 15 and 16 (penalty), Part B1's item lines, and Part F's declaration are completed when filing.", figures.currency_code),
+                    description: format!(
+                        "In {}. Items 15 and 16 (penalty), Part B1's item lines, and Part F's declaration are completed when filing.",
+                        figures.currency_code
+                    ),
                     table: table(&self.items, "items_grid", "SST-02 items", rows, None, false)?,
                 })
             }

@@ -316,7 +316,7 @@ fn adjustment_row(r: &tokio_postgres::Row) -> bilibi_database::Result<Adjustment
 /// The company's returns matching `filter` (on `r`), each with its events,
 /// ordered by id.
 async fn read_returns(
-    c: &impl GenericClient,
+    c: &(impl GenericClient + Sync),
     tenant: i64,
     company: i64,
     filter: &str,
@@ -379,7 +379,7 @@ async fn read_returns(
 
 /// `{amended return id => the finalised return that amends it}`.
 async fn superseded(
-    c: &impl GenericClient,
+    c: &(impl GenericClient + Sync),
     tenant: i64,
     company: i64,
 ) -> bilibi_database::Result<HashMap<i64, i64>> {
@@ -396,7 +396,7 @@ async fn superseded(
 
 /// One return with its events and adjustment rows, or `None`.
 pub(crate) async fn fetch(
-    c: &impl GenericClient,
+    c: &(impl GenericClient + Sync),
     tenant: i64,
     company: i64,
     id: i64,
@@ -424,7 +424,7 @@ pub(crate) async fn fetch(
 }
 
 async fn fetch_adjustment(
-    c: &impl GenericClient,
+    c: &(impl GenericClient + Sync),
     tenant: i64,
     company: i64,
     id: i64,
@@ -441,7 +441,7 @@ async fn fetch_adjustment(
 }
 
 /// The return with `id`, or `ReturnNotFound`.
-async fn load(c: &impl GenericClient, s: &Scope, company: i64, id: i64) -> Result<Loaded> {
+async fn load(c: &(impl GenericClient + Sync), s: &Scope, company: i64, id: i64) -> Result<Loaded> {
     if id <= 0 {
         return Err(SstError::ReturnNotFound);
     }
@@ -452,7 +452,7 @@ async fn load(c: &impl GenericClient, s: &Scope, company: i64, id: i64) -> Resul
 
 /// A finalised return's stored figures, in the form's order.
 async fn snapshot(
-    c: &impl GenericClient,
+    c: &(impl GenericClient + Sync),
     tenant: i64,
     company: i64,
     loaded: &Loaded,
@@ -739,7 +739,7 @@ impl Sst {
 
     async fn report(
         &self,
-        c: &impl GenericClient,
+        c: &(impl GenericClient + Sync),
         s: &Scope,
         company: i64,
         loaded: Loaded,
@@ -1431,7 +1431,7 @@ impl Sst {
 
 /// The period's returns of its tax, each with its status.
 async fn period_returns(
-    c: &impl GenericClient,
+    c: &(impl GenericClient + Sync),
     tenant: i64,
     company: i64,
     period: &Period,
@@ -1449,7 +1449,7 @@ async fn period_returns(
 /// Whether a return of the tax not discarded covers a different period that
 /// overlaps this one.
 async fn overlapping(
-    c: &impl GenericClient,
+    c: &(impl GenericClient + Sync),
     tenant: i64,
     company: i64,
     period: &Period,

@@ -257,10 +257,10 @@ impl Payables {
                 }
                 match (line.order_line_id, line.quantity) {
                     (None, Some(_)) => {
-                        return Err(invalid("order_line_id", "is needed with a quantity"))
+                        return Err(invalid("order_line_id", "is needed with a quantity"));
                     }
                     (Some(_), None) => {
-                        return Err(invalid("quantity", "is needed with an order line"))
+                        return Err(invalid("quantity", "is needed with an order line"));
                     }
                     // A bill's order lines are checked against Payables' copy of the
                     // order source below; a debit note's against its bill.
@@ -705,7 +705,7 @@ impl Payables {
         let actor = (s.user(), s.impersonator().map(|p| p.user()));
         let (d, payable, new, options, matched) = match prepared {
             PreparedPosting::Held(d, lines) => {
-                return self.hold(tx, s, company, d, actor, lines).await
+                return self.hold(tx, s, company, d, actor, lines).await;
             }
             PreparedPosting::Post {
                 document,

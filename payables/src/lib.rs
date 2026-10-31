@@ -71,7 +71,7 @@ inventory::submit! { Module {
         parties: s.get("base/tenancy.parties")?,
         records: s.get(bilibi_records::SERVICE)?,
         order_source: orders::available(&*s.get::<bilibi_events::Events>(bilibi_events::SERVICE)?),
-    }); opening_operations::bind(payables.clone())?; agent_operations::bind(payables.clone(), s.get("base/tenancy.parties")?)?; Ok(payables) } }, Service { id: web::PAGES, factory: |s| Ok(Arc::new(bilibi_ui::page::PageService::<Scope, Error>(Arc::new(web::Pages {
+    }); opening_operations::bind(payables.clone())?; agent_operations::bind(payables.clone())?; Ok(payables) } }, Service { id: web::PAGES, factory: |s| Ok(Arc::new(bilibi_ui::page::PageService::<Scope, Error>(Arc::new(web::Pages {
         records: s.get(bilibi_records::SERVICE)?,
         parties: s.get("base/tenancy.parties")?,
         contracts: s.get(bilibi_agent_api::page::SERVICE)?,
@@ -471,8 +471,13 @@ impl Payables {
             })
     }
 }
-async fn authorize(c: &impl GenericClient, s: &Scope, company: i64, cap: &str) -> Result<()> {
-    bilibi_company::authorize_target(c, s, company, cap)
+async fn authorize(
+    c: &(impl GenericClient + Sync),
+    s: &Scope,
+    company: i64,
+    cap: &str,
+) -> Result<()> {
+    bilibi_company::authorize_work_target(c, s, company, cap)
         .await
         .map(|_| ())
         .map_err(refusal)

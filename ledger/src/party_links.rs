@@ -345,7 +345,7 @@ impl<'a> PartyLinks<'a> {
             match bilibi_company::create(tx, scope, &input).await? {
                 bilibi_company::CreateOutcome::Created(company) => company.id,
                 bilibi_company::CreateOutcome::Refused(fields) => {
-                    return Err(company_fields(fields))
+                    return Err(company_fields(fields));
                 }
             }
         };
@@ -457,7 +457,7 @@ impl<'a> PartyLinks<'a> {
                             .map(|f| f.message)
                             .collect::<Vec<_>>()
                             .join("; "),
-                    ))
+                    ));
                 }
             }
         }
@@ -490,7 +490,17 @@ impl<'a> PartyLinks<'a> {
         .iter()
         .find(|(key, _)| required.contains(key) && facts.restricted.iter().any(|f| f == key))
         {
-            return Err(invalid(field, format!("the {}'s {label} is restricted for you, so it cannot be frozen on the document", if kind=="company" {"company"} else {"person"})));
+            return Err(invalid(
+                field,
+                format!(
+                    "the {}'s {label} is restricted for you, so it cannot be frozen on the document",
+                    if kind == "company" {
+                        "company"
+                    } else {
+                        "person"
+                    }
+                ),
+            ));
         }
         let name = if kind == "company" {
             let (company, masked) = bilibi_company::detail(client, scope, id).await?;

@@ -769,7 +769,7 @@ pub(crate) async fn events(
 
 /// The current status of each document, by ID.
 pub(crate) async fn statuses(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     document_ids: &[i64],
@@ -795,7 +795,7 @@ pub(crate) async fn statuses(
 /// The document's current status, or `None` for a document the company does
 /// not have.
 pub(crate) async fn status(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     document_id: i64,
@@ -826,7 +826,7 @@ pub(crate) async fn code_number_taken(
 
 /// The notes of the company that name the document as their original.
 pub(crate) async fn notes_of(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     document_id: i64,
@@ -847,7 +847,10 @@ pub(crate) async fn notes_of(
 /// sources (the documents it covers do not count). The trigger on submissions
 /// refuses to store one in that case, so this is asked before storing, under
 /// the company lock.
-pub(crate) async fn source_taken(client: &impl GenericClient, document_id: i64) -> Result<bool> {
+pub(crate) async fn source_taken(
+    client: &(impl GenericClient + Sync),
+    document_id: i64,
+) -> Result<bool> {
     Ok(client
         .query_one(
             "SELECT EXISTS (SELECT 1 FROM finance_einvoice_source_links l \
@@ -870,7 +873,7 @@ pub(crate) struct Attempt {
 /// final answer is missing (a crash, an outage, or a search that could not
 /// answer): any of them may have been accepted. Newest first.
 pub(crate) async fn unresolved_attempts(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     recorded: &Recorded,

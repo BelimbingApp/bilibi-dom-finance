@@ -1,6 +1,6 @@
 //! Retained conversion evidence. These records are source summaries, never
 //! ledger entries, tax returns, submissions, payroll runs or remittances.
-use crate::{agent_operations::PARTIES, Reports, MODULE, VIEW};
+use crate::{Reports, MODULE, VIEW};
 use bilibi_agent_api::{
     Channels, Definitions, Handler, Operation, OperationClient, OperationFuture, ReadHandler,
     WriteHandler, DEFINITIONS,
@@ -50,11 +50,7 @@ async fn authorise(
 ) -> bilibi_agent_api::Result<()> {
     let company =
         OrganisationId::new(company).map_err(|_| invalid("company_id", "Choose a company."))?;
-    PARTIES
-        .get()
-        .ok_or(Error::Internal)?
-        .organisation_target(client, scope, company, cap)
-        .await?;
+    bilibi_company::authorize_work_target(client, scope, company.get(), cap).await?;
     Ok(())
 }
 fn company(input: &Value) -> bilibi_agent_api::Result<i64> {

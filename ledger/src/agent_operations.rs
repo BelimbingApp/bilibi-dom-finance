@@ -5,18 +5,9 @@ use bilibi_agent_api::{
     Channels, Definitions, Guide, Handler, Operation, OperationClient, OperationFuture,
     ReadHandler, WriteHandler, DEFINITIONS,
 };
-use bilibi_module_registry::{Contribution, Provenance, RegistryError};
-use bilibi_party_ids::OrganisationId;
-use bilibi_tenancy::PartyProofs;
+use bilibi_module_registry::{Contribution, Provenance};
 use serde_json::{json, Value};
-use std::{collections::BTreeMap, sync::OnceLock};
-
-static PARTIES: OnceLock<Arc<PartyProofs>> = OnceLock::new();
-pub(super) fn bind(parties: Arc<PartyProofs>) -> bilibi_module_registry::Result<()> {
-    PARTIES
-        .set(parties)
-        .map_err(|_| RegistryError::Service("duplicate ledger operation binding".into()))
-}
+use std::collections::BTreeMap;
 
 fn invalid(error: LedgerError) -> bilibi_agent_api::Error {
     use bilibi_agent_api::Error as E;
@@ -50,15 +41,7 @@ pub(super) async fn authorize_on(
     company: i64,
     capability: &str,
 ) -> Result<()> {
-    PARTIES
-        .get()
-        .ok_or(Error::Internal)?
-        .organisation_target(
-            client,
-            scope,
-            OrganisationId::new(company).map_err(|_| LedgerError::CompanyNotFound)?,
-            capability,
-        )
+    bilibi_company::authorize_work_target(client, scope, company, capability)
         .await
         .map(|_| ())
         .map_err(refusal)

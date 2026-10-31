@@ -93,7 +93,7 @@ fn view(row: &Row) -> IssuedReport {
 }
 
 pub(crate) async fn insert(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     new: &NewIssued,
 ) -> std::result::Result<IssuedReport, Error> {
     let row = client
@@ -137,7 +137,7 @@ pub(crate) fn summary(issued: &IssuedReport) -> Value {
 }
 
 pub(crate) async fn find(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     id: i64,

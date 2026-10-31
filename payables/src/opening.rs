@@ -259,7 +259,10 @@ impl Payables {
         {
             return Err(invalid(
                 "csv",
-                format!("requires header {} and 1 to 500 rows directly, or up to 10000 rows from staged batches", HEADER.join(",")),
+                format!(
+                    "requires header {} and 1 to 500 rows directly, or up to 10000 rows from staged batches",
+                    HEADER.join(",")
+                ),
             ));
         }
         let (_, setup) = store::settings(c, s.tenant(), company)

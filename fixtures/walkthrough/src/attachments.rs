@@ -13,7 +13,7 @@ use bilibi_finance_attachments::{
     REFRESH_PRINCIPAL, SERVICE,
 };
 use bilibi_module_registry::Services;
-use bilibi_queue::execution::{Config, Executor};
+use bilibi_queue::{Config, Executor};
 use bilibi_settings::{Settings, Target};
 use bilibi_tenancy::Scope;
 use jiff::civil::date;
@@ -169,8 +169,8 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         .batch_execute(
             "INSERT INTO persons(id,tenant_id,code,name,kind,email) VALUES(4,1,'person_4','Lee Viewer','human','lee@example.test'),(5,1,'person_5','Sam Staff','human','sam@example.test') ON CONFLICT DO NOTHING; \
              INSERT INTO person_affiliations(id,tenant_id,person_id,organisation_id,title,work_email) VALUES(3,1,4,1,'Reviewer','viewer@example.test'),(4,1,5,1,'Clerk','staff@example.test') ON CONFLICT DO NOTHING; \
-             UPDATE users SET person_id=4,affiliation_id=3,organisation_id=1 WHERE tenant_id=1 AND id=2 AND person_id IS NULL; \
-             UPDATE users SET person_id=5,affiliation_id=4,organisation_id=1 WHERE tenant_id=1 AND id=3 AND person_id IS NULL; \
+             UPDATE users SET person_id=4 WHERE tenant_id=1 AND id=2 AND person_id IS NULL; INSERT INTO user_desks(tenant_id,person_id,company_id) SELECT tenant_id,person_id,1 FROM users WHERE tenant_id=1 AND id=2 AND person_id IS NOT NULL ON CONFLICT DO NOTHING; \
+             UPDATE users SET person_id=5 WHERE tenant_id=1 AND id=3 AND person_id IS NULL; INSERT INTO user_desks(tenant_id,person_id,company_id) SELECT tenant_id,person_id,1 FROM users WHERE tenant_id=1 AND id=3 AND person_id IS NOT NULL ON CONFLICT DO NOTHING; \
              SELECT setval(pg_get_serial_sequence('persons','id'),GREATEST((SELECT max(id) FROM persons),1)); \
              SELECT setval(pg_get_serial_sequence('person_affiliations','id'),GREATEST((SELECT max(id) FROM person_affiliations),1))",
         )
@@ -904,7 +904,9 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
                 .release_hold(&manager, COMPANY, on_posted.id, "Case closed")
                 .await,
         );
-        println!("-- Base Artifacts changed out of band (an operator extends and holds; the module has no event yet)");
+        println!(
+            "-- Base Artifacts changed out of band (an operator extends and holds; the module has no event yet)"
+        );
         raw(
             &raw_client,
             "operator extends the artifact in Base and holds it",
@@ -961,7 +963,10 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         finalise(db, &boundary, &attachments, &manager, moving).await?,
     );
     records::set(db, moving, date(2026, 10, 1), true).await?;
-    show("viewer, who finalised the record and holds no attachments grant but reads the ledger, queues the refresh", finalise(db, &boundary, &attachments, &viewer, moving).await?);
+    show(
+        "viewer, who finalised the record and holds no attachments grant but reads the ledger, queues the refresh",
+        finalise(db, &boundary, &attachments, &viewer, moving).await?,
+    );
     println!("jobs:\n  {}", job_states(&raw_client).await?);
     let executor = Executor::from_services(
         services,
@@ -1033,7 +1038,12 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         false,
     )
     .await?;
-    show_attachment("administrator attaches to company 002 (Base Artifacts binds a person affiliated with Company 001 to it)", attachments.attach(&admin, 2, OPEN_SOURCE, archived_record, &pdf).await);
+    show_attachment(
+        "administrator attaches to company 002 (Base Artifacts binds a person affiliated with Company 001 to it)",
+        attachments
+            .attach(&admin, 2, OPEN_SOURCE, archived_record, &pdf)
+            .await,
+    );
     raw(
         &raw_client,
         "company 002 archived",

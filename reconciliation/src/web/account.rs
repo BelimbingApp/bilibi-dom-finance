@@ -420,7 +420,20 @@ impl Account {
             )?;
         }
         let m = &account.import_mapping;
-        view.mapping=format!("The bank's CSV export, read with this account's mapping: {} as the description, {} as the amount{}. A file or a line already imported is refused.",column_text(&m.description),if m.amount.is_some(){column_text(&m.amount)}else{format!("{} and {}",column_text(&m.debit),column_text(&m.credit))},if m.balance.is_some(){format!(", {} as the running balance",column_text(&m.balance))}else{String::new()});
+        view.mapping = format!(
+            "The bank's CSV export, read with this account's mapping: {} as the description, {} as the amount{}. A file or a line already imported is refused.",
+            column_text(&m.description),
+            if m.amount.is_some() {
+                column_text(&m.amount)
+            } else {
+                format!("{} and {}", column_text(&m.debit), column_text(&m.credit))
+            },
+            if m.balance.is_some() {
+                format!(", {} as the running balance", column_text(&m.balance))
+            } else {
+                String::new()
+            }
+        );
         view.opening = self.opening.body(&self.pages, scope).await?;
         view.account = Some(account);
         view.render().map_err(|_| Error::Internal)

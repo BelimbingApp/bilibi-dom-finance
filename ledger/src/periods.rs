@@ -217,7 +217,7 @@ fn months(start: Date, end: Date) -> Vec<(i16, Date, Date)> {
 /// The database stamps the year and checks, at commit, that its periods
 /// reach its end.
 pub(crate) async fn insert_year(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     actor: i64,
@@ -288,7 +288,7 @@ pub(crate) struct NewEvent {
 /// Appends a closing event; the database numbers and stamps it and refuses
 /// one that breaks the closing rules.
 pub(crate) async fn record_event(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     actor: i64,
@@ -339,7 +339,7 @@ pub(crate) async fn record_event(
 
 /// The year's closing log, oldest first.
 pub(crate) async fn events(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     fiscal_year_id: i64,

@@ -61,6 +61,7 @@ bilibi_menu::contribute!(
 bilibi_menu::contribute!(
     "finance/sst",
     bilibi_menu::MenuItem::page("finance.sst", "SST returns", INDEX)
+        .company_scoped()
         .icon("tabler-receipt-tax")
         .under("finance.group.tax")
         .requires(bilibi_menu::Requirement::Capability(VIEW))
@@ -69,6 +70,7 @@ bilibi_menu::contribute!(
 bilibi_menu::contribute!(
     "finance/sst",
     bilibi_menu::MenuItem::page("finance.sst.setup", "SST setup", SETUP)
+        .company_scoped()
         .icon("tabler-receipt-tax")
         .under("finance.group.tax")
         .requires(bilibi_menu::Requirement::Capability(VIEW))
@@ -86,7 +88,7 @@ macro_rules! provenance {
 }
 macro_rules! route {
     ($key:literal, $path:expr, $operation:literal) => {
-        inventory::submit! { Contribution::new(ROUTES, $key, provenance!(), &Route {
+        inventory::submit! { Contribution::new(ROUTES, $key, provenance!(), &Route { company_scope: bilibi_module_registry::contributions::CompanyScope::Company,
             method: Method::Get, path: $path, service: PAGES,
             operation: $operation, access: Access::Capability(VIEW), framed: true,
         }) }

@@ -280,7 +280,7 @@ impl PartyChooser {
         {
             Reviewed::Valid { code, review } => (code, review),
             Reviewed::Invalid(fields) => {
-                return Ok(PartySubmission::Invalid(composed_errors(fields)))
+                return Ok(PartySubmission::Invalid(composed_errors(fields)));
             }
             Reviewed::Refused(message) => return Ok(PartySubmission::Refused(message)),
         };

@@ -37,7 +37,7 @@ use bilibi_company::WriteError;
 use bilibi_database::{Error, MutationTransaction};
 use bilibi_finance_ledger::LedgerError;
 use bilibi_party_ids::OrganisationId;
-use bilibi_queue::execution::{Execution, Outcome};
+use bilibi_queue::{Execution, Outcome};
 use bilibi_settings::Target;
 use bilibi_tenancy::Scope;
 use jiff::{SignedDuration, Timestamp};
@@ -770,7 +770,7 @@ impl Einvoice {
             Search::NotFound(_) => {
                 return self
                     .send(scope, company_id, &recorded, &prepared, now, writer)
-                    .await
+                    .await;
             }
             Search::RateLimited(answer) => Decided::Deferred("rate_limited", answer),
             Search::Unavailable(answer) => Decided::Deferred("unavailable", answer),
@@ -1169,7 +1169,7 @@ impl Einvoice {
                         Ok(status) if status == "submitted" => Outcome::Retry("in_progress"),
                         Ok(_) => Outcome::Completed,
                         Err(outcome) => outcome,
-                    }
+                    };
                 }
                 Progress::RateLimited(_) => return Outcome::Retry("rate_limited"),
                 Progress::Unavailable(_) => return Outcome::Retry("authority_unavailable"),
@@ -1394,7 +1394,7 @@ impl Einvoice {
             Err(LedgerError::EntryNotFound) => {
                 return Ok(Err(format!(
                     "names ledger entry {entry_id}, which does not exist"
-                )))
+                )));
             }
             Err(LedgerError::Failed(error)) => return Err(error.into()),
             Err(error) => return Ok(Err(format!("cannot read ledger entry {entry_id}: {error}"))),

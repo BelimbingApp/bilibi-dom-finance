@@ -45,8 +45,8 @@ async fn main() -> Outcome<()> {
     db.get().await?.batch_execute(
         "INSERT INTO persons(id,tenant_id,code,name,kind,email) VALUES(4,1,'person_4','Alex Admin','human','admin@example.test'),(5,1,'person_5','Lee Viewer','human','viewer@example.test') ON CONFLICT DO NOTHING;
          INSERT INTO person_affiliations(id,tenant_id,person_id,organisation_id,title,work_email) VALUES(3,1,4,1,'Reviewer','admin@example.test'),(4,1,5,1,'Reader','viewer@example.test') ON CONFLICT DO NOTHING;
-         UPDATE users SET person_id=4,affiliation_id=3,organisation_id=1 WHERE tenant_id=1 AND id=4 AND person_id IS NULL;
-         UPDATE users SET person_id=5,affiliation_id=4,organisation_id=1 WHERE tenant_id=1 AND id=2 AND person_id IS NULL;
+         UPDATE users SET person_id=4 WHERE tenant_id=1 AND id=4 AND person_id IS NULL; INSERT INTO user_desks(tenant_id,person_id,company_id) SELECT tenant_id,person_id,1 FROM users WHERE tenant_id=1 AND id=4 AND person_id IS NOT NULL ON CONFLICT DO NOTHING;
+         UPDATE users SET person_id=5 WHERE tenant_id=1 AND id=2 AND person_id IS NULL; INSERT INTO user_desks(tenant_id,person_id,company_id) SELECT tenant_id,person_id,1 FROM users WHERE tenant_id=1 AND id=2 AND person_id IS NOT NULL ON CONFLICT DO NOTHING;
          SELECT setval(pg_get_serial_sequence('persons','id'),(SELECT max(id) FROM persons));
          SELECT setval(pg_get_serial_sequence('person_affiliations','id'),(SELECT max(id) FROM person_affiliations))"
     ).await?;
@@ -280,7 +280,9 @@ async fn main() -> Outcome<()> {
         )
         .await?;
     assert_eq!((page.page, page.total, page.documents.len()), (1, 0, 0));
-    println!("out-of-range pages: last nonempty page 2 (4 rows, ending NP4-002); empty page 1; 255-character search accepted");
+    println!(
+        "out-of-range pages: last nonempty page 2 (4 rows, ending NP4-002); empty page 1; 255-character search accepted"
+    );
 
     // Run actual mounted page states against the real database before serving.
     let pages = services.get::<PageService<Scope, Error>>("finance/payables.pages")?;
@@ -393,14 +395,16 @@ async fn main() -> Outcome<()> {
             "{operation} hides {marker} from a reader"
         );
     }
-    println!("recording pages: the recorder gets the bill, payment and setup forms; a reader gets none of their controls");
-    println!("Fixture accounts: manager@example.test (recorder), admin@example.test (independent reviewer), viewer@example.test (read only); the walkthrough fixture's password applies");
+    println!(
+        "recording pages: the recorder gets the bill, payment and setup forms; a reader gets none of their controls"
+    );
+    println!(
+        "Fixture accounts: manager@example.test (recorder), admin@example.test (independent reviewer), viewer@example.test (read only); the walkthrough fixture's password applies"
+    );
     // The real queue executor delivers mounted Supply Chain events into
     // Payables' own copy; the fixture never writes order or receipt facts.
-    let executor = bilibi_queue::execution::Executor::from_services(
-        services,
-        bilibi_queue::execution::Config::default(),
-    )?;
+    let executor =
+        bilibi_queue::Executor::from_services(services, bilibi_queue::Config::default())?;
     let (stop, shutdown) = tokio::sync::watch::channel(false);
     let worker = tokio::spawn(executor.run(shutdown));
     let listener = tokio::net::TcpListener::bind(

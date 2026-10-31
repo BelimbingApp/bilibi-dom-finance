@@ -154,12 +154,36 @@ fn actor(e: &StatusEvent) -> String {
 fn attention(flag: Attention) -> (&'static str, String) {
     let authority = Einvoice::authority();
     match flag {
-        Attention::Overdue => ("overdue", format!("Not submitted within {} hours of the authority becoming unavailable; the submission keeps retrying.", authority.outage_notice_hours())),
-        Attention::RejectionRequested => ("rejection_requested", format!("The buyer requested rejection. You may cancel within the {}-hour window or issue the appropriate credit, debit or refund note e-Invoice linked to the original.", authority.cancellation_window_hours())),
-        Attention::Unposted => ("unposted", "Validated but not yet posted to the ledger.".into()),
-        Attention::PostingFailed => ("posting_failed", "The ledger posting failed; see the last posting event.".into()),
-        Attention::Unreversed => ("unreversed", "Cancelled but its ledger entry has not been reversed.".into()),
-        Attention::ReversalFailed => ("reversal_failed", "The ledger reversal failed; see the last reversal event.".into()),
+        Attention::Overdue => (
+            "overdue",
+            format!(
+                "Not submitted within {} hours of the authority becoming unavailable; the submission keeps retrying.",
+                authority.outage_notice_hours()
+            ),
+        ),
+        Attention::RejectionRequested => (
+            "rejection_requested",
+            format!(
+                "The buyer requested rejection. You may cancel within the {}-hour window or issue the appropriate credit, debit or refund note e-Invoice linked to the original.",
+                authority.cancellation_window_hours()
+            ),
+        ),
+        Attention::Unposted => (
+            "unposted",
+            "Validated but not yet posted to the ledger.".into(),
+        ),
+        Attention::PostingFailed => (
+            "posting_failed",
+            "The ledger posting failed; see the last posting event.".into(),
+        ),
+        Attention::Unreversed => (
+            "unreversed",
+            "Cancelled but its ledger entry has not been reversed.".into(),
+        ),
+        Attention::ReversalFailed => (
+            "reversal_failed",
+            "The ledger reversal failed; see the last reversal event.".into(),
+        ),
     }
 }
 
@@ -628,10 +652,33 @@ impl Detail {
             )?;
         }
         view.dialog = if self.confirming {
-            render(ConfirmDialog { id: "einvoice-document-cancel-confirmation", consequence: "Cancel this document", detail: "This requests cancellation from the authority. If accepted, the ledger reversal is attempted; check its result on this document.", confirm: "Cancel document", working: "Cancelling…", confirm_event: "cancel", cancel_event: "close_cancel" })?
+            render(ConfirmDialog {
+                id: "einvoice-document-cancel-confirmation",
+                consequence: "Cancel this document",
+                detail: "This requests cancellation from the authority. If accepted, the ledger reversal is attempted; check its result on this document.",
+                confirm: "Cancel document",
+                working: "Cancelling…",
+                confirm_event: "cancel",
+                cancel_event: "close_cancel",
+            })?
         } else if self.cancelling {
-            render(Modal { id: "einvoice-document-cancel-modal", title: "Cancel this document", cancel_event: "close_cancel", description: "This requests cancellation from the authority. If accepted, the ledger reversal is attempted; check its result on this document.",
-                body: render(CancelForm { reason: Field::in_form("cancel", "reason").id("einvoice-document-cancel-reason").kind(InputKind::Textarea).label("Reason (1 to 300 characters)").value(&self.reason).required().attr("maxlength", "300") })?, flash: Some(flash), ..Default::default() })?
+            render(Modal {
+                id: "einvoice-document-cancel-modal",
+                title: "Cancel this document",
+                cancel_event: "close_cancel",
+                description: "This requests cancellation from the authority. If accepted, the ledger reversal is attempted; check its result on this document.",
+                body: render(CancelForm {
+                    reason: Field::in_form("cancel", "reason")
+                        .id("einvoice-document-cancel-reason")
+                        .kind(InputKind::Textarea)
+                        .label("Reason (1 to 300 characters)")
+                        .value(&self.reason)
+                        .required()
+                        .attr("maxlength", "300"),
+                })?,
+                flash: Some(flash),
+                ..Default::default()
+            })?
         } else {
             Html::EMPTY
         };

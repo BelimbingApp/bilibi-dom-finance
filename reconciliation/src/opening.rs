@@ -4,7 +4,6 @@ use crate::*;
 use bilibi_agent_api::OperationClient;
 use bilibi_database::Change;
 use bilibi_finance_ledger::{EntryOwner, Money, OpeningContext};
-use bilibi_party_ids::OrganisationId;
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 
@@ -43,13 +42,7 @@ impl Reconciliation {
         company: i64,
         capability: &str,
     ) -> Result<()> {
-        self.parties
-            .organisation_target(
-                c,
-                s,
-                OrganisationId::new(company).map_err(|_| ReconciliationError::CompanyNotFound)?,
-                capability,
-            )
+        bilibi_company::authorize_work_target(c, s, company, capability)
             .await
             .map(|_| ())
             .map_err(refusal)

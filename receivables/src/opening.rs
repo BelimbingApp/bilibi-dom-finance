@@ -305,7 +305,10 @@ impl Receivables {
         {
             return Err(invalid(
                 "csv",
-                format!("requires header {} and 1 to 500 rows directly, or up to 10000 rows from staged batches", HEADER.join(",")),
+                format!(
+                    "requires header {} and 1 to 500 rows directly, or up to 10000 rows from staged batches",
+                    HEADER.join(",")
+                ),
             ));
         }
         let setup = store::find(c, store::SETUPS, s.tenant(), company, None)

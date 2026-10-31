@@ -361,7 +361,9 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         )
         .await?;
     ar.discard_draft(&manager, 1, reopened.id).await?;
-    println!("customers: linked to Core companies, pending and suspended companies refused for new invoices, permanent Core links");
+    println!(
+        "customers: linked to Core companies, pending and suspended companies refused for new invoices, permanent Core links"
+    );
 
     let header = json!({"kind":"invoice","series_id":series.id,"customer_id":customer.id});
     let empty = ar.create_draft(&manager, 1, &header).await?;
@@ -452,7 +454,9 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
     client.batch_execute("DROP TRIGGER nr1_capture_fault ON base_audit_mutations; DROP FUNCTION nr1_refuse_capture()").await?;
     assert!(matches!(failed, Err(R::Failed(_))));
     assert_eq!(ar.get_document(&manager, 1, draft.id).await?, draft);
-    println!("stale scope refused after direct deny; capture fault rolled back header and child replacement");
+    println!(
+        "stale scope refused after direct deny; capture fault rolled back header and child replacement"
+    );
     field(
         ar.create_draft(
             &manager,
@@ -584,7 +588,9 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
     ));
     ar.configure(&manager, 1, &json!({"income_account_id":income}))
         .await?;
-    println!("drafts: invalid replacement rolled back; null preserves IDs/snapshots; replace, clear and kept discard");
+    println!(
+        "drafts: invalid replacement rolled back; null preserves IDs/snapshots; replace, clear and kept discard"
+    );
 
     let query = DocumentQuery {
         page: Page {
@@ -626,13 +632,26 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         "DELETE FROM finance_receivables_documents WHERE tenant_id=1 AND company_id=1",
         "UPDATE finance_receivables_series SET prefix='changed' WHERE tenant_id=1 AND company_id=1",
         "UPDATE finance_receivables_tax_codes SET rate=20 WHERE tenant_id=1 AND company_id=1",
-
         "UPDATE finance_receivables_customers SET record_id='15' WHERE tenant_id=1 AND company_id=1 AND record_id='12'",
         "TRUNCATE finance_receivables_document_lines",
-    ] { let error = client.batch_execute(sql).await.expect_err("database must refuse"); println!("database refused: {}", error.as_db_error().map(|e| e.message()).unwrap_or("database error")); }
+    ] {
+        let error = client
+            .batch_execute(sql)
+            .await
+            .expect_err("database must refuse");
+        println!(
+            "database refused: {}",
+            error
+                .as_db_error()
+                .map(|e| e.message())
+                .unwrap_or("database error")
+        );
+    }
     let audit: i64 = client.query_one("SELECT count(*) FROM base_audit_mutations WHERE auditable_type LIKE 'finance.receivables.%'", &[]).await?.get(0);
     assert!(audit > 20);
-    println!("receivables audit mutations: {audit}; concurrent duplicate serialized to one success and one field refusal");
+    println!(
+        "receivables audit mutations: {audit}; concurrent duplicate serialized to one success and one field refusal"
+    );
     // Uniqueness is per operating company, not per Core counterparty.
     let other_customer = ar
         .create_customer(&admin, 3, &json!({"record_kind":"company","record_id":10}))
@@ -654,6 +673,8 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         "record_id",
         "is an archived company",
     );
-    println!("NR1 proof passed: setup, code lists, arithmetic, drafts, isolation, paging, concurrent writes, archival, SQL guards and audit");
+    println!(
+        "NR1 proof passed: setup, code lists, arithmetic, drafts, isolation, paging, concurrent writes, archival, SQL guards and audit"
+    );
     Ok(())
 }

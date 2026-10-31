@@ -49,7 +49,7 @@ inventory::submit! { Module {
         db: s.get::<Db>("base/database.pool")?.as_ref().clone(),
         ledger: s.get(bilibi_finance_ledger::SERVICE)?,
         payables: s.get(bilibi_finance_payables::SERVICE)?,
-        parties: s.get("base/tenancy.parties")?,
+
     }); opening_operations::bind(assets.clone())?; operations::bind(assets.clone())?; Ok(assets) } }, Service { id: web::PAGES, factory: |s| Ok(Arc::new(bilibi_ui::page::PageService::<Scope, Error>(Arc::new(web::Pages {
         contracts: s.get(bilibi_agent_api::page::SERVICE)?,
         plans: s.get("base/agent_api.plans")?,
@@ -272,7 +272,6 @@ pub struct FixedAssets {
     db: Db,
     ledger: Arc<Ledger>,
     payables: Arc<Payables>,
-    parties: Arc<bilibi_tenancy::PartyProofs>,
 }
 impl FixedAssets {
     async fn write<'c>(
@@ -323,8 +322,13 @@ impl FixedAssets {
         store::page(c, s.tenant(), company, dataset, limit, after).await
     }
 }
-async fn authorize(c: &impl GenericClient, s: &Scope, company: i64, cap: &str) -> Result<()> {
-    bilibi_company::authorize_target(c, s, company, cap)
+async fn authorize(
+    c: &(impl GenericClient + Sync),
+    s: &Scope,
+    company: i64,
+    cap: &str,
+) -> Result<()> {
+    bilibi_company::authorize_work_target(c, s, company, cap)
         .await
         .map(|_| ())
         .map_err(|e| match e {

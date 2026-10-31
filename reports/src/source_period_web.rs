@@ -48,8 +48,8 @@ const KINDS: [(&str, &str, &str); 4] = [
         "/finance/reports/source-periods?kind=payroll",
     ),
 ];
-inventory::submit! { Contribution::new(ROUTES,"finance/reports.source-periods",Provenance {module:MODULE,source:file!(),line:line!()}, &Route { method:Method::Get,path:"/finance/reports/source-periods",service:PAGES,operation:"list",access:Access::Capability(VIEW),framed:true }) }
-inventory::submit! { Contribution::new(ROUTES,"finance/reports.source-period",Provenance {module:MODULE,source:file!(),line:line!()}, &Route { method:Method::Get,path:"/finance/reports/source-periods/{kind}/{id}",service:PAGES,operation:"detail",access:Access::Capability(VIEW),framed:true }) }
+inventory::submit! { Contribution::new(ROUTES,"finance/reports.source-periods",Provenance {module:MODULE,source:file!(),line:line!()}, &Route { company_scope: bilibi_module_registry::contributions::CompanyScope::Company, method:Method::Get,path:"/finance/reports/source-periods",service:PAGES,operation:"list",access:Access::Capability(VIEW),framed:true }) }
+inventory::submit! { Contribution::new(ROUTES,"finance/reports.source-period",Provenance {module:MODULE,source:file!(),line:line!()}, &Route { company_scope: bilibi_module_registry::contributions::CompanyScope::Company, method:Method::Get,path:"/finance/reports/source-periods/{kind}/{id}",service:PAGES,operation:"detail",access:Access::Capability(VIEW),framed:true }) }
 bilibi_menu::contribute!(
     "finance/reports",
     bilibi_menu::MenuItem::page(
@@ -57,6 +57,7 @@ bilibi_menu::contribute!(
         "Source-period schedules",
         PATH
     )
+    .company_scoped()
     .under("finance.group.bookkeeping")
     .icon("gmdi-money-r")
     .requires(bilibi_menu::Requirement::Capability(VIEW))

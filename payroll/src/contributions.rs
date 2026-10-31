@@ -13,10 +13,10 @@ inventory::submit! { Contribution::new(VOCABULARY, MODULE, Provenance { module: 
 }) }
 
 use bilibi_module_registry::contributions::{Access, Method, Route, ROUTES};
-inventory::submit! { Contribution::new(ROUTES, "finance/payroll.postings", Provenance { module: MODULE, source: file!(), line: line!() }, &Route {
+inventory::submit! { Contribution::new(ROUTES, "finance/payroll.postings", Provenance { module: MODULE, source: file!(), line: line!() }, &Route { company_scope: bilibi_module_registry::contributions::CompanyScope::Company,
     method: Method::Get, path: "/finance/payroll", service: "finance/payroll.pages", operation: "postings", access: Access::Capability(VIEW), framed: true,
 }) }
-inventory::submit! { Contribution::new(ROUTES, "finance/payroll.setup", Provenance { module: MODULE, source: file!(), line: line!() }, &Route {
+inventory::submit! { Contribution::new(ROUTES, "finance/payroll.setup", Provenance { module: MODULE, source: file!(), line: line!() }, &Route { company_scope: bilibi_module_registry::contributions::CompanyScope::Company,
     method: Method::Get, path: "/finance/payroll/setup", service: "finance/payroll.pages", operation: "setup", access: Access::Capability(VIEW), framed: true,
 }) }
 // Menu group (a bookkeeper's section of the Finance menu); its pages sit under it.
@@ -31,6 +31,7 @@ bilibi_menu::contribute!(
 bilibi_menu::contribute!(
     "finance/payroll",
     bilibi_menu::MenuItem::page("finance.payroll", "Payroll and claims", "/finance/payroll")
+        .company_scoped()
         .under("finance.group.payroll")
         .icon("gmdi-money-r")
         .requires(bilibi_menu::Requirement::Capability(VIEW))

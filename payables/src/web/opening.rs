@@ -379,10 +379,34 @@ impl Opening {
                         false,
                         "Required only when overriding separation of duties with the appropriate authority.",
                     ),
-                    ("part","Batch number",InputKind::Number,false,"For staging: sequential batch number, starting at 1."),
-                    ("part_count","Batch count",InputKind::Number,false,"For staging: total batches in this export, at most 200."),
-                    ("replaces_batch_id","Register to replace",InputKind::Number,false,"For a correction: the current reconciled register ID. Keep the same ID for all source batches."),
-                    ("reason","Correction reason",InputKind::Text,false,"Required for a correction. Preserve the prior export and explain the replacement."),
+                    (
+                        "part",
+                        "Batch number",
+                        InputKind::Number,
+                        false,
+                        "For staging: sequential batch number, starting at 1.",
+                    ),
+                    (
+                        "part_count",
+                        "Batch count",
+                        InputKind::Number,
+                        false,
+                        "For staging: total batches in this export, at most 200.",
+                    ),
+                    (
+                        "replaces_batch_id",
+                        "Register to replace",
+                        InputKind::Number,
+                        false,
+                        "For a correction: the current reconciled register ID. Keep the same ID for all source batches.",
+                    ),
+                    (
+                        "reason",
+                        "Correction reason",
+                        InputKind::Text,
+                        false,
+                        "Required for a correction. Preserve the prior export and explain the replacement.",
+                    ),
                 ] {
                     let mut field = Field::in_form("conversion", key)
                         .id(format!("conversion-{key}"))

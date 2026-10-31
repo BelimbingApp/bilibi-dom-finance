@@ -263,7 +263,10 @@ impl Returns {
             .transpose()?;
         let value = |k: &str| self.form.get(k).cloned().unwrap_or_default();
         Ok(PeriodsView {
-            description: format!("{}-month periods; a return is due by the date shown (moved to the next working day when it falls on a weekend or holiday).", registration.period_months),
+            description: format!(
+                "{}-month periods; a return is due by the date shown (moved to the next working day when it falls on a weekend or holiday).",
+                registration.period_months
+            ),
             table,
             forbidden,
             can_prepare: self.can_prepare,

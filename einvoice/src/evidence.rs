@@ -189,7 +189,7 @@ fn column(field: &str) -> String {
 /// One page of `dataset` for the company: `InvalidOption` for an unknown
 /// dataset, a limit outside 1 to 500, or a negative cursor.
 async fn page(
-    client: &impl GenericClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company_id: i64,
     dataset: &str,

@@ -101,7 +101,7 @@ pub(crate) async fn post(
         Err(LedgerError::Invalid(errors))
             if errors.iter().any(|error| error.field == "owner_record") =>
         {
-            return Err(ReconciliationError::StatementLinePosted)
+            return Err(ReconciliationError::StatementLinePosted);
         }
         other => other?,
     };
