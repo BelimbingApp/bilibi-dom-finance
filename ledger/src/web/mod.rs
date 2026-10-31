@@ -1122,7 +1122,7 @@ impl Pages {
                     Box::new(journal::Journal::new(pages, id_param(r.path)?))
                 }
             }
-            "years" => Box::new(years::Years::new(pages, r.query)),
+            "years" => Box::new(years::Years::new(pages, r.query)?),
             "trial" => Box::new(trial::Trial::new(pages, r.query)),
             _ => return Err(Error::NotFound),
         })

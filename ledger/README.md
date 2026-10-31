@@ -144,11 +144,13 @@ The wire walkthrough exercises all writes over both transports, observes preview
 
 ## Pages
 
+Fiscal years is the only place to open a fiscal year. Filter by company and open, closed or locked state; a locked year has all its periods locked. Bookkeeping controls links to this list. Every year opening uses `finance.ledger.fiscal_year.open`, including its review and confirmation.
+
 Opening balances starts in Journals. Choose **Opening balances**, review the mapped CSV, then submit its single journal for approval. Filter Source to **Opening** and Status to find waiting, rejected, withdrawn or posted opening journals. Corrections start on that journal’s record page and use the same reviewed opening operation.
 
 Company books is the only book list. Each company links to its book at `/finance/ledger/books/{company_id}`, including the reviewed open-book action. Viewing or opening another company’s book does not switch the current company. The list filters by company name, book state, currency and fiscal-year state.
 
-The ledger has pages so a person without an AI agent can do the same daily work. Bilimbi's ledger has none (`web: nil`), so these are this port's own. Reports keeps the older [Bookkeeping and Approval exceptions pages](../reports/README.md#bookkeeping-and-approval-exceptions-pages).
+The ledger has pages so a person without an AI agent can do the same daily work. Bilimbi's ledger has none (`web: nil`), so these are this port's own. Reports keeps the older [Bookkeeping controls and Approval exceptions pages](../reports/README.md#bookkeeping-and-approval-exceptions-pages).
 
 | Menu (Finance, under Bookkeeping) | Route | What a person does there |
 | --- | --- | --- |

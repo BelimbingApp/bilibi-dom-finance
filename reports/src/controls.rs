@@ -7,8 +7,8 @@ use bilibi_datetime::{
     Clock, DisplayContext, DisplayPolicy, Format, Period, PeriodFilter, Precision,
 };
 use bilibi_finance_ledger::{
-    ApprovalExceptionQuery, LateRecordingQuery, LateStatus, LedgerError, NewFiscalYear,
-    MANAGE_CONTROLLED_BOOKKEEPING, MANAGE_DUTY_SEPARATION, MANAGE_PERIODS, REVIEW_EXCEPTIONS,
+    ApprovalExceptionQuery, LateRecordingQuery, LateStatus, LedgerError,
+    MANAGE_CONTROLLED_BOOKKEEPING, MANAGE_DUTY_SEPARATION, REVIEW_EXCEPTIONS,
     REVIEW_LATE_RECORDINGS,
 };
 use bilibi_locale::Locales;
@@ -22,7 +22,7 @@ use bilibi_ui::{
     Filter, FlashMap, FlexRow, FlexTable, Header, Html, InputKind, ListColumns, ListSpec,
     ListState, Modal, RowMode, SectionHeading, StatusKind, Tab, Tabs, NO_FLASH,
 };
-use jiff::{civil::Date, Timestamp};
+use jiff::Timestamp;
 use serde_json::{json, Value};
 use std::{collections::HashMap, sync::Arc};
 
@@ -37,7 +37,6 @@ pub(crate) struct Pages {
 #[derive(Clone, Copy)]
 enum Dialog {
     ControlledOff,
-    FiscalYear,
     Separation { required: bool },
     Review { id: i64 },
 }
@@ -52,7 +51,6 @@ struct State {
     period: Option<PeriodFilter>,
     dialog: Option<Dialog>,
     text: String,
-    dates: HashMap<String, String>,
     flash: Option<(StatusKind, String)>,
 }
 
@@ -64,7 +62,7 @@ impl State {
         framed: bool,
     ) -> Result<Self> {
         let bookkeeping = match operation {
-            "bookkeeping" => true,
+            "controls" => true,
             "approval-exceptions" => false,
             _ => return Err(Error::NotFound),
         };
@@ -197,7 +195,6 @@ impl State {
             period: None,
             dialog: None,
             text: String::new(),
-            dates: HashMap::new(),
             flash: None,
         })
     }
@@ -217,7 +214,7 @@ impl State {
     }
     fn path(&self) -> &'static str {
         if self.bookkeeping {
-            "/finance/reports/bookkeeping"
+            "/finance/reports/controls"
         } else {
             "/finance/reports/approval-exceptions"
         }
@@ -290,14 +287,14 @@ impl State {
     fn close(&mut self) {
         self.dialog = None;
         self.text.clear();
-        self.dates.clear();
     }
     fn refused(&mut self, error: LedgerError) {
         let invalid = matches!(error, LedgerError::Invalid(_));
         let text = if invalid {
             match self.dialog {
-                Some(Dialog::FiscalYear) => "Check the fiscal year's dates: it starts on the first of a month and runs to the end of one, up to two years.".into(),
-                Some(Dialog::Review { .. }) if !self.bookkeeping => "Keep the note to 500 characters.".into(),
+                Some(Dialog::Review { .. }) if !self.bookkeeping => {
+                    "Keep the note to 500 characters.".into()
+                }
                 _ => "Give a reason of 1 to 500 characters.".into(),
             }
         } else {
@@ -372,16 +369,10 @@ impl State {
             if let Some(text) = payload["dialog[text]"].as_str() {
                 self.text = text.into();
             }
-            for key in ["start_date", "end_date"] {
-                if let Some(text) = payload[format!("dialog[{key}]")].as_str() {
-                    self.dates.insert(key.into(), text.into());
-                }
-            }
             return Ok(());
         }
         let capability = match event {
             "turn_on" | "turn_off" if self.bookkeeping => MANAGE_CONTROLLED_BOOKKEEPING,
-            "open_fiscal_year" if self.bookkeeping => MANAGE_PERIODS,
             "change_separation" if !self.bookkeeping => MANAGE_DUTY_SEPARATION,
             "review" => {
                 if self.bookkeeping {
@@ -392,7 +383,6 @@ impl State {
             }
             "open_dialog" => match dialog_kind {
                 Some("controlled-off") if self.bookkeeping => MANAGE_CONTROLLED_BOOKKEEPING,
-                Some("fiscal-year") if self.bookkeeping => MANAGE_PERIODS,
                 Some("separation") if !self.bookkeeping => MANAGE_DUTY_SEPARATION,
                 Some("review") => {
                     if self.bookkeeping {
@@ -416,7 +406,6 @@ impl State {
             self.close();
             self.dialog = match dialog_kind {
                 Some("controlled-off") => Some(Dialog::ControlledOff),
-                Some("fiscal-year") => Some(Dialog::FiscalYear),
                 Some("separation") => match ledger.get_duty_separation(scope, company).await {
                     Ok(state) => Some(Dialog::Separation {
                         required: !state.required,
@@ -479,45 +468,6 @@ impl State {
                 }),
                 Err(error) => self.refused(error),
             },
-            ("open_fiscal_year", Some(Dialog::FiscalYear)) => {
-                for key in ["start_date", "end_date"] {
-                    match payload.get(format!("dialog[{key}]")) {
-                        Some(Value::String(text)) => {
-                            self.dates.insert(key.into(), text.into());
-                        }
-                        None => {}
-                        Some(_) => {
-                            self.flash = Some((StatusKind::Error, "Give the first day of the fiscal year as a date. The last day is optional, but must be a date.".into()));
-                            return Ok(());
-                        }
-                    }
-                }
-                let date = |key: &str| -> std::result::Result<Option<Date>, ()> {
-                    match self.dates.get(key).map(String::as_str).unwrap_or("") {
-                        "" => Ok(None),
-                        value => value.parse().map(Some).map_err(|_| ()),
-                    }
-                };
-                let first = ledger
-                    .get_controlled_bookkeeping(scope, company)
-                    .await
-                    .map(|s| s.fiscal_years == 0);
-                // Bilimbi ignores the last day when the first is blank.
-                let start = date("start_date");
-                let end = match start {
-                    Ok(None) => Ok(None),
-                    _ => date("end_date"),
-                };
-                match (start, end, first) {
-                    (_, _, Err(error)) => self.refused(error),
-                    (Ok(start), Ok(end), Ok(first)) if start.is_some() || !first => {
-                        match ledger.open_fiscal_year(scope, company, &NewFiscalYear { start_date: start, end_date: end }).await {
-                            Ok(year) => self.success(format!("Fiscal year {} to {} is open.", year.start_date, year.end_date)), Err(error) => self.refused(error),
-                        }
-                    }
-                    _ => self.flash = Some((StatusKind::Error, "Give the first day of the fiscal year as a date. The last day is optional, but must be a date.".into())),
-                }
-            }
             ("review", Some(Dialog::Review { id })) if self.bookkeeping => match ledger
                 .record_late_recording_review(scope, company, id, &text)
                 .await
@@ -544,12 +494,12 @@ impl State {
 
     async fn render(&mut self, scope: &Scope) -> Result<String> {
         let title = if self.bookkeeping {
-            "Bookkeeping"
+            "Bookkeeping controls"
         } else {
             "Approval exceptions"
         };
         let subtitle = if self.bookkeeping {
-            "Controlled bookkeeping, fiscal years, and entries recorded late"
+            "Control posting dates and review changes to bookkeeping controls"
         } else {
             "Same-person approvals and overrides of controls, for someone independent to review."
         };
@@ -570,7 +520,7 @@ impl State {
             )?);
             return PageView {
                 id: if self.bookkeeping {
-                    "bookkeeping-page"
+                    "bookkeeping-controls-page"
                 } else {
                     "approval-exceptions-page"
                 },
@@ -603,7 +553,7 @@ impl State {
         }
         PageView {
             id: if self.bookkeeping {
-                "bookkeeping-page"
+                "bookkeeping-controls-page"
             } else {
                 "approval-exceptions-page"
             },
@@ -668,7 +618,6 @@ impl State {
             )
             .await?;
         let can_manage = self.allowed(scope, MANAGE_CONTROLLED_BOOKKEEPING).await?;
-        let can_year = self.allowed(scope, MANAGE_PERIODS).await?;
         let can_review = self.allowed(scope, REVIEW_LATE_RECORDINGS).await?;
         let change = controlled.change.as_ref();
         let mut content = html(Summary {
@@ -720,41 +669,12 @@ impl State {
         if controlled.controlled && controlled.fiscal_years == 0 {
             content.push(&html(Alert { id: "no-fiscal-year", kind: StatusKind::Warning, class: "mt-4", body: Html::text("No fiscal year is open, so no entry can be posted yet. Open the first fiscal year to start.") })?);
         }
-        let years = if controlled.fiscal_years == 0 {
-            "No fiscal year is open yet.".into()
-        } else {
-            format!(
-                "{} fiscal {} open.",
-                controlled.fiscal_years,
-                if controlled.fiscal_years == 1 {
-                    "year"
-                } else {
-                    "years"
-                }
-            )
-        };
-        if can_year {
-            let year_action = button(
-                "fiscal-year-open",
-                "open_dialog",
-                "dialog",
-                "fiscal-year",
-                if controlled.fiscal_years == 0 {
-                    "Open the first fiscal year"
-                } else {
-                    "Open the next fiscal year"
-                },
-                if controlled.fiscal_years == 0 {
-                    ButtonVariant::Primary
-                } else {
-                    ButtonVariant::Secondary
-                },
-            )?;
-            content.push(&html(YearView {
-                count: &years,
-                action: year_action,
-            })?);
-        }
+        content.push(&html(Button {
+            id: "controls-fiscal-years",
+            href: "/finance/ledger/fiscal-years",
+            body: Html::text("Fiscal years"),
+            ..Button::default()
+        })?);
         if !changes.is_empty() {
             let rows = changes
                 .iter()
@@ -1361,17 +1281,6 @@ impl State {
                     "Reason (1 to 500 characters)",
                     true,
                 ),
-                Dialog::FiscalYear => (
-                    "fiscal-year",
-                    "Open a fiscal year",
-                    "A fiscal year is divided into monthly periods, which are open until they are closed. The first year may start on any month; each later year starts the day after the previous one ends. Leave the end date blank for twelve months.",
-                    "open_fiscal_year",
-                    "Open fiscal year",
-                    "Opening…",
-                    ButtonVariant::Primary,
-                    "",
-                    false,
-                ),
                 Dialog::Separation { required: false } => (
                     "duty-separation",
                     "Turn separation of duties off",
@@ -1417,26 +1326,7 @@ impl State {
                     false,
                 ),
             };
-        let fields = if matches!(dialog, Dialog::FiscalYear) {
-            vec![
-                Field::in_form("dialog", "start_date")
-                    .id("fiscal-year-start")
-                    .label("First day of the year")
-                    .kind(InputKind::Date)
-                    .value(
-                        self.dates
-                            .get("start_date")
-                            .map(String::as_str)
-                            .unwrap_or(""),
-                    )
-                    .required(),
-                Field::in_form("dialog", "end_date")
-                    .id("fiscal-year-end")
-                    .label("Last day (optional)")
-                    .kind(InputKind::Date)
-                    .value(self.dates.get("end_date").map(String::as_str).unwrap_or("")),
-            ]
-        } else {
+        let fields = {
             let id = if prefix == "exception-review" {
                 "exception-review-note".into()
             } else if prefix == "duty-separation" {
@@ -1698,7 +1588,7 @@ struct TimeView<'a> {
 impl Page<Scope, Error> for Pages {
     fn title(&self, operation: &str) -> Option<&'static str> {
         match operation {
-            "bookkeeping" => Some("Bookkeeping"),
+            "controls" => Some("Bookkeeping controls"),
             "approval-exceptions" => Some("Approval exceptions"),
             _ => None,
         }
@@ -1779,13 +1669,6 @@ struct NextLink<'a> {
     href: &'a str,
     label: &'a str,
 }
-#[derive(Template)]
-#[template(path = "control_year.html")]
-struct YearView<'a> {
-    count: &'a str,
-    action: Html,
-}
-
 fn classification(kind: BadgeKind, text: &str) -> Result<Html> {
     html(Badge {
         dot: false,

@@ -11,12 +11,31 @@ use bilibi_tenancy::Scope;
 use bilibi_ui::{
     page::{LiveBody, LiveFuture, LiveInput, LiveRequest, LiveState},
     params, Alert, Badge, BadgeKind, BuiltinColumn, Button, ButtonVariant, Card, Cell, Choice,
-    Combobox, ConfirmDialog, CreateButton, EmptyState, Field, FlexRow, FlexTable, Form, Header,
-    Html, InputKind, ListColumns, Modal, PageVariant, SectionHeading, StatusKind, TableEmpty,
+    Combobox, ConfirmDialog, CreateButton, EmptyState, Field, Filter, FlexRow, FlexTable, Form,
+    Header, Html, InputKind, ListColumns, ListSpec, ListState, Modal, PageVariant, SectionHeading,
+    StatusKind, TableEmpty,
 };
 use jiff::{civil::Date, ToSpan};
 use serde_json::json;
-use std::collections::HashMap;
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::{Arc, LazyLock},
+};
+static SPEC: LazyLock<Arc<ListSpec>> = LazyLock::new(|| {
+    ListSpec {
+        filters: BTreeMap::from([
+            ("company".into(), Filter::string("")),
+            (
+                "status".into(),
+                Filter::one_of(&["all", "open", "closed", "locked"], "all"),
+            ),
+        ]),
+        omit_defaults: true,
+        ..ListSpec::default()
+    }
+    .shared()
+    .expect("fiscal years list spec")
+});
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Kind {
@@ -152,6 +171,7 @@ struct Allowed {
 
 pub(super) struct Years {
     pages: Pages,
+    list: ListState,
     flash: Flash,
     columns: Option<ListColumns>,
     pick: Pick,
@@ -162,8 +182,9 @@ pub(super) struct Years {
 impl Years {
     /// `query` may name a company (`?company=ID`), as the company books page
     /// does; it only filters this page and grants nothing.
-    pub(super) fn new(pages: Pages, query: &HashMap<String, String>) -> Self {
-        Self {
+    pub(super) fn new(pages: Pages, query: &HashMap<String, String>) -> Result<Self> {
+        Ok(Self {
+            list: ListState::parse(query, SPEC.clone()).map_err(|_| Error::Internal)?,
             pages,
             flash: Flash::default(),
             columns: None,
@@ -173,7 +194,7 @@ impl Years {
                 .map_or(Pick::Auto, Pick::One),
             choice: None,
             opening: None,
-        }
+        })
     }
 
     /// The companies the page lists now: the picked one, else every company
@@ -221,13 +242,29 @@ impl Years {
             event: "company_filter",
             change: true,
             class: "mb-4 max-w-sm",
-            body: render(
-                Combobox::new("ledger-years-company", format!("{FILTER_FORM}[company]"))
-                    .label("Company")
-                    .wrapper_class("mb-0")
-                    .value(value)
-                    .options(options),
-            )?,
+            body: {
+                let mut body = render(
+                    Combobox::new("ledger-years-company", format!("{FILTER_FORM}[company]"))
+                        .label("Company")
+                        .wrapper_class("mb-0")
+                        .value(value)
+                        .options(options),
+                )?;
+                body.push(&render(
+                    Field::in_form(FILTER_FORM, "status")
+                        .id("ledger-years-status")
+                        .label("Status")
+                        .kind(InputKind::Select)
+                        .value(&self.list.filters["status"])
+                        .options(vec![
+                            Choice::new("All states", "all"),
+                            Choice::new("Open", "open"),
+                            Choice::new("Closed", "closed"),
+                            Choice::new("Locked", "locked"),
+                        ]),
+                )?);
+                body
+            },
             actions: Html::EMPTY,
         })
     }
@@ -262,9 +299,7 @@ impl Years {
         if companies.is_empty() {
             body.push(&no_company("ledger-years-no-company")?);
         } else {
-            if companies.len() > 1 {
-                body.push(&self.filter(scope, &companies, &listed)?);
-            }
+            body.push(&self.filter(scope, &companies, &listed)?);
             if allowed.open && !listed.is_empty() {
                 actions.push(&render(CreateButton {
                     noun: "Fiscal year",
@@ -350,6 +385,7 @@ impl Years {
         Ok(LiveBody {
             html: shell("ledger-years", PageVariant::List, &self.flash, page)?,
             rows: shown,
+            query: self.list.to_params(),
             ..LiveBody::default()
         })
     }
@@ -441,10 +477,25 @@ impl Years {
             can_lock: allowed.lock,
             can_post: allowed.post,
         };
+        let mut shown = 0;
         for year in years.iter().rev() {
-            out.push(&self.year(year, company, targets)?);
+            let state = if year.periods.iter().all(|p| p.status == "locked") {
+                "locked"
+            } else {
+                year.status.as_str()
+            };
+            if self.list.filters["status"] == "all" || self.list.filters["status"] == state {
+                out.push(&self.year(year, company, targets)?);
+                shown += 1;
+            }
         }
-        Ok((out, years.len(), true))
+        if shown == 0 && !years.is_empty() {
+            out.push(&render(EmptyState::missing(
+                "No matching fiscal years",
+                "Choose another status in the filter.",
+            ))?);
+        }
+        Ok((out, shown, true))
     }
 
     fn year(&mut self, year: &view::Year, company: &Company, targets: Targets) -> Result<Html> {
@@ -1254,6 +1305,14 @@ fn period_badge(status: &str) -> Result<Html> {
 impl LiveState<Scope, Error> for Years {
     fn update<'a>(&'a mut self, r: LiveRequest<'a, Scope>) -> LiveFuture<'a, Error> {
         Box::pin(async move {
+            if let LiveInput::Params(query) = r.input {
+                self.list = ListState::parse(query, SPEC.clone()).map_err(|_| Error::Internal)?;
+                self.pick = match self.list.filters["company"].as_str() {
+                    "" => Pick::Auto,
+                    "all" => Pick::All,
+                    id => id.parse().map_or(Pick::Auto, Pick::One),
+                };
+            }
             if let LiveInput::Event(value) = r.input {
                 match event_type(value)? {
                     "open_dialog" => {
@@ -1263,10 +1322,9 @@ impl LiveState<Scope, Error> for Years {
                     }
                     "close_dialog" => self.opening = None,
                     "company_filter" => {
-                        let picked = params::form_values(value, FILTER_FORM)
-                            .get("company")
-                            .cloned()
-                            .unwrap_or_default();
+                        let fields = params::form_values(value, FILTER_FORM);
+                        self.list.apply_filters(&fields);
+                        let picked = fields.get("company").cloned().unwrap_or_default();
                         self.pick = match picked.parse::<i64>() {
                             Ok(id) => Pick::One(id),
                             Err(_) => Pick::All,

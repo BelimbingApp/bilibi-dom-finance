@@ -1382,7 +1382,21 @@ impl ReadHandler for Read {
                     let after = optional_date(input, "after_start_date").map_err(invalid)?;
                     let mut rows = years
                         .into_iter()
-                        .filter(|y| after.is_none_or(|d| y.start_date > d));
+                        .filter(|y| after.is_none_or(|d| y.start_date > d))
+                        .filter(|y| {
+                            input["status"].as_str().is_none_or(|status| {
+                                status
+                                    == if y
+                                        .periods
+                                        .iter()
+                                        .all(|p| p.status == crate::PeriodStatus::Locked)
+                                    {
+                                        "locked"
+                                    } else {
+                                        y.status.as_str()
+                                    }
+                            })
+                        });
                     let page: Vec<_> = rows.by_ref().take(limit).collect();
                     let next = rows
                         .next()
@@ -1646,7 +1660,7 @@ fn currencies_schema() -> Value {
 fn years_schema() -> Value {
     schema(
         &[],
-        json!({"after_start_date":day(),"page_size":{"type":"integer","minimum":1,"maximum":100}}),
+        json!({"status":{"type":"string","enum":["open","closed","locked"]},"after_start_date":day(),"page_size":{"type":"integer","minimum":1,"maximum":100}}),
     )
 }
 
