@@ -47,13 +47,15 @@ the sealed `Scope` it was handed and an explicit company id.
 | `account_activity` | One account's debits and credits over a window, and the entries behind them, paged |
 | `subscribe` | The ledger's posting notices (`Ledger::subscribe_postings`) |
 | `issue_report` | An immutable issued profit and loss, balance sheet, cash position or trial balance |
+| `conversion_report` | A conversion preview with its opening sources, target balances, reconciliations and explicit limits on one database snapshot |
 | `get_issued_report` | The stored copy, never recomputed |
 | `evidence_datasets`, `evidence_page` | Issued reports, immutable conversion sign-offs and retained source-period schedules for the auditor's pack |
 | `previous_period` | The comparison period: as many whole months before, or as many days |
 
 Every amount is a list with one value per column, in the order the periods or
 dates were given; the first column is the reporting period and the rest its
-comparatives. Every report takes `through_entry_number`.
+comparatives. Every management report takes `through_entry_number`. A conversion
+report captures its own entry and source boundaries.
 
 ## Authorization and company scope
 

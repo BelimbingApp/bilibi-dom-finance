@@ -1920,7 +1920,7 @@ impl Ledger {
 
     pub async fn latest_account_entry_number_on(
         &self,
-        client: &dyn bilibi_agent_api::OperationClient,
+        client: &(impl GenericClient + Sync),
         scope: &Scope,
         company_id: i64,
         account_id: i64,

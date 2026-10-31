@@ -47,7 +47,7 @@ pub(crate) async fn latest_date(
 }
 
 pub(crate) async fn latest_account_entry_number(
-    client: &dyn OperationClient,
+    client: &(impl GenericClient + Sync),
     tenant: i64,
     company: i64,
     account: i64,

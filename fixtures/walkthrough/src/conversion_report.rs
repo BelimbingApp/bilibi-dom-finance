@@ -392,9 +392,10 @@ pub async fn after(db: &Db, services: &Services, kept: Kept) -> Outcome<()> {
             entry_only_bridge["finalised_boundary"][axis]
         );
     }
+    let importer = sign_in(db, services, 1, 2).await?;
     let imported = reconciliation
         .import_statement(
-            &s,
+            &importer,
             COMPANY,
             kept.bank_id,
             &NewFile {
