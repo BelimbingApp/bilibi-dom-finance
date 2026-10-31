@@ -131,11 +131,24 @@ pub async fn install(db: &Db, services: &Services) -> Result<Installed> {
         .await?;
     let ledger = services.get::<Ledger>(SERVICE).map_err(Error::from)?;
     let administrator = sign_in(db, services, 1, 4).await?;
-    services
-        .get::<bilibi_core::user::UserService>("core/user.accounts")
-        .map_err(Error::from)?
-        .set_desk(&administrator, 2, 1, true)
-        .await?;
+    // The desk facade's write must change a row. Do not send a duplicate
+    // assignment on a fixture rerun: an empty mutation poisons its boundary.
+    let assigned = db
+        .get()
+        .await?
+        .query_opt(
+            "SELECT id FROM user_desks WHERE tenant_id=1 AND company_id=2 AND person_id=1",
+            &[],
+        )
+        .await?
+        .is_some();
+    if !assigned {
+        services
+            .get::<bilibi_core::user::UserService>("core/user.accounts")
+            .map_err(Error::from)?
+            .set_desk(&administrator, 2, 1, true)
+            .await?;
+    }
     let manager = sign_in(db, services, 1, MANAGER).await?;
     let book = match ledger.get_book(&manager, COMPANY).await {
         Err(LedgerError::BookNotOpen) => {

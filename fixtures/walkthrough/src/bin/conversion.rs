@@ -50,8 +50,19 @@ async fn setup(db: &Db, services: &Services, company: i64) -> Outcome<Value> {
     // Workplace reach is explicit on the pinned Platform. Capability grants
     // alone do not let a fixture preparer or reviewer work in another company.
     let users = services.get::<bilibi_core::user::UserService>("core/user.accounts")?;
-    for user in [1, 4] {
-        users.set_desk(&admin, user, company, true).await?;
+    for person in [1, 4] {
+        let assigned = db
+            .get()
+            .await?
+            .query_opt(
+                "SELECT id FROM user_desks WHERE tenant_id=1 AND company_id=$1 AND person_id=$2",
+                &[&company, &person],
+            )
+            .await?
+            .is_some();
+        if !assigned {
+            users.set_desk(&admin, company, person, true).await?;
+        }
     }
     let admin = sign_in(db, services, 1, 4).await?;
     let manager = sign_in(db, services, 1, 1).await?;
