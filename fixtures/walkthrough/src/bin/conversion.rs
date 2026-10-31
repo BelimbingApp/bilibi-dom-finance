@@ -473,27 +473,13 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
     let trial = l.trial_balance(&s, company, date(2026, 7, 1), None).await?;
     assert_eq!(trial.total_debit.shown(trial.minor_units), "27000.00");
     let before_ar = ar
-        .aged_receivables(
-            &s,
-            company,
-            date(2026, 7, 1),
-            &AgingOptions {
-                through_entry_number: Some(trial.through_entry_number),
-                ..Default::default()
-            },
-        )
+        .aged_receivables(&s, company, date(2026, 7, 1), &Default::default())
         .await?;
     let before_ap = ap
-        .aged_payables(
-            &s,
-            company,
-            date(2026, 7, 1),
-            &bilibi_finance_payables::AgingQuery {
-                through_entry_number: Some(trial.through_entry_number),
-                ..Default::default()
-            },
-        )
+        .aged_payables(&s, company, date(2026, 7, 1), &Default::default())
         .await?;
+    let before_ar_pins = before_ar.pins();
+    let before_ap_pins = before_ap.pins();
     let before_ar_tie = ar
         .tie_out_control_accounts(&s, company, date(2026, 7, 1), &Default::default())
         .await?;
@@ -853,9 +839,9 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
             company,
             date(2026, 7, 1),
             &AgingOptions {
-                through_entry_number: Some(before_ar.through_entry_number),
-                through_opening_batch_id: Some(before_ar.through_opening_batch_id),
-                through_settlement_number: Some(before_ar.through_settlement_number),
+                through_entry_number: before_ar_pins.through_entry_number,
+                through_opening_batch_id: before_ar_pins.through_opening_batch_id,
+                through_settlement_number: before_ar_pins.through_settlement_number,
                 ..Default::default()
             },
         )
@@ -870,9 +856,9 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
             company,
             date(2026, 7, 1),
             &bilibi_finance_payables::AgingQuery {
-                through_entry_number: Some(before_ap.through_entry_number),
-                through_opening_batch_id: Some(before_ap.through_opening_batch_id),
-                through_settlement_number: Some(before_ap.through_settlement_number),
+                through_entry_number: before_ap_pins.through_entry_number,
+                through_opening_batch_id: before_ap_pins.through_opening_batch_id,
+                through_settlement_number: before_ap_pins.through_settlement_number,
                 ..Default::default()
             },
         )

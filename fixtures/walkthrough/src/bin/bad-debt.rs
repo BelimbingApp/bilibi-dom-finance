@@ -314,12 +314,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .await,
         Err(LedgerError::OwnedBy(_))
     ));
-    let pin = approved.events[0]
-        .ledger_entry_number
-        .ok_or(Error::Internal)?;
     let net = ar
         .aged_receivables(&manager, 1, date(2026, 10, 1), &AgingOptions::default())
         .await?;
+    let net_pins = net.pins();
     assert_eq!(net.total, Decimal::from(324));
     assert!(
         ar.tie_out_control_accounts(&manager, 1, date(2026, 10, 1), &Default::default())
@@ -364,7 +362,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             1,
             date(2026, 10, 15),
             &AgingOptions {
-                through_entry_number: Some(pin),
+                through_entry_number: net_pins.through_entry_number,
+                through_opening_batch_id: net_pins.through_opening_batch_id,
+                through_settlement_number: net_pins.through_settlement_number,
                 ..AgingOptions::default()
             }
         )

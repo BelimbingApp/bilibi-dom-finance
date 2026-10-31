@@ -329,6 +329,7 @@ pub async fn prove(
     assert_eq!(ar_after.customers[0].documents.len(), 10_000);
     assert_eq!(ar_after.total, ar_before.total);
     let old_ar_pins = ar_before.pins();
+    let old_ap_pins = ap_before.pins();
     // These pins preceded the extra payment/reversal proof too.
     let ar_old = ar
         .aged_receivables(
@@ -353,9 +354,9 @@ pub async fn prove(
             company,
             day,
             &bilibi_finance_payables::AgingQuery {
-                through_entry_number: Some(ap_before.through_entry_number),
-                through_opening_batch_id: Some(ap_before.through_opening_batch_id),
-                through_settlement_number: Some(ap_before.through_settlement_number),
+                through_entry_number: old_ap_pins.through_entry_number,
+                through_opening_batch_id: old_ap_pins.through_opening_batch_id,
+                through_settlement_number: old_ap_pins.through_settlement_number,
                 ..Default::default()
             },
         )

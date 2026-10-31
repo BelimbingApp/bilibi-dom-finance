@@ -196,31 +196,13 @@ impl Reports {
             let ar = self
                 .sources
                 .receivables
-                .aged_receivables_on(
-                    tx,
-                    scope,
-                    company,
-                    as_of,
-                    &AgingOptions {
-                        through_entry_number: Some(through),
-                        ..AgingOptions::default()
-                    },
-                )
+                .aged_receivables_on(tx, scope, company, as_of, &AgingOptions::default())
                 .await
                 .map_err(source_error)?;
             let ap = self
                 .sources
                 .payables
-                .aged_payables_on(
-                    tx,
-                    scope,
-                    company,
-                    as_of,
-                    &AgingQuery {
-                        through_entry_number: Some(through),
-                        ..AgingQuery::default()
-                    },
-                )
+                .aged_payables_on(tx, scope, company, as_of, &AgingQuery::default())
                 .await
                 .map_err(source_error)?;
             balance_pins = json!({"as_of":as_of.to_string(),"through_entry_number":through,"receivables_opening_batch_id":ar.through_opening_batch_id,"receivables_settlement_number":ar.through_settlement_number,"payables_opening_batch_id":ap.through_opening_batch_id,"payables_settlement_number":ap.through_settlement_number});

@@ -122,38 +122,38 @@ impl Reports {
             .ledger
             .account_totals_by_owner_on(c, s, company, &query)
             .await?;
+        let ar_pins = if pins.through_entry_number.is_some() {
+            bilibi_finance_receivables::BalancePins {
+                through_entry_number: Some(through),
+                through_opening_batch_id: pins.receivables_opening_batch_id,
+                through_settlement_number: pins.receivables_settlement_number,
+            }
+        } else {
+            Default::default()
+        };
+        let ap_pins = if pins.through_entry_number.is_some() {
+            bilibi_finance_payables::BalancePins {
+                through_entry_number: Some(through),
+                through_opening_batch_id: pins.payables_opening_batch_id,
+                through_settlement_number: pins.payables_settlement_number,
+            }
+        } else {
+            Default::default()
+        };
         let ar = self
             .sources
             .receivables
-            .tie_out_control_accounts_on(
-                c,
-                s,
-                company,
-                as_of,
-                &bilibi_finance_receivables::BalancePins {
-                    through_entry_number: Some(through),
-                    through_opening_batch_id: pins.receivables_opening_batch_id,
-                    through_settlement_number: pins.receivables_settlement_number,
-                },
-            )
+            .tie_out_control_accounts_on(c, s, company, as_of, &ar_pins)
             .await
             .map_err(source_error)?;
         let ap = self
             .sources
             .payables
-            .tie_out_control_accounts_on(
-                c,
-                s,
-                company,
-                as_of,
-                &bilibi_finance_payables::BalancePins {
-                    through_entry_number: Some(through),
-                    through_opening_batch_id: pins.payables_opening_batch_id,
-                    through_settlement_number: pins.payables_settlement_number,
-                },
-            )
+            .tie_out_control_accounts_on(c, s, company, as_of, &ap_pins)
             .await
             .map_err(source_error)?;
+        let captured_ar_pins = ar.pins();
+        let captured_ap_pins = ap.pins();
         let ar_detail = self
             .sources
             .receivables
@@ -163,9 +163,9 @@ impl Reports {
                 company,
                 as_of,
                 &bilibi_finance_receivables::AgingOptions {
-                    through_entry_number: Some(through),
-                    through_opening_batch_id: Some(ar.through_opening_batch_id),
-                    through_settlement_number: Some(ar.through_settlement_number),
+                    through_entry_number: captured_ar_pins.through_entry_number,
+                    through_opening_batch_id: captured_ar_pins.through_opening_batch_id,
+                    through_settlement_number: captured_ar_pins.through_settlement_number,
                     ..Default::default()
                 },
             )
@@ -180,9 +180,9 @@ impl Reports {
                 company,
                 as_of,
                 &bilibi_finance_payables::AgingQuery {
-                    through_entry_number: Some(through),
-                    through_opening_batch_id: Some(ap.through_opening_batch_id),
-                    through_settlement_number: Some(ap.through_settlement_number),
+                    through_entry_number: captured_ap_pins.through_entry_number,
+                    through_opening_batch_id: captured_ap_pins.through_opening_batch_id,
+                    through_settlement_number: captured_ap_pins.through_settlement_number,
                     ..Default::default()
                 },
             )

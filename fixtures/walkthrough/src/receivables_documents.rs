@@ -267,6 +267,7 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
     let before_rename = ar
         .aged_receivables(&admin, 1, date(2026, 9, 1), &AgingOptions::default())
         .await?;
+    let before_rename_pins = before_rename.pins();
     client
         .execute(
             "UPDATE companies SET legal_name='R2 later party' WHERE tenant_id=1 AND id=20",
@@ -286,9 +287,9 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
             1,
             date(2026, 9, 1),
             &AgingOptions {
-                through_entry_number: Some(before_rename.through_entry_number),
-                through_opening_batch_id: Some(before_rename.through_opening_batch_id),
-                through_settlement_number: Some(before_rename.through_settlement_number),
+                through_entry_number: before_rename_pins.through_entry_number,
+                through_opening_batch_id: before_rename_pins.through_opening_batch_id,
+                through_settlement_number: before_rename_pins.through_settlement_number,
                 ..AgingOptions::default()
             },
         )
@@ -593,6 +594,7 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
         .find(|c| c.customer_id == customer.id)
         .expect("R2 customer");
     assert_eq!(baseline_customer.total, money("330").amount());
+    let baseline_pins = baseline.pins();
     let pin = baseline.through_entry_number;
     let companies = services.get::<bilibi_company::CompanyService>(bilibi_company::SERVICE)?;
     companies
@@ -710,7 +712,9 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
             1,
             date(2026, 10, 6),
             &AgingOptions {
-                through_entry_number: Some(pin),
+                through_entry_number: baseline_pins.through_entry_number,
+                through_opening_batch_id: baseline_pins.through_opening_batch_id,
+                through_settlement_number: baseline_pins.through_settlement_number,
                 ..Default::default()
             },
         )
