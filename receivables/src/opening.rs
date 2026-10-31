@@ -52,43 +52,71 @@ pub(super) struct Prepared {
 }
 
 pub(super) fn opening_classifications(input: &Value) -> Result<BTreeMap<i64, String>> {
-    let Some(values) = input["opening_account_classifications"].as_object() else {
+    let value = &input["opening_account_classifications"];
+    let entries: Vec<(i64, &Value)> = if let Some(values) = value.as_object() {
+        values
+            .iter()
+            .map(|(id, value)| {
+                id.parse::<i64>()
+                    .ok()
+                    .filter(|id| *id > 0)
+                    .map(|id| (id, value))
+                    .ok_or_else(|| {
+                        invalid(
+                            "opening_account_classifications",
+                            "account IDs must be positive integers",
+                        )
+                    })
+            })
+            .collect::<Result<_>>()?
+    } else if let Some(values) = value.as_array() {
+        values
+            .iter()
+            .map(|value| {
+                value["account_id"]
+                    .as_i64()
+                    .filter(|id| *id > 0)
+                    .map(|id| (id, &value["classification"]))
+                    .ok_or_else(|| {
+                        invalid(
+                            "opening_account_classifications",
+                            "account IDs must be positive integers",
+                        )
+                    })
+            })
+            .collect::<Result<_>>()?
+    } else {
         return Err(invalid(
             "opening_account_classifications",
             "must classify opening accounts by account ID",
         ));
     };
-    if values.len() > 10_000 {
+    if entries.len() > 10_000 {
         return Err(invalid(
             "opening_account_classifications",
             "must contain at most 10000 account classifications",
         ));
     }
-    values
-        .iter()
-        .map(|(id, value)| {
-            let id = id.parse::<i64>().ok().filter(|id| *id > 0).ok_or_else(|| {
-                invalid(
-                    "opening_account_classifications",
-                    "account IDs must be positive integers",
-                )
-            })?;
-            let classification = value.as_str().unwrap_or("");
-            if ![
-                "receivables_control",
-                "payables_control",
-                "not_a_control",
-            ]
-            .contains(&classification)
-            {
-                return Err(invalid(
-                    "opening_account_classifications",
-                    "each account must be a receivables control, payables control, or not a control",
-                ));
-            }
-            Ok((id, classification.to_owned()))
-        })
-        .collect()
+    let mut classifications = BTreeMap::new();
+    for (id, value) in entries {
+        let classification = value.as_str().unwrap_or("");
+        if !["receivables_control", "payables_control", "not_a_control"].contains(&classification) {
+            return Err(invalid(
+                "opening_account_classifications",
+                "each account must be a receivables control, payables control, or not a control",
+            ));
+        }
+        if classifications
+            .insert(id, classification.to_owned())
+            .is_some()
+        {
+            return Err(invalid(
+                "opening_account_classifications",
+                format!("account ID {id} is classified more than once"),
+            ));
+        }
+    }
+    Ok(classifications)
 }
 
 impl Receivables {

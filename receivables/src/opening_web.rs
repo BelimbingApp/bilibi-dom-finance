@@ -78,6 +78,22 @@ fn posted_classifications(payload: &Value) -> Value {
     Value::Object(values)
 }
 
+fn operation_classifications(value: &Value) -> Value {
+    Value::Array(
+        value
+            .as_object()
+            .into_iter()
+            .flatten()
+            .map(|(account_id, classification)| {
+                json!({
+                    "account_id": account_id.parse::<i64>().ok(),
+                    "classification": classification,
+                })
+            })
+            .collect(),
+    )
+}
+
 fn classification_label(value: &str) -> &str {
     match value {
         "receivables_control" => "Receivables control",
@@ -832,6 +848,9 @@ impl LiveState<Scope, Error> for Opening {
                                 object.insert("staged".into(), json!(true));
                             }
                         }
+                        let classifications =
+                            operation_classifications(&input["opening_account_classifications"]);
+                        input["opening_account_classifications"] = classifications;
                         let call = Call {
                             scope: r.scope,
                             credential: r.credential,

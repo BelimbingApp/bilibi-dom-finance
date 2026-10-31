@@ -113,7 +113,10 @@ def opening_classifications(context):
         "2000": "payables_control",
         "2010": "payables_control",
     }
-    return {str(account["id"]): roles.get(account["code"], "not_a_control") for account in context["opening_accounts"]}
+    return [
+        {"account_id": account["id"], "classification": roles.get(account["code"], "not_a_control")}
+        for account in context["opening_accounts"]
+    ]
 
 
 # Run after the conversion fixture's Company 001 browser proof.
@@ -154,10 +157,10 @@ for module, expected, omitted_code, omitted_amount in [
     facts = review["results"][0]["preview"]["result"]["changes"]
     require({row["account_code"] for row in facts["reconciliation"]} == expected, f"{module}: multi-control review is incomplete")
     require(all(Decimal(row["difference"]) == 0 for row in facts["reconciliation"]), f"{module}: multi-control review does not reconcile")
-    require(facts["opening_account_classifications"] == multi_inputs[module]["opening_account_classifications"], f"{module}: reviewed classifications changed")
-    incomplete = multi_inputs[module] | {"opening_account_classifications": dict(multi_inputs[module]["opening_account_classifications"])}
-    omitted_id = next(str(account["id"]) for account in (multi_ar_context if module == "receivables" else multi_ap_context)["opening_accounts"] if account["code"] == omitted_code)
-    del incomplete["opening_account_classifications"][omitted_id]
+    submitted = {str(row["account_id"]): row["classification"] for row in multi_inputs[module]["opening_account_classifications"]}
+    require(facts["opening_account_classifications"] == submitted, f"{module}: reviewed classifications changed")
+    omitted_id = next(account["id"] for account in (multi_ar_context if module == "receivables" else multi_ap_context)["opening_accounts"] if account["code"] == omitted_code)
+    incomplete = multi_inputs[module] | {"opening_account_classifications": [dict(row) for row in multi_inputs[module]["opening_account_classifications"] if row["account_id"] != omitted_id]}
     refusal = plan(channel, [operation(key, multi_company, **incomplete)], "approver")
     refusal_text = json.dumps(refusal)
     require(refusal.get("valid") is False and omitted_code in refusal_text and omitted_amount in refusal_text, f"{module}: omitted historical control was not named")
@@ -180,7 +183,7 @@ ap_context=read(channel,"finance.payables.opening.context",company,"approver")
 inputs={"receivables":{"source_reference":"AR-SOURCE","currency_code":"MYR","series_id":invoice_series,"csv":ar_csv,"opening_account_classifications":opening_classifications(ar_context)},"payables":{"source_reference":"AP-SOURCE","currency_code":"MYR","csv":ap_csv,"opening_account_classifications":opening_classifications(ap_context)},"fixed_assets":{"source_reference":"ASSET-SOURCE","currency_code":"MYR","csv":asset_csv}}
 for module,old,new in [("receivables",",3000,1100",",3001,1100"),("payables",",1500,2000",",1501,2000"),("fixed_assets",",1800,96",",1801,96")]:
     changed=inputs[module]|{"csv":inputs[module]["csv"].replace(old,new)}
-    refused(channel,f"finance.{module}.opening.import",company,"reconcile",who="approver",**changed)
+    refused(channel,f"finance.{module}.opening.import",company,"difference",who="approver",**changed)
     require(sql(f"SELECT count(*) FROM finance_{module}_opening_batches WHERE company_id=2")=="0","mismatch wrote records")
 refused(channel,"finance.receivables.opening.import",company,"separation",who="manager",**inputs["receivables"])
 ops=[operation("finance.receivables.opening.import",company,**inputs["receivables"])]

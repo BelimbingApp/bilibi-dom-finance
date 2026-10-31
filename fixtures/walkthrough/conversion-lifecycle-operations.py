@@ -109,7 +109,10 @@ def refused(channel, key, company, contains, who="manager", **values):
 
 def opening_classifications(context):
     roles = {"1100": "receivables_control", "2000": "payables_control"}
-    return {str(account["id"]): roles.get(account["code"], "not_a_control") for account in context["opening_accounts"]}
+    return [
+        {"account_id": account["id"], "classification": roles.get(account["code"], "not_a_control")}
+        for account in context["opening_accounts"]
+    ]
 
 
 # Company 001 is exercised in the browser; Company 002 uses the MCP door.
