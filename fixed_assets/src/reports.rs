@@ -85,7 +85,9 @@ impl FixedAssets {
             .isolation_level(tokio_postgres::IsolationLevel::RepeatableRead)
             .start()
             .await?;
-        let report = self.report_on(&*tx, s, company, date, pins).await?;
+        let report = self
+            .register_report_on(&*tx, s, company, date, pins)
+            .await?;
         tx.commit().await?;
         Ok(report)
     }
@@ -98,7 +100,8 @@ impl FixedAssets {
     ) -> Result<RegisterReport> {
         self.register_report(s, company, date, pins).await
     }
-    pub(crate) async fn report_on(
+    /// Register and reconciliation on the caller's snapshot.
+    pub async fn register_report_on(
         &self,
         c: &dyn OperationClient,
         s: &Scope,

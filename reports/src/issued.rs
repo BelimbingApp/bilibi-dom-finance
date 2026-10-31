@@ -9,10 +9,11 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use tokio_postgres::{GenericClient, Row};
 
-pub(crate) const DATASETS: &[&str] = &["issued"];
+pub(crate) const DATASETS: &[&str] = &["issued", "conversion_signoff"];
 
 const ISO: &str = "YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"";
 const DEFAULT_LIMIT: i64 = 500;
+const ISSUED_BODY_LIMIT: i64 = 1;
 const FIELDS: &[&str] = &[
     "id",
     "tenant_id",
@@ -163,28 +164,78 @@ pub struct EvidencePage {
     pub next: Option<i64>,
 }
 
-pub(crate) async fn page(
-    client: &impl GenericClient,
-    tenant: i64,
-    company_id: i64,
+pub(crate) fn page_options(
     dataset: &str,
     limit: Option<i64>,
     after: Option<i64>,
-) -> Result<EvidencePage> {
+    excluded_kind: Option<&str>,
+) -> Result<(i64, i64)> {
     let limit = limit.unwrap_or(DEFAULT_LIMIT);
     let after = after.unwrap_or(0);
-    if !DATASETS.contains(&dataset) || !(1..=500).contains(&limit) || after < 0 {
+    if !DATASETS.contains(&dataset)
+        || !(1..=500).contains(&limit)
+        || after < 0
+        || (dataset != "issued" && excluded_kind.is_some())
+    {
         return Err(ReportsError::InvalidOption);
     }
+    Ok((
+        if dataset == "issued" {
+            limit.min(ISSUED_BODY_LIMIT)
+        } else {
+            limit
+        },
+        after,
+    ))
+}
+
+pub(crate) struct IssuedPage {
+    ids: Vec<i64>,
+    pub kinds: Vec<String>,
+    next: Option<i64>,
+}
+
+pub(crate) async fn select_issued_page(
+    client: &impl GenericClient,
+    tenant: i64,
+    company_id: i64,
+    limit: Option<i64>,
+    after: Option<i64>,
+    excluded_kind: Option<&str>,
+) -> Result<IssuedPage> {
+    let (limit, after) = page_options("issued", limit, after, excluded_kind)?;
+    let rows = client
+        .query(
+            "SELECT id,kind FROM finance_reports_issued \
+             WHERE tenant_id=$1 AND company_id=$2 AND id>$3 \
+               AND ($5::text IS NULL OR kind <> $5) ORDER BY id LIMIT $4",
+            &[&tenant, &company_id, &after, &limit, &excluded_kind],
+        )
+        .await
+        .map_err(Error::from)?;
+    let ids = rows.iter().map(|row| row.get(0)).collect::<Vec<_>>();
+    let kinds = rows.iter().map(|row| row.get(1)).collect::<Vec<_>>();
+    let next = (rows.len() as i64 == limit)
+        .then(|| ids.last().copied())
+        .flatten();
+    Ok(IssuedPage { ids, kinds, next })
+}
+
+pub(crate) async fn selected_issued_page(
+    client: &impl GenericClient,
+    tenant: i64,
+    company_id: i64,
+    selected: IssuedPage,
+) -> Result<EvidencePage> {
     let row = client
         .query_one(
             &format!(
                 "SELECT COALESCE(json_agg(t ORDER BY t.id),'[]'::json) FROM (SELECT id,tenant_id,company_id,kind,\
                  implementation_version,through_entry_number,content,chart,layout,membership,issued_by_user_id,\
                  issued_by_impersonator_id,to_char(issued_at,'{ISO}') AS issued_at FROM finance_reports_issued \
-                 WHERE tenant_id=$1 AND company_id=$2 AND id>$3 ORDER BY id LIMIT $4) t"
+                 WHERE tenant_id=$1 AND company_id=$2 AND id=ANY($3)) t"
             ),
-            &[&tenant, &company_id, &after, &limit],
+            &[&tenant, &company_id, &selected.ids],
         )
         .await
         .map_err(Error::from)?;
@@ -192,12 +243,50 @@ pub(crate) async fn page(
         Value::Array(rows) => rows,
         _ => Vec::new(),
     };
-    let next = (rows.len() as i64 == limit)
-        .then(|| rows.last().and_then(|row| row["id"].as_i64()))
-        .flatten();
     Ok(EvidencePage {
         fields: FIELDS.to_vec(),
         rows,
-        next,
+        next: selected.next,
     })
+}
+
+pub(crate) async fn page(
+    client: &impl GenericClient,
+    tenant: i64,
+    company_id: i64,
+    dataset: &str,
+    limit: Option<i64>,
+    after: Option<i64>,
+    excluded_kind: Option<&str>,
+) -> Result<EvidencePage> {
+    let (limit, after) = page_options(dataset, limit, after, excluded_kind)?;
+    if dataset == "conversion_signoff" {
+        let fields = vec![
+            "id",
+            "tenant_id",
+            "company_id",
+            "report_id",
+            "reviewer_reference",
+            "note",
+            "attestation",
+            "signed_by_user_id",
+            "signed_by_impersonator_id",
+            "signed_at",
+        ];
+        let rows = client.query("SELECT id,tenant_id,company_id,report_id,reviewer_reference,note,attestation,signed_by_user_id,signed_by_impersonator_id,to_char(signed_at,'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') FROM finance_reports_conversion_signoffs WHERE tenant_id=$1 AND company_id=$2 AND id>$3 ORDER BY id LIMIT $4", &[&tenant,&company_id,&after,&limit]).await.map_err(Error::from)?.iter().map(|r| json!({"id":r.get::<_,i64>(0),"tenant_id":r.get::<_,i64>(1),"company_id":r.get::<_,i64>(2),"report_id":r.get::<_,i64>(3),"reviewer_reference":r.get::<_,String>(4),"note":r.get::<_,String>(5),"attestation":r.get::<_,String>(6),"signed_by_user_id":r.get::<_,i64>(7),"signed_by_impersonator_id":r.get::<_,Option<i64>>(8),"signed_at":r.get::<_,String>(9)})).collect::<Vec<_>>();
+        let next = (rows.len() as i64 == limit)
+            .then(|| rows.last().and_then(|r| r["id"].as_i64()))
+            .flatten();
+        return Ok(EvidencePage { fields, rows, next });
+    }
+    let selected = select_issued_page(
+        client,
+        tenant,
+        company_id,
+        Some(limit),
+        Some(after),
+        excluded_kind,
+    )
+    .await?;
+    selected_issued_page(client, tenant, company_id, selected).await
 }

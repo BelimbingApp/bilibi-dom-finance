@@ -47,13 +47,15 @@ the sealed `Scope` it was handed and an explicit company id.
 | `account_activity` | One account's debits and credits over a window, and the entries behind them, paged |
 | `subscribe` | The ledger's posting notices (`Ledger::subscribe_postings`) |
 | `issue_report` | An immutable issued profit and loss, balance sheet, cash position or trial balance |
+| `conversion_report` | A conversion preview with its opening sources, target balances, reconciliations and explicit limits on one database snapshot |
 | `get_issued_report` | The stored copy, never recomputed |
-| `evidence_datasets`, `evidence_page` | Issued reports and retained source-period schedules for the auditor's pack |
+| `evidence_datasets`, `evidence_page` | Issued reports, immutable conversion sign-offs and retained source-period schedules for the auditor's pack |
 | `previous_period` | The comparison period: as many whole months before, or as many days |
 
 Every amount is a list with one value per column, in the order the periods or
 dates were given; the first column is the reporting period and the rest its
-comparatives. Every report takes `through_entry_number`.
+comparatives. Every management report takes `through_entry_number`. A conversion
+report captures its own entry and source boundaries.
 
 ## Authorization and company scope
 
@@ -63,8 +65,12 @@ ledger calls it makes authorize again: a missing grant or a sibling company
 without tenant-wide reach is `Unauthorized`, and a company the scope cannot see
 is `CompanyNotFound`. Issuing asks for `finance.reports.issue` as well, and
 runs in an audited mutation transaction holding the company's lock, so an
-archived company is `CompanyArchived`. `finance.reports.reports-export` generates and downloads the auditor pack, with ledger view required. All nine source views enable the full evidence pack; otherwise it produces a clearly labelled ledger-and-reports pack. Both capabilities
-are granted to `tenant_owner`.
+archived company is `CompanyArchived`. `finance.reports.sign-off` records an
+accountant's attestation against an issued conversion report.
+`finance.reports.reports-export` generates and downloads the auditor pack, with
+ledger view required. All nine source views enable the full evidence pack;
+otherwise it produces a clearly labelled ledger-and-reports pack. All three
+Reports capabilities are granted to `tenant_owner`.
 
 ## Figures that reproduce
 
@@ -201,11 +207,11 @@ Archived-company history remains readable. Until Base Settings accepts an archiv
 
 ## Auditor pack
 
-`export_auditor_pack(scope, company, as_of)` always collects the complete ledger, trial balance and Reports' issued reports. When the person holds every Finance source view, it also collects every dataset published by the nine Finance siblings, Reports' source-period dataset and the aging summaries. Otherwise it excludes all subledger and source-period datasets, attachment indexes and authority payloads, and labels the result as a ledger-and-reports pack. The manifest explicitly names the excluded source-period records; the page's success message says Payroll and other source records are excluded while retaining payroll journal lines. It never removes ledger lines or makes an incomplete trial balance appear complete. Collection goes through the authorized facades on one PostgreSQL repeatable-read transaction (write-enabled only because Base Authz records its access decisions on the caller's connection). The initial ledger total supplies the one `through_entry_number` for the general ledger, trial balance and aged receivables/payables. The database snapshot also freezes mutable account labels, document states, settings histories and attachment status across all evidence pages; an entry pin alone cannot do this. `as_of` dates the summaries only: evidence includes all company records visible at the snapshot, including drafts and reversals. A page's positive entry cutoff does not truncate the auditor pack.
+`export_auditor_pack(scope, company, as_of)` always collects the complete ledger, trial balance and issued management reports. Conversion reports and their sign-offs require all source views and are explicitly excluded from a ledger-only pack. When the person holds every Finance source view, it also collects every dataset published by the nine Finance siblings, Reports' source-period dataset and the aging summaries. Otherwise it excludes all subledger and source-period datasets, attachment indexes and authority payloads, and labels the result as a ledger-and-reports pack. The manifest explicitly names the excluded source-period records and conversion evidence; the page's success message says Payroll and other source records are excluded while retaining payroll journal lines. It never removes ledger lines or makes an incomplete trial balance appear complete. Collection goes through the authorized facades on one PostgreSQL repeatable-read transaction (write-enabled only because Base Authz records its access decisions on the caller's connection). The initial ledger total supplies the one `through_entry_number` for the general ledger, trial balance and aged receivables/payables. The database snapshot also freezes mutable account labels, document states, settings histories and attachment status across all evidence pages; an entry pin alone cannot do this. `as_of` dates the summaries only: evidence includes all company records visible at the snapshot, including drafts and reversals. A page's positive entry cutoff does not truncate the auditor pack.
 
-The ZIP includes `manifest.json`, one `<module>-<dataset>.csv` per sibling dataset, `reports-source-period.csv`, `issued-reports.csv`, `general-ledger.csv`, JSON and CSV trial balance and aging summaries, `source-file-index.csv`, and exact `authority-payload-<submission-id>.json` files. The attachment index is `attachments-attachment.csv`: it carries filenames, hashes, retention and holds, with `import_mapping_ref` linking statement attachments to `reconciliation-statement.csv#<id>`. Original supporting documents and bank-statement bytes stay in Attachments. Every authority payload's SHA-256 must match before inclusion. General-ledger debit and credit sums must equal the ledger facade's SQL aggregates, or no artifact is published.
+The ZIP includes `manifest.json`, one `<module>-<dataset>.csv` per sibling dataset, `reports-source-period.csv`, `issued-reports.csv`, `reports-conversion_signoff.csv` in a full pack, `general-ledger.csv`, JSON and CSV trial balance and aging summaries, `source-file-index.csv`, and exact `authority-payload-<submission-id>.json` files. The attachment index is `attachments-attachment.csv`: it carries filenames, hashes, retention and holds, with `import_mapping_ref` linking statement attachments to `reconciliation-statement.csv#<id>`. Original supporting documents and bank-statement bytes stay in Attachments. Every authority payload's SHA-256 must match before inclusion. General-ledger debit and credit sums must equal the ledger facade's SQL aggregates, or no artifact is published.
 
-Manifest version 9 adds `coverage`, `excluded_sources` and `coverage_notice`, and records the tenant, company, currency, minor units, actor and impersonator, UTC capture time, PostgreSQL snapshot, entry cutoff, filters, exact-decimal encoding, and each file's SHA-256 and row count (byte size for payloads). CSV uses UTF-8, CRLF and quoted cells; formula-like text is prefixed with an apostrophe even after whitespace or controls. Known numeric fields retain unrounded decimal strings, including negative amounts. Empty datasets still have their frozen headers. Files are collected in a random 0700 temporary directory with 0600 files, paged 500 rows at a time, hashed incrementally and removed on success, failure or cancellation. The compressed archive is checked against `artifacts.max_bytes` before loading into memory.
+Manifest version 10 includes `coverage`, `excluded_sources` and `coverage_notice`. It records the tenant, company, currency, minor units, actor and impersonator, UTC capture time, PostgreSQL snapshot, entry cutoff, filters, exact-decimal encoding, and each file's SHA-256 and row count (byte size for payloads). CSV uses UTF-8, CRLF and quoted cells; formula-like text is prefixed with an apostrophe even after whitespace or controls. Known numeric fields retain unrounded decimal strings, including negative amounts. Empty datasets still have their frozen headers. Files are collected in a random 0700 temporary directory with 0600 files, paged 500 rows at a time, hashed incrementally and removed on success, failure or cancellation. The compressed archive is checked against `artifacts.max_bytes` before loading into memory.
 
 Publication uses Base Artifacts' ordinary retained download policy (`artifacts.storage_root`, `artifacts.retention_days`, `artifacts.max_bytes`). Its private owner validates an immutable UUID reference of kind `auditor-pack` (all source views) or `ledger-pack` (ledger view), and rechecks the export capability, live company and that stored coverage's view grants on create and every read. An existing full pack cannot be downloaded by someone with only ledger access or after any source permission is revoked; generating a new restricted pack never changes that old artifact's protection. Maintenance requires `finance.reports.issue`. `read_auditor_pack(scope, company, artifact_id)` returns only bytes and a trusted filename; `/finance/reports/auditor-packs/{artifact_id}` resolves the session's current company and calls this facade on every click. Base Artifacts reauthenticates the actor, verifies expiry, byte size and hash, and commits read audit evidence before delivering bytes. Shared download delivery sets attachment disposition, private/no-store, nosniff and sandbox headers. Revoking ledger view or export refuses either kind of pack. Revoking another source view refuses an existing full pack; a newly generated pack then contains only ledger and report evidence.
 
@@ -234,3 +240,37 @@ The retained record pins the opening entry, period, currency, timezone, source r
 Source files may be attached through Attachments to the resulting record, under `finance/reports/source_comparative`, `finance/reports/source_movement`, `finance/reports/source_sst` or `finance/reports/source_payroll` as appropriate. The record is final, so files can be added but not replaced or removed. Attachments applies the company's retention policy from the conversion date. Every file read requires ledger view; SST and payroll file reads additionally require that area's view. Importing any schedule requires ledger account management, and importing SST or payroll also requires that area's settings capability. The `source_period` auditor dataset requires ledger, SST and payroll view because the table contains all four kinds; it is included only in an all-Finance pack.
 
 An accounting practitioner has not yet reviewed the comparative layout, source-period tax treatment or payroll bridge. In particular, source summaries must not be treated as evidence that an authority accepted a return or received a payment without the retained source acknowledgement. Reports, filing status and remittance history remain the accountant's responsibility. See [conversion evidence](../ledger/README.md#source-period-schedules-at-conversion) for provenance, cut-off, access, retention and the unsupported historical scope.
+
+## Conversion reports
+
+Use **Conversion reports** under Bookkeeping to issue a permanent reconciliation of the current company's opening records. The reporting date is one as-of date, not a date-range filter.
+
+For example, issue the conversion report after importing opening invoices, bills and assets. It keeps the source balances beside the target trial balance, the entry and register boundaries, all opening source CSVs and correction decisions, receivables and payables detail and control tie-outs, and the asset register's cost and accumulation reconciliation. Each source dataset has its last ID and SHA-256 digest. The report retains bank statement and reconciliation evidence, bank bridges and changes since their finalisation, and the recorded tax and payroll schedules. Other-owner control-account postings stay visible: recognition of opening detail never disguises an unrelated posting.
+
+Enter the reviewer and workpaper references, your review conclusion, and whether bank, tax and payroll schedules apply. An applicable schedule needs a reference; “Not applicable” needs a reason. Unassessed schedules remain unresolved. Review the report's sections, then continue to confirmation and issue it. Issuance freezes the figures, labels, sources and exclusions; later backdated postings, chart changes or opening-register corrections cannot change that copy. A fresh report captures the later state. A changed source invalidates a pending issuance review.
+
+**Issuance is not accountant sign-off.** A person granted `finance.reports.sign-off` opens the issued report, enters their reviewer reference and conclusion (including qualifications), reviews it and signs that exact snapshot. The record keeps their session identity, any impersonator and the database's signing time. It cannot be edited, deleted, truncated or signed twice. Ledger's duty-separation check covers the issuer, original opening preparer, and the preparers and actors recorded in retained source and material configuration evidence; it records any separation-policy exception through the shared control. There is no override-reason input on sign-off. The application records an attestation; it does not establish a person's professional qualification.
+
+### Accounting judgement and limits
+
+The default conclusion is **unassessed**, even when every numeric difference is zero. The accountant must decide the conversion cut-off, completeness, schedule applicability and whether qualifications permit sign-off. Bank bridges identify their own dates and posting, statement and match boundaries; a bridge ending before the report date, an open bridge, a missing bridge or a backdated change requires review. Tax/payroll evidence contains what their modules recorded; it does not reconstruct legacy filings or payroll year-to-date history. External schedules and their reviewer references must cover that gap. Earlier settled transactions, legacy bank matches and historical depreciation postings remain excluded. An asset's projected schedule is not posted history and is omitted from the conversion copy.
+
+Open accounting question: the company and its accountant must agree the wording and supporting workpapers required for an unqualified conversion sign-off. The built-in attestation permits a qualified conclusion and never clears recorded differences or certifies statutory compliance.
+
+All source-view grants are required to preview, issue or read a conversion copy, including through general issued-report reads and evidence exports. A ledger-only auditor pack explicitly excludes conversion copies and sign-offs; a full pack includes them. Each source is read through its owning facade on one database snapshot for a standalone preview, or the reviewed write's company-locked transaction for issuance. Report size is limited to 64 MiB, with complete evidence paging; exceeding the limit refuses the whole report.
+
+### Shared page and agent contracts
+
+| Operation | Input beyond `company_id` | Result |
+| --- | --- | --- |
+| `finance.reports.conversion.preview` | `as_of` | Current reconciliation and retained source evidence |
+| `finance.reports.conversion.list` | optional `after` issued ID | Up to 100 issued reports and next cursor |
+| `finance.reports.conversion.get` | `report_id` | Frozen report and sign-off events |
+| `finance.reports.conversion.issue` | `as_of`, `reviewer_reference`, `note`; optional `bank_status`, `tax_status`, `payroll_status` and corresponding `_reference` fields | Reviewed immutable issued report |
+| `finance.reports.conversion.sign` | `report_id`, `reviewer_reference`, `note` | Reviewed immutable accountant attestation |
+
+Schedule status is `not_assessed` (default), `applicable` or `not_applicable`. Issue requires `finance.reports.issue`; sign requires `finance.reports.sign-off`; every operation also requires all source views. HTTP API, MCP and the page use these same contracts. The page offers the complete retained evidence in sections, 100 records at a time, including source CSV and review references.
+
+Run the conversion walkthrough on a fresh disposable database with `cargo run -p bilibi-finance-walkthrough-fixture --bin conversion`. Its report proof surrounds the existing register-correction lifecycle and checks stale plans, retained source rows beyond one evidence page, permission revocation, backdated control postings, duty separation, immutable issuance and qualified sign-off.
+
+For a small browser fixture, append `-- report-browser` to that command. It keeps Company 003's opening records and an unsigned report, then stops before the bulk corrections. Start the Platform launcher against that database to review, issue and sign through the page.
