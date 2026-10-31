@@ -21,7 +21,7 @@
 //! same scope: an attachment also needs whatever that source asks to read the
 //! record, and answers the source's refusal when it is not readable. Reading
 //! an attachment's metadata ([`Attachments::get_attachment`], the lists)
-//! needs the source's `view_capability` as well as
+//! needs all of the source's `view_capabilities` as well as
 //! `finance.attachments.view`: a list leaves out the attachments of every
 //! source the caller cannot read, and a single read or a retention change of
 //! one is [`AttachmentError::Unauthorized`].

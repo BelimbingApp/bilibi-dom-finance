@@ -297,15 +297,15 @@ pub mod records {
     struct Records {
         kind: &'static str,
         label: &'static str,
-        view: &'static str,
+        view_capabilities: &'static [&'static str],
     }
 
     impl Source for Records {
         fn label(&self) -> &'static str {
             self.label
         }
-        fn view_capability(&self) -> &'static str {
-            self.view
+        fn view_capabilities(&self) -> &'static [&'static str] {
+            self.view_capabilities
         }
         fn document<'a>(
             &'a self,
@@ -330,13 +330,15 @@ pub mod records {
             company_id: i64,
             document_id: i64,
         ) -> Result<SourceDocument, SourceRefusal> {
-            bilibi_company::authorize_work_target(client, scope, company_id, self.view)
-                .await
-                .map_err(|error| match error {
-                    Error::Forbidden | Error::Unauthorized => SourceRefusal::Unauthorized,
-                    Error::NotFound => SourceRefusal::NotFound,
-                    other => SourceRefusal::Failed(other),
-                })?;
+            for capability in self.view_capabilities {
+                bilibi_company::authorize_work_target(client, scope, company_id, capability)
+                    .await
+                    .map_err(|error| match error {
+                        Error::Forbidden | Error::Unauthorized => SourceRefusal::Unauthorized,
+                        Error::NotFound => SourceRefusal::NotFound,
+                        other => SourceRefusal::Failed(other),
+                    })?;
+            }
             let row = client
                 .query_opt(
                     "SELECT label,to_char(record_date,'YYYY-MM-DD'),is_final FROM finance_walkthrough_records \
@@ -357,12 +359,12 @@ pub mod records {
     static OPEN: Records = Records {
         kind: "open",
         label: "Specimen record",
-        view: "finance.ledger.view",
+        view_capabilities: &["finance.ledger.view"],
     };
     static RESTRICTED: Records = Records {
         kind: "restricted",
         label: "Restricted record",
-        view: "finance.ledger.entries.post",
+        view_capabilities: &["finance.ledger.entries.post"],
     };
     // The specimen sources are contributed as the attachments module, the
     // only registered module this example-only crate can speak for.

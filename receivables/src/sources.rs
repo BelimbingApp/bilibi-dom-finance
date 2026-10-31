@@ -70,8 +70,8 @@ impl Source for DocumentSource {
     fn label(&self) -> &'static str {
         "Receivables document"
     }
-    fn view_capability(&self) -> &'static str {
-        VIEW
+    fn view_capabilities(&self) -> &'static [&'static str] {
+        &[VIEW]
     }
     fn document<'a>(
         &'a self,
@@ -91,8 +91,8 @@ impl Source for PaymentSource {
     fn label(&self) -> &'static str {
         "Payment received"
     }
-    fn view_capability(&self) -> &'static str {
-        VIEW
+    fn view_capabilities(&self) -> &'static [&'static str] {
+        &[VIEW]
     }
     fn document<'a>(
         &'a self,

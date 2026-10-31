@@ -55,9 +55,70 @@ fn field_label(key: &str) -> &str {
         "series_id" => "Opening invoice series",
         "source_reference" => "Source reference",
         "currency_code" => "Book currency",
+        "opening_account_classifications" => "Opening account classifications",
         "override_reason" => "Approval exception reason",
         _ => key,
     }
+}
+
+fn posted_classifications(payload: &Value) -> Value {
+    let prefix = "conversion[opening_account_classifications][";
+    let mut values = serde_json::Map::new();
+    if let Some(object) = payload.as_object() {
+        for (key, value) in object {
+            if let Some(id) = key
+                .strip_prefix(prefix)
+                .and_then(|key| key.strip_suffix(']'))
+            {
+                if let Some(classification) = value.as_str() {
+                    values.insert(id.to_owned(), json!(classification));
+                }
+            }
+        }
+    }
+    Value::Object(values)
+}
+
+fn operation_classifications(value: &Value) -> Value {
+    Value::Array(
+        value
+            .as_object()
+            .into_iter()
+            .flatten()
+            .map(|(account_id, classification)| {
+                json!({
+                    "account_id": account_id.parse::<i64>().ok(),
+                    "classification": classification,
+                })
+            })
+            .collect(),
+    )
+}
+
+fn classification_label(value: &str) -> &str {
+    match value {
+        "receivables_control" => "Receivables control",
+        "payables_control" => "Payables control",
+        "not_a_control" => "Not a control",
+        _ => "",
+    }
+}
+
+fn retained_classifications(
+    context: &Value,
+    source_reference: &str,
+) -> Option<serde_json::Map<String, Value>> {
+    let source_reference = source_reference.trim();
+    if source_reference.is_empty() {
+        return None;
+    }
+    context["stage_sources"]
+        .as_array()?
+        .iter()
+        .find(|source| source["source_reference"].as_str() == Some(source_reference))?
+        ["opening_account_classifications"]
+        .as_object()
+        .cloned()
 }
 
 fn render(t: impl Template) -> Result<Html> {
@@ -84,6 +145,7 @@ struct Opening {
     message: Option<(StatusKind, String)>,
     review: Option<Review>,
     columns: ListColumns,
+    classification_columns: ListColumns,
     balance_columns: ListColumns,
     stage_columns: ListColumns,
 }
@@ -95,6 +157,15 @@ impl Opening {
             fields: BTreeMap::new(),
             message: None,
             review: None,
+            classification_columns: ListColumns::mount(
+                "conversion-classifications",
+                vec![
+                    BuiltinColumn::new("account", "Account"),
+                    BuiltinColumn::new("opening", "Opening balance").right(),
+                    BuiltinColumn::new("classification", "Classification"),
+                ],
+            )
+            .map_err(|_| Error::Internal)?,
             stage_columns: ListColumns::mount(
                 "conversion-stages",
                 vec![
@@ -294,7 +365,7 @@ impl Opening {
                     id: "conversion-boundary",
                     kind: StatusKind::Info,
                     body: Html::text(
-                        "Import positive residual invoices or bills only, including partially settled documents. Opening credits, source-period tax detail and historical transactions remain outside this import. Review the complete register against the approved opening control balance.",
+                        "Import positive residual invoices, including partially settled invoices. Map each row to its control account and review each approved opening balance. Opening credits, source-period tax detail and historical transactions remain outside this import.",
                     ),
                     ..Alert::default()
                 })?;
@@ -397,6 +468,95 @@ impl Opening {
                         field = field.readonly();
                     }
                     fields.push(&render(field)?);
+                }
+
+                let units = context["book"]["minor_units"]
+                    .as_i64()
+                    .and_then(bilibi_finance_ledger::MinorUnits::new)
+                    .ok_or(Error::Internal)?;
+                let selected_classifications =
+                    if matches!(self.values["mode"].as_str(), Some("stage" | "reconcile")) {
+                        retained_classifications(
+                            &context,
+                            self.values["source_reference"].as_str().unwrap_or(""),
+                        )
+                    } else {
+                        None
+                    }
+                    .or_else(|| {
+                        self.values["opening_account_classifications"]
+                            .as_object()
+                            .cloned()
+                    })
+                    .or_else(|| {
+                        context["decisions"]
+                            .as_array()
+                            .and_then(|decisions| decisions.last())
+                            .and_then(|decision| {
+                                decision["review"]["opening_account_classifications"].as_object()
+                            })
+                            .cloned()
+                    })
+                    .unwrap_or_default();
+                for (index, account) in context["opening_accounts"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .enumerate()
+                {
+                    let id = account["id"].as_i64().ok_or(Error::Internal)?.to_string();
+                    let opening_balance = account["opening_balance"]
+                        .as_str()
+                        .and_then(|value| bilibi_finance_ledger::Money::parse(value, units).ok())
+                        .map(|value| value.display(units))
+                        .ok_or(Error::Internal)?;
+                    let options = match account["account_type"].as_str() {
+                        Some("asset") => vec![
+                            Choice::new("Receivables control", "receivables_control"),
+                            Choice::new("Not a control", "not_a_control"),
+                        ],
+                        Some("liability") => vec![
+                            Choice::new("Payables control", "payables_control"),
+                            Choice::new("Not a control", "not_a_control"),
+                        ],
+                        _ => return Err(Error::Internal),
+                    };
+                    fields.push(&render(
+                        Combobox::new(
+                            if index == 0 {
+                                "conversion-opening_account_classifications".to_owned()
+                            } else {
+                                format!("conversion-opening-account-{id}")
+                            },
+                            format!("conversion[opening_account_classifications][{id}]"),
+                        )
+                        .label(format!(
+                            "{} · {} *",
+                            account["name"].as_str().unwrap_or(""),
+                            account["code"].as_str().unwrap_or("")
+                        ))
+                        .aria_label(format!(
+                            "Classify {}",
+                            account["code"].as_str().unwrap_or("")
+                        ))
+                        .options(options)
+                        .value(
+                            selected_classifications
+                                .get(&id)
+                                .and_then(Value::as_str)
+                                .unwrap_or(""),
+                        )
+                        .errors(if index == 0 {
+                            self.errors("opening_account_classifications")
+                        } else {
+                            vec![]
+                        })
+                        .hint(format!(
+                            "{} opening balance {}.",
+                            account["account_type"].as_str().unwrap_or("Account"),
+                            opening_balance
+                        )),
+                    )?);
                 }
 
                 let mut options = Vec::new();
@@ -521,6 +681,39 @@ impl Opening {
             if !facts["replaces_batch_id"].is_null() {
                 body.push(&render(Alert{id:"conversion-correction-review",kind:StatusKind::Warning,body:Html::text(&format!("Replace register {} as of the conversion date {}. Reason: {}. Prior records and approvals remain available at their original report boundaries.",facts["replaces_batch_id"],facts["conversion_date"].as_str().unwrap_or(""),facts["reason"].as_str().unwrap_or(""))),..Alert::default()})?);
             }
+            if let Some(classifications) = facts["classified_opening_accounts"].as_array() {
+                let rows = classifications
+                    .iter()
+                    .map(|account| {
+                        FlexRow::new(account["account_id"].to_string())
+                            .cell(
+                                "account",
+                                Cell::text(format!(
+                                    "{} · {}",
+                                    account["account_name"].as_str().unwrap_or(""),
+                                    account["account_code"].as_str().unwrap_or("")
+                                )),
+                            )
+                            .cell("opening", Cell::text(money(&account["opening_balance"])))
+                            .cell(
+                                "classification",
+                                Cell::text(classification_label(
+                                    account["classification"].as_str().unwrap_or(""),
+                                )),
+                            )
+                    })
+                    .collect();
+                let mut classifications = FlexTable::new(
+                    "conversion-classifications",
+                    self.classification_columns.flex_columns(),
+                    rows,
+                );
+                classifications.caption = "Opening account classifications";
+                classifications.zoom = self.classification_columns.zoom;
+                classifications.suggestions = self.classification_columns.flex_suggestions();
+                classifications.add_query = &self.classification_columns.add_query;
+                body.push(&render(classifications)?);
+            }
             if let Some(reconciliation) = facts["reconciliation"].as_array() {
                 let rows = reconciliation
                     .iter()
@@ -642,13 +835,47 @@ impl LiveState<Scope, Error> for Opening {
                     "preview_opening" => {
                         self.review = None;
                         self.fields.clear();
+                        let opening_account_classifications = posted_classifications(value);
+                        let mut scalar_values = value.clone();
+                        if let Some(object) = scalar_values.as_object_mut() {
+                            object.retain(|key, _| {
+                                !key.starts_with("conversion[opening_account_classifications][")
+                            });
+                        }
                         let fields = params::form_values_checked(
-                            value,
+                            &scalar_values,
                             "conversion",
                             crate::opening_csv::MAX_BYTES,
                         )
                         .map_err(Error::refused)?;
                         self.values = json!(fields);
+                        self.values["opening_account_classifications"] =
+                            opening_account_classifications;
+                        let mode = self.values["mode"].as_str().unwrap_or("").to_owned();
+                        if matches!(mode.as_str(), "stage" | "reconcile") {
+                            if let Some(company) = r.scope.current_company().map(|id| id.get()) {
+                                match self
+                                    .pages
+                                    .contracts
+                                    .read(r.scope, CONTEXT, &json!({"company_id":company}))
+                                    .await
+                                {
+                                    Ok(context) => {
+                                        if let Some(classifications) = retained_classifications(
+                                            &context["result"],
+                                            self.values["source_reference"].as_str().unwrap_or(""),
+                                        ) {
+                                            self.values["opening_account_classifications"] =
+                                                Value::Object(classifications);
+                                        }
+                                    }
+                                    Err(error) => {
+                                        self.fail(error);
+                                        return self.body(r.scope).await;
+                                    }
+                                }
+                            }
+                        }
                         let mut input = self.values.clone();
                         input["company_id"] = r
                             .scope
@@ -665,12 +892,8 @@ impl LiveState<Scope, Error> for Opening {
                                 .expect("form object")
                                 .remove("override_reason");
                         }
-                        let contract = if self.values["mode"] == "stage" {
-                            STAGE
-                        } else {
-                            CONTRACT
-                        };
-                        let staged = self.values["mode"] == "reconcile";
+                        let contract = if mode == "stage" { STAGE } else { CONTRACT };
+                        let staged = mode == "reconcile";
                         if let Some(object) = input.as_object_mut() {
                             object.remove("mode");
                             for key in ["part", "part_count", "replaces_batch_id"] {
@@ -690,6 +913,9 @@ impl LiveState<Scope, Error> for Opening {
                                 object.insert("staged".into(), json!(true));
                             }
                         }
+                        let classifications =
+                            operation_classifications(&input["opening_account_classifications"]);
+                        input["opening_account_classifications"] = classifications;
                         let call = Call {
                             scope: r.scope,
                             credential: r.credential,

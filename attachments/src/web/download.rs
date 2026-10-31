@@ -1,6 +1,6 @@
 //! `/finance/attachments/{id}/download` (Bilimbi
 //! `Web.DownloadController`). Every request reads through the facade, which
-//! re-asks the view capability, re-reads the record the file supports and
+//! re-asks every view capability, re-reads the record the file supports and
 //! reads the bytes through Base Artifacts; the delivery headers (attachment,
 //! no sniffing, no caching, sandboxed) come from `FileBody::headers`.
 use crate::{AttachmentError, Attachments};

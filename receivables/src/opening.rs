@@ -3,9 +3,9 @@
 use crate::*;
 use bilibi_agent_api::OperationClient;
 use bilibi_database::Change;
-use bilibi_finance_ledger::{EntryOwner, Money, OpeningContext, PartyLinks};
+use bilibi_finance_ledger::{AccountType, EntryOwner, Money, OpeningContext, PartyLinks};
 use serde_json::{json, Value};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) const HEADER: &[&str] = &[
     "source_id",
@@ -45,13 +45,137 @@ pub(super) struct Prepared {
     pub review: Value,
     context: OpeningContext,
     rows: Vec<Value>,
-    balance: Money,
-    control: i64,
+    balances: BTreeMap<i64, Money>,
+    replaced_accounts: BTreeSet<i64>,
     series: Value,
     existing: Option<Value>,
 }
 
+pub(super) fn opening_classifications(input: &Value) -> Result<BTreeMap<i64, String>> {
+    let value = &input["opening_account_classifications"];
+    let entries: Vec<(i64, &Value)> = if let Some(values) = value.as_object() {
+        values
+            .iter()
+            .map(|(id, value)| {
+                id.parse::<i64>()
+                    .ok()
+                    .filter(|id| *id > 0)
+                    .map(|id| (id, value))
+                    .ok_or_else(|| {
+                        invalid(
+                            "opening_account_classifications",
+                            "account IDs must be positive integers",
+                        )
+                    })
+            })
+            .collect::<Result<_>>()?
+    } else if let Some(values) = value.as_array() {
+        values
+            .iter()
+            .map(|value| {
+                value["account_id"]
+                    .as_i64()
+                    .filter(|id| *id > 0)
+                    .map(|id| (id, &value["classification"]))
+                    .ok_or_else(|| {
+                        invalid(
+                            "opening_account_classifications",
+                            "account IDs must be positive integers",
+                        )
+                    })
+            })
+            .collect::<Result<_>>()?
+    } else {
+        return Err(invalid(
+            "opening_account_classifications",
+            "must classify opening accounts by account ID",
+        ));
+    };
+    if entries.len() > 10_000 {
+        return Err(invalid(
+            "opening_account_classifications",
+            "must contain at most 10000 account classifications",
+        ));
+    }
+    let mut classifications = BTreeMap::new();
+    for (id, value) in entries {
+        let classification = value.as_str().unwrap_or("");
+        if !["receivables_control", "payables_control", "not_a_control"].contains(&classification) {
+            return Err(invalid(
+                "opening_account_classifications",
+                "each account must be a receivables control, payables control, or not a control",
+            ));
+        }
+        if classifications
+            .insert(id, classification.to_owned())
+            .is_some()
+        {
+            return Err(invalid(
+                "opening_account_classifications",
+                format!("account ID {id} is classified more than once"),
+            ));
+        }
+    }
+    Ok(classifications)
+}
+
 impl Receivables {
+    pub(super) async fn validate_opening_classifications(
+        &self,
+        c: &dyn OperationClient,
+        s: &Scope,
+        company: i64,
+        input: &Value,
+    ) -> Result<()> {
+        let classifications = opening_classifications(input)?;
+        let opening = self.ledger.opening_context_on(c, s, company).await?;
+        let book = self.ledger.get_book_on(c, s, company).await?;
+        let chart = self.ledger.list_accounts_on(c, s, company).await?;
+        let mut expected = BTreeSet::new();
+        for account in chart {
+            let Some(balance) = opening.balances.get(&account.id).copied() else {
+                continue;
+            };
+            if balance == Money::ZERO
+                || account.is_group
+                || ![AccountType::Asset, AccountType::Liability].contains(&account.account_type)
+            {
+                continue;
+            }
+            expected.insert(account.id);
+            let classification = classifications.get(&account.id).ok_or_else(|| {
+                invalid(
+                    "opening_account_classifications",
+                    format!(
+                        "classify {} ({}) as a receivables control, payables control, or not a control",
+                        account.code,
+                        balance.display(book.minor_units)
+                    ),
+                )
+            })?;
+            if (classification == "receivables_control"
+                && account.account_type != AccountType::Asset)
+                || (classification == "payables_control"
+                    && account.account_type != AccountType::Liability)
+            {
+                return Err(invalid(
+                    "opening_account_classifications",
+                    format!(
+                        "{} has an incompatible control classification",
+                        account.code
+                    ),
+                ));
+            }
+        }
+        if let Some(id) = classifications.keys().find(|id| !expected.contains(id)) {
+            return Err(invalid(
+                "opening_account_classifications",
+                format!("account ID {id} has no non-zero asset or liability opening balance"),
+            ));
+        }
+        Ok(())
+    }
+
     pub(super) async fn opening_context(
         &self,
         c: &dyn OperationClient,
@@ -62,6 +186,21 @@ impl Receivables {
         self.authorize_on(c, s, company, VIEW).await?;
         let opening = self.ledger.opening_context_on(c, s, company).await?;
         let book = self.ledger.get_book_on(c, s, company).await?;
+        let opening_accounts = self
+            .ledger
+            .list_accounts_on(c, s, company)
+            .await?
+            .into_iter()
+            .filter(|account| {
+                [AccountType::Asset, AccountType::Liability].contains(&account.account_type)
+                    && !account.is_group
+                    && opening
+                        .balances
+                        .get(&account.id)
+                        .is_some_and(|balance| *balance != Money::ZERO)
+            })
+            .map(|account| json!({"id":account.id,"code":account.code,"name":account.name,"account_type":account.account_type,"opening_balance":opening.balances[&account.id]}))
+            .collect::<Vec<_>>();
         let after = input["items_after"].as_i64().unwrap_or(0);
         let limit = input["limit"].as_i64().unwrap_or(200).clamp(1, 500);
         let items: Vec<Value> = c.query("SELECT to_jsonb(i) FROM finance_receivables_opening_items i WHERE tenant_id=$1 AND company_id=$2 AND id>$3 ORDER BY id LIMIT $4", &[&s.tenant(), &company, &after, &(limit + 1)]).await?.iter().map(|row| row.get(0)).collect();
@@ -73,8 +212,10 @@ impl Receivables {
             None
         };
         let total: i64 = c.query_opt("SELECT count(*) FROM finance_receivables_opening_items WHERE tenant_id=$1 AND company_id=$2", &[&s.tenant(), &company]).await?.ok_or(Error::Internal)?.get(0);
+        let stages = c.query("SELECT to_jsonb(s)-'payload'||jsonb_build_object('part_count',payload->'part_count','csv_bytes',octet_length(payload->>'csv')) FROM finance_receivables_opening_stages s WHERE tenant_id=$1 AND company_id=$2 ORDER BY id", &[&s.tenant(), &company]).await?.iter().map(|r|r.get::<_,Value>(0)).collect::<Vec<_>>();
+        let stage_sources = c.query("SELECT jsonb_build_object('source_reference',source_reference,'opening_account_classifications',payload->'opening_account_classifications') FROM (SELECT DISTINCT ON (source_reference) source_reference,payload,id FROM finance_receivables_opening_stages WHERE tenant_id=$1 AND company_id=$2 ORDER BY source_reference,id DESC) source ORDER BY id", &[&s.tenant(), &company]).await?.iter().map(|r|r.get::<_,Value>(0)).collect::<Vec<_>>();
         Ok(
-            json!({"opening":opening,"book":book,"batch":c.query_opt("SELECT to_jsonb(b) || jsonb_build_object('state','reconciled') FROM finance_receivables_opening_batches b WHERE tenant_id=$1 AND company_id=$2 ORDER BY id DESC LIMIT 1",&[&s.tenant(),&company]).await?.map(|r|r.get::<_,Value>(0)),"stages":c.query("SELECT to_jsonb(s)-'payload'||jsonb_build_object('part_count',payload->'part_count','csv_bytes',octet_length(payload->>'csv')) FROM finance_receivables_opening_stages s WHERE tenant_id=$1 AND company_id=$2 ORDER BY id",&[&s.tenant(),&company]).await?.iter().map(|r|r.get::<_,Value>(0)).collect::<Vec<_>>(),"decisions":c.query("SELECT to_jsonb(d) FROM finance_receivables_opening_decisions d WHERE tenant_id=$1 AND company_id=$2 ORDER BY id",&[&s.tenant(),&company]).await?.iter().map(|r|r.get::<_,Value>(0)).collect::<Vec<_>>(),"header":HEADER,"items":items,"item_count":total,"items_next":next}),
+            json!({"opening":opening,"book":book,"opening_accounts":opening_accounts,"batch":c.query_opt("SELECT to_jsonb(b) || jsonb_build_object('state','reconciled') FROM finance_receivables_opening_batches b WHERE tenant_id=$1 AND company_id=$2 ORDER BY id DESC LIMIT 1",&[&s.tenant(),&company]).await?.map(|r|r.get::<_,Value>(0)),"stages":stages,"stage_sources":stage_sources,"decisions":c.query("SELECT to_jsonb(d) FROM finance_receivables_opening_decisions d WHERE tenant_id=$1 AND company_id=$2 ORDER BY id",&[&s.tenant(),&company]).await?.iter().map(|r|r.get::<_,Value>(0)).collect::<Vec<_>>(),"header":HEADER,"items":items,"item_count":total,"items_next":next}),
         )
     }
 
@@ -111,6 +252,7 @@ impl Receivables {
         let series = store::find(c, store::SERIES, s.tenant(), company, Some(series_id))
             .await?
             .ok_or(ReceivableError::SeriesNotFound)?;
+        let classifications = opening_classifications(input)?;
         let existing = c.query_opt("SELECT to_jsonb(b) || jsonb_build_object('state','reconciled') FROM finance_receivables_opening_batches b WHERE tenant_id=$1 AND company_id=$2 AND source_reference=$3",&[&s.tenant(),&company,&reference]).await?.map(|r|r.get::<_,Value>(0));
         if let Some(batch) = existing {
             if batch["source_reference"] != reference
@@ -127,10 +269,11 @@ impl Receivables {
                 let review: Value = row.get(0);
                 if review["replaces_batch_id"] != input["replaces_batch_id"]
                     || review["reason"] != input["reason"]
+                    || opening_classifications(&review)? != classifications
                 {
                     return Err(invalid(
                         "source_reference",
-                        "already identifies different correction instructions",
+                        "already identifies different correction instructions or opening account classifications",
                     ));
                 }
             }
@@ -138,8 +281,8 @@ impl Receivables {
                 review: json!({"state":"reconciled","batch":batch,"already_imported":true,"rows":[],"posts":false}),
                 context,
                 rows: vec![],
-                balance: Money::ZERO,
-                control: 0,
+                balances: BTreeMap::new(),
+                replaced_accounts: BTreeSet::new(),
                 series,
                 existing: Some(batch),
             });
@@ -175,15 +318,77 @@ impl Receivables {
             .as_i64()
             .ok_or(Error::Internal)?;
         let chart = self.ledger.list_accounts_on(c, s, company).await?;
-        let account = chart
-            .iter()
-            .find(|a| a.id == control && a.postable())
-            .ok_or_else(|| {
+        if !chart.iter().any(|a| a.id == control && a.postable()) {
+            return Err(invalid(
+                "csv",
+                "the receivables control account must be active and postable",
+            ));
+        }
+        let mut classified_accounts = Vec::new();
+        let mut control_accounts = BTreeSet::new();
+        let mut expected = BTreeSet::new();
+        for account in &chart {
+            let Some(balance) = context.balances.get(&account.id).copied() else {
+                continue;
+            };
+            if balance == Money::ZERO
+                || account.is_group
+                || ![AccountType::Asset, AccountType::Liability].contains(&account.account_type)
+            {
+                continue;
+            }
+            expected.insert(account.id);
+            let classification = classifications.get(&account.id).ok_or_else(|| {
                 invalid(
-                    "csv",
-                    "the receivables control account must be active and postable",
+                    "opening_account_classifications",
+                    format!(
+                        "classify {} ({}) as a receivables control, payables control, or not a control",
+                        account.code,
+                        balance.display(book.minor_units)
+                    ),
                 )
             })?;
+            if (classification == "receivables_control"
+                && account.account_type != AccountType::Asset)
+                || (classification == "payables_control"
+                    && account.account_type != AccountType::Liability)
+            {
+                return Err(invalid(
+                    "opening_account_classifications",
+                    format!(
+                        "{} has an incompatible control classification",
+                        account.code
+                    ),
+                ));
+            }
+            if classification == "receivables_control" {
+                control_accounts.insert(account.id);
+            }
+            classified_accounts.push(json!({"account_id":account.id,"account_code":account.code,"account_name":account.name,"account_type":account.account_type,"opening_balance":balance,"classification":classification}));
+        }
+        if let Some(id) = classifications.keys().find(|id| !expected.contains(id)) {
+            return Err(invalid(
+                "opening_account_classifications",
+                format!("account ID {id} has no non-zero asset or liability opening balance"),
+            ));
+        }
+        if context
+            .balances
+            .get(&control)
+            .is_some_and(|balance| *balance != Money::ZERO)
+            && classifications.get(&control).map(String::as_str) != Some("receivables_control")
+        {
+            return Err(invalid(
+                "opening_account_classifications",
+                "the configured receivables account must be classified as a receivables control",
+            ));
+        }
+        if control_accounts.is_empty() {
+            return Err(invalid(
+                "opening_account_classifications",
+                "classify at least one approved opening account as a receivables control",
+            ));
+        }
         let requested: std::collections::HashSet<String> = parsed
             .iter()
             .skip(1)
@@ -222,7 +427,7 @@ impl Receivables {
         let mut seen = BTreeSet::new();
         let mut documents = BTreeSet::new();
         let mut rows = vec![];
-        let mut balance = Money::ZERO;
+        let mut balances = BTreeMap::<i64, Money>::new();
         for (index, row) in parsed.into_iter().enumerate().skip(1) {
             let fail = |text: &str| invalid("csv", format!("row {}: {text}", index + 1));
             if row.len() != HEADER.len() {
@@ -275,40 +480,49 @@ impl Receivables {
                     "outstanding must be positive and no greater than original_total; opening credits are not supported",
                 ));
             }
-            if row[7] != account.code {
-                return Err(fail(
-                    "control_account_code must match the configured receivables control",
-                ));
-            }
-            balance = Money::new((balance + residual).amount(), book.minor_units)
+            let account = chart
+                .iter()
+                .find(|a| a.code == row[7] && control_accounts.contains(&a.id))
+                .ok_or_else(|| {
+                    fail("control_account_code must identify an account classified as a receivables control")
+                })?;
+            let balance = balances.entry(account.id).or_insert(Money::ZERO);
+            *balance = Money::new((*balance + residual).amount(), book.minor_units)
                 .map_err(|e| fail(&e.to_string()))?;
-            rows.push(json!({"source_id":row[0],"customer_id":customer_id,"customer_code":row[1],"party_kind":row[8],"customer_name":customer_name,"customer":customer,"document_reference":row[2],"document_date":date.to_string(),"due_date":due.to_string(),"original_total":original,"outstanding":residual,"settled_before_conversion":original-residual,"account_id":control,"account_code":account.code}));
+            rows.push(json!({"source_id":row[0],"customer_id":customer_id,"customer_code":row[1],"party_kind":row[8],"customer_name":customer_name,"customer":customer,"document_reference":row[2],"document_date":date.to_string(),"due_date":due.to_string(),"original_total":original,"outstanding":residual,"settled_before_conversion":original-residual,"account_id":account.id,"account_code":account.code}));
         }
-        let expected = context
-            .balances
-            .get(&control)
-            .copied()
-            .unwrap_or(Money::ZERO);
-        if balance != expected {
-            return Err(invalid(
-                "csv",
-                format!(
-                    "opening invoices total {} does not reconcile to opening control balance {} (difference {})",
-                    balance.display(book.minor_units),
-                    expected.display(book.minor_units),
-                    (balance - expected).display(book.minor_units)
-                ),
-            ));
+        let mut reconciliation = Vec::new();
+        for &id in &control_accounts {
+            let account = chart.iter().find(|a| a.id == id).ok_or(Error::Internal)?;
+            let balance = balances.get(&id).copied().unwrap_or(Money::ZERO);
+            let expected = context.balances.get(&id).copied().unwrap_or(Money::ZERO);
+            if balance != expected {
+                return Err(invalid("csv", format!("opening invoices on {} total {} but the approved opening balance is {} (difference {})", account.code, balance.display(book.minor_units), expected.display(book.minor_units), (balance - expected).display(book.minor_units))));
+            }
+            reconciliation.push(json!({"account_id":id,"account_code":account.code,"register_balance":balance,"opening_balance":expected,"difference":Money::ZERO}));
+        }
+        let account_ids: Vec<i64> = control_accounts.iter().copied().collect();
+        if c.query_opt("SELECT id FROM finance_receivables_payments WHERE tenant_id=$1 AND company_id=$2 AND deposit_account_id=ANY($3::bigint[]) LIMIT 1", &[&s.tenant(), &company, &account_ids]).await?.is_some() {
+            return Err(invalid("csv", "an account used for receipt deposits cannot be a receivables control"));
+        }
+        let source_ids: Vec<&str> = rows
+            .iter()
+            .filter_map(|r| r["source_id"].as_str())
+            .collect();
+        if c.query_opt("SELECT i.id FROM finance_receivables_opening_items i WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.source_id=ANY($3::text[]) AND i.batch_id<>COALESCE($4::bigint,0::bigint) AND NOT EXISTS(SELECT 1 FROM finance_receivables_opening_decisions d WHERE d.tenant_id=$1 AND d.company_id=$2 AND d.replaces_batch_id=i.batch_id) LIMIT 1", &[&s.tenant(), &company, &source_ids, &input["replaces_batch_id"].as_i64()]).await?.is_some() {
+            return Err(invalid("csv", "a source ID is already used by another opening register"));
         }
         if replacement.is_none() && c.query_opt("SELECT id FROM finance_receivables_documents WHERE tenant_id=$1 AND company_id=$2 AND status='issued' AND NOT EXISTS(SELECT 1 FROM finance_receivables_opening_items i WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=finance_receivables_documents.id) LIMIT 1",&[&s.tenant(),&company]).await?.is_some() {return Err(invalid("csv","import opening invoices before issuing ordinary invoices"));}
+        let mut replaced_accounts = BTreeSet::new();
         if let Some(old) = &replacement {
             let old_id = old["id"].as_i64().ok_or(Error::Invalid)?;
             let accounts=c.query("SELECT DISTINCT (source_facts->>'account_id')::bigint FROM finance_receivables_opening_items WHERE tenant_id=$1 AND company_id=$2 AND batch_id=$3",&[&s.tenant(),&company,&old_id]).await?;
-            if accounts.iter().any(|r| r.get::<_, i64>(0) != control) {
-                return Err(invalid(
-                    "csv",
-                    "a correction must retain every previously recognized opening account and its balance",
-                ));
+            for row in accounts {
+                let id: i64 = row.get(0);
+                if !balances.contains_key(&id) {
+                    return Err(invalid("csv","a correction must retain every previously recognized opening account and its balance"));
+                }
+                replaced_accounts.insert(id);
             }
         }
         let approval = self
@@ -323,11 +537,11 @@ impl Receivables {
             )
             .await?;
         Ok(Prepared {
-            review: json!({"state":"previewed","replaces_batch_id":input["replaces_batch_id"],"reason":input["reason"],"staged":input["staged"]==true,"conversion_date":context.entry.entry_date.to_string(),"entry_id":context.entry.id,"entry_number":context.entry.entry_number,"source_reference":reference,"currency_code":book.currency_code,"minor_units":book.minor_units,"rows":rows,"total":balance,"opening_balance":expected,"difference":Money::ZERO,"posts":false,"approval":approval,"already_imported":false}),
+            review: json!({"state":"previewed","replaces_batch_id":input["replaces_batch_id"],"reason":input["reason"],"staged":input["staged"]==true,"conversion_date":context.entry.entry_date.to_string(),"entry_id":context.entry.id,"entry_number":context.entry.entry_number,"source_reference":reference,"currency_code":book.currency_code,"minor_units":book.minor_units,"opening_account_classifications":classifications,"classified_opening_accounts":classified_accounts,"rows":rows,"reconciliation":reconciliation,"posts":false,"approval":approval,"already_imported":false}),
             context,
             rows,
-            balance,
-            control,
+            balances,
+            replaced_accounts,
             series,
             existing: None,
         })
@@ -392,11 +606,11 @@ impl Receivables {
         let entry = p.context.entry;
         let series = p.series;
         let rows = p.rows;
-        let control = p.control;
         let batch=tx.mutate(move |sql|Box::pin(async move {
             let mut changes=vec![];
             let batch=store::save(sql,BATCH,tenant,company,None,json!({"source_reference":source,"source_csv":csv,"currency_code":entry.currency_code,"conversion_date":entry.entry_date.to_string(),"entry_id":entry.id,"entry_number":entry.entry_number,"series_id":series["id"],"recorded_by_user_id":actor,"recorded_by_impersonator_id":imp}),&mut changes).await?;
             for facts in rows {
+                let control = facts["account_id"].as_i64().ok_or(Error::Invalid)?;
                 let total=&facts["outstanding"];
                 let old=store::save(sql,store::DOCUMENTS,tenant,company,None,json!({"kind":"invoice","status":"draft","series_id":series["id"],"customer_id":facts["customer_id"],"currency_code":entry.currency_code,"issue_date":facts["document_date"],"due_date":facts["due_date"],"description":format!("Opening invoice {}",facts["document_reference"].as_str().unwrap_or("")),"subtotal":total,"tax_total":"0","total":total}),&mut changes).await?;
                 let id=old["id"].as_i64().ok_or(Error::Invalid)?;
@@ -410,23 +624,29 @@ impl Receivables {
             }
             Ok((batch,changes))
         })).await?;
-        self.ledger
-            .replace_opening_recognition_on(
-                tx,
-                s,
-                company,
-                &EntryOwner {
-                    module: MODULE.into(),
-                    record: format!("opening:{}", batch["id"]),
-                },
-                input["replaces_batch_id"]
-                    .as_i64()
-                    .map(|id| format!("opening:{id}"))
-                    .as_deref(),
-                control,
-                p.balance,
-            )
-            .await?;
+        let previous = input["replaces_batch_id"]
+            .as_i64()
+            .map(|id| format!("opening:{id}"));
+        for (control, balance) in p.balances {
+            self.ledger
+                .replace_opening_recognition_on(
+                    tx,
+                    s,
+                    company,
+                    &EntryOwner {
+                        module: MODULE.into(),
+                        record: format!("opening:{}", batch["id"]),
+                    },
+                    if p.replaced_accounts.contains(&control) {
+                        previous.as_deref()
+                    } else {
+                        None
+                    },
+                    control,
+                    balance,
+                )
+                .await?;
+        }
         self.record_opening_decision(tx, s, company, &batch, input, &review)
             .await?;
         let mut batch = batch;

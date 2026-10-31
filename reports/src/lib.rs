@@ -3,11 +3,14 @@
 //! ledger: profit and loss for date ranges, the balance sheet and the cash
 //! position as of dates, headline figures for a period against the one before
 //! it, and the entries behind any account's figure. They are management
-//! reports for the company's own use, not statutory financial statements.
+//! reports for the company's own use, not statutory financial statements. The
+//! module also retains source-period conversion schedules as evidence without
+//! turning them into postings, tax returns, payroll runs or remittances.
 //!
-//! Every figure comes from the [`Ledger`] facade; this module stores issued
-//! snapshots and reads none of the ledger's tables. Every function takes the
-//! sealed [`Scope`] it was handed and an explicit company id, and authorizes
+//! Every report figure comes from the [`Ledger`] facade; this module stores
+//! issued snapshots and source-period evidence and reads none of the ledger's
+//! tables. Every function takes the sealed [`Scope`] it was handed and an
+//! explicit company id, and authorizes
 //! the ledger's view capability (`finance.ledger.view`) for the scope's actor
 //! and that company when it runs, through Core Company's `authorize_work_target`: a
 //! missing grant, or a sibling company without tenant-wide reach, is
@@ -36,6 +39,8 @@ mod layout;
 mod pack_owner;
 mod setup;
 mod setup_page;
+mod source_period;
+mod source_period_web;
 mod statement;
 mod web;
 
@@ -87,7 +92,10 @@ inventory::submit! {
             "finance/reconciliation", "finance/einvoice", "finance/payroll",
             "finance/sst", "finance/fixed_assets",
         ],
-        migrations: &[("finance-reports-001-issued", include_str!("../migrations/001-issued.sql"))],
+        migrations: &[
+            ("finance-reports-001-issued", include_str!("../migrations/001-issued.sql")),
+            ("finance-reports-002-source-period", include_str!("../migrations/002-source-period.sql")),
+        ],
         services: &[Service { id: SERVICE, factory: |services| { let reports = Arc::new(Reports {
             db: services.get::<Db>("base/database.pool")?.as_ref().clone(),
             mutations: services.get("base/database.mutations")?,
@@ -124,6 +132,10 @@ inventory::submit! {
                 contracts: services.get(bilibi_agent_api::page::SERVICE)?,
                 display: services.get("base/datetime.display")?,
                 locales: services.get("base/locale.locales")?,
+            }))))
+        } }, Service { id: source_period_web::PAGES, factory: |services| {
+            Ok(Arc::new(bilibi_ui::page::PageService::<Scope, Error>(Arc::new(source_period_web::Pages {
+                contracts: services.get(bilibi_agent_api::page::SERVICE)?,
             }))))
         } }, Service { id: setup_page::PAGES, factory: |services| {
             Ok(Arc::new(bilibi_ui::page::PageService::<Scope, Error>(Arc::new(setup_page::Pages {
@@ -792,7 +804,7 @@ impl Reports {
     /// The datasets [`Reports::evidence_page`] exports, one per table this
     /// module owns.
     pub fn evidence_datasets() -> Vec<&'static str> {
-        issued::DATASETS.to_vec()
+        vec!["issued", "source_period"]
     }
 
     /// One ID-ordered evidence page of `dataset` with explicit fields, rows
@@ -824,6 +836,12 @@ impl Reports {
         after: Option<i64>,
     ) -> Result<EvidencePage> {
         authorize(client, scope, company_id, VIEW).await?;
+        if dataset == "source_period" {
+            authorize(client, scope, company_id, bilibi_finance_sst::VIEW).await?;
+            authorize(client, scope, company_id, bilibi_finance_payroll::VIEW).await?;
+            return source_period::evidence_page(client, scope.tenant(), company_id, limit, after)
+                .await;
+        }
         issued::page(client, scope.tenant(), company_id, dataset, limit, after).await
     }
 

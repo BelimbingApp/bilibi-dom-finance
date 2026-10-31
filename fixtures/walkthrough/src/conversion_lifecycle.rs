@@ -58,7 +58,7 @@ pub async fn prove(
         }
         csv
     };
-    let common = json!({"source_reference":"AR-CORRECTED","currency_code":"MYR","series_id":config["invoice_series"],"replaces_batch_id":batches[0]["id"],"reason":"Replace incomplete source invoice detail","part_count":20});
+    let common = json!({"source_reference":"AR-CORRECTED","currency_code":"MYR","series_id":config["invoice_series"],"replaces_batch_id":batches[0]["id"],"reason":"Replace incomplete source invoice detail","part_count":20,"opening_account_classifications":config["opening_account_classifications"]});
     let mut part1 = common.clone();
     part1["part"] = json!(1);
     part1["csv"] = json!(chunk(0, 500));
@@ -110,7 +110,7 @@ pub async fn prove(
         }
         csv
     };
-    let ap_common = json!({"source_reference":"AP-CORRECTED","currency_code":"MYR","replaces_batch_id":batches[1]["id"],"reason":"Correct source bill original total","part_count":20});
+    let ap_common = json!({"source_reference":"AP-CORRECTED","currency_code":"MYR","replaces_batch_id":batches[1]["id"],"reason":"Correct source bill original total","part_count":20,"opening_account_classifications":config["opening_account_classifications"]});
     let revision = config["revision"].as_i64().unwrap();
     let asset_header="source_id,description,category_revision_id,acquisition_date,in_service_date,cost,accumulated_depreciation,remaining_life_months,residual_value\n";
     let asset_chunk = |start, end| {
@@ -388,7 +388,7 @@ pub async fn prove(
     );
     assert!(ar.record_payment(&approver,company,&json!({"series_id":config["payment_series"],"customer_id":config["customer_id"],"payment_date":"2026-08-01","amount":"5","deposit_account_id":config["bank"],"allocations":[{"document_id":invoice,"amount":"5"}]})).await.is_err());
     // Old source exports survive and identical historical retries remain safe.
-    assert_eq!(ar.import_opening_invoices(&approver,company,&json!({"source_reference":batches[0]["source_reference"],"currency_code":"MYR","series_id":config["invoice_series"],"csv":batches[0]["source_csv"]})).await?,batches[0]);
+    assert_eq!(ar.import_opening_invoices(&approver,company,&json!({"source_reference":batches[0]["source_reference"],"currency_code":"MYR","series_id":config["invoice_series"],"csv":batches[0]["source_csv"],"opening_account_classifications":config["opening_account_classifications"]})).await?,batches[0]);
     let opening = ledger
         .opening_context_on(&**db.get().await?, &approver, company)
         .await?;

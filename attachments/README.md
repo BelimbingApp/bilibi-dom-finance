@@ -32,7 +32,7 @@ it with a sealed `Scope` and an explicit company id. Results are plain records
 | `extend_retention` | `retention.manage` + `view` | Moves one attachment's retain-until later, with a reason |
 | `place_hold` / `release_hold` | `retention.manage` + `view` | A legal hold on the bytes, with a reason |
 | `refresh_retention` | none (the source's own read) | Queues the retention refresh for a record that has just become final |
-| `list_attachments`, `list_company_attachments`, `list_sources`, `get_attachment`, `read_attachment` | `view` + the source's view capability | The reads; a source the caller cannot read is left out of every list |
+| `list_attachments`, `list_company_attachments`, `list_sources`, `get_attachment`, `read_attachment` | `view` + all of the source's view capabilities | The reads; a source the caller cannot read is left out of every list |
 | `evidence_page` | `view` | One ID-ordered page of the `attachment`, `attachment_event` and `retention_change` datasets for the auditor's pack |
 
 Capabilities are `finance.attachments.view`, `.create`, `.delete` and
@@ -50,10 +50,11 @@ lock in an audited `MutationBoundary` transaction. Errors are
 A Finance module that keeps source documents contributes one `SourceDefinition`
 per kind of record to the `finance/attachments.sources` catalog, under the id
 `<its module id>/<record kind>` (`finance/payables/bill`). Its `Source` says
-how a record is named (`label`), the capability that reads it
-(`view_capability`) and, for a record id, its `label`, `date` and `is_final`
-on the caller's connection and with the caller's scope. The source authorizes
-the read itself and answers `SourceRefusal::NotFound` or `Unauthorized`. The
+how a record is named (`label`), every capability that reads it
+(`view_capabilities`) and, for a record id, its `label`, `date` and `is_final`
+on the caller's connection and with the caller's scope. Attachments authorizes
+every declared capability before asking the source to authorize and read the
+record. The source answers `SourceRefusal::NotFound` or `Unauthorized`. The
 attachments facade stores the source id and the contributing module with each
 attachment and never reads the owner's tables.
 

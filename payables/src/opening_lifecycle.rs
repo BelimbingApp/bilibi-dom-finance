@@ -57,7 +57,9 @@ impl Payables {
         if input["currency_code"] != book.currency_code {
             return Err(invalid("currency_code", "must match the book's currency"));
         }
-        let payload = stage_payload(input);
+        self.validate_opening_classifications(c, s, company, input)
+            .await?;
+        let payload = stage_payload(input)?;
         if payload.to_string().len() > 262144 {
             return Err(invalid(
                 "csv",
@@ -124,7 +126,7 @@ impl Payables {
                 .trim()
                 .to_owned();
             let part = input["part"].as_i64().unwrap_or(0) as i32;
-            let payload = stage_payload(input);
+            let payload = stage_payload(input)?;
             tx.mutate(move |sql|Box::pin(async move {
                 let row=sql.query_one("INSERT INTO finance_payables_opening_stages(tenant_id,company_id,source_reference,part,payload,recorded_by_user_id,recorded_by_impersonator_id) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING to_jsonb(finance_payables_opening_stages)",&[&tenant,&company,&reference,&part,&payload,&actor,&imp]).await?;
                 let new:Value=row.get(0);let id=new["id"].as_i64().ok_or(Error::Invalid)?;
@@ -163,7 +165,6 @@ impl Payables {
                 "has missing batches; stage every batch before reconciliation",
             ));
         }
-        // Finalize the retained manifest; callers cannot silently change its mapping.
         for key in ["currency_code", "series_id", "replaces_batch_id", "reason"] {
             if !input[key].is_null() && input[key] != first[key] {
                 return Err(invalid(
@@ -171,6 +172,15 @@ impl Payables {
                     "does not match the staged register instructions",
                 ));
             }
+        }
+        if !input["opening_account_classifications"].is_null()
+            && crate::opening::opening_classifications(input)?
+                != crate::opening::opening_classifications(&first)?
+        {
+            return Err(invalid(
+                "source_reference",
+                "does not match the staged register instructions",
+            ));
         }
         if input["csv"].as_str().is_some_and(|v| !v.is_empty()) {
             return Err(invalid(
@@ -280,7 +290,8 @@ impl Payables {
         Ok(())
     }
 }
-fn stage_payload(input: &Value) -> Value {
+fn stage_payload(input: &Value) -> Result<Value> {
+    let classifications = crate::opening::opening_classifications(input)?;
     let mut value = input.clone();
     if let Some(object) = value.as_object_mut() {
         object.retain(|key, _| {
@@ -289,6 +300,7 @@ fn stage_payload(input: &Value) -> Value {
                 "currency_code",
                 "csv",
                 "series_id",
+                "opening_account_classifications",
                 "replaces_batch_id",
                 "reason",
                 "part",
@@ -298,7 +310,8 @@ fn stage_payload(input: &Value) -> Value {
         });
     }
     value["source_reference"] = json!(input["source_reference"].as_str().unwrap_or("").trim());
-    value
+    value["opening_account_classifications"] = json!(classifications);
+    Ok(value)
 }
 fn stage_manifest(input: &Value) -> Value {
     let mut value = input.clone();

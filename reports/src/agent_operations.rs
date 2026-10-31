@@ -15,7 +15,7 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
-static OWNER: OnceLock<Arc<Reports>> = OnceLock::new();
+pub(crate) static OWNER: OnceLock<Arc<Reports>> = OnceLock::new();
 pub(crate) fn bind(owner: Arc<Reports>) -> Result<(), RegistryError> {
     OWNER
         .set(owner)
