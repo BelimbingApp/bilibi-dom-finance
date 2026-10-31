@@ -55,6 +55,31 @@ fn issue() -> PlannedOperation {
         input: json!({"company_id":COMPANY,"as_of":"2026-08-01","reviewer_reference":"Source closing pack CONVERSION-3; reviewer workpaper C-109","note":"Review unresolved control postings and the external payroll and tax schedules. No historical completeness attestation."}),
     }
 }
+fn opening_import(
+    bank: i64,
+    reference: &str,
+    statement_balance: &str,
+    csv: &str,
+    replaces: Option<i64>,
+) -> PlannedOperation {
+    let mut input = json!({
+        "company_id": COMPANY,
+        "bank_account_id": bank,
+        "source_reference": reference,
+        "statement_source": "Source bank statement at conversion",
+        "statement_balance": statement_balance,
+        "currency_code": "MYR",
+        "csv": csv,
+    });
+    if let Some(replaces) = replaces {
+        input["replaces_bridge_id"] = replaces.into();
+        input["reason"] = "Corrected outstanding deposit amount from source statement".into();
+    }
+    PlannedOperation {
+        key: "finance.reconciliation.opening.import".into(),
+        input,
+    }
+}
 pub async fn before(db: &Db, services: &Services) -> Outcome<Kept> {
     let s = sign_in(db, services, 1, 4).await?;
     let auth = services.get::<Authentication>("base/tenancy.authentication")?;
@@ -66,9 +91,6 @@ pub async fn before(db: &Db, services: &Services) -> Outcome<Kept> {
     let reports = services.get::<Reports>(bilibi_finance_reports::SERVICE)?;
     let ledger = services.get::<Ledger>(bilibi_finance_ledger::SERVICE)?;
     let reconciliation = services.get::<Reconciliation>(bilibi_finance_reconciliation::SERVICE)?;
-    let opening = ledger
-        .opening_context_on(&**db.get().await?, &s, COMPANY)
-        .await?;
     let bank_account_id = ledger
         .list_accounts(&s, COMPANY)
         .await?
@@ -94,6 +116,67 @@ pub async fn before(db: &Db, services: &Services) -> Outcome<Kept> {
             },
         )
         .await?;
+    let registry = services.get::<bilibi_agent_api::Registry>("base/agent_api.registry")?;
+    let first = [opening_import(
+        bank.id,
+        "BANK-OPENING-V1",
+        "9500",
+        "source_id,item_date,description,amount\ndeposit-in-transit,2026-06-30,Deposit in transit,500\n",
+        None,
+    )];
+    let review = plans.preview(&authority, &first).await?;
+    assert_eq!(review["valid"], true, "{review}");
+    plans
+        .commit(
+            &s,
+            &authority,
+            review["plan_code"]
+                .as_str()
+                .ok_or("no opening review code")?,
+            &first,
+        )
+        .await?;
+    let first_bridge = registry
+        .read(
+            db,
+            &s,
+            "finance.reconciliation.opening.current",
+            &json!({"company_id":COMPANY,"bank_account_id":bank.id}),
+        )
+        .await?["result"]["bridge_id"]
+        .as_i64()
+        .ok_or("first opening bank bridge")?;
+    let corrected = [opening_import(
+        bank.id,
+        "BANK-OPENING-V2",
+        "9400",
+        "source_id,item_date,description,amount\ndeposit-in-transit,2026-06-30,Corrected deposit in transit,600\n",
+        Some(first_bridge),
+    )];
+    let review = plans.preview(&authority, &corrected).await?;
+    assert_eq!(review["valid"], true, "{review}");
+    plans
+        .commit(
+            &s,
+            &authority,
+            review["plan_code"]
+                .as_str()
+                .ok_or("no correction review code")?,
+            &corrected,
+        )
+        .await?;
+    let opening = registry
+        .read(
+            db,
+            &s,
+            "finance.reconciliation.opening.context",
+            &json!({"company_id":COMPANY,"bank_account_id":bank.id}),
+        )
+        .await?["result"]
+        .clone();
+    let opening_item = opening["items"][0]["id"]
+        .as_i64()
+        .ok_or("corrected opening bank item")?;
     let grants = services.get::<bilibi_authz::grants::Grants>("base/authz.grants")?;
     for cap in VIEWS {
         grants.set_direct(&s, 2, cap, Some(true)).await?;
@@ -123,21 +206,30 @@ pub async fn before(db: &Db, services: &Services) -> Outcome<Kept> {
             bank.id,
             &NewFile {
                 file_name: "conversion-opening-statement.csv".into(),
-                content: b"Date,Details,Ref,Amount,Balance\n2026-07-01,Opening bank balance,OPENING,10000,10000\n".to_vec(),
+                content: b"Date,Details,Ref,Amount,Balance\n2026-07-02,Outstanding deposit,OPENING-DEPOSIT,600,10000\n".to_vec(),
                 content_type: Some("text/csv".into()),
             },
         )
         .await?;
-    reconciliation
-        .record_match(
+    let opening_match = [PlannedOperation {
+        key: "finance.reconciliation.opening.match".into(),
+        input: json!({
+            "company_id": COMPANY,
+            "bank_account_id": bank.id,
+            "opening_item_id": opening_item,
+            "statement_line_id": statement.statement.lines[0].id,
+        }),
+    }];
+    let review = plans.preview(&authority, &opening_match).await?;
+    assert_eq!(review["valid"], true, "{review}");
+    plans
+        .commit(
             &s,
-            COMPANY,
-            bank.id,
-            &NewMatch {
-                statement_line_ids: vec![statement.statement.lines[0].id],
-                entry_ids: vec![opening.entry.id],
-                note: Some("Opening bank balance".into()),
-            },
+            &authority,
+            review["plan_code"]
+                .as_str()
+                .ok_or("no opening match code")?,
+            &opening_match,
         )
         .await?;
     let opened = reconciliation
@@ -162,7 +254,6 @@ pub async fn before(db: &Db, services: &Services) -> Outcome<Kept> {
     reconciliation
         .finalise_reconciliation(&manager, COMPANY, opened.id)
         .await?;
-    let registry = services.get::<bilibi_agent_api::Registry>("base/agent_api.registry")?;
     let preview = registry
         .read(
             db,
@@ -179,6 +270,41 @@ pub async fn before(db: &Db, services: &Services) -> Outcome<Kept> {
         .as_array()
         .unwrap()
         .is_empty());
+    let opening_bridges = preview["sources"]["bank"]["opening_bridge"]["rows"]
+        .as_array()
+        .ok_or("retained opening bank bridges")?;
+    assert_eq!(opening_bridges.len(), 2);
+    assert_eq!(opening_bridges[0]["source_reference"], "BANK-OPENING-V1");
+    assert_eq!(opening_bridges[1]["source_reference"], "BANK-OPENING-V2");
+    assert_eq!(
+        opening_bridges[1]["statement_source"],
+        "Source bank statement at conversion"
+    );
+    assert_eq!(opening_bridges[1]["statement_balance"], "9400.0000");
+    assert_eq!(opening_bridges[1]["book_balance"], "10000.0000");
+    assert_eq!(opening_bridges[1]["replaces_bridge_id"], first_bridge);
+    assert_eq!(
+        opening_bridges[1]["reason"],
+        "Corrected outstanding deposit amount from source statement"
+    );
+    assert_eq!(
+        opening_bridges[1]["review"]["source_reference"],
+        "BANK-OPENING-V2"
+    );
+    assert_eq!(
+        opening_bridges[1]["source_csv"],
+        "source_id,item_date,description,amount\ndeposit-in-transit,2026-06-30,Corrected deposit in transit,600\n"
+    );
+    let opening_items = preview["sources"]["bank"]["opening_item"]["rows"]
+        .as_array()
+        .ok_or("retained opening bank items")?;
+    assert_eq!(opening_items.len(), 2);
+    assert_eq!(opening_items[1]["source_id"], "deposit-in-transit");
+    assert_eq!(opening_items[1]["amount"], "600.0000");
+    assert_eq!(
+        preview["sources"]["bank"]["match_opening_item"]["rows"][0]["opening_item_id"],
+        opening_item
+    );
     assert_eq!(
         preview["bank_bridges"][0]["source_activity_after_finalisation"],
         false

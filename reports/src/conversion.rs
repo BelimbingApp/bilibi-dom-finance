@@ -254,6 +254,9 @@ impl Reports {
             "bank",
             self.sources.reconciliation,
             [
+                "opening_bridge",
+                "opening_item",
+                "match_opening_item",
                 "bank_account",
                 "statement",
                 "statement_line",
