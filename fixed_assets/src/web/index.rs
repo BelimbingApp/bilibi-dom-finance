@@ -619,7 +619,7 @@ impl Index {
         let mut pager = Pagination::new("assets-pagination", counts, &[25, 50, 100]);
         pager.filters_event = "filter";
         let reconciliation = if let Some(r) = &report {
-            // The reproduce link carries the period and pins only.
+            // The reproduce link carries the filters, period and pins.
             let mut query = self.list.to_params();
             query.extend(self.period_params());
             for (key, value) in PINS.into_iter().zip([

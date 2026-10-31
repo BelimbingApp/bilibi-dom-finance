@@ -1,7 +1,5 @@
 # Opening asset register
 
-Open **Fixed assets → Fixed assets**, then choose **Opening asset register**. Review and approve the batch in its dialog. The list then shows opening assets, and each row opens the ordinary asset page. Filter by **Source** and **Status**; reconciliation always covers the whole register.
-
 Read finance.fixed_assets.opening.context for the current company's approved conversion entry, book precision, exact CSV header, retained batch and imported item identifiers. Prepare setup and mapping in separate reviewed writes; plans preview dependent steps before executing earlier steps.
 
 Use finance.fixed_assets.opening.import with company_id, source_reference, currency_code and csv. Preview the complete register and inspect each source ID, date, amount and account mapping, then commit the exact reviewed input once. The register must reconcile exactly to the approved opening accounts. Import creates no ledger entry or source-period tax lines. The reviewer must be independent of the opening journal's source preparer. An override_reason invokes the existing duty-separation controls and records an exception; it is not a bypass.
@@ -16,4 +14,4 @@ Preview returns `state: "previewed"`. A retained source batch returns `state: "c
 
 Asset corrections retain source cost and accumulation and replace prospective assumptions. Reverse a standing disposal before its depreciation runs, newest run first. Reversed months remain consumed; the next unconsumed month catches up the corrected prospective schedule. The opening journal remains protected against reversal, including after correction. Changing its recognized balances is refused; never repair import state with ordinary invoices, bills, acquisitions or repeated postings.
 
-Follow the [opening-register conversion rules](README.md#opening-asset-register-at-conversion) for source balances, remaining life and the full first-month convention. Depreciation runs and disposal still use the existing FixedAssets facade/UI; this import does not add missing general asset agent operations.
+Follow the [opening-register conversion rules](README.md#opening-asset-register-at-conversion) for source balances, remaining life and the full first-month convention. For depreciation runs, disposal and the other asset operations, use the [lifecycle guide](lifecycle-guide.md).

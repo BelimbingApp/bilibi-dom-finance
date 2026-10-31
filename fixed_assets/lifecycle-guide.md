@@ -10,7 +10,7 @@ For example, an opening asset with cost 1,200, source accumulation 300 and nine 
 2. Read `finance.fixed_assets.category.list`. Use `category.save` to create a category or append a complete revision. Choose active accounts that accept postings: asset accounts for cost and accumulation, expense accounts for depreciation and losses, and an income account for gains. Cost and accumulation must differ. Every revision needs a reason. Existing assets retain their saved revision.
 3. For opening assets, read `opening.context` and use `opening.import` with its CSV header. Import the complete source register against approved opening balances. See the opening guide for independent approval and exact reconciliation.
 4. For a later acquisition, use `asset.acquire` with a live posted entry or supplier bill and its complete debit line. It retains the source's owner and creates no acquisition posting. Opening aggregate debits are refused here.
-5. Read `asset.get` for source assumptions, projected schedule, posted charges and corrections. Read `register.get` or `schedule.get` with an `as_of` date. Scheduled depreciation is a projection; accumulation is the posted figure plus retained opening accumulation.
+5. Read `asset.get` for source assumptions, projected schedule, posted charges and corrections. Read `register.get` or `schedule.get` with an `as_of` date. `register.get` can filter rows by source and status; its reconciliation still covers the whole register. `schedule.get` remains unfiltered. Scheduled depreciation is a projection; accumulation is the posted figure plus retained opening accumulation.
 6. Review `run.post` with the month's first day, then commit that exact plan. It posts through month-end, including earlier scheduled depreciation still unposted. Read the charge lines and skipped acquisitions before approving. Open the fiscal year first; closed periods are refused.
 
 ## Dispose and correct
@@ -23,7 +23,7 @@ Use `disposal.reverse` to restore an asset through a new event and the owned led
 
 Every write requires a reviewed plan. Review each dependent step after its prerequisites commit: a category revision, run or disposal can change what a later step would do. If a combined plan changes previously reviewed facts, the whole plan is refused and rolled back. Refresh and review again.
 
-Save the `as_of` date and all four boundaries returned by `register.get`: `through_entry_number`, `through_asset_number`, `through_event_number` and `through_category_revision_id`. Supply all four to reproduce the register and its account reconciliation after later activity, including backdated corrections. Show every difference; never net accounts or companies together.
+Save the `as_of` date, any source or status filters, and all four boundaries returned by `register.get`: `through_entry_number`, `through_asset_number`, `through_event_number` and `through_category_revision_id`. Supply them together to reproduce the selected rows and whole-register reconciliation after later activity, including backdated corrections. Show every difference; never net accounts or companies together.
 
 All actions name `company_id` and recheck access and company status. Writes retain period controls, source ownership and row audits. Amounts finer than the book permits are refused without rounding.
 
