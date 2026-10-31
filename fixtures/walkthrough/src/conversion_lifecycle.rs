@@ -4,7 +4,7 @@ use bilibi_finance_fixed_assets::{DisposalInput, EventInput, FixedAssets};
 use bilibi_finance_ledger::{Ledger, Money};
 use bilibi_finance_payables::{AllocationInput, NewPayment, Payables};
 use bilibi_finance_receivables::Receivables;
-use bilibi_finance_walkthrough_fixture::sign_in;
+
 use bilibi_module_registry::Services;
 use jiff::civil::date;
 use serde_json::{json, Value};
@@ -17,8 +17,8 @@ pub async fn prove(
     run_id: i64,
 ) -> Outcome<()> {
     let company = 3;
-    let preparer = sign_in(db, services, 1, 1).await?;
-    let approver = sign_in(db, services, 1, 4).await?;
+    let preparer = crate::in_company(db, services, 1, company).await?;
+    let approver = crate::in_company(db, services, 4, company).await?;
     let ar = services.get::<Receivables>(bilibi_finance_receivables::SERVICE)?;
     let ap = services.get::<Payables>(bilibi_finance_payables::SERVICE)?;
     let assets = services.get::<FixedAssets>(bilibi_finance_fixed_assets::SERVICE)?;

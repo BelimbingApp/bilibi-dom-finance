@@ -45,6 +45,19 @@ const AP: &str = "source_id,vendor_code,vendor_name,document_reference,document_
 const MULTI_SOURCE: &str = "source_id,account_code,debit,credit\nbank,1000,10000,\nreceivables,1100,2500,\nhistorical-receivables,1110,500,\nasset-cost,1200,12000,\nytd-cost,5000,2000,\npayables,2000,,1200\nhistorical-payables,2010,,300\naccumulation,1290,,1800\ncapital,3000,,18200\nytd-sales,4000,,5500\n";
 const MULTI_AR: &str = "source_id,customer_code,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind\ninvoice-17,company_010,OLD-INV-17,2026-05-15,2026-06-30,5000,2500,1100,company\ninvoice-18,company_010,OLD-INV-18,2026-04-15,2026-05-31,1000,500,1110,company\n";
 const MULTI_AP: &str = "source_id,vendor_code,vendor_name,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind\nbill-29,company_010,Conversion vendor,OLD-BILL-29,2026-05-01,2026-06-15,2500,1200,2000,company\nbill-30,company_010,Conversion vendor,OLD-BILL-30,2026-04-01,2026-05-15,900,300,2010,company\n";
+async fn in_company(
+    db: &Db,
+    services: &Services,
+    user: i64,
+    company: i64,
+) -> Outcome<bilibi_tenancy::Scope> {
+    let authentication =
+        services.get::<bilibi_tenancy::Authentication>("base/tenancy.authentication")?;
+    let c = db.get().await?;
+    Ok(authentication
+        .authenticate_session(&**c, 1, user, None, Some(company), String::new())
+        .await?)
+}
 async fn setup(db: &Db, services: &Services, company: i64) -> Outcome<Value> {
     let admin = sign_in(db, services, 1, 4).await?;
     // Workplace reach is explicit on the pinned Platform. Capability grants
@@ -64,8 +77,8 @@ async fn setup(db: &Db, services: &Services, company: i64) -> Outcome<Value> {
             users.set_desk(&admin, company, person, true).await?;
         }
     }
-    let admin = sign_in(db, services, 1, 4).await?;
-    let manager = sign_in(db, services, 1, 1).await?;
+    let admin = in_company(db, services, 4, company).await?;
+    let manager = in_company(db, services, 1, company).await?;
     let multiple_controls = company == 4;
     let l = services.get::<Ledger>(bilibi_finance_ledger::SERVICE)?;
     let ar = services.get::<Receivables>(bilibi_finance_receivables::SERVICE)?;
@@ -284,8 +297,8 @@ async fn prove_opening_invoice_page_scale(db: &Db, services: &Services) -> Outco
     const HEADER: &str = "source_id,customer_code,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind\n";
     let company = 5;
     let config = setup(db, services, company).await?;
-    let admin = sign_in(db, services, 1, 4).await?;
-    let manager = sign_in(db, services, 1, 1).await?;
+    let admin = in_company(db, services, 4, company).await?;
+    let manager = in_company(db, services, 1, company).await?;
     let ar = services.get::<Receivables>(bilibi_finance_receivables::SERVICE)?;
     let registry = services.get::<Registry>("base/agent_api.registry")?;
     let mut rows = vec![
@@ -406,8 +419,8 @@ async fn prove_opening_invoice_page_scale(db: &Db, services: &Services) -> Outco
 async fn prove(db: &Db, services: &Services) -> Outcome<()> {
     let company = 3;
     let config = setup(db, services, company).await?;
-    let s = sign_in(db, services, 1, 4).await?;
-    let manager = sign_in(db, services, 1, 1).await?;
+    let s = in_company(db, services, 4, company).await?;
+    let manager = in_company(db, services, 1, company).await?;
     let viewer = sign_in(db, services, 1, 2).await?;
     let l = services.get::<Ledger>(bilibi_finance_ledger::SERVICE)?;
     let ar = services.get::<Receivables>(bilibi_finance_receivables::SERVICE)?;
@@ -1197,8 +1210,8 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
 async fn prove_historical_controls(db: &Db, services: &Services) -> Outcome<()> {
     let company = 4;
     let config = setup(db, services, company).await?;
-    let reviewer = sign_in(db, services, 1, 4).await?;
-    let manager = sign_in(db, services, 1, 1).await?;
+    let reviewer = in_company(db, services, 4, company).await?;
+    let manager = in_company(db, services, 1, company).await?;
     let ledger = services.get::<Ledger>(bilibi_finance_ledger::SERVICE)?;
     let ar = services.get::<Receivables>(bilibi_finance_receivables::SERVICE)?;
     let ap = services.get::<Payables>(bilibi_finance_payables::SERVICE)?;
