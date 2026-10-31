@@ -520,7 +520,7 @@ fn read_date<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Date
 }
 
 fn read_money<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Money, D::Error> {
-    let amount = Decimal::deserialize(d)?;
+    let amount = <Decimal as serde::Deserialize>::deserialize(d)?;
     Money::new(amount, bilibi_finance_ledger::MinorUnits::new(4).unwrap())
         .map_err(serde::de::Error::custom)
 }

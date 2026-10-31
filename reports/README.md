@@ -55,7 +55,7 @@ the sealed `Scope` it was handed and an explicit company id.
 Every amount is a list with one value per column, in the order the periods or
 dates were given; the first column is the reporting period and the rest its
 comparatives. Every management report takes `through_entry_number`. A conversion
-report captures its own entry and source boundaries.
+report captures its own ledger-entry boundary and each subledger's opening-batch and settlement boundaries.
 
 ## Authorization and company scope
 
@@ -245,7 +245,7 @@ An accounting practitioner has not yet reviewed the comparative layout, source-p
 
 Use **Conversion reports** under Bookkeeping to issue a permanent reconciliation of the current company's opening records. The reporting date is one as-of date, not a date-range filter.
 
-For example, issue the conversion report after importing opening invoices, bills and assets. It keeps the source balances beside the target trial balance, the entry and register boundaries, all opening source CSVs and correction decisions, receivables and payables detail and control tie-outs, and the asset register's cost and accumulation reconciliation. Each source dataset has its last ID and SHA-256 digest. The report retains bank statement and reconciliation evidence, bank bridges and changes since their finalisation, and the recorded tax and payroll schedules. Other-owner control-account postings stay visible: recognition of opening detail never disguises an unrelated posting.
+For example, issue the conversion report after importing the customer, supplier and asset opening registers. It keeps the source balances beside the target trial balance, the entry, register and settlement boundaries, all opening source CSVs and correction decisions, receivables and payables detail and control tie-outs, and the asset register's cost and accumulation reconciliation. Each source dataset has its last ID and SHA-256 digest. The report retains bank statement and reconciliation evidence, bank bridges and changes since their finalisation, and the recorded tax and payroll schedules. Other-owner control-account postings stay visible: recognition of opening detail never disguises an unrelated posting.
 
 Enter the reviewer and workpaper references, your review conclusion, and whether bank, tax and payroll schedules apply. An applicable schedule needs a reference; “Not applicable” needs a reason. Unassessed schedules remain unresolved. Review the report's sections, then continue to confirmation and issue it. Issuance freezes the figures, labels, sources and exclusions; later backdated postings, chart changes or opening-register corrections cannot change that copy. A fresh report captures the later state. A changed source invalidates a pending issuance review.
 

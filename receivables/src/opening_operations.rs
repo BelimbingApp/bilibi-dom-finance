@@ -382,14 +382,8 @@ fn tie_out_schema() -> Value {
     ] {
         s["properties"][key] = json!({"type":"integer","minimum":0});
     }
-    s["oneOf"] = json!([
-        {"required":["through_entry_number","through_opening_batch_id","through_settlement_number"]},
-        {"not":{"anyOf":[
-            {"required":["through_entry_number"]},
-            {"required":["through_opening_batch_id"]},
-            {"required":["through_settlement_number"]}
-        ]}}
-    ]);
+    // The facade enforces the all-or-none tuple because the shared operation
+    // schema dialect deliberately has no cross-field combinators.
     s
 }
 inventory::submit! {Contribution::new(DEFINITIONS,"finance/receivables.control-tie-out",Provenance{module:MODULE,source:file!(),line:line!()},&Definitions{operations:&[

@@ -74,9 +74,14 @@ async function opening(module, source) {
   requireProof(credits === 3, "The visible opening-credit filter did not retain its three rows");
   await page.fill(filter, "");
   await page.wait(filter + ' option[value=""][selected]');
-  const records = await page.eval(() => [...document.querySelectorAll("main a[href]")].map(a => a.getAttribute("href")).filter(href => /\/(?:invoices|bills)\/\d+$/.test(href)));
+  const records = await page.eval(() => [...document.querySelectorAll("main a[href]")]
+    .filter(a => /\/(?:invoices|bills)\/\d+$/.test(a.getAttribute("href")))
+    .map(a => ({ href: a.getAttribute("href"), row: a.closest("tr")?.innerText || "" })));
   requireProof(records.length === 5, "Expected the fixture's five mixed opening records on their existing list");
-  return { primary: records[3], historical: records[2] };
+  const primary = records.find(record => /(?:Customer credit|Supplier Credit)/.test(record.row) && record.row.includes("2026-01-01") && record.row.includes("30.00"));
+  const historical = records.find(record => /(?:Customer credit|Supplier Credit)/.test(record.row) && record.row.includes("2026-05-01") && record.row.includes("30.00"));
+  requireProof(primary && historical, "Opening credit rows lost their visible type, date or amount");
+  return { primary: primary.href, historical: historical.href };
 }
 for (const [module, source] of [["receivables", "ar"], ["payables", "ap"]]) {
   const records = await opening(module, source);

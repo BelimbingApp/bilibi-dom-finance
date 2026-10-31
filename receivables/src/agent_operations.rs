@@ -643,15 +643,9 @@ fn schema(required: &[&str], properties: Value) -> Value {
         .collect();
     object(&required, Value::Object(properties))
 }
-fn complete_pins(mut value: Value) -> Value {
-    value["oneOf"] = json!([
-        {"required":["as_of","through_entry_number","through_opening_batch_id","through_settlement_number"]},
-        {"not":{"anyOf":[
-            {"required":["through_entry_number"]},
-            {"required":["through_opening_batch_id"]},
-            {"required":["through_settlement_number"]}
-        ]}}
-    ]);
+fn complete_pins(value: Value) -> Value {
+    // The operation schema dialect has no cross-field combinators. The facade
+    // validates that callers supply all three accounting pins or none.
     value
 }
 fn output() -> Value {
