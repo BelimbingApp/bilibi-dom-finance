@@ -158,6 +158,9 @@ impl Document {
         {
             Ok(value) => {
                 self.balance_pins = value["balance_pins"].clone();
+                if self.balance_pins.is_object() {
+                    self.balance_input = self.balance_pins.clone();
+                }
                 serde_json::from_value(value).ok()
             }
             Err(Error::NotFound) => None,
@@ -1420,8 +1423,15 @@ fn attachments_slot() -> Result<Html> {
 impl LiveState<Scope, Error> for Document {
     fn update<'a>(&'a mut self, r: LiveRequest<'a, Scope>) -> LiveFuture<'a, Error> {
         Box::pin(async move {
-            if let LiveInput::Event(v) = r.input {
-                self.event(r.scope, r.credential, v).await?;
+            match r.input {
+                LiveInput::Event(v) => {
+                    self.event(r.scope, r.credential, v).await?;
+                }
+                LiveInput::Params(query) => {
+                    self.balance_input = super::credits::balance_query(query)?;
+                    self.balance_pins = Value::Null;
+                }
+                LiveInput::Refresh => {}
             }
             self.load(r.scope).await?;
             if self.record.is_none() {
@@ -1430,6 +1440,7 @@ impl LiveState<Scope, Error> for Document {
             }
             Ok(LiveBody {
                 html: self.body(r.scope).await?,
+                query: super::credits::balance_params(&self.balance_pins),
                 ..LiveBody::default()
             })
         })

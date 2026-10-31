@@ -582,3 +582,12 @@ pub(super) fn balance_query(query: &std::collections::HashMap<String, String>) -
     }
     Ok(input)
 }
+
+/// Preserve the complete captured tuple when the live host updates the URL.
+pub(super) fn balance_params(pins: &Value) -> std::collections::HashMap<String, String> {
+    pins.as_object()
+        .into_iter()
+        .flat_map(|fields| fields.iter())
+        .map(|(key, value)| (key.clone(), text(value)))
+        .collect()
+}

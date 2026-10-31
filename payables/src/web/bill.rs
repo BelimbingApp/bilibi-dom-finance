@@ -119,6 +119,7 @@ impl Bill {
                 .await
                 .map_err(|_| Error::Invalid)?;
             self.balance_pins = answer["result"]["balance_pins"].clone();
+            self.balance_input = self.balance_pins.clone();
             if let Some(d) = &mut self.document {
                 d.settlements = serde_json::from_value(answer["result"]["settlements"].clone())
                     .map_err(|_| Error::Internal)?;
@@ -751,7 +752,12 @@ impl LiveState<Scope, Error> for Bill {
     fn update<'a>(&'a mut self, r: LiveRequest<'a, Scope>) -> LiveFuture<'a, Error> {
         Box::pin(async move {
             let reload = match r.input {
-                LiveInput::Refresh | LiveInput::Params(_) => true,
+                LiveInput::Refresh => true,
+                LiveInput::Params(query) => {
+                    self.balance_input = super::credits::balance_query(query)?;
+                    self.balance_pins = Value::Null;
+                    true
+                }
                 LiveInput::Event(v) => self.event(r.scope, r.credential, v).await?,
             };
             if reload {
@@ -759,6 +765,7 @@ impl LiveState<Scope, Error> for Bill {
             }
             Ok(LiveBody {
                 html: self.body(r.scope).await?,
+                query: super::credits::balance_params(&self.balance_pins),
                 ..LiveBody::default()
             })
         })
