@@ -9,8 +9,8 @@ use bilibi_ui::{
         LiveBody, LiveFuture, LiveInput, LiveRequest, LiveState, MountFuture, Page, PageBody,
         PageFuture, PageRequest,
     },
-    params, Alert, BuiltinColumn, Button, ButtonVariant, Card, Cell, Choice, ConfirmDialog, Field,
-    FlexRow, FlexTable, Form, Header, Html, InputKind, ListColumns, PageVariant, StatusKind,
+    params, Alert, BuiltinColumn, Button, ButtonVariant, Card, Cell, Choice, Field, FlexRow,
+    FlexTable, Form, Header, Html, InputKind, ListColumns, PageVariant, StatusKind,
 };
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, sync::Arc};
@@ -28,6 +28,19 @@ struct Review {
     code: String,
     input: Value,
     contract: &'static str,
+    instance: Value,
+}
+#[derive(Template)]
+#[template(
+    source = r#"{% import "dialog.html" as dialog %}{% call dialog::confirm_dialog(id="conversion-confirm-modal",consequence=consequence,detail=detail,confirm=confirm,working="Saving…",confirm_event=event,cancel_event="cancel_review",body=body) %}{% endcall %}"#,
+    ext = "html"
+)]
+struct Confirmation<'a> {
+    consequence: &'a str,
+    detail: &'a str,
+    confirm: &'a str,
+    event: &'a str,
+    body: Html,
 }
 struct State {
     pages: Pages,
@@ -441,7 +454,16 @@ impl State {
                 })?);
             }
             if let Some(review) = self.review.as_ref().filter(|_| self.confirm) {
-                body.push(&render(ConfirmDialog {id:"conversion-confirm-modal",consequence:if review.contract==ISSUE{"Issue this conversion report?"}else{"Sign this issued conversion report?"},detail:&format!("Current company: {name}. Review the report's retained sources, differences and limits before confirming. This record cannot be changed."),confirm:if review.contract==ISSUE{"Issue"}else{"Sign"},confirm_event:if review.contract==ISSUE{"issue"}else{"sign"},cancel_event:"cancel_review",..ConfirmDialog::default()})?);
+                let instance = &review.instance;
+                let banner = render(bilibi_ui::InstanceBanner {
+                    id: "conversion-instance",
+                    tone: StatusKind::Info,
+                    role: instance["environment"].as_str().unwrap_or(""),
+                    label: instance["label"].as_str().unwrap_or(""),
+                    message: instance["notice"].as_str().unwrap_or(""),
+                    ..bilibi_ui::InstanceBanner::default()
+                })?;
+                body.push(&render(Confirmation {consequence:if review.contract==ISSUE {"Issue this conversion report?"}else{"Sign this issued conversion report?"},detail:&format!("Current company: {name}. Review the report's sources, differences and limits before confirming. This record cannot be changed."),confirm:if review.contract==ISSUE {"Issue"}else{"Sign"},event:if review.contract==ISSUE {"issue"}else{"sign"},body:banner})?);
             }
         } else {
             body.push(&render(Alert {
@@ -559,6 +581,7 @@ impl LiveState<Scope, Error> for State {
                                         code: code.into(),
                                         input,
                                         contract,
+                                        instance: review["instance"].clone(),
                                     });
                                 } else {
                                     let fields = &review["results"][0]["error"]["fields"];

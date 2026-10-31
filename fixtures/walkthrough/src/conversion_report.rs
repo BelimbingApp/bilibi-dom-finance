@@ -153,8 +153,6 @@ pub async fn after(db: &Db, services: &Services, kept: Kept) -> Outcome<()> {
                 entry_date: date(2026, 7, 1),
                 description: "Unrelated backdated control posting after conversion issuance".into(),
                 reference: None,
-                owner: None,
-                settlement_account_ids: vec![],
                 lines: vec![
                     NewLine {
                         account_id: account("1100"),
@@ -170,6 +168,7 @@ pub async fn after(db: &Db, services: &Services, kept: Kept) -> Outcome<()> {
                     },
                 ],
             },
+            &Default::default(),
         )
         .await?;
     assert_eq!(
