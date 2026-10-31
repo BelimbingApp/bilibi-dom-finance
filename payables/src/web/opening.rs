@@ -586,7 +586,11 @@ impl Opening {
                         .cell("source", Cell::text(text("source_id")))
                         .cell(
                             "type",
-                            Cell::text(format!("{} · {}", text("item_kind"), text("source_kind"))),
+                            Cell::text(format!(
+                                "{} · {}",
+                                super::format::opening_item_kind(text("item_kind")),
+                                text("source_kind")
+                            )),
                         )
                         .cell("system", Cell::text(text("source_system")))
                         .cell("currency", Cell::text(text("currency_code")))

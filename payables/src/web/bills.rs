@@ -211,7 +211,7 @@ impl Bills {
                         ("All types", ""),
                         ("Bill", "bill"),
                         ("Debit note", "debit_note"),
-                        ("Opening credit", "opening_credit"),
+                        ("Supplier credit", "opening_credit"),
                     ]
                     .map(|(l, v)| Choice::new(l, v))
                     .to_vec(),

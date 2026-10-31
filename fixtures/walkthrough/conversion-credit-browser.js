@@ -63,6 +63,7 @@ async function opening(module, source) {
     await page.wait("#conversion-import");
     const review = await page.eval(() => document.querySelector("main").innerText);
     requireProof(review.includes("5 records") && review.includes('"status":"unknown"') && review.includes('"tax_total":"0"'), "Opening review omitted source rows or tax distinctions");
+    requireProof(review.includes(module === "receivables" ? "Customer credit" : "Supplier credit"), "Opening review mislabelled the domain credit type");
     await page.click("#conversion-import");
     await page.wait(600);
   }
@@ -83,6 +84,7 @@ for (const [module, source] of [["receivables", "ar"], ["payables", "ap"]]) {
   await page.open(origin + records.primary);
   const facts = await page.eval(() => document.querySelector("main").innerText);
   requireProof(facts.includes("53.00") && facts.includes('"tax_total":"3"'), "Record lost its source gross or tax evidence");
+  requireProof(facts.includes(module === "receivables" ? "Customer credit" : "Supplier credit"), "Record mislabelled the domain credit type");
   await page.click("#credit-apply");
   await page.wait("#credit-effective_date");
   await fillCredit("effective_date", "2026-07-16");

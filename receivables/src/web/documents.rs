@@ -291,7 +291,7 @@ impl Documents {
                             ("All types", ""),
                             ("Invoices", "invoice"),
                             ("Credit notes", "credit_note"),
-                            ("Opening credits", "opening_credit"),
+                            ("Customer credits", "opening_credit"),
                         ]
                         .map(|(l, v)| Choice::new(l, v))
                         .to_vec(),

@@ -361,10 +361,10 @@ pub struct MatchApproval {
 }
 impl Document {
     pub fn label(&self) -> String {
-        let kind = if self.document_type == "bill" {
-            "Bill"
-        } else {
-            "Debit note"
+        let kind = match self.document_type.as_str() {
+            "bill" => "Bill",
+            "opening_credit" => "Supplier credit",
+            _ => "Debit note",
         };
         match self.document_number {
             Some(n) => format!("{kind} {n}"),

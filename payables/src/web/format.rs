@@ -9,11 +9,18 @@ use rust_decimal::Decimal;
 
 pub(super) fn kind(document_type: &str) -> &'static str {
     if document_type == "opening_credit" {
-        "Opening credit"
+        "Supplier credit"
     } else if document_type == "bill" {
         "Bill"
     } else {
         "Debit note"
+    }
+}
+pub(super) fn opening_item_kind(kind: &str) -> &str {
+    match kind {
+        "supplier_credit" => "Supplier credit",
+        "bill" => "Bill",
+        _ => kind,
     }
 }
 pub(super) fn number(number: Option<i64>) -> String {

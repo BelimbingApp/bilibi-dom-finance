@@ -13,11 +13,19 @@ use std::collections::BTreeMap;
 
 pub(super) fn kind_label(kind: &str) -> &'static str {
     if kind == "opening_credit" {
-        "Opening credit"
+        "Customer credit"
     } else if kind == "credit_note" {
         "Credit note"
     } else {
         "Invoice"
+    }
+}
+
+pub(super) fn opening_item_kind_label(kind: &str) -> &str {
+    match kind {
+        "customer_credit" => "Customer credit",
+        "invoice" => "Invoice",
+        _ => kind,
     }
 }
 

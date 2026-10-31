@@ -311,7 +311,7 @@ impl Bill {
         if let Some(opening) = &d.opening {
             items.push(f::fact(
                 "Source item kind",
-                opening["item_kind"].as_str().unwrap_or(""),
+                f::opening_item_kind(opening["item_kind"].as_str().unwrap_or("")),
             ));
             items.push(f::fact(
                 "Source kind",

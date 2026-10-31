@@ -672,7 +672,7 @@ impl Receivables {
                 let total=&facts["outstanding"];
                 let description = format!(
                     "Opening {} {}",
-                    if facts["item_kind"] == "customer_credit" { "credit" } else { "invoice" },
+                    if facts["item_kind"] == "customer_credit" { "customer credit" } else { "invoice" },
                     facts["document_reference"].as_str().unwrap_or("")
                 );
                 let old=store::save(sql,store::DOCUMENTS,tenant,company,None,json!({"kind":if facts["item_kind"]=="customer_credit" {"opening_credit"} else {"invoice"},"status":"draft","series_id":series["id"],"customer_id":facts["customer_id"],"currency_code":entry.currency_code,"issue_date":facts["document_date"],"due_date":if facts["due_date"].is_null() { &facts["document_date"] } else { &facts["due_date"] },"description":description,"subtotal":total,"tax_total":"0","total":total}),&mut changes).await?;

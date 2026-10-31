@@ -539,7 +539,7 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
             .unwrap()
             .description
             .as_deref()
-            .is_some_and(|description| description.starts_with("Opening credit ")));
+            .is_some_and(|description| description.starts_with("Opening customer credit ")));
         assert_eq!(
             documents
                 .iter()
@@ -551,6 +551,16 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
             "0"
         );
     }
+    assert!(bills
+        .iter()
+        .find(|d| {
+            d.opening
+                .as_ref()
+                .is_some_and(|s| s["source_id"] == "credit")
+        })
+        .unwrap()
+        .label()
+        .starts_with("Supplier credit "));
     assert!(ar
         .tax_totals(&reviewer, company, &Default::default())
         .await?

@@ -403,7 +403,7 @@ impl Aging {
                                 credit
                                     .document_reference
                                     .as_deref()
-                                    .unwrap_or("Opening credit"),
+                                    .unwrap_or("Customer credit"),
                             )?,
                         )
                         .cell("customer", Cell::text(&c.name))
@@ -415,15 +415,15 @@ impl Aging {
                 );
             }
         }
-        body.push(&render(SectionHeading{title:"Unapplied credits",description:"Credits age from their original source dates and are shown separately from unpaid invoices.",class:"mt-4",..SectionHeading::default()})?);
+        body.push(&render(SectionHeading{title:"Unapplied customer credits",description:"Customer credits age from their original source dates and are shown separately from unpaid invoices.",class:"mt-4",..SectionHeading::default()})?);
         body.push(&render(Card {
             id: "receivables-aging-credits",
             body: f::table(
                 &self.credits,
                 "credits_grid",
-                "Unapplied credits",
+                "Unapplied customer credits",
                 credit_rows,
-                "No unapplied opening credits on this date.",
+                "No unapplied customer credits on this date.",
             )?,
             ..Card::default()
         })?);
