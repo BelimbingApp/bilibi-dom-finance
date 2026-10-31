@@ -227,7 +227,8 @@ impl Reports {
                 "opening_batch",
                 "opening_item",
                 "opening_decision",
-                "opening_stage"
+                "opening_stage",
+                "setup_change"
             ]
         );
         retain!(
@@ -237,7 +238,8 @@ impl Reports {
                 "opening_batch",
                 "opening_item",
                 "opening_decision",
-                "opening_stage"
+                "opening_stage",
+                "settings_change"
             ]
         );
         retain!(
@@ -247,7 +249,8 @@ impl Reports {
                 "opening_batch",
                 "opening_item",
                 "opening_decision",
-                "opening_stage"
+                "opening_stage",
+                "category_revision"
             ]
         );
         retain!(

@@ -318,6 +318,17 @@ pub async fn before(db: &Db, services: &Services) -> Outcome<Kept> {
     assert!(bank_account_changes
         .iter()
         .all(|row| { row["bank_account_id"] == bank.id && row["changed_by_user_id"] == s.user() }));
+    for (area, dataset, actor) in [
+        ("receivables", "setup_change", "changed_by_user_id"),
+        ("payables", "settings_change", "changed_by_user_id"),
+        ("fixed_assets", "category_revision", "recorded_by_user_id"),
+    ] {
+        let rows = preview["sources"][area][dataset]["rows"]
+            .as_array()
+            .ok_or("retained source configuration")?;
+        assert!(!rows.is_empty(), "missing {area} {dataset} provenance");
+        assert!(rows.iter().all(|row| row[actor] == s.user()));
+    }
     assert_eq!(
         preview["bank_bridges"][0]["source_activity_after_finalisation"],
         false
