@@ -262,6 +262,129 @@ async fn setup(db: &Db, services: &Services, company: i64) -> Outcome<Value> {
         json!({"company_id":company,"vendor_id":vendor.id,"vendor_key":format!("vendor:{}", vendor.id),"customer_id":customer.id,"invoice_series":invoice.id,"payment_series":payment.id,"bank":account("1000"),"bank_account_id":bank_account.id,"ar":if multiple_controls { MULTI_AR } else { AR },"ap":if multiple_controls { MULTI_AP } else { AP },"expense":account("5000"),"assets":asset_csv,"revision":revision,"opening_account_classifications":classifications,"historical_ar":if multiple_controls { json!(account("1110")) } else { Value::Null },"historical_ap":if multiple_controls { json!(account("2010")) } else { Value::Null }}),
     )
 }
+async fn prove_opening_invoice_page_scale(db: &Db, services: &Services) -> Outcome<()> {
+    const HEADER: &str = "source_id,customer_code,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind\n";
+    let company = 5;
+    let config = setup(db, services, company).await?;
+    let admin = sign_in(db, services, 1, 4).await?;
+    let manager = sign_in(db, services, 1, 1).await?;
+    let ar = services.get::<Receivables>(bilibi_finance_receivables::SERVICE)?;
+    let registry = services.get::<Registry>("base/agent_api.registry")?;
+    let mut rows = vec![
+        "scale-nonmatching,company_010,OUTSIDE-QUERY,2026-05-15,2026-06-30,0.50,0.50,1100,company"
+            .to_owned(),
+    ];
+    for n in 1..=2100 {
+        let amount = if n == 2100 { "0.50" } else { "1" };
+        rows.push(format!("scale-{n},company_010,SCALE-ROW-{n},2026-05-15,2026-06-30,{amount},{amount},1100,company"));
+    }
+    rows.push(
+        "scale-0,company_010,SCALE-ROW-0,2026-05-15,2026-06-30,900,900,1100,company".to_owned(),
+    );
+    let part_count = rows.len().div_ceil(500);
+    for (index, chunk) in rows.chunks(500).enumerate() {
+        ar.stage_opening_import(
+            &manager,
+            company,
+            &json!({
+                "source_reference":"AR-SCALE",
+                "currency_code":"MYR",
+                "series_id":config["invoice_series"],
+                "csv":format!("{HEADER}{}\n", chunk.join("\n")),
+                "opening_account_classifications":config["opening_account_classifications"],
+                "part":index + 1,
+                "part_count":part_count,
+            }),
+        )
+        .await?;
+    }
+    let reconciliation = json!({
+        "source_reference":"AR-SCALE",
+        "currency_code":"MYR",
+        "series_id":config["invoice_series"],
+        "csv":"",
+        "opening_account_classifications":config["opening_account_classifications"],
+        "staged":true,
+    });
+    assert!(ar
+        .import_opening_invoices(&manager, company, &reconciliation)
+        .await
+        .is_err());
+    ar.import_opening_invoices(&admin, company, &reconciliation)
+        .await?;
+    let ordinary = ar
+        .create_draft(
+            &manager,
+            company,
+            &json!({
+                "kind":"invoice",
+                "series_id":config["invoice_series"],
+                "customer_id":config["customer_id"],
+                "issue_date":"2026-07-02",
+                "description":"SCALE-ROW ordinary invoice",
+                "lines":[{"description":"SCALE-ROW ordinary invoice","quantity":"1","unit_price":"1"}],
+            }),
+        )
+        .await?;
+    ar.issue_document(&manager, company, ordinary.id).await?;
+    let current_draft = ar
+        .create_draft(
+            &manager,
+            company,
+            &json!({
+                "kind":"invoice",
+                "series_id":config["invoice_series"],
+                "customer_id":config["customer_id"],
+                "description":"Current customer search proof",
+            }),
+        )
+        .await?;
+    let client = db.get().await?;
+    let page = registry
+        .call(
+            &**client,
+            &admin,
+            "finance.receivables.document.page",
+            &json!({"company_id":company,"source":"opening","search":"SCALE-ROW","sort":"total","direction":"asc","page":999,"page_size":25}),
+        )
+        .await?;
+    assert_eq!(page["result"]["total"], 2101);
+    assert_eq!(page["result"]["page"], 85);
+    let documents = page["result"]["documents"]
+        .as_array()
+        .ok_or("opening invoice page rows missing")?;
+    assert_eq!(documents.len(), 1);
+    assert_eq!(documents[0]["description"], "Opening invoice SCALE-ROW-0");
+    assert_eq!(documents[0]["document_reference"], "OPEN-2102");
+    assert_eq!(documents[0]["total"], "900");
+    let snapshot_page = registry
+        .call(
+            &**client,
+            &admin,
+            "finance.receivables.document.page",
+            &json!({"company_id":company,"source":"opening","search":"company_010","page":1,"page_size":25}),
+        )
+        .await?;
+    assert_eq!(snapshot_page["result"]["total"], 2102);
+    assert!(snapshot_page["result"]["documents"]
+        .as_array()
+        .is_some_and(|rows| rows.iter().all(|row| row["party_code"] == "company_010")));
+    let current_page = registry
+        .call(
+            &**client,
+            &admin,
+            "finance.receivables.document.page",
+            &json!({"company_id":company,"source":"ordinary","status":"draft","search":"company_010","page":1,"page_size":25}),
+        )
+        .await?;
+    assert_eq!(current_page["result"]["total"], 1);
+    assert_eq!(
+        current_page["result"]["documents"][0]["id"],
+        current_draft.id
+    );
+    println!("Opening invoice scale proof: staged reconciliation, SQL source/search filtering, sorting, count and clamping passed.");
+    Ok(())
+}
 async fn prove(db: &Db, services: &Services) -> Outcome<()> {
     let company = 3;
     let config = setup(db, services, company).await?;
@@ -899,6 +1022,22 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
     }
     conversion_lifecycle::prove(db, services, &config, [a, b, asset_batch], run.id).await?;
     conversion_report::after(db, services, report).await?;
+    prove_opening_invoice_page_scale(db, services).await?;
+    let client = db.get().await?;
+    let bills = registry
+        .call(
+            &**client,
+            &s,
+            "finance.payables.document.page",
+            &json!({"company_id":company,"source":"opening","page":1,"page_size":25}),
+        )
+        .await?;
+    let bill = bills["result"]["documents"][0]
+        .as_object()
+        .ok_or("opening bill page row missing")?;
+    assert!(bill.contains_key("party_code") && bill.contains_key("match_status"));
+    assert!(!bill.contains_key("lines") && !bill.contains_key("match_events"));
+    println!("Opening list contract proof: SQL filtering, sorting, count, clamping and lightweight rows passed.");
     Ok(())
 }
 async fn prove_historical_controls(db: &Db, services: &Services) -> Outcome<()> {
@@ -1049,6 +1188,14 @@ async fn main() -> Outcome<()> {
     let origin = std::env::var("APP_ORIGIN").unwrap_or_else(|_| "http://127.0.0.1:8147".into());
     let app = bilibi_web::App::new(db.clone(), &origin)?;
     bilibi_finance_walkthrough_fixture::without_step_up(&app.services)?;
+    if std::env::args().any(|s| s == "launcher-ordinary") {
+        launcher_ordinary(&db, &app.services).await?;
+        return Ok(());
+    }
+    if std::env::args().any(|s| s == "launcher-credentials") {
+        launcher_credentials(&db, &app.services).await?;
+        return Ok(());
+    }
     install(&db, &app.services).await?;
     // Identity-only fixture repair: the reviewer has a real Person affiliation,
     // so browser sessions can choose the current company. No business rows use SQL.
@@ -1078,6 +1225,25 @@ async fn main() -> Outcome<()> {
     grants
         .set_direct(&admin, 1, "admin.company.tenant-wide.manage", Some(true))
         .await?;
+    if std::env::args().any(|s| s == "opening-list-scale") {
+        prove_opening_invoice_page_scale(&db, &app.services).await?;
+        return Ok(());
+    }
+    if std::env::args().any(|s| s == "prepare-launcher") {
+        // Fixture identity only: the launcher's demo retirement matches the
+        // original generated name. Keep the counterparty these records use.
+        db.get().await?.execute("UPDATE companies SET name='Opening proof counterparty' WHERE tenant_id=1 AND id=10 AND name='Company 010'", &[]).await?;
+        let mut sources = Vec::new();
+        for company in [1, 2, 4] {
+            sources.push(setup(&db, &app.services, company).await?);
+        }
+        std::fs::write(
+            std::env::var("BILIBI_OPENING_PROOF_CONFIG")?,
+            serde_json::to_vec_pretty(&sources)?,
+        )?;
+        println!("Opening list sources prepared. Start the Platform launcher on this disposable database.");
+        return Ok(());
+    }
     if std::env::args().any(|s| s == "serve") {
         for company in [1, 2, 4] {
             println!(
@@ -1101,5 +1267,153 @@ async fn main() -> Outcome<()> {
         prove(&db, &app.services).await?;
         prove_historical_controls(&db, &app.services).await?;
     }
+    Ok(())
+}
+
+// One-door proof: keep the normal Platform launcher and its administrator.
+// This is called after launch-only retirement of the old walkthrough users.
+async fn launcher_credentials(db: &Db, services: &Services) -> Outcome<()> {
+    use bilibi_core::agent_access::{
+        code_challenge, AgentAccess, AuthorizeParams, ClientRegistration, CodeExchange,
+    };
+    use std::{
+        fs::OpenOptions,
+        io::Write,
+        os::unix::fs::OpenOptionsExt,
+        time::{Duration, SystemTime},
+    };
+    if std::env::var("BILIBI_AGENT_PROOF").as_deref() != Ok("disposable") {
+        return Err("disposable proof required".into());
+    }
+    let client = db.get().await?;
+    let row = client
+        .query_one(
+            "SELECT tenant_id,id FROM users WHERE email='ai@agent.my'",
+            &[],
+        )
+        .await?;
+    let (tenant, user): (i64, i64) = (row.get(0), row.get(1));
+    drop(client);
+    let scope = sign_in(db, services, tenant, user).await?;
+    let access = services.get::<AgentAccess>("core/agent_access.grants")?;
+    let callback = "https://example.test/opening-list-proof/callback";
+    let registration=access.register_client(&serde_json::from_value::<ClientRegistration>(json!({"client_name":"Opening list proof","redirect_uris":[callback],"token_endpoint_auth_method":"none"}))?).await?;
+    let client_id = registration["client_id"]
+        .as_str()
+        .ok_or("missing client ID")?;
+    let origin = std::env::var("APP_ORIGIN")?;
+    let mut tokens = serde_json::Map::new();
+    let resource = format!("{}/mcp", origin.trim_end_matches('/'));
+    let verifier = "opening-list-proof-verifier-with-at-least-forty-three-characters";
+    let params = AuthorizeParams {
+        client_id: client_id.into(),
+        redirect_uri: callback.into(),
+        response_type: "code".into(),
+        resource: resource.clone(),
+        scope: Some("bilibi".into()),
+        code_challenge: code_challenge(verifier),
+        code_challenge_method: "S256".into(),
+        state: None,
+    };
+    let code = access
+        .authorize(
+            &scope,
+            &params,
+            &resource,
+            SystemTime::now() + Duration::from_secs(3600),
+        )
+        .await?;
+    let token = access
+        .exchange_code(
+            &CodeExchange {
+                code,
+                client_id: params.client_id,
+                redirect_uri: params.redirect_uri,
+                code_verifier: verifier.into(),
+                resource: resource.clone(),
+            },
+            &resource,
+        )
+        .await?;
+    tokens.insert("mcp".into(), json!(token.access_token));
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(std::env::var("BILIBI_AGENT_CREDENTIALS")?)?;
+    file.write_all(&serde_json::to_vec(&tokens)?)?;
+    println!("Opening list OAuth credentials saved privately.");
+    Ok(())
+}
+
+// Create a normal acquisition after the opening register was approved in the
+// browser. Both kinds must be visible together on the same record list.
+async fn launcher_ordinary(db: &Db, services: &Services) -> Outcome<()> {
+    use bilibi_finance_ledger::{NewEntry, NewLine, PostOptions};
+    if std::env::var("BILIBI_AGENT_PROOF").as_deref() != Ok("disposable") {
+        return Err("disposable proof required".into());
+    }
+    let client = db.get().await?;
+    let row = client
+        .query_one(
+            "SELECT tenant_id,id FROM users WHERE email='ai@agent.my'",
+            &[],
+        )
+        .await?;
+    let (tenant, user): (i64, i64) = (row.get(0), row.get(1));
+    drop(client);
+    let scope = sign_in(db, services, tenant, user).await?;
+    let ledger = services.get::<Ledger>(bilibi_finance_ledger::SERVICE)?;
+    let assets = services.get::<FixedAssets>(bilibi_finance_fixed_assets::SERVICE)?;
+    let book = ledger.get_book(&scope, 1).await?;
+    let accounts = ledger.list_accounts(&scope, 1).await?;
+    let account = |code| {
+        accounts
+            .iter()
+            .find(|a| a.code == code)
+            .map(|a| a.id)
+            .ok_or("proof account missing")
+    };
+    let category = assets
+        .list_categories(&scope, 1)
+        .await?
+        .into_iter()
+        .find(|c| c.name == "Conversion assets")
+        .ok_or("proof category missing")?;
+    let amount = Money::parse("500.00", book.minor_units)?;
+    let entry = ledger
+        .post_entry(
+            &scope,
+            1,
+            &NewEntry {
+                entry_date: date(2026, 10, 1),
+                description: "Ordinary acquisition for list proof".into(),
+                reference: None,
+                lines: vec![
+                    NewLine::debit(account("1200")?, amount),
+                    NewLine::credit(account("1000")?, amount),
+                ],
+            },
+            &PostOptions::default(),
+        )
+        .await?;
+    assets
+        .acquire_from_entry(
+            &scope,
+            1,
+            entry.id,
+            1,
+            &bilibi_finance_fixed_assets::AcquisitionInput {
+                category_revision_id: category.revision.id,
+                description: "Ordinary acquired asset".into(),
+                in_service_date: date(2026, 10, 1),
+                residual_value: None,
+                method: None,
+                life_months: None,
+                annual_rate: None,
+            },
+        )
+        .await?;
+    println!("Ordinary asset prepared through the ledger and Fixed Assets facades.");
     Ok(())
 }

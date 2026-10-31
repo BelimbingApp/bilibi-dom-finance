@@ -121,11 +121,15 @@ impl Receivables {
                 .as_deref()
                 .is_some_and(|s| !["draft", "issued", "discarded"].contains(&s))
             || query.customer_id.is_some_and(|id| id <= 0)
+            || query
+                .source
+                .as_deref()
+                .is_some_and(|source| !matches!(source, "ordinary" | "opening"))
         {
             return Err(R::InvalidOption);
         }
         let sql = format!(
-            "{READ} AND d.id>$3 AND ($4::text IS NULL OR d.kind=$4) AND ($5::text IS NULL OR d.status=$5) AND ($6::bigint IS NULL OR d.customer_id=$6) ORDER BY d.id LIMIT $7"
+            "{READ} AND d.id>$3 AND ($4::text IS NULL OR d.kind=$4) AND ($5::text IS NULL OR d.status=$5) AND ($6::bigint IS NULL OR d.customer_id=$6) AND ($8::text IS NULL OR EXISTS (SELECT 1 FROM finance_receivables_opening_items i WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=d.id)=($8='opening')) ORDER BY d.id LIMIT $7"
         );
         client
             .query(
@@ -138,6 +142,7 @@ impl Receivables {
                     &query.status,
                     &query.customer_id,
                     &limit,
+                    &query.source,
                 ],
             )
             .await

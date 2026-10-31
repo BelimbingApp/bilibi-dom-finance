@@ -157,7 +157,7 @@ The `finance/payables/payment` attachment source describes a payment request fro
 
 ## Reviewed agent operations (H3)
 
-The `finance.payables` guide is contributed to Base Agent API. Ten reads expose settings, tax codes, document/request/payment get/list, `aging.get` and `opening.context`. Fifteen safe writes expose settings put, tax-code create/update, bill create and replace-draft, debit-note create, document approve/post/void, payment submit/approve/reject/reverse, `opening.stage` and `opening.import`. Prefix each with `finance.payables.`. Authentication and single-use consent plans belong to the host; an agent cannot call a write directly. Capability keys remain those of the facade, including additional Ledger checks. See [guide.md](guide.md) for exact fields, omissions, clear flags and the workflow.
+The `finance.payables` guide is contributed to Base Agent API. Reads cover vendors and supplier-key mappings, settings, tax codes, document pages and records, payment requests, payments, aging and opening context. Reviewed writes cover vendor setup and mapping, payables setup, tax codes, bills and debit notes, document decisions, payments and opening imports. Prefix each with `finance.payables.`. Authentication and single-use consent plans belong to the host; an agent cannot call a write directly. Capability keys remain those of the facade, including additional Ledger checks. See [guide.md](guide.md) for exact fields, omissions, clear flags and the workflow.
 
 Reads use stable `after_id` cursors and `page_size` 1–100, not the facade's date/request-number cursors. They list oldest first; `payment_request.list` and `payment.list` take `newest_first` to start from the newest, the cursor then being the lowest ID seen (omit it for the first page), and `next_after_id` is null when no more exist. Document reads omit the potentially unbounded `debit_note_ids` collection; traverse `document.list` with `corrects_document_id` instead. They expose bounded `match_context` (the latest match event and its approved hold, at most two), not complete match history. Immutable document lines/tax groups and payment allocations are bounded by their recording contracts. Agent operations add no pages or assets.
 
@@ -185,7 +185,7 @@ Bills show account codes and names from the ledger account-list contract, and mo
 
 ## Opening bills at accounting system conversion
 
-Import the complete supplier outstanding register against an approved opening trial balance, before posting ordinary bills. Configure the payables control account first, then open **Payables → Opening bills** (`/finance/payables/opening`) for the current company.
+Import the complete supplier outstanding register against an approved opening trial balance, before posting ordinary bills. Configure the payables control account first, then choose **Opening bills** on **Payables → Bills** (`/finance/payables/bills`) for the current company. The reviewed import is a dialog on that list. After approval, the list shows the opening bills and links to their ordinary bill pages. Source and status are columns; the source filter selects all, ordinary or opening bills. Pagination and totals apply after filtering. There is no separate opening-bills route or menu item.
 
 The UTF-8 CSV header is:
 
@@ -210,3 +210,7 @@ The `opening_batch` and `opening_item` evidence datasets retain the exact CSV, r
 Stage a replacement export, then approve the complete reconciliation independently. Source batches, original records and approvals remain immutable. The [opening guide](opening-guide.md) describes batch limits, the conversion-date effect, dependent reversals and historical report pins. `fixtures/walkthrough/src/bin/conversion.rs` proves the lifecycle on a disposable composed database.
 
 For browser/MCP parity, serve the disposable `conversion` fixture, provision credentials with `agent-operations conversion-credentials`, then run `fixtures/walkthrough/conversion-lifecycle-operations.py`. This mode uses the same independent reviewer for both doors; the default contractor fixture retains its Core fact masks.
+
+The Bills page reads `finance.payables.document.page`, with `source` (`ordinary` or `opening`), `status`, `document_type`, `search`, `page` and `page_size` (25, 50 or 100). Its result contains only displayed bill-row fields, not document lines, tax groups, corrections or match history. The cursor-based `finance.payables.document.list` also accepts `source`. Both retain the caller's company and view permission. The opening dialog uses the existing `finance.payables.opening.import` and `.stage` preview/commit contracts.
+
+Readers can open the opening dialog to inspect retained source batches. The import form still requires the module's existing opening-write permission, and approval checks run in the shared contract.

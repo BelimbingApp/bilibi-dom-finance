@@ -3,11 +3,11 @@ use super::{
     input::{self, Draft},
     *,
 };
-use crate::{RegisterReport, ReportPins, ACQUIRE, CONFIGURE, DEPRECIATE, REVERSE};
+use crate::{RegisterReport, ReportPins, ACQUIRE, CONFIGURE, DEPRECIATE, REVERSE, VIEW};
 use bilibi_datetime::{filter::Outcome, Clock, Period, PeriodFilter};
 use bilibi_ui::{
-    Choice, FilterToolbar, FlashMap, InputKind, ListSpec, ListState, Pagination, RecordLink,
-    ToolbarControl,
+    Button, Choice, Filter, FilterToolbar, FlashMap, InputKind, ListSpec, ListState, Pagination,
+    RecordLink, ToolbarControl,
 };
 use std::sync::LazyLock;
 
@@ -15,6 +15,17 @@ static SPEC: LazyLock<Arc<ListSpec>> = LazyLock::new(|| {
     ListSpec {
         page_sizes: vec![25, 50, 100],
         default_page_size: 25,
+        filters: [
+            (
+                "source".into(),
+                Filter::one_of(&["", "ordinary", "opening"], ""),
+            ),
+            (
+                "status".into(),
+                Filter::one_of(&["", "in_service", "disposed", "voided"], ""),
+            ),
+        ]
+        .into(),
         page_size_param: "page_size".into(),
         ..ListSpec::default()
     }
@@ -78,6 +89,7 @@ impl Kind {
                 ("cost", "Cost"),
                 ("accumulated", "Depreciation"),
                 ("carrying", "Carrying value"),
+                ("source", "Source"),
                 ("status", "Status"),
             ],
             Self::Categories => &[
@@ -110,6 +122,7 @@ pub(super) struct Index {
     draft: Draft,
     reverse: Draft,
     flash: Option<(StatusKind, String)>,
+    opening: Option<super::opening::Opening>,
 }
 #[derive(Template)]
 #[template(path = "index.html")]
@@ -117,6 +130,8 @@ struct View<'a> {
     page_dom: String,
     title: &'static str,
     title_actions: Html,
+    actions: Html,
+    opening: Html,
     flash: FlashMap<'a>,
     toolbar: Html,
     period: Html,
@@ -156,6 +171,7 @@ impl Index {
             draft: Draft::default(),
             reverse: Draft::default(),
             flash: None,
+            opening: None,
         })
     }
     fn pins(&self) -> ReportPins {
@@ -191,12 +207,19 @@ impl Index {
         }
         Ok(())
     }
-    /// A filter, page or period change keeps the list state and period but
-    /// drops the report pins, as Bilimbi's `patch_state` does.
     fn canonical(&self) -> HashMap<String, String> {
         let mut query = self.list.to_params();
         query.extend(self.period_params());
+        query.extend(
+            PINS.into_iter()
+                .filter_map(|key| self.query.get(key).map(|value| (key.into(), value.clone()))),
+        );
         query
+    }
+    fn clear_pins(&mut self) {
+        for key in PINS {
+            self.query.remove(key);
+        }
     }
     fn period_params(&self) -> HashMap<String, String> {
         self.period
@@ -400,6 +423,13 @@ impl Index {
                                 serde_json::to_value(self.pins()).map_err(|_| Error::Internal)?;
                             value["company_id"] = c.into();
                             value["as_of"] = serde_json::json!(as_of.to_string());
+                            for key in ["source", "status"] {
+                                if let Some(filter) =
+                                    self.list.filters.get(key).filter(|v| !v.is_empty())
+                                {
+                                    value[key] = serde_json::json!(filter);
+                                }
+                            }
                             value
                         },
                         "report",
@@ -421,6 +451,14 @@ impl Index {
                         .cell("cost", Cell::text(a.cost.display(units)))
                         .cell("accumulated", Cell::text(r.accumulated.display(units)))
                         .cell("carrying", Cell::text(r.carrying_value.display(units)))
+                        .cell(
+                            "source",
+                            Cell::text(if a.opening_date.is_some() {
+                                "Opening"
+                            } else {
+                                "Ordinary"
+                            }),
+                        )
                         .cell(
                             "status",
                             Cell::text(if r.voided {
@@ -548,12 +586,42 @@ impl Index {
                 "Search records…",
             )],
         );
+        if self.kind == Kind::Register {
+            toolbar.controls.push(ToolbarControl::select(
+                "assets-source",
+                "source",
+                "Filter by source",
+                &self.list.filters["source"],
+                [
+                    ("All sources", ""),
+                    ("Ordinary", "ordinary"),
+                    ("Opening", "opening"),
+                ]
+                .map(|(l, v)| Choice::new(l, v))
+                .to_vec(),
+            ));
+            toolbar.controls.push(ToolbarControl::select(
+                "assets-status",
+                "status",
+                "Filter by status",
+                &self.list.filters["status"],
+                [
+                    ("All statuses", ""),
+                    ("In service", "in_service"),
+                    ("Disposed", "disposed"),
+                    ("Voided", "voided"),
+                ]
+                .map(|(l, v)| Choice::new(l, v))
+                .to_vec(),
+            ));
+        }
         toolbar.event = "filter";
         let mut pager = Pagination::new("assets-pagination", counts, &[25, 50, 100]);
         pager.filters_event = "filter";
         let reconciliation = if let Some(r) = &report {
-            // The reproduce link carries the period and pins only.
-            let mut query = self.period_params();
+            // The reproduce link carries the filters, period and pins.
+            let mut query = self.list.to_params();
+            query.extend(self.period_params());
             for (key, value) in PINS.into_iter().zip([
                 r.through_entry_number,
                 r.through_asset_number,
@@ -564,7 +632,7 @@ impl Index {
             }
             render(ReconciliationView {
                 report: r,
-                heading: format!("Ledger reconciliation as of {}", r.as_of),
+                heading: format!("Whole register reconciliation as of {}", r.as_of),
                 reproduce: params::address("/finance/fixed-assets/register", &query),
                 rows: r
                     .reconciliation
@@ -591,6 +659,22 @@ impl Index {
             page_dom: format!("assets-{}", self.kind.key()),
             title: self.kind.title(),
             title_actions: bilibi_ui::Html::EMPTY,
+            actions: if self.kind == Kind::Register && self.pages.allowed(s, VIEW).await? {
+                render(Button {
+                    id: "assets-opening",
+                    button_type: "button",
+                    event: "open_opening",
+                    body: Html::text("Opening asset register"),
+                    ..Button::default()
+                })?
+            } else {
+                Html::EMPTY
+            },
+            opening: if let Some(opening) = &mut self.opening {
+                opening.body(s).await?
+            } else {
+                Html::EMPTY
+            },
             flash: flash_map(&self.flash),
             toolbar: render(toolbar)?,
             period: if self.kind == Kind::Register {
@@ -658,6 +742,7 @@ impl Index {
         let clock = self.clock(s).await?;
         if let Some(outcome) = self.period.as_mut().and_then(|p| p.event(event, v, &clock)) {
             if let Outcome::Applied(p) = outcome {
+                self.clear_pins();
                 self.period
                     .as_mut()
                     .expect("period initialized")
@@ -671,8 +756,14 @@ impl Index {
             "clear-flash" => {
                 clear_flash(&mut self.flash, v);
             }
-            "filter" => self.list.apply_filters(&params::form_values(v, "filters")),
-            "page" => self.list.put_page(v["page"].as_str()),
+            "filter" => {
+                self.clear_pins();
+                self.list.apply_filters(&params::form_values(v, "filters"));
+            }
+            "page" => {
+                self.clear_pins();
+                self.list.put_page(v["page"].as_str());
+            }
             "grid" => {
                 self.columns.handle(&params::string_values(v));
             }
@@ -753,7 +844,35 @@ impl LiveState<Scope, Error> for Index {
                         ListState::parse(query, SPEC.clone()).map_err(|_| Error::Internal)?;
                     self.period(r.scope).await?;
                 }
-                LiveInput::Event(v) => self.event(r.scope, r.credential, v).await?,
+                LiveInput::Event(v) => match v["type"].as_str().unwrap_or("") {
+                    "open_opening"
+                        if self.kind == Kind::Register
+                            && self.pages.allowed(r.scope, VIEW).await? =>
+                    {
+                        self.opening = Some(super::opening::Opening::new(self.pages.clone())?)
+                    }
+                    "close_opening" => self.opening = None,
+                    "preview_opening" | "import_opening" | "cancel_opening" | "stage_grid"
+                    | "balance_grid" | "opening_grid" | "clear-flash"
+                        if self.opening.is_some() =>
+                    {
+                        let opening = self.opening.as_mut().expect("opening dialog");
+                        opening.update(&r).await?;
+                        if opening.completed {
+                            self.opening = None;
+                            self.flash = Some((StatusKind::Success, "The opening register was reconciled. Open an asset below to read its source evidence.".into()));
+                            self.list.search.clear();
+                            self.list.apply_filters(&HashMap::from([
+                                ("source".into(), "opening".into()),
+                                ("status".into(), "".into()),
+                            ]));
+                            self.query.clear();
+                            self.period = None;
+                            self.period(r.scope).await?;
+                        }
+                    }
+                    _ => self.event(r.scope, r.credential, v).await?,
+                },
             }
             let html = self.body(r.scope).await?;
             Ok(LiveBody {

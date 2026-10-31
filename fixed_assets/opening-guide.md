@@ -14,4 +14,4 @@ Preview returns `state: "previewed"`. A retained source batch returns `state: "c
 
 Asset corrections retain source cost and accumulation and replace prospective assumptions. Reverse a standing disposal before its depreciation runs, newest run first. Reversed months remain consumed; the next unconsumed month catches up the corrected prospective schedule. The opening journal remains protected against reversal, including after correction. Changing its recognized balances is refused; never repair import state with ordinary invoices, bills, acquisitions or repeated postings.
 
-Follow the [opening-register conversion rules](README.md#opening-asset-register-at-conversion) for source balances, remaining life and the full first-month convention. Depreciation runs and disposal still use the existing FixedAssets facade/UI; this import does not add missing general asset agent operations.
+Follow the [opening-register conversion rules](README.md#opening-asset-register-at-conversion) for source balances, remaining life and the full first-month convention. For depreciation runs, disposal and the other asset operations, use the [lifecycle guide](lifecycle-guide.md).

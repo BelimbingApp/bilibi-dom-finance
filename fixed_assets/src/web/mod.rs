@@ -2,6 +2,7 @@
 mod detail;
 mod index;
 mod input;
+mod opening;
 
 use crate::{FixedAssetsError, MODULE};
 use askama::Template;
@@ -25,6 +26,7 @@ const DENIED: &str = "You do not have permission for that action.";
 pub(crate) struct Pages {
     pub db: Db,
     pub contracts: Arc<bilibi_agent_api::page::PageContracts>,
+    pub plans: Arc<bilibi_agent_api::plans::Plans>,
     pub display: Arc<DisplayPolicy>,
     pub locales: Arc<Locales>,
 }
@@ -259,6 +261,11 @@ fn flash_map(flash: &Option<(StatusKind, String)>) -> bilibi_ui::FlashMap<'_> {
 inventory::submit! { bilibi_module_registry::Contribution::new(bilibi_module_registry::contributions::PAGE_WRITES, PAGES, bilibi_module_registry::Provenance { module: MODULE, source: file!(), line: line!() }, &bilibi_module_registry::contributions::PageWrites {
     service: PAGES,
     contracts: &[
+        ("preview_opening", "finance.fixed_assets.opening.import"),
+        ("import_opening", "finance.fixed_assets.opening.import"),
+        ("preview_opening", "finance.fixed_assets.opening.stage"),
+        ("import_opening", "finance.fixed_assets.opening.stage"),
+
         ("record_asset","finance.fixed_assets.category.save"),
         ("record_asset","finance.fixed_assets.asset.acquire"),
         ("record_asset","finance.fixed_assets.run.post"),

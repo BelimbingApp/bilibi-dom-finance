@@ -1,16 +1,18 @@
 //! Bilimbi Payables.Web.BillsLive: filters, paging and built-in ListColumns.
+use super::opening::Opening;
 use super::{company, format, render, Pages, INDEX, NEW_BILL};
-use crate::{Document, DocumentPageQuery, CREATE_DOCUMENTS};
+use crate::{DocumentPageRow, CREATE_DOCUMENTS, VIEW};
 use askama::Template;
 use bilibi_database::{Error, Result};
-use bilibi_finance_ledger::MinorUnits;
+use bilibi_finance_ledger::{MinorUnits, Money};
 use bilibi_tenancy::Scope;
 use bilibi_ui::{
     page::{LiveBody, LiveFuture, LiveInput, LiveRequest, LiveState},
-    params, BadgeKind, BuiltinColumn, Cell, Choice, CreateButton, EmptyState, Filter,
-    FilterToolbar, FlexRow, FlexTable, Html, ListColumns, ListSpec, ListState, PageCounts,
-    Pagination, RecordLink, TableEmpty, ToolbarControl,
+    params, BadgeKind, BuiltinColumn, Button, Cell, Choice, CreateButton, EmptyState, Filter,
+    FilterToolbar, FlashGroup, FlexRow, FlexTable, Html, ListColumns, ListSpec, ListState,
+    PageCounts, Pagination, RecordLink, StatusKind, TableEmpty, ToolbarControl,
 };
+use serde_json::json;
 use std::{
     collections::HashMap,
     sync::{Arc, LazyLock},
@@ -21,6 +23,10 @@ static SPEC: LazyLock<Arc<ListSpec>> = LazyLock::new(|| {
     ListSpec {
         page_sizes: SIZES.to_vec(),
         filters: [
+            (
+                "source".into(),
+                Filter::one_of(&["", "ordinary", "opening"], ""),
+            ),
             (
                 "status".into(),
                 Filter::one_of(&["", "draft", "approved", "held", "posted", "voided"], ""),
@@ -41,7 +47,10 @@ pub(super) struct Bills {
     pages: Pages,
     list: ListState,
     columns: ListColumns,
-    documents: Vec<Document>,
+    documents: Vec<DocumentPageRow>,
+    opening: Option<Opening>,
+    can_open: bool,
+    success: bool,
     total: u64,
     units: Option<MinorUnits>,
     can_create: bool,
@@ -58,6 +67,7 @@ impl Bills {
             ("party_document_number", "Party's number"),
             ("document_date", "Date"),
             ("total", "Total"),
+            ("source", "Source"),
             ("status", "Status"),
             ("match_status", "Match"),
         ]
@@ -77,6 +87,9 @@ impl Bills {
             columns: ListColumns::mount("payables-bills-table", columns)
                 .map_err(|_| Error::Internal)?,
             documents: vec![],
+            opening: None,
+            can_open: false,
+            success: false,
             total: 0,
             units: None,
             can_create: false,
@@ -87,45 +100,37 @@ impl Bills {
 
     pub(super) async fn reload(&mut self, scope: &Scope) -> Result<()> {
         self.can_create = self.pages.allowed(scope, CREATE_DOCUMENTS).await?;
-        let result = match company(scope) {
-            Some(company) => {
-                self.pages
-                    .payables
-                    .page_documents(
-                        scope,
-                        company,
-                        &DocumentPageQuery {
-                            document_type: params::blank_to_none(
-                                self.list.filters.get("document_type").map(String::as_str),
-                            )
-                            .map(str::to_owned),
-                            status: params::blank_to_none(
-                                self.list.filters.get("status").map(String::as_str),
-                            )
-                            .map(str::to_owned),
-                            search: self.list.search.clone(),
-                            page: self.list.page as i64,
-                            page_size: self.list.page_size as i64,
-                        },
-                    )
-                    .await
-            }
-            None => Err(crate::PayablesError::Unauthorized),
-        };
-        self.unavailable = result.is_err();
+        self.can_open = self.pages.allowed(scope, VIEW).await?;
         self.documents.clear();
         self.total = 0;
-        if let Ok(page) = result {
-            self.units = self.pages.units(scope).await;
-            self.documents = page.documents;
-            self.total = page.total as u64;
-            self.list.page = page.page as u64;
+        self.unavailable = true;
+        if let Some(company) = company(scope) {
+            let mut input = json!({"company_id":company,"search":self.list.search,"page":self.list.page,"page_size":self.list.page_size});
+            for key in ["document_type", "status", "source"] {
+                if let Some(value) = self.list.filters.get(key).filter(|value| !value.is_empty()) {
+                    input[key] = json!(value);
+                }
+            }
+            if let Ok(answer) = self
+                .pages
+                .contracts
+                .read(scope, "finance.payables.document.page", &input)
+                .await
+            {
+                let page = &answer["result"];
+                self.documents = serde_json::from_value(page["documents"].clone())
+                    .map_err(|_| Error::Internal)?;
+                self.total = page["total"].as_u64().ok_or(Error::Internal)?;
+                self.list.page = page["page"].as_u64().ok_or(Error::Internal)?;
+                self.units = self.pages.units(scope).await;
+                self.unavailable = false;
+            }
         }
         self.columns.load(&self.documents, |d| d.id.to_string());
         Ok(())
     }
 
-    pub(super) fn body(&self) -> Result<String> {
+    pub(super) async fn body(&mut self, scope: &Scope) -> Result<String> {
         let mut held = self.list.clone();
         held.apply_filters(&HashMap::from([("status".into(), "held".into())]));
         let mut actions = render(HeldLink {
@@ -139,7 +144,25 @@ impl Bills {
                 ..CreateButton::default()
             })?);
         }
+        if self.can_open {
+            actions.push(&render(Button {
+                id: "payables-opening",
+                event: "open_opening",
+                button_type: "button",
+                body: Html::text("Opening bills"),
+                ..Button::default()
+            })?);
+        }
         let mut content = Html::EMPTY;
+        if self.success {
+            let mut flash = bilibi_ui::NO_FLASH;
+            flash.success =
+                "The opening bills were reconciled. Open a bill below to read its source evidence.";
+            content.push(&render(FlashGroup {
+                id: "payables-bills-flash",
+                flash,
+            })?);
+        }
         let mut toolbar = FilterToolbar::new(
             "payables-bills-filters",
             vec![
@@ -149,6 +172,19 @@ impl Bills {
                     "Search bills",
                     &self.list.search,
                     "Search by party or party's number…",
+                ),
+                ToolbarControl::select(
+                    "payables-bills-source",
+                    "source",
+                    "Filter by source",
+                    &self.list.filters["source"],
+                    [
+                        ("All sources", ""),
+                        ("Ordinary", "ordinary"),
+                        ("Opening", "opening"),
+                    ]
+                    .map(|(label, value)| Choice::new(label, value))
+                    .to_vec(),
                 ),
                 ToolbarControl::select(
                     "payables-bills-status",
@@ -213,7 +249,7 @@ impl Bills {
                     )
                     .cell(
                         "party",
-                        Cell::text(format!("{} · {}", d.party.code, d.party.name)),
+                        Cell::text(format!("{} · {}", d.party_code, d.party_name)),
                     )
                     .cell(
                         "party_document_number",
@@ -223,8 +259,16 @@ impl Bills {
                     .slot(
                         "total",
                         render(Tabular {
-                            text: format!("{} {}", d.total.display(self.units), d.currency_code),
+                            text: format!(
+                                "{} {}",
+                                Money::display_decimal(d.total, self.units),
+                                d.currency_code
+                            ),
                         })?,
+                    )
+                    .cell(
+                        "source",
+                        Cell::text(if d.opening { "Opening" } else { "Ordinary" }),
                     )
                     .slot("status", format::status(&d.status)?)
                     .slot(
@@ -258,6 +302,9 @@ impl Bills {
             pager.filters_event = "filter";
             content.push(&render(pager)?);
         }
+        if let Some(opening) = &mut self.opening {
+            content.push(&opening.body(scope).await?);
+        }
         View {
             title_actions: bilibi_ui::Html::EMPTY,
             actions,
@@ -290,6 +337,49 @@ struct HeldLink {
 impl LiveState<Scope, Error> for Bills {
     fn update<'a>(&'a mut self, r: LiveRequest<'a, Scope>) -> LiveFuture<'a, Error> {
         Box::pin(async move {
+            if let LiveInput::Event(value) = r.input {
+                match value["type"].as_str().unwrap_or("") {
+                    "open_opening" if self.can_open => {
+                        self.opening = Some(Opening::new(self.pages.clone())?)
+                    }
+                    "close_opening" => self.opening = None,
+                    "clear-flash" if self.opening.is_none() => {
+                        if value["key"].as_str() == Some(StatusKind::Success.name()) {
+                            self.success = false;
+                        }
+                    }
+                    "preview_opening"
+                    | "import_opening"
+                    | "cancel_opening"
+                    | "stage_grid"
+                    | "balance_grid"
+                    | "classification_grid"
+                    | "opening_grid"
+                    | "clear-flash"
+                        if self.opening.is_some() =>
+                    {
+                        let opening = self.opening.as_mut().expect("opening dialog");
+                        opening.update(&r).await?;
+                        if opening.completed {
+                            self.opening = None;
+                            self.success = true;
+                            self.list.search.clear();
+                            self.list.apply_filters(&HashMap::from([
+                                ("source".into(), "opening".into()),
+                                ("status".into(), "".into()),
+                                ("document_type".into(), "".into()),
+                            ]));
+                            self.reload(r.scope).await?;
+                        }
+                        return Ok(LiveBody {
+                            html: self.body(r.scope).await?,
+                            query: self.list.to_params(),
+                            ..LiveBody::default()
+                        });
+                    }
+                    _ => {}
+                }
+            }
             let reload = match r.input {
                 LiveInput::Refresh => true,
                 LiveInput::Params(values) => {
@@ -310,6 +400,7 @@ impl LiveState<Scope, Error> for Bills {
                         self.columns.handle(&params::string_values(v));
                         false
                     }
+                    Some("open_opening" | "close_opening" | "clear-flash") => false,
                     _ => return Err(Error::Invalid),
                 },
             };
@@ -317,7 +408,7 @@ impl LiveState<Scope, Error> for Bills {
                 self.reload(r.scope).await?;
             }
             Ok(LiveBody {
-                html: self.body()?,
+                html: self.body(r.scope).await?,
                 query: self.list.to_params(),
                 ..LiveBody::default()
             })

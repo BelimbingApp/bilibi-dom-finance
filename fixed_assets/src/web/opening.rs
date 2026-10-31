@@ -1,49 +1,22 @@
-//! Reviewed conversion page. Bilimbi has no opening-import UI; shared Base
+//! Reviewed opening action on the record list. Bilimbi has no opening-import UI; shared Base
 //! components render it and PageContracts supplies the same write as MCP.
 use crate::*;
 use askama::Template;
-use bilibi_agent_api::{
-    page::{Call, PageContracts},
-    Error as ContractError,
-};
+use bilibi_agent_api::{page::Call, Error as ContractError};
 use bilibi_database::{Error, Result};
-use bilibi_module_registry::{
-    contributions::{Access, Method, PageWrites, Pending, Route, PAGE_WRITES, ROUTES},
-    Contribution, Provenance,
-};
 use bilibi_ui::{
-    page::*, params, Alert, BuiltinColumn, Button, ButtonVariant, Card, Cell, ErrorSummary, Field,
-    FlashGroup, FlexRow, FlexTable, Form, Header, Html, InputKind, ListColumns, Modal, ModalWidth,
-    PageVariant, StatusKind,
+    page::{LiveInput, LiveRequest},
+    params, Alert, BuiltinColumn, Button, ButtonVariant, Cell, ErrorSummary, Field, FlashGroup,
+    FlexRow, FlexTable, Form, Html, InputKind, ListColumns, Modal, ModalWidth, StatusKind,
 };
 
+use super::{Pages, PAGES};
 use serde_json::{json, Value};
-use std::{collections::BTreeMap, sync::Arc};
-pub(crate) const PAGES: &str = "finance/fixed_assets.opening-pages";
+use std::collections::BTreeMap;
 const CONTRACT: &str = "finance.fixed_assets.opening.import";
 const STAGE: &str = "finance.fixed_assets.opening.stage";
 const CONTEXT: &str = "finance.fixed_assets.opening.context";
 const TITLE: &str = "Opening asset register";
-#[derive(Clone)]
-pub(crate) struct Pages {
-    pub db: bilibi_database::Db,
-    pub contracts: Arc<PageContracts>,
-    pub plans: Arc<bilibi_agent_api::plans::Plans>,
-}
-inventory::submit! {Contribution::new(ROUTES,PAGES,Provenance{module:MODULE,source:file!(),line:line!()},&Route{method:Method::Get,path:"/finance/fixed-assets/opening",service:PAGES,operation:"opening",access:Access::Capability(VIEW),framed:true})}
-inventory::submit! {Contribution::new(PAGE_WRITES,PAGES,Provenance{module:MODULE,source:file!(),line:line!()},&PageWrites{service:PAGES,contracts:&[("preview_opening",CONTRACT),("import_opening",CONTRACT),("preview_opening",STAGE),("import_opening",STAGE)],pending:Pending::None})}
-bilibi_menu::contribute!(
-    "finance/fixed_assets",
-    bilibi_menu::MenuItem::page(
-        "finance.fixed-assets.opening",
-        TITLE,
-        "/finance/fixed-assets/opening"
-    )
-    .under("finance.group.fixed-assets")
-    .icon("carbon-financial-assets")
-    .requires(bilibi_menu::Requirement::Capability(VIEW))
-    .order(60)
-);
 fn field_label(key: &str) -> &str {
     match key {
         "part" => "Batch number",
@@ -76,7 +49,8 @@ struct Review {
     input: Value,
     facts: Value,
 }
-struct Opening {
+pub(super) struct Opening {
+    pub(super) completed: bool,
     pages: Pages,
     values: Value,
     fields: BTreeMap<String, Vec<String>>,
@@ -87,8 +61,9 @@ struct Opening {
     stage_columns: ListColumns,
 }
 impl Opening {
-    fn new(pages: Pages) -> Result<Self> {
+    pub(super) fn new(pages: Pages) -> Result<Self> {
         Ok(Self {
+            completed: false,
             pages,
             values: json!({}),
             fields: BTreeMap::new(),
@@ -170,29 +145,9 @@ impl Opening {
             }
         }
     }
-    async fn body(&mut self, scope: &Scope) -> Result<LiveBody> {
-        let mut page = render(Header {
-            title: Html::text(TITLE),
-            subtitle: "Reconcile the source register with the current company's approved opening balances.",
-            title_actions: bilibi_ui::Html::EMPTY,
-            ..Header::default()
-        })?;
-        let Some(company) = scope.current_company().map(|id| id.get()) else {
-            page.push(&render(Alert {
-                body: Html::text("Choose the current company before importing opening records."),
-                ..Alert::default()
-            })?);
-            return Ok(LiveBody {
-                html: render(bilibi_ui::Page {
-                    id: "conversion-page",
-                    variant: PageVariant::Form,
-                    body: page,
-                    ..Default::default()
-                })?
-                .to_string(),
-                ..Default::default()
-            });
-        };
+    pub(super) async fn body(&mut self, scope: &Scope) -> Result<Html> {
+        let mut page = Html::EMPTY;
+        let company = scope.current_company().ok_or(Error::Invalid)?.get();
         let context = match self
             .pages
             .contracts
@@ -392,27 +347,27 @@ impl Opening {
                     )),
                     ..Alert::default()
                 })?);
-                let form = render(Form {
+                let mut buttons = render(Button {
+                    button_type: "button",
+                    event: "close_opening",
+                    body: Html::text("Cancel"),
+                    ..Button::default()
+                })?;
+                buttons.push(&render(Button {
+                    id: "conversion-preview",
+                    button_type: "submit",
+                    body: Html::text("Preview action"),
+                    variant: ButtonVariant::Primary,
+                    working: "Checking…",
+                    ..Button::default()
+                })?);
+                page.push(&render(Form {
                     id: "conversion-form",
                     event: "preview_opening",
                     class: "mt-4",
                     body: fields,
-                    actions: render(Actions {
-                        buttons: render(Button {
-                            id: "conversion-preview",
-                            button_type: "submit",
-                            body: Html::text("Preview action"),
-                            variant: ButtonVariant::Primary,
-                            working: "Checking…",
-                            ..Button::default()
-                        })?,
-                    })?,
+                    actions: render(Actions { buttons })?,
                     ..Form::default()
-                })?;
-                page.push(&render(Card {
-                    id: "conversion-card",
-                    body: form,
-                    ..Card::default()
                 })?);
             }
         }
@@ -457,6 +412,7 @@ impl Opening {
                 );
             }
             let mut table = FlexTable::new("conversion-rows", self.columns.flex_columns(), rows);
+            table.event = "opening_grid";
             table.zoom = self.columns.zoom;
             table.suggestions = self.columns.flex_suggestions();
             table.add_query = &self.columns.add_query;
@@ -554,7 +510,7 @@ impl Opening {
                 ..Button::default()
             })?);
             body.push(&render(Actions { buttons })?);
-            page.push(&render(Modal {
+            page = render(Modal {
                 id: "conversion-review-modal",
                 title: if review.contract == STAGE {
                     "Review source batch"
@@ -570,180 +526,153 @@ impl Opening {
                 width: ModalWidth::Wide,
                 body,
                 ..Modal::default()
-            })?);
+            })?;
+        } else {
+            page = render(Modal {
+                id: "conversion-modal", title: TITLE,
+                description: "Reconcile the source register with the current company's approved opening balances.",
+                cancel_event: "close_opening", width: ModalWidth::Wide, body: page, ..Modal::default()
+            })?;
         }
-        Ok(LiveBody {
-            html: render(bilibi_ui::Page {
-                id: "conversion-page",
-                variant: PageVariant::Form,
-                body: page,
-                ..Default::default()
-            })?
-            .to_string(),
-            ..Default::default()
-        })
+        Ok(page)
     }
 }
-impl LiveState<Scope, Error> for Opening {
-    fn update<'a>(&'a mut self, r: LiveRequest<'a, Scope>) -> LiveFuture<'a, Error> {
-        Box::pin(async move {
-            if let LiveInput::Event(value) = r.input {
-                match value["type"].as_str().unwrap_or("") {
-                    "preview_opening" => {
-                        self.review = None;
-                        self.fields.clear();
-                        let fields = params::form_values_checked(
-                            value,
-                            "conversion",
-                            crate::opening_csv::MAX_BYTES,
-                        )
-                        .map_err(Error::refused)?;
-                        self.values = json!(fields);
-                        let mut input = self.values.clone();
-                        input["company_id"] = r
-                            .scope
-                            .current_company()
-                            .map(|id| json!(id.get()))
-                            .unwrap_or(Value::Null);
+impl Opening {
+    pub(super) async fn update(&mut self, r: &LiveRequest<'_, Scope>) -> Result<()> {
+        if let LiveInput::Event(value) = r.input {
+            match value["type"].as_str().unwrap_or("") {
+                "preview_opening" => {
+                    self.review = None;
+                    self.fields.clear();
+                    let fields = params::form_values_checked(
+                        value,
+                        "conversion",
+                        crate::opening_csv::MAX_BYTES,
+                    )
+                    .map_err(Error::refused)?;
+                    self.values = json!(fields);
+                    let mut input = self.values.clone();
+                    input["company_id"] = r
+                        .scope
+                        .current_company()
+                        .map(|id| json!(id.get()))
+                        .unwrap_or(Value::Null);
 
-                        if input["override_reason"] == "" {
-                            input
-                                .as_object_mut()
-                                .expect("form object")
-                                .remove("override_reason");
+                    if input["override_reason"] == "" {
+                        input
+                            .as_object_mut()
+                            .expect("form object")
+                            .remove("override_reason");
+                    }
+                    let contract = if self.values["mode"] == "stage" {
+                        STAGE
+                    } else {
+                        CONTRACT
+                    };
+                    let staged = self.values["mode"] == "reconcile";
+                    if let Some(object) = input.as_object_mut() {
+                        object.remove("mode");
+                        for key in ["part", "part_count", "replaces_batch_id"] {
+                            let value = object
+                                .get(key)
+                                .and_then(Value::as_str)
+                                .and_then(|text| text.parse::<i64>().ok());
+                            object.remove(key);
+                            if let Some(value) = value {
+                                object.insert(key.into(), json!(value));
+                            }
                         }
-                        let contract = if self.values["mode"] == "stage" {
-                            STAGE
-                        } else {
-                            CONTRACT
-                        };
-                        let staged = self.values["mode"] == "reconcile";
-                        if let Some(object) = input.as_object_mut() {
-                            object.remove("mode");
-                            for key in ["part", "part_count", "replaces_batch_id"] {
-                                let value = object
-                                    .get(key)
-                                    .and_then(Value::as_str)
-                                    .and_then(|text| text.parse::<i64>().ok());
-                                object.remove(key);
-                                if let Some(value) = value {
-                                    object.insert(key.into(), json!(value));
+                        if object.get("reason").is_some_and(|v| v == "") {
+                            object.remove("reason");
+                        }
+                        if staged {
+                            object.insert("staged".into(), json!(true));
+                        }
+                    }
+                    let call = Call {
+                        scope: r.scope,
+                        credential: r.credential,
+                        service: PAGES,
+                        event: "preview_opening",
+                        contract,
+                    };
+                    match self.pages.contracts.preview(&call, input.clone()).await {
+                        Ok(answer) => {
+                            let result = &answer["results"][0];
+                            if result["valid"] == true {
+                                if let Some(code) = answer["plan_code"].as_str() {
+                                    let facts = result["preview"]["result"]["changes"].clone();
+                                    if let Some(rows) = facts["rows"].as_array() {
+                                        self.columns.load(rows, |r| {
+                                            r["source_id"].as_str().unwrap_or("").to_owned()
+                                        });
+                                    }
+                                    self.review = Some(Review {
+                                        contract,
+                                        code: code.into(),
+                                        input,
+                                        facts,
+                                    });
                                 }
-                            }
-                            if object.get("reason").is_some_and(|v| v == "") {
-                                object.remove("reason");
-                            }
-                            if staged {
-                                object.insert("staged".into(), json!(true));
+                            } else {
+                                self.fields=serde_json::from_value(result["error"]["fields"].clone()).unwrap_or_else(|_|BTreeMap::from([("base".into(),vec!["The opening source could not be reviewed. Check permissions and source data.".into()])]));
                             }
                         }
+                        Err(e) => self.fail(e),
+                    }
+                }
+                "import_opening" => {
+                    if let Some(review) = self.review.take() {
                         let call = Call {
                             scope: r.scope,
                             credential: r.credential,
                             service: PAGES,
-                            event: "preview_opening",
-                            contract,
+                            event: "import_opening",
+                            contract: review.contract,
                         };
-                        match self.pages.contracts.preview(&call, input.clone()).await {
-                            Ok(answer) => {
-                                let result = &answer["results"][0];
-                                if result["valid"] == true {
-                                    if let Some(code) = answer["plan_code"].as_str() {
-                                        let facts = result["preview"]["result"]["changes"].clone();
-                                        if let Some(rows) = facts["rows"].as_array() {
-                                            self.columns.load(rows, |r| {
-                                                r["source_id"].as_str().unwrap_or("").to_owned()
-                                            });
-                                        }
-                                        self.review = Some(Review {
-                                            contract,
-                                            code: code.into(),
-                                            input,
-                                            facts,
-                                        });
-                                    }
-                                } else {
-                                    self.fields=serde_json::from_value(result["error"]["fields"].clone()).unwrap_or_else(|_|BTreeMap::from([("base".into(),vec!["The opening source could not be reviewed. Check permissions and source data.".into()])]));
-                                }
+                        match self
+                            .pages
+                            .contracts
+                            .commit(&call, &review.code, review.input)
+                            .await
+                        {
+                            Ok(_) => {
+                                self.completed = review.contract != STAGE;
+                                self.message = Some((
+                                    StatusKind::Success,
+                                    if review.contract == STAGE {
+                                        "The source batch was committed. Continue staging or reconcile the complete register.".into()
+                                    } else {
+                                        "The opening register was reconciled. Prior source evidence is retained.".into()
+                                    },
+                                ))
                             }
                             Err(e) => self.fail(e),
                         }
                     }
-                    "import_opening" => {
-                        if let Some(review) = self.review.take() {
-                            let call = Call {
-                                scope: r.scope,
-                                credential: r.credential,
-                                service: PAGES,
-                                event: "import_opening",
-                                contract: review.contract,
-                            };
-                            match self
-                                .pages
-                                .contracts
-                                .commit(&call, &review.code, review.input)
-                                .await
-                            {
-                                Ok(_) => {
-                                    self.message = Some((
-                                        StatusKind::Success,
-                                        if review.contract == STAGE {
-                                            "The source batch was committed. Continue staging or reconcile the complete register.".into()
-                                        } else {
-                                            "The opening register was reconciled. Prior source evidence is retained.".into()
-                                        },
-                                    ))
-                                }
-                                Err(e) => self.fail(e),
-                            }
-                        }
-                    }
-                    "cancel_opening" => self.review = None,
-                    "stage_grid" => {
-                        self.stage_columns.handle(&params::string_values(value));
-                    }
-                    "balance_grid" => {
-                        self.balance_columns.handle(&params::string_values(value));
-                    }
-                    "grid" => {
-                        self.columns.handle(&params::string_values(value));
-                    }
-                    "clear-flash" => {
-                        if self
-                            .message
-                            .as_ref()
-                            .is_some_and(|(kind, _)| value["key"].as_str() == Some(kind.name()))
-                        {
-                            self.message = None;
-                        }
-                    }
-                    _ => return Err(Error::Invalid),
                 }
+                "cancel_opening" => self.review = None,
+                "stage_grid" => {
+                    self.stage_columns.handle(&params::string_values(value));
+                }
+                "balance_grid" => {
+                    self.balance_columns.handle(&params::string_values(value));
+                }
+                "opening_grid" => {
+                    self.columns.handle(&params::string_values(value));
+                }
+                "clear-flash" => {
+                    if self
+                        .message
+                        .as_ref()
+                        .is_some_and(|(kind, _)| value["key"].as_str() == Some(kind.name()))
+                    {
+                        self.message = None;
+                    }
+                }
+                _ => return Err(Error::Invalid),
             }
-            self.body(r.scope).await
-        })
-    }
-}
-impl bilibi_ui::page::Page<Scope, Error> for Pages {
-    fn title(&self, _: &str) -> Option<&'static str> {
-        Some(TITLE)
-    }
-    fn render<'a>(&'a self, r: PageRequest<'a, Scope>) -> PageFuture<'a, Error> {
-        Box::pin(async move {
-            let mut state = Opening::new(self.clone())?;
-            let body = state.body(r.scope.ok_or(Error::Unauthorized)?).await?;
-            Ok(PageBody {
-                html: body.html,
-                live: true,
-                title: None,
-            })
-        })
-    }
-    fn mount<'a>(&'a self, _: PageRequest<'a, Scope>) -> MountFuture<'a, Scope, Error> {
-        Box::pin(async move {
-            Ok(Some(
-                Box::new(Opening::new(self.clone())?) as Box<dyn LiveState<Scope, Error>>
-            ))
-        })
+        }
+        Ok(())
     }
 }

@@ -3,7 +3,9 @@
 //! for browser proof after the checks, with APP_ORIGIN and BIND_ADDR set.
 use bilibi_authz::grants::Grants;
 use bilibi_database::{pool, Error};
-use bilibi_finance_fixed_assets::{Assumptions, FixedAssets, Method, RevisionInput, CAPABILITIES};
+use bilibi_finance_fixed_assets::{
+    AcquisitionInput, Assumptions, FixedAssets, Method, RevisionInput, CAPABILITIES,
+};
 use bilibi_finance_ledger::{
     AccountType, Ledger, MinorUnits, Money, NewAccount, NewEntry, NewLine, PostOptions, Reversal,
 };
@@ -262,7 +264,7 @@ async fn main() -> Outcome<()> {
     )
     .await?;
     assert_eq!(applied.query["to"], "2026-12-31");
-    has(&applied, "Ledger reconciliation as of 2026-12-31");
+    has(&applied, "Whole register reconciliation as of 2026-12-31");
     let mut ids = Vec::new();
     let mut entries = Vec::new();
     for label in [
@@ -379,6 +381,96 @@ async fn main() -> Outcome<()> {
             .is_some()
     );
     println!("NX3: run skips, disposal/reversal, void confirmation and charge corrections passed");
+    let pinned_report = assets
+        .register_report(&manager, COMPANY, date(2026, 12, 31), &Default::default())
+        .await?;
+    let pinned_query = HashMap::from([
+        ("period".into(), "custom".into()),
+        ("from".into(), "2026-01-01".into()),
+        ("to".into(), "2026-12-31".into()),
+        (
+            "through_entry_number".into(),
+            pinned_report.through_entry_number.to_string(),
+        ),
+        (
+            "through_asset_number".into(),
+            pinned_report.through_asset_number.to_string(),
+        ),
+        (
+            "through_event_number".into(),
+            pinned_report.through_event_number.to_string(),
+        ),
+        (
+            "through_category_revision_id".into(),
+            pinned_report.through_category_revision_id.to_string(),
+        ),
+    ]);
+    let entry = ledger
+        .post_entry(
+            &manager,
+            COMPANY,
+            &NewEntry {
+                entry_date: date(2026, 2, 1),
+                description: "Asset after report pin".into(),
+                reference: None,
+                lines: vec![
+                    NewLine::debit(cost.id, money("120")),
+                    NewLine::credit(find("3000"), money("120")),
+                ],
+            },
+            &PostOptions::default(),
+        )
+        .await?;
+    assets
+        .acquire_from_entry(
+            &manager,
+            COMPANY,
+            entry.id,
+            1,
+            &AcquisitionInput {
+                category_revision_id: original.revision.id,
+                description: "Asset after report pin".into(),
+                in_service_date: date(2026, 2, 1),
+                residual_value: None,
+                method: None,
+                life_months: None,
+                annual_rate: None,
+            },
+        )
+        .await?;
+    let mut pinned = mount(services, &manager, "register", None, &pinned_query).await?;
+    let body = refresh(&mut pinned, &manager).await?;
+    no(&body, "Asset after report pin");
+    assert!(body.query.contains_key("through_asset_number"));
+    let body = event(
+        &mut pinned,
+        &manager,
+        json!({"type":"filter","filters[source]":"ordinary","filters[status]":"","filters[perPage]":"25"}),
+    )
+    .await?;
+    has(&body, "Asset after report pin");
+    assert!(!body.query.contains_key("through_asset_number"));
+    let mut pinned = mount(services, &manager, "register", None, &pinned_query).await?;
+    let body = event(&mut pinned, &manager, json!({"type":"page","page":"2"})).await?;
+    assert!(!body.query.contains_key("through_asset_number"));
+    let mut pinned = mount(services, &manager, "register", None, &pinned_query).await?;
+    let body = event(
+        &mut pinned,
+        &manager,
+        json!({"type":"period_apply:assets-report-period","range[from]":"2026-01-01","range[to]":"2026-12-31"}),
+    )
+    .await?;
+    assert!(!body.query.contains_key("through_asset_number"));
+    let mut pinned = mount(services, &manager, "register", None, &pinned_query).await?;
+    let body = event(
+        &mut pinned,
+        &manager,
+        json!({"type":"grid","op":"zoom_preset","preset":"compact"}),
+    )
+    .await?;
+    assert!(body.query.contains_key("through_asset_number"));
+    no(&body, "Asset after report pin");
+    println!("NX3: pinned register filters, pages and periods render the canonical snapshot");
     let grants = services.get::<Grants>("base/authz.grants")?;
     grants
         .set_direct(&admin, 1, bilibi_finance_fixed_assets::ACQUIRE, Some(false))
