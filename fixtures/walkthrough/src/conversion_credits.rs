@@ -362,6 +362,22 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         .await
         .is_err());
     tied(&ar, &ap, &reviewer, company, date(2026, 7, 31)).await?;
+    let mut backdated = apply_ar.clone();
+    backdated["reference"] = json!("backdated-overdraw");
+    backdated["effective_date"] = json!("2026-07-12");
+    backdated["amount"] = json!("25");
+    assert!(ar
+        .apply_credit(&manager, company, &backdated)
+        .await
+        .is_err());
+    let mut backdated = apply_ap.clone();
+    backdated["reference"] = json!("backdated-overdraw");
+    backdated["effective_date"] = json!("2026-07-12");
+    backdated["amount"] = json!("25");
+    assert!(ap
+        .apply_credit(&manager, company, &backdated)
+        .await
+        .is_err());
     // Saved inactive controls remain settleable. The transfer is owned.
     ledger
         .update_account(
