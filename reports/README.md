@@ -234,3 +234,35 @@ The retained record pins the opening entry, period, currency, timezone, source r
 Source files may be attached through Attachments to the resulting record, under `finance/reports/source_comparative`, `finance/reports/source_movement`, `finance/reports/source_sst` or `finance/reports/source_payroll` as appropriate. The record is final, so files can be added but not replaced or removed. Attachments applies the company's retention policy from the conversion date. Every file read requires ledger view; SST and payroll file reads additionally require that area's view. Importing any schedule requires ledger account management, and importing SST or payroll also requires that area's settings capability. The `source_period` auditor dataset requires ledger, SST and payroll view because the table contains all four kinds; it is included only in an all-Finance pack.
 
 An accounting practitioner has not yet reviewed the comparative layout, source-period tax treatment or payroll bridge. In particular, source summaries must not be treated as evidence that an authority accepted a return or received a payment without the retained source acknowledgement. Reports, filing status and remittance history remain the accountant's responsibility. See [conversion evidence](../ledger/README.md#source-period-schedules-at-conversion) for provenance, cut-off, access, retention and the unsupported historical scope.
+
+## Conversion reports
+
+Use **Conversion reports** under Bookkeeping to issue a permanent reconciliation of the current company's opening records. The reporting date is one as-of date, not a date-range filter.
+
+For example, issue the conversion report after importing opening invoices, bills and assets. It keeps the source balances beside the target trial balance, the entry and register boundaries, all opening source CSVs and correction decisions, receivables and payables detail and control tie-outs, and the asset register's cost and accumulation reconciliation. Each source dataset has its last ID and SHA-256 digest. The report retains bank statement and reconciliation evidence, bank bridges and changes since their finalisation, and the recorded tax and payroll schedules. Other-owner control-account postings stay visible: recognition of opening detail never disguises an unrelated posting.
+
+Enter the reviewer and workpaper references, your review conclusion, and whether bank, tax and payroll schedules apply. An applicable schedule needs a reference; “Not applicable” needs a reason. Unassessed schedules remain unresolved. Review the report's sections, then continue to confirmation and issue it. Issuance freezes the figures, labels, sources and exclusions; later backdated postings, chart changes or opening-register corrections cannot change that copy. A fresh report captures the later state. A changed source invalidates a pending issuance review.
+
+**Issuance is not accountant sign-off.** A person granted `finance.reports.sign-off` opens the issued report, enters their reviewer reference and conclusion (including qualifications), reviews it and signs that exact snapshot. The record keeps their session identity, any impersonator and the database's signing time. It cannot be edited, deleted, truncated or signed twice. Ledger's duty-separation check covers the issuer, original opening preparer and retained register preparers; it records any separation-policy exception through the shared control. There is no override-reason input on sign-off. The application records an attestation; it does not establish a person's professional qualification.
+
+### Accounting judgement and limits
+
+The default conclusion is **unassessed**, even when every numeric difference is zero. The accountant must decide the conversion cut-off, completeness, schedule applicability and whether qualifications permit sign-off. Bank bridges identify their own dates and posting, statement and match boundaries; a bridge ending before the report date, an open bridge, a missing bridge or a backdated change requires review. Tax/payroll evidence contains what their modules recorded; it does not reconstruct legacy filings or payroll year-to-date history. External schedules and their reviewer references must cover that gap. Earlier settled transactions, legacy bank matches and historical depreciation postings remain excluded. An asset's projected schedule is not posted history and is omitted from the conversion copy.
+
+Open accounting question: the company and its accountant must agree the wording and supporting workpapers required for an unqualified conversion sign-off. The built-in attestation permits a qualified conclusion and never clears recorded differences or certifies statutory compliance.
+
+All source-view grants are required to preview, issue or read a conversion copy, including through general issued-report reads and evidence exports. A ledger-only auditor pack explicitly excludes conversion copies and sign-offs; a full pack includes them. Each source is read through its owning facade on one database snapshot for a standalone preview, or the reviewed write's company-locked transaction for issuance. Report size is limited to 64 MiB, with complete evidence paging; exceeding the limit refuses the whole report.
+
+### Shared page and agent contracts
+
+| Operation | Input beyond `company_id` | Result |
+| --- | --- | --- |
+| `finance.reports.conversion.preview` | `as_of` | Current reconciliation and retained source evidence |
+| `finance.reports.conversion.list` | optional `after` issued ID | Up to 100 issued reports and next cursor |
+| `finance.reports.conversion.get` | `report_id` | Frozen report and sign-off events |
+| `finance.reports.conversion.issue` | `as_of`, `reviewer_reference`, `note`; optional `bank_status`, `tax_status`, `payroll_status` and corresponding `_reference` fields | Reviewed immutable issued report |
+| `finance.reports.conversion.sign` | `report_id`, `reviewer_reference`, `note` | Reviewed immutable accountant attestation |
+
+Schedule status is `not_assessed` (default), `applicable` or `not_applicable`. Issue requires `finance.reports.issue`; sign requires `finance.reports.sign-off`; every operation also requires all source views. HTTP API, MCP and the page use these same contracts. The page offers the complete retained evidence in sections, 100 records at a time, including source CSV and review references.
+
+Run the conversion walkthrough on a fresh disposable database with `cargo run -p bilibi-finance-walkthrough-fixture --bin conversion`. Its report proof surrounds the existing register-correction lifecycle and checks stale plans, retained source rows beyond one evidence page, permission revocation, backdated control postings, duty separation, immutable issuance and qualified sign-off.

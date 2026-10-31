@@ -377,9 +377,17 @@ impl Reports {
         let mut issued = files.csv_writer("issued-reports.csv")?;
         let mut after = None;
         loop {
-            let page = self
-                .evidence_page_on(tx, scope, company, "issued", None, after)
-                .await?;
+            let mut page = if coverage == Coverage::All {
+                self.evidence_page_on(tx, scope, company, "issued", None, after)
+                    .await?
+            } else {
+                // Conversion snapshots contain every source's data. A ledger-only
+                // pack explicitly excludes them instead of weakening their grants.
+                crate::issued::page(tx, scope.tenant(), company, "issued", None, after).await?
+            };
+            if coverage == Coverage::Ledger {
+                page.rows.retain(|r| r["kind"] != crate::conversion::KIND);
+            }
             issued.page(&page.fields, &page.rows)?;
             match page.next {
                 Some(next) => after = Some(next),
@@ -387,6 +395,9 @@ impl Reports {
             }
         }
         files.finish_csv("issued-reports.csv", issued);
+        if coverage == Coverage::All {
+            evidence!("reports", self, ["conversion_signoff"]);
+        }
         files.finish_sources()?;
         Ok(json!({
             "generator":"finance/reports/auditor-pack", "generator_version":"9",
@@ -396,7 +407,7 @@ impl Reports {
             "captured_at":snapshot.get::<_,String>(1), "timezone":"Etc/UTC", "database_snapshot":snapshot.get::<_,String>(0),
             "through_entry_number":through,
             "coverage": if coverage == Coverage::All { "all-finance" } else { "ledger-and-reports" },
-            "excluded_sources": if coverage == Coverage::All { Vec::<&str>::new() } else { vec!["receivables", "payables", "reconciliation", "einvoice", "payroll", "sst", "fixed_assets", "attachments", "reports.source_period"] },
+            "excluded_sources": if coverage == Coverage::All { Vec::<&str>::new() } else { vec!["receivables", "payables", "reconciliation", "einvoice", "payroll", "sst", "fixed_assets", "attachments", "reports.source_period", "conversion reports and sign-offs"] },
             "coverage_notice": if coverage == Coverage::All {
                 "All Finance source datasets are included."
             } else {

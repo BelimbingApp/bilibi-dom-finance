@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 use tokio_postgres::{GenericClient, Transaction};
 
 pub(crate) const KIND: &str = "conversion";
-const MAX_BYTES: usize = 32 * 1024 * 1024;
+const MAX_BYTES: usize = 64 * 1024 * 1024;
 
 impl Reports {
     /// A coherent conversion preview. Issuance collects the same facts on the
@@ -157,6 +157,17 @@ impl Reports {
             )
             .await
             .map_err(source_error)?;
+        let mut asset_snapshot = json(&assets)?;
+        for row in asset_snapshot["rows"]
+            .as_array_mut()
+            .ok_or(Error::Internal)?
+        {
+            // A conversion reconciles posted register balances. Prospective
+            // depreciation projections are neither source nor posted history.
+            row.as_object_mut()
+                .ok_or(Error::Internal)?
+                .remove("schedule");
+        }
         let comparisons: Vec<_> = chart.iter().filter(|a| !a.is_group).map(|a| {
             let source_balance=opening.balances.get(&a.id).copied().unwrap_or(Money::ZERO);
             let target_balance=target.rows.iter().find(|r|r.account.id==a.id).map(|r|r.debit_balance-r.credit_balance).unwrap_or(Money::ZERO);
@@ -336,7 +347,7 @@ impl Reports {
         }
         let report = json!({"version":1,"company_id":company,"as_of":as_of.to_string(),"conversion_date":opening.entry.entry_date.to_string(),"currency_code":target.currency_code,"minor_units":target.minor_units,"through_entry_number":through,
             "opening":opening,"source_trial_balance":{"rows":comparisons,"basis":"Approved source opening journal only; signed debit less credit balances."},"target_trial_balance":target,"accounts":comparisons,"postings_by_owner":owners,
-            "receivables":{"detail":ar_detail,"control":ar},"payables":{"detail":ap_detail,"control":ap},"assets":assets,"bank_bridges":bank_bridges,"sources":evidence,
+            "receivables":{"detail":ar_detail,"control":ar},"payables":{"detail":ap_detail,"control":ap},"assets":asset_snapshot,"bank_bridges":bank_bridges,"sources":evidence,
             "unresolved_differences":differences,
             "excluded_history":["Transactions before conversion other than the approved opening journal and retained opening registers.","Previously settled invoice and bill history, historical asset depreciation entries and legacy bank matches are not imported."],
             "schedule_limits":["Bank evidence retains statement and finalised reconciliation bridges. Open bridges require a separate reconciliation; no conversion bank bridge is inferred.","Tax and payroll evidence is retained where recorded. Legacy returns, payroll year-to-date and filing completeness require the accountant's external schedules and reviewer references."],

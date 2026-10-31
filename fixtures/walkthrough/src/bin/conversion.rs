@@ -2,6 +2,8 @@
 //! clean Company 002, then facade controls on Company 003. No product seeds.
 #[path = "../conversion_lifecycle.rs"]
 mod conversion_lifecycle;
+#[path = "../conversion_report.rs"]
+mod conversion_report;
 use bilibi_agent_api::{Handler, Registry};
 use bilibi_authz::{RoleDefinition, VocabularyContribution, VOCABULARY};
 use bilibi_database::{pool, Db};
@@ -890,7 +892,9 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         "Conversion facade proof: exact source balances, partial residuals, all three mismatch refusals, corrected preview, identical retries, independent approval, pre-cutoff exclusion, aged dates, control tie-outs, source accumulation differing from historical projection, prospective 106.25 depreciation, receipt, supplier payment and their reversals, guarded opening reversal, audit evidence and retained rows passed."
     );
     drop(c);
+    let report = conversion_report::before(db, services).await?;
     conversion_lifecycle::prove(db, services, &config, [a, b, asset_batch], run.id).await?;
+    conversion_report::after(db, services, report).await?;
     Ok(())
 }
 async fn prove_historical_controls(db: &Db, services: &Services) -> Outcome<()> {

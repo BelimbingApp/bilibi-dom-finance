@@ -59,7 +59,7 @@ impl State {
     fn new(pages: Pages, r: &PageRequest<'_, Scope>) -> Self {
         Self {
             pages,
-            id: r.params.get("report_id").and_then(|v| v.parse().ok()),
+            id: r.path.get("report_id").and_then(|v| v.parse().ok()),
             company: None,
             values: BTreeMap::new(),
             errors: BTreeMap::new(),
@@ -280,6 +280,20 @@ impl State {
                     Err(e) => self.message = e,
                 }
             }
+            if self.id.is_none() && !self.document.is_null() {
+                if let Err(e) = self
+                    .read(
+                        s,
+                        "finance.reports.conversion.list",
+                        json!({"company_id":company}),
+                    )
+                    .await
+                {
+                    self.document = Value::Null;
+                    self.review = None;
+                    self.message = e;
+                }
+            }
             if !self.message.is_empty() {
                 body.push(&render(Alert {
                     id: "conversion-message",
@@ -452,6 +466,13 @@ impl State {
 impl LiveState<Scope, Error> for State {
     fn update<'a>(&'a mut self, r: LiveRequest<'a, Scope>) -> LiveFuture<'a, Error> {
         Box::pin(async move {
+            if self.company != r.scope.current_company().map(|c| c.get()) {
+                self.review = None;
+                self.document = Value::Null;
+                self.path.clear();
+                self.offset = 0;
+                return self.view(r.scope).await;
+            }
             if let LiveInput::Event(v) = r.input {
                 let event = v["type"].as_str().ok_or(Error::Invalid)?;
                 match event {
