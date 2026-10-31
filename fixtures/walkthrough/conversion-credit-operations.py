@@ -7,17 +7,24 @@ import concurrent.futures
 import json
 import os
 import ssl
+import socket
+import urllib.parse
 import urllib.error
 import urllib.request
 
 if os.environ.get("BILIBI_AGENT_PROOF") != "disposable":
     raise SystemExit("BILIBI_AGENT_PROOF=disposable is required")
 base = os.environ["BILIBI_AGENT_URL"].rstrip("/")
-if not base.startswith("https://") or ".localhost" not in base:
+hostname = urllib.parse.urlsplit(base).hostname or ""
+if not base.startswith("https://") or not hostname.endswith(".localhost"):
     raise SystemExit("Use the disposable launcher's HTTPS localhost name")
 credentials = json.load(open(os.environ["BILIBI_AGENT_CREDENTIALS"]))
 config = next(row for row in json.load(open(os.environ["BILIBI_OPENING_PROOF_CONFIG"])) if row["company_id"] == 9)
 company = config["company_id"]
+# Chrome resolves .localhost without DNS; Python's resolver may not. Keep
+# the original HTTPS hostname/SNI and route only this disposable name locally.
+resolve = socket.getaddrinfo
+socket.getaddrinfo = lambda host, *args, **kwargs: resolve("127.0.0.1" if host == hostname else host, *args, **kwargs)
 context = ssl._create_unverified_context()  # Disposable local launcher certificate only.
 
 
