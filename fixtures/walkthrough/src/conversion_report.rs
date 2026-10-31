@@ -2,7 +2,9 @@
 //! opening-register corrections and backdated settlement lifecycle.
 use bilibi_agent_api::plans::{PlanAuthority, PlanIdentity, PlannedOperation, Plans};
 use bilibi_database::Db;
+use bilibi_finance_attachments::NewFile;
 use bilibi_finance_ledger::{Ledger, Money, NewEntry, NewLine};
+use bilibi_finance_reconciliation::{NewBankAccount, NewMatch, NewReconciliation, Reconciliation};
 use bilibi_finance_reports::Reports;
 use bilibi_finance_walkthrough_fixture::sign_in;
 use bilibi_module_registry::Services;
@@ -31,6 +33,7 @@ impl PlanAuthority for Authority {
 }
 pub struct Kept {
     pub id: i64,
+    pub bank_id: i64,
     pub content: Value,
     pub pending: Value,
 }
@@ -63,6 +66,83 @@ pub async fn before(db: &Db, services: &Services) -> Outcome<Kept> {
     };
     let plans = services.get::<Plans>("base/agent_api.plans")?;
     let reports = services.get::<Reports>(bilibi_finance_reports::SERVICE)?;
+    let ledger = services.get::<Ledger>(bilibi_finance_ledger::SERVICE)?;
+    let reconciliation = services.get::<Reconciliation>(bilibi_finance_reconciliation::SERVICE)?;
+    let opening = ledger
+        .opening_context_on(&**db.get().await?, &s, COMPANY)
+        .await?;
+    let bank_account_id = ledger
+        .list_accounts(&s, COMPANY)
+        .await?
+        .into_iter()
+        .find(|account| account.code == "1000")
+        .ok_or("bank ledger account")?
+        .id;
+    let bank = reconciliation
+        .create_bank_account(
+            &s,
+            COMPANY,
+            &NewBankAccount {
+                name: "Conversion bank bridge".into(),
+                ledger_account_id: bank_account_id,
+                import_mapping: json!({
+                    "date":"Date","description":"Details","reference":"Ref","amount":"Amount","balance":"Balance"
+                }),
+                charges_account_id: None,
+                interest_account_id: None,
+                match_window_days: None,
+                active: None,
+                reason: None,
+            },
+        )
+        .await?;
+    let statement = reconciliation
+        .import_statement(
+            &s,
+            COMPANY,
+            bank.id,
+            &NewFile {
+                file_name: "conversion-opening-statement.csv".into(),
+                content: b"Date,Details,Ref,Amount,Balance\n2026-07-01,Opening bank balance,OPENING,10000,10000\n".to_vec(),
+                content_type: Some("text/csv".into()),
+            },
+        )
+        .await?;
+    reconciliation
+        .record_match(
+            &s,
+            COMPANY,
+            bank.id,
+            &NewMatch {
+                statement_line_ids: vec![statement.statement.lines[0].id],
+                entry_ids: vec![opening.entry.id],
+                note: Some("Opening bank balance".into()),
+            },
+        )
+        .await?;
+    let opened = reconciliation
+        .open_reconciliation(
+            &s,
+            COMPANY,
+            bank.id,
+            &NewReconciliation {
+                end_date: Some(date(2026, 8, 1)),
+                statement_balance: "10000".into(),
+            },
+        )
+        .await?;
+    let grants = services.get::<bilibi_authz::grants::Grants>("base/authz.grants")?;
+    for capability in [
+        bilibi_finance_ledger::VIEW,
+        bilibi_finance_reconciliation::VIEW,
+        bilibi_finance_reconciliation::FINALISE_RECONCILIATIONS,
+    ] {
+        grants.set_direct(&s, 1, capability, Some(true)).await?;
+    }
+    let manager = sign_in(db, services, 1, 1).await?;
+    reconciliation
+        .finalise_reconciliation(&manager, COMPANY, opened.id)
+        .await?;
     let registry = services.get::<bilibi_agent_api::Registry>("base/agent_api.registry")?;
     let preview = registry
         .read(
@@ -80,6 +160,10 @@ pub async fn before(db: &Db, services: &Services) -> Outcome<Kept> {
         .as_array()
         .unwrap()
         .is_empty());
+    assert_eq!(
+        preview["bank_bridges"][0]["source_activity_after_finalisation"],
+        false
+    );
     let op = [issue()];
     let review = plans.preview(&authority, &op).await?;
     assert_eq!(review["valid"], true, "{review}");
@@ -98,11 +182,24 @@ pub async fn before(db: &Db, services: &Services) -> Outcome<Kept> {
     assert!(kept.content.get("accounts").is_none());
     let pending = plans.preview(&authority, &op).await?;
     assert_eq!(pending["valid"], true);
-    let grants = services.get::<bilibi_authz::grants::Grants>("base/authz.grants")?;
     for cap in VIEWS {
         grants.set_direct(&s, 2, cap, Some(true)).await?;
     }
+    grants
+        .set_direct(&s, 2, bilibi_finance_reports::ISSUE, Some(false))
+        .await?;
     let viewer = sign_in(db, services, 1, 2).await?;
+    assert_eq!(
+        registry
+            .read(
+                db,
+                &viewer,
+                "finance.reports.conversion.preview",
+                &json!({"company_id":COMPANY,"as_of":"2026-08-01"}),
+            )
+            .await?["result"]["version"],
+        2
+    );
     assert_eq!(
         reports
             .get_issued_report(&viewer, COMPANY, id)
@@ -134,6 +231,7 @@ pub async fn before(db: &Db, services: &Services) -> Outcome<Kept> {
     println!("PASS conversion report: shared contract issuance, replay refusal, exact source/target facts, source-grant revocation and immutable issued copy");
     Ok(Kept {
         id,
+        bank_id: bank.id,
         content: kept.content,
         pending,
     })
@@ -142,6 +240,7 @@ pub async fn after(db: &Db, services: &Services, kept: Kept) -> Outcome<()> {
     let s = sign_in(db, services, 1, 4).await?;
     let reports = services.get::<Reports>(bilibi_finance_reports::SERVICE)?;
     let ledger = services.get::<Ledger>(bilibi_finance_ledger::SERVICE)?;
+    let reconciliation = services.get::<Reconciliation>(bilibi_finance_reconciliation::SERVICE)?;
     let authentication = services.get::<Authentication>("base/tenancy.authentication")?;
     let issuer = Authority {
         authentication: authentication.clone(),
@@ -194,6 +293,89 @@ pub async fn after(db: &Db, services: &Services, kept: Kept) -> Outcome<()> {
         plans.commit(&s, &issuer, old, &[issue()]).await.is_err(),
         "stale source review committed"
     );
+    let deposit = ledger
+        .post_entry(
+            &s,
+            COMPANY,
+            &NewEntry {
+                entry_date: date(2026, 7, 2),
+                description: "Late bank deposit".into(),
+                reference: Some("LATE-DEPOSIT".into()),
+                lines: vec![
+                    NewLine {
+                        account_id: account("1000"),
+                        debit: Money::parse("1", units)?,
+                        credit: Money::ZERO,
+                        description: None,
+                    },
+                    NewLine {
+                        account_id: account("3000"),
+                        debit: Money::ZERO,
+                        credit: Money::parse("1", units)?,
+                        description: None,
+                    },
+                ],
+            },
+            &Default::default(),
+        )
+        .await?;
+    let withdrawal = ledger
+        .post_entry(
+            &s,
+            COMPANY,
+            &NewEntry {
+                entry_date: date(2026, 7, 3),
+                description: "Late bank withdrawal".into(),
+                reference: Some("LATE-WITHDRAWAL".into()),
+                lines: vec![
+                    NewLine {
+                        account_id: account("3000"),
+                        debit: Money::parse("1", units)?,
+                        credit: Money::ZERO,
+                        description: None,
+                    },
+                    NewLine {
+                        account_id: account("1000"),
+                        debit: Money::ZERO,
+                        credit: Money::parse("1", units)?,
+                        description: None,
+                    },
+                ],
+            },
+            &Default::default(),
+        )
+        .await?;
+    let imported = reconciliation
+        .import_statement(
+            &s,
+            COMPANY,
+            kept.bank_id,
+            &NewFile {
+                file_name: "conversion-late-statement.csv".into(),
+                content: b"Date,Details,Ref,Amount,Balance\n2026-07-02,Late bank deposit,LATE-DEPOSIT,1,10001\n2026-07-03,Late bank withdrawal,LATE-WITHDRAWAL,-1,10000\n".to_vec(),
+                content_type: Some("text/csv".into()),
+            },
+        )
+        .await?;
+    for (line, entry) in imported
+        .statement
+        .lines
+        .iter()
+        .zip([deposit.id, withdrawal.id])
+    {
+        reconciliation
+            .record_match(
+                &s,
+                COMPANY,
+                kept.bank_id,
+                &NewMatch {
+                    statement_line_ids: vec![line.id],
+                    entry_ids: vec![entry],
+                    note: Some("Late source activity after bridge finalisation".into()),
+                },
+            )
+            .await?;
+    }
     let current = reports
         .conversion_report(&s, COMPANY, date(2026, 8, 1))
         .await?;
@@ -213,6 +395,58 @@ pub async fn after(db: &Db, services: &Services, kept: Kept) -> Outcome<()> {
             > 500,
         "evidence paging lost register rows"
     );
+    let bridge = current["bank_bridges"]
+        .as_array()
+        .and_then(|rows| rows.iter().find(|row| row["account"]["id"] == kept.bank_id))
+        .ok_or("conversion bank bridge")?;
+    assert!(Money::parse(
+        bridge["change_since_bridge"]
+            .as_str()
+            .ok_or("bank bridge change")?,
+        units,
+    )?
+    .is_zero());
+    assert_eq!(bridge["source_activity_after_finalisation"], true);
+    assert!(
+        bridge["source_boundary"]["through_statement_number"]
+            .as_i64()
+            .unwrap()
+            > bridge["finalised_boundary"]["through_statement_number"]
+                .as_i64()
+                .unwrap()
+    );
+    assert!(
+        bridge["source_boundary"]["through_match_event_number"]
+            .as_i64()
+            .unwrap()
+            > bridge["finalised_boundary"]["through_match_event_number"]
+                .as_i64()
+                .unwrap()
+    );
+    assert!(current["unresolved_differences"]
+        .as_array()
+        .is_some_and(|rows| rows.iter().any(|row| {
+            row["kind"] == "bank_bridge_stale" && row["bank_account_id"] == kept.bank_id
+        })));
+    for dataset in [
+        "statement",
+        "statement_line",
+        "match",
+        "match_entry",
+        "match_event",
+        "match_line",
+    ] {
+        assert!(
+            current["sources"]["bank"][dataset]["rows"]
+                .as_array()
+                .unwrap()
+                .len()
+                > kept.content["sources"]["bank"][dataset]["rows"]
+                    .as_array()
+                    .unwrap()
+                    .len()
+        );
+    }
     let sign = [PlannedOperation {
         key: "finance.reports.conversion.sign".into(),
         input: json!({"company_id":COMPANY,"report_id":kept.id,"reviewer_reference":"Independent accountant review C-109/S","note":"Qualified: the retained report's differences and excluded history remain; external tax/payroll schedules require separate review."}),

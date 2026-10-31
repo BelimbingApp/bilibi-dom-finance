@@ -16,6 +16,7 @@ use serde_json::{json, Value};
 use std::{collections::BTreeMap, sync::Arc};
 pub(crate) const SERVICE: &str = "finance/reports.conversion-pages";
 const PATH: &str = "/finance/reports/conversions";
+const PREVIEW: &str = "finance.reports.conversion.preview";
 const ISSUE: &str = "finance.reports.conversion.issue";
 const SIGN: &str = "finance.reports.conversion.sign";
 #[derive(Clone)]
@@ -441,6 +442,21 @@ impl State {
                         &self.document
                     };
                     body.push(&render(Alert {id:"conversion-summary",kind:StatusKind::Info,body:Html::text(&format!("Conversion {} · reporting date {} · through entry {} · {} unresolved items. Review every difference, source and schedule limit.",content["conversion_date"].as_str().unwrap_or(""),content["as_of"].as_str().unwrap_or(""),content["through_entry_number"],content["unresolved_differences"].as_array().map_or(0,Vec::len))),..Alert::default()})?);
+                    let stale_bridges = content["bank_bridges"].as_array().map_or(0, |rows| {
+                        rows.iter()
+                            .filter(|row| row["source_activity_after_finalisation"] == true)
+                            .count()
+                    });
+                    if stale_bridges > 0 {
+                        body.push(&render(Alert {
+                            id: "conversion-bank-bridge-stale",
+                            kind: StatusKind::Warning,
+                            body: Html::text(&format!(
+                                "{stale_bridges} finalised bank bridge(s) have later statement or match activity through this report date. Finalise a new reconciliation that includes it."
+                            )),
+                            ..Alert::default()
+                        })?);
+                    }
                     body.push(&render(Button {
                         event: "accounts",
                         body: Html::text("Source and target balances"),
@@ -548,7 +564,16 @@ impl State {
                         )?);
                     }
                 }
-                let actions = render(Button {
+                let mut actions = Html::EMPTY;
+                if self.id.is_none() {
+                    actions.push(&render(Button {
+                        button_type: "button",
+                        event: "preview",
+                        body: Html::text("Preview report"),
+                        ..Button::default()
+                    })?);
+                }
+                actions.push(&render(Button {
                     button_type: "submit",
                     body: Html::text(if self.id.is_some() {
                         "Review sign-off"
@@ -557,7 +582,7 @@ impl State {
                     }),
                     variant: ButtonVariant::Primary,
                     ..Button::default()
-                })?;
+                })?);
                 fields.push(&render(Alert {id:"conversion-significance",kind:StatusKind::Info,body:Html::text(if self.id.is_some(){"Sign the exact issued report after reviewing its sources, differences and excluded history. Explain any qualifications in your conclusion."}else{"Issue an immutable copy after reviewing the report. Issuance does not sign it or certify completeness."}),..Alert::default()})?);
                 body.push(&render(Card {
                     id: "conversion-form-card",
@@ -684,7 +709,7 @@ impl LiveState<Scope, Error> for State {
                         self.path.clear();
                         self.offset = 0;
                     }
-                    "review_issue" | "review_sign" => {
+                    "preview" | "review_issue" | "review_sign" => {
                         self.errors.clear();
                         self.message.clear();
                         self.review = None;
@@ -704,43 +729,59 @@ impl LiveState<Scope, Error> for State {
                                 self.values.insert(key.into(), text.into());
                             }
                         }
-                        let mut input = json!(self.values);
-                        input["company_id"] = json!(r.scope.current_company().map(|c| c.get()));
-                        if let Some(id) = self.id {
-                            input["report_id"] = json!(id);
-                        }
-                        let contract = if event == "review_issue" { ISSUE } else { SIGN };
-                        let call = Call {
-                            scope: r.scope,
-                            credential: r.credential,
-                            service: SERVICE,
-                            event,
-                            contract,
-                        };
-                        match self.pages.contracts.preview(&call, input.clone()).await {
-                            Ok(review) => {
-                                if let Some(code) = review["plan_code"].as_str() {
-                                    self.document = if contract == ISSUE {
-                                        review["results"][0]["preview"]["result"].clone()
-                                    } else {
-                                        review["results"][0]["preview"]["result"]["record"].clone()
-                                    };
+                        if event == "preview" {
+                            let input = json!({
+                                "company_id": r.scope.current_company().map(|c| c.get()),
+                                "as_of": self.values.get("as_of").cloned().unwrap_or_default(),
+                            });
+                            match self.read(r.scope, PREVIEW, input).await {
+                                Ok(document) => {
+                                    self.document = document;
                                     self.path.clear();
                                     self.offset = 0;
-                                    self.review = Some(Review {
-                                        code: code.into(),
-                                        input,
-                                        contract,
-                                        instance: review["instance"].clone(),
-                                    });
-                                } else {
-                                    let fields = &review["results"][0]["error"]["fields"];
-                                    self.errors =
-                                        serde_json::from_value(fields.clone()).unwrap_or_default();
-                                    self.message=self.errors.get("base").map(|v|v.join(" ")).unwrap_or_else(||"The report could not be reviewed. Check the highlighted fields and your permissions.".into());
                                 }
+                                Err(error) => self.message = error,
                             }
-                            Err(e) => self.message = e.to_string(),
+                        } else {
+                            let mut input = json!(self.values);
+                            input["company_id"] = json!(r.scope.current_company().map(|c| c.get()));
+                            if let Some(id) = self.id {
+                                input["report_id"] = json!(id);
+                            }
+                            let contract = if event == "review_issue" { ISSUE } else { SIGN };
+                            let call = Call {
+                                scope: r.scope,
+                                credential: r.credential,
+                                service: SERVICE,
+                                event,
+                                contract,
+                            };
+                            match self.pages.contracts.preview(&call, input.clone()).await {
+                                Ok(review) => {
+                                    if let Some(code) = review["plan_code"].as_str() {
+                                        self.document = if contract == ISSUE {
+                                            review["results"][0]["preview"]["result"].clone()
+                                        } else {
+                                            review["results"][0]["preview"]["result"]["record"]
+                                                .clone()
+                                        };
+                                        self.path.clear();
+                                        self.offset = 0;
+                                        self.review = Some(Review {
+                                            code: code.into(),
+                                            input,
+                                            contract,
+                                            instance: review["instance"].clone(),
+                                        });
+                                    } else {
+                                        let fields = &review["results"][0]["error"]["fields"];
+                                        self.errors = serde_json::from_value(fields.clone())
+                                            .unwrap_or_default();
+                                        self.message=self.errors.get("base").map(|v|v.join(" ")).unwrap_or_else(||"The report could not be reviewed. Check the highlighted fields and your permissions.".into());
+                                    }
+                                }
+                                Err(e) => self.message = e.to_string(),
+                            }
                         }
                     }
                     "issue" | "sign" => {

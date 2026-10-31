@@ -563,6 +563,12 @@ pub struct Pins {
     pub through_opening_id: Option<i64>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct ActivityBoundary {
+    pub through_statement_number: i64,
+    pub through_match_event_number: i64,
+}
+
 /// What opens (or previews) a reconciliation: the statement's `end_date` and
 /// the `statement_balance` it shows that day, in decimal notation no finer
 /// than the book's currency.
@@ -1626,6 +1632,32 @@ impl Reconciliation {
             ReconciliationStatus::Abandoned => None,
         };
         Ok(found)
+    }
+
+    pub async fn activity_boundary_on(
+        &self,
+        client: &(impl tokio_postgres::GenericClient + Sync),
+        scope: &Scope,
+        company_id: i64,
+        bank_account_id: i64,
+        through: Date,
+    ) -> Result<ActivityBoundary> {
+        authorize(client, scope, company_id, VIEW).await?;
+        bank_accounts::find(client, scope.tenant(), company_id, bank_account_id)
+            .await?
+            .ok_or(ReconciliationError::BankAccountNotFound)?;
+        let (through_statement_number, through_match_event_number) = matching::activity_boundary(
+            client,
+            scope.tenant(),
+            company_id,
+            bank_account_id,
+            through,
+        )
+        .await?;
+        Ok(ActivityBoundary {
+            through_statement_number,
+            through_match_event_number,
+        })
     }
 
     /// The bank account's reconciliations, oldest first, with their status

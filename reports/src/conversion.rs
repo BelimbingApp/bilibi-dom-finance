@@ -250,6 +250,11 @@ impl Reports {
             [
                 "bank_account",
                 "statement",
+                "statement_line",
+                "match",
+                "match_entry",
+                "match_event",
+                "match_line",
                 "reconciliation_record",
                 "reconciliation_event",
                 "reconciliation_item"
@@ -366,7 +371,30 @@ impl Reports {
             } else {
                 (None, None)
             };
-            bank_bridges.push(json!({"account":account,"target_balance":current_balance,"bridge_end_balance":end_balance,"change_since_bridge":changed,"bridge":bridge}));
+            let source_boundary = self
+                .sources
+                .reconciliation
+                .activity_boundary_on(c, s, company, bank_id, as_of)
+                .await
+                .map_err(source_error)?;
+            let finalised_boundary = bridge
+                .as_ref()
+                .filter(|b| {
+                    b.status == bilibi_finance_reconciliation::ReconciliationStatus::Finalised
+                })
+                .and_then(|b| b.figures.as_ref())
+                .map(|f| {
+                    json!({"through_statement_number":f.through_statement_number,"through_match_event_number":f.through_match_event_number})
+                });
+            let source_activity_after_finalisation = bridge.as_ref().is_some_and(|b| {
+                b.status == bilibi_finance_reconciliation::ReconciliationStatus::Finalised
+                    && b.figures.as_ref().is_some_and(|f| {
+                        source_boundary.through_statement_number > f.through_statement_number
+                            || source_boundary.through_match_event_number
+                                > f.through_match_event_number
+                    })
+            });
+            bank_bridges.push(json!({"account":account,"target_balance":current_balance,"bridge_end_balance":end_balance,"change_since_bridge":changed,"source_boundary":source_boundary,"finalised_boundary":finalised_boundary,"source_activity_after_finalisation":source_activity_after_finalisation,"bridge":bridge}));
         }
         let mut differences = pending_sources;
         for row in &ar.accounts {
@@ -392,19 +420,24 @@ impl Reports {
                 .as_str()
                 .and_then(|v| Money::parse(v, target.minor_units).ok())
                 .is_some_and(|m| m != Money::ZERO);
-            if incomplete || changed {
-                differences.push(json!({"area":"bank","bank_account_id":bank["account"]["id"],"reason":"Review the bridge's status, end date and changes since finalisation; it does not establish a complete tie-out at the report date."}));
+            let stale = bank["source_activity_after_finalisation"] == true;
+            if incomplete || changed || stale {
+                differences.push(if stale {
+                    json!({"area":"bank","kind":"bank_bridge_stale","bank_account_id":bank["account"]["id"],"reason":"Statement or match activity through the report date was recorded after this bridge was finalised. Finalise a new reconciliation that includes it."})
+                } else {
+                    json!({"area":"bank","bank_account_id":bank["account"]["id"],"reason":"Review the bridge's status, end date and changes since finalisation; it does not establish a complete tie-out at the report date."})
+                });
             }
         }
         for area in ["bank", "tax", "payroll"] {
             differences.push(json!({"area":area,"kind":"schedule_assessment","reason":"The accountant has not assessed this schedule's applicability or completeness."}));
         }
-        let report = json!({"version":1,"company_id":company,"as_of":as_of.to_string(),"conversion_date":opening.entry.entry_date.to_string(),"currency_code":target.currency_code,"minor_units":target.minor_units,"through_entry_number":through,
+        let report = json!({"version":2,"company_id":company,"as_of":as_of.to_string(),"conversion_date":opening.entry.entry_date.to_string(),"currency_code":target.currency_code,"minor_units":target.minor_units,"through_entry_number":through,
             "opening":opening,"source_trial_balance":{"rows":comparisons,"basis":"Approved source opening journal only; signed debit less credit balances."},"target_trial_balance":target,"postings_by_owner":owners,
             "receivables":{"detail":ar_detail,"control":ar},"payables":{"detail":ap_detail,"control":ap},"assets":asset_snapshot,"bank_bridges":bank_bridges,"sources":evidence,
             "unresolved_differences":differences,"register_coverage":register_coverage,
             "excluded_history":["Transactions before conversion other than the approved opening journal and retained opening registers.","Previously settled invoice and bill history, historical asset depreciation entries and legacy bank matches are not imported."],
-            "schedule_limits":["Bank evidence retains statement and finalised reconciliation bridges. Open bridges require a separate reconciliation; no conversion bank bridge is inferred.","Tax and payroll evidence is retained where recorded. Legacy returns, payroll year-to-date and filing completeness require the accountant's external schedules and reviewer references."],
+            "schedule_limits":["Bank evidence retains statement and match activity with finalised reconciliation bridges. Open or stale bridges require a new reconciliation; no conversion bank bridge is inferred.","Tax and payroll evidence is retained where recorded. Legacy returns, payroll year-to-date and filing completeness require the accountant's external schedules and reviewer references."],
             "schedule_reviews":{"bank":{"status":"not_assessed"},"tax":{"status":"not_assessed"},"payroll":{"status":"not_assessed"}},
             "assessment":"Unassessed. Zero numerical differences do not establish completeness or accountant approval. Other-owner control postings remain visible; opening recognition is evidence, not a reclassification."});
         if serde_json::to_vec(&report)
@@ -436,7 +469,7 @@ impl Reports {
             tenant_id: s.tenant(),
             company_id: company,
             kind: KIND,
-            implementation_version: "conversion-1",
+            implementation_version: "conversion-2",
             through_entry_number: content["through_entry_number"]
                 .as_i64()
                 .ok_or(Error::Internal)?,

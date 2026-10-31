@@ -209,6 +209,36 @@ pub(crate) async fn last_statement_number(
         .get(0))
 }
 
+pub(crate) async fn activity_boundary(
+    client: &impl GenericClient,
+    tenant: i64,
+    company_id: i64,
+    bank_account_id: i64,
+    through: Date,
+) -> Result<(i64, i64)> {
+    let through = through.to_string();
+    let row = client
+        .query_one(
+            "SELECT \
+             COALESCE((SELECT max(s.statement_number) FROM finance_reconciliation_statements s \
+               WHERE s.tenant_id=$1 AND s.company_id=$2 AND s.bank_account_id=$3 \
+                 AND EXISTS (SELECT 1 FROM finance_reconciliation_statement_lines l \
+                   WHERE l.statement_id=s.id AND l.line_date <= $4::text::date)),0)::bigint, \
+             COALESCE((SELECT max(e.event_number) FROM finance_reconciliation_match_events e \
+               JOIN finance_reconciliation_matches m ON m.id=e.match_id \
+               WHERE m.tenant_id=$1 AND m.company_id=$2 AND m.bank_account_id=$3 \
+                 AND (EXISTS (SELECT 1 FROM finance_reconciliation_match_lines ml \
+                       JOIN finance_reconciliation_statement_lines l ON l.id=ml.statement_line_id \
+                       WHERE ml.match_id=m.id AND l.line_date <= $4::text::date) \
+                   OR EXISTS (SELECT 1 FROM finance_reconciliation_match_entries me \
+                       WHERE me.match_id=m.id AND me.entry_date <= $4::text::date))),0)::bigint",
+            &[&tenant, &company_id, &bank_account_id, &through],
+        )
+        .await
+        .map_err(Error::from)?;
+    Ok((row.get(0), row.get(1)))
+}
+
 // Statement side
 
 /// The bank account's statement lines within `bounds`' date and statement
