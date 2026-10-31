@@ -40,11 +40,11 @@ roles!(
 );
 type Outcome<T> = Result<T, Box<dyn std::error::Error>>;
 const SOURCE: &str = "source_id,account_code,debit,credit\nbank,1000,10000,\nreceivables,1100,3000,\nasset-cost,1200,12000,\nytd-cost,5000,2000,\npayables,2000,,1500\naccumulation,1290,,1800\ncapital,3000,,18200\nytd-sales,4000,,5500\n";
-const AR: &str = "source_id,customer_code,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind\ninvoice-17,company_010,OLD-INV-17,2026-05-15,2026-06-30,5000,3000,1100,company\n";
-const AP: &str = "source_id,vendor_code,vendor_name,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind\nbill-29,company_010,Conversion vendor,OLD-BILL-29,2026-05-01,2026-06-15,2500,1500,2000,company\n";
+const AR: &str = "source_id,customer_code,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind,item_kind,source_kind,source_system,currency_code,source_tax_facts\ninvoice-17,company_010,OLD-INV-17,2026-05-15,2026-06-30,5000,3000,1100,company,invoice,invoice,source-system,MYR,unknown\n";
+const AP: &str = "source_id,vendor_code,vendor_name,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind,item_kind,source_kind,source_system,currency_code,source_tax_facts\nbill-29,company_010,Conversion vendor,OLD-BILL-29,2026-05-01,2026-06-15,2500,1500,2000,company,bill,bill,source-system,MYR,unknown\n";
 const MULTI_SOURCE: &str = "source_id,account_code,debit,credit\nbank,1000,10000,\nreceivables,1100,2500,\nhistorical-receivables,1110,500,\nasset-cost,1200,12000,\nytd-cost,5000,2000,\npayables,2000,,1200\nhistorical-payables,2010,,300\naccumulation,1290,,1800\ncapital,3000,,18200\nytd-sales,4000,,5500\n";
-const MULTI_AR: &str = "source_id,customer_code,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind\ninvoice-17,company_010,OLD-INV-17,2026-05-15,2026-06-30,5000,2500,1100,company\ninvoice-18,company_010,OLD-INV-18,2026-04-15,2026-05-31,1000,500,1110,company\n";
-const MULTI_AP: &str = "source_id,vendor_code,vendor_name,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind\nbill-29,company_010,Conversion vendor,OLD-BILL-29,2026-05-01,2026-06-15,2500,1200,2000,company\nbill-30,company_010,Conversion vendor,OLD-BILL-30,2026-04-01,2026-05-15,900,300,2010,company\n";
+const MULTI_AR: &str = "source_id,customer_code,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind,item_kind,source_kind,source_system,currency_code,source_tax_facts\ninvoice-17,company_010,OLD-INV-17,2026-05-15,2026-06-30,5000,2500,1100,company,invoice,invoice,source-system,MYR,unknown\ninvoice-18,company_010,OLD-INV-18,2026-04-15,2026-05-31,1000,500,1110,company,invoice,invoice,source-system,MYR,unknown\n";
+const MULTI_AP: &str = "source_id,vendor_code,vendor_name,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind,item_kind,source_kind,source_system,currency_code,source_tax_facts\nbill-29,company_010,Conversion vendor,OLD-BILL-29,2026-05-01,2026-06-15,2500,1200,2000,company,bill,bill,source-system,MYR,unknown\nbill-30,company_010,Conversion vendor,OLD-BILL-30,2026-04-01,2026-05-15,900,300,2010,company,bill,bill,source-system,MYR,unknown\n";
 async fn in_company(
     db: &Db,
     services: &Services,
@@ -294,7 +294,7 @@ async fn setup(db: &Db, services: &Services, company: i64) -> Outcome<Value> {
     )
 }
 async fn prove_opening_invoice_page_scale(db: &Db, services: &Services) -> Outcome<()> {
-    const HEADER: &str = "source_id,customer_code,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind\n";
+    const HEADER: &str = "source_id,customer_code,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind,item_kind,source_kind,source_system,currency_code,source_tax_facts\n";
     let company = 5;
     let config = setup(db, services, company).await?;
     let admin = in_company(db, services, 4, company).await?;
@@ -302,15 +302,15 @@ async fn prove_opening_invoice_page_scale(db: &Db, services: &Services) -> Outco
     let ar = services.get::<Receivables>(bilibi_finance_receivables::SERVICE)?;
     let registry = services.get::<Registry>("base/agent_api.registry")?;
     let mut rows = vec![
-        "scale-nonmatching,company_010,OUTSIDE-QUERY,2026-05-15,2026-06-30,0.50,0.50,1100,company"
+        "scale-nonmatching,company_010,OUTSIDE-QUERY,2026-05-15,2026-06-30,0.50,0.50,1100,company,invoice,invoice,source-system,MYR,unknown"
             .to_owned(),
     ];
     for n in 1..=2100 {
         let amount = if n == 2100 { "0.50" } else { "1" };
-        rows.push(format!("scale-{n},company_010,SCALE-ROW-{n},2026-05-15,2026-06-30,{amount},{amount},1100,company"));
+        rows.push(format!("scale-{n},company_010,SCALE-ROW-{n},2026-05-15,2026-06-30,{amount},{amount},1100,company,invoice,invoice,source-system,MYR,unknown"));
     }
     rows.push(
-        "scale-0,company_010,SCALE-ROW-0,2026-05-15,2026-06-30,900,900,1100,company".to_owned(),
+        "scale-0,company_010,SCALE-ROW-0,2026-05-15,2026-06-30,900,900,1100,company,invoice,invoice,source-system,MYR,unknown".to_owned(),
     );
     let part_count = rows.len().div_ceil(500);
     for (index, chunk) in rows.chunks(500).enumerate() {
@@ -544,7 +544,7 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
             "customer_code and party_kind",
         ),
         (
-            AR.replace(",company\n", ",person\n"),
+            AR.replace(",company,", ",person,"),
             "customer_code and party_kind",
         ),
     ] {
@@ -560,7 +560,7 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
     }
     for csv in [
         AP.replace("bill-29,company_010", "bill-29,"),
-        AP.replace(",company\n", ",person\n"),
+        AP.replace(",company,", ",person,"),
     ] {
         let mut bad = ap_input.clone();
         bad["csv"] = json!(csv);

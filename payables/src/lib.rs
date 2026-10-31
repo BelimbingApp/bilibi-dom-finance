@@ -10,6 +10,7 @@ mod opening;
 mod opening_csv;
 mod opening_lifecycle;
 mod opening_operations;
+mod settlements;
 mod vendors;
 pub use vendors::{SupplierHistory, Vendor, VendorInput};
 mod payments;
@@ -64,6 +65,8 @@ inventory::submit! { Module {
         ("finance-payables-006-opening-items", include_str!("../migrations/006-opening-items.sql")),
             ("finance-payables-007-opening-lifecycle", include_str!("../migrations/007-opening-lifecycle.sql")),
         ("finance-payables-008-core-party-code", include_str!("../migrations/008-core-party-code.sql")),
+            ("finance-payables-009-opening-credits", include_str!("../migrations/009-opening-credits.sql")),
+            ("finance-payables-010-credit-settlements", include_str!("../migrations/010-credit-settlements.sql")),
     ],
     services: &[Service { id: SERVICE, factory: |s| { let payables = Arc::new(Payables {
         db: s.get::<Db>("base/database.pool")?.as_ref().clone(),

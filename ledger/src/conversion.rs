@@ -76,7 +76,24 @@ impl Ledger {
         agent_operations::authorize_on(tx.sql(), scope, company, VIEW).await?;
         lock(tx, scope, company).await?;
         let context = self.opening_context_on(tx.sql(), scope, company).await?;
-        if !entries::owner_valid(owner) || context.balances.get(&account) != Some(&balance) {
+        let eligible = self
+            .list_accounts_on(tx.sql(), scope, company)
+            .await?
+            .iter()
+            .any(|a| {
+                a.id == account
+                    && !a.is_group
+                    && [AccountType::Asset, AccountType::Liability].contains(&a.account_type)
+            });
+        if !entries::owner_valid(owner)
+            || !eligible
+            || context
+                .balances
+                .get(&account)
+                .copied()
+                .unwrap_or(Money::ZERO)
+                != balance
+        {
             return Err(LedgerError::Invalid(vec![FieldError::new(
                 "items",
                 "must reconcile exactly to the approved opening account balance",

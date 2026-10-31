@@ -137,13 +137,13 @@ multi_inputs = {
         "source_reference": "MULTI-AR",
         "currency_code": "MYR",
         "series_id": next(row["id"] for row in multi_series if row["code"] == "OPENING"),
-        "csv": "source_id,customer_code,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind\ninvoice-17,company_010,OLD-INV-17,2026-05-15,2026-06-30,5000,2500,1100,company\ninvoice-18,company_010,OLD-INV-18,2026-04-15,2026-05-31,1000,500,1110,company\n",
+        "csv": "source_id,customer_code,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind,item_kind,source_kind,source_system,currency_code,source_tax_facts\ninvoice-17,company_010,OLD-INV-17,2026-05-15,2026-06-30,5000,2500,1100,company,invoice,invoice,source-system,MYR,unknown\ninvoice-18,company_010,OLD-INV-18,2026-04-15,2026-05-31,1000,500,1110,company,invoice,invoice,source-system,MYR,unknown\n",
         "opening_account_classifications": opening_classifications(multi_ar_context),
     },
     "payables": {
         "source_reference": "MULTI-AP",
         "currency_code": "MYR",
-        "csv": "source_id,vendor_code,vendor_name,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind\nbill-29,company_010,Conversion vendor,OLD-BILL-29,2026-05-01,2026-06-15,2500,1200,2000,company\nbill-30,company_010,Conversion vendor,OLD-BILL-30,2026-04-01,2026-05-15,900,300,2010,company\n",
+        "csv": "source_id,vendor_code,vendor_name,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind,item_kind,source_kind,source_system,currency_code,source_tax_facts\nbill-29,company_010,Conversion vendor,OLD-BILL-29,2026-05-01,2026-06-15,2500,1200,2000,company,bill,bill,source-system,MYR,unknown\nbill-30,company_010,Conversion vendor,OLD-BILL-30,2026-04-01,2026-05-15,900,300,2010,company,bill,bill,source-system,MYR,unknown\n",
         "opening_account_classifications": opening_classifications(multi_ap_context),
     },
 }
@@ -174,8 +174,8 @@ customer=next(r for r in read(channel,"finance.receivables.customer.list",compan
 vendor=next(r for r in read(channel,"finance.payables.vendor.list",company,"approver")["records"] if r["code"]=="company_010")
 asset_context=read(channel,"finance.fixed_assets.opening.context",company,"approver")
 revision=next(r["id"] for r in asset_context["category_revisions"] if r["category_name"]=="Conversion assets")
-ar_csv="source_id,customer_code,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind\ninvoice-17,company_010,OLD-INV-17,2026-05-15,2026-06-30,5000,3000,1100,company\n"
-ap_csv="source_id,vendor_code,vendor_name,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind\nbill-29,company_010,Conversion vendor,OLD-BILL-29,2026-05-01,2026-06-15,2500,1500,2000,company\n"
+ar_csv="source_id,customer_code,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind,item_kind,source_kind,source_system,currency_code,source_tax_facts\ninvoice-17,company_010,OLD-INV-17,2026-05-15,2026-06-30,5000,3000,1100,company,invoice,invoice,source-system,MYR,unknown\n"
+ap_csv="source_id,vendor_code,vendor_name,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind,item_kind,source_kind,source_system,currency_code,source_tax_facts\nbill-29,company_010,Conversion vendor,OLD-BILL-29,2026-05-01,2026-06-15,2500,1500,2000,company,bill,bill,source-system,MYR,unknown\n"
 asset_csv=f"source_id,description,category_revision_id,acquisition_date,in_service_date,cost,accumulated_depreciation,remaining_life_months,residual_value\nasset-3,Source register asset,{revision},2024-06-01,2024-07-01,12000,1800,96,0\n"
 before_import={module:read(channel,f"finance.{module}.aging.get",company,"approver",as_of="2026-07-01",through_entry_number=trial["through_entry_number"]) for module in ["receivables","payables"]}
 ar_context=read(channel,"finance.receivables.opening.context",company,"approver")
