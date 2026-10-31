@@ -593,6 +593,162 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         )
         .await
         .is_err());
+    // Concurrent writers serialize under the company lock; only one can spend 20.
+    let race_ar = [
+        json!({"credit_document_id":ar_id("credit"),"target_document_id":ar_id("invoice"),"effective_date":"2026-07-26","amount":"20","reference":"race-a"}),
+        json!({"credit_document_id":ar_id("credit"),"target_document_id":ar_id("invoice"),"effective_date":"2026-07-26","amount":"20","reference":"race-b"}),
+    ];
+    let (left, right) = tokio::join!(
+        ar.apply_credit(&manager, company, &race_ar[0]),
+        ar.apply_credit(&manager, company, &race_ar[1])
+    );
+    assert_eq!(usize::from(left.is_ok()) + usize::from(right.is_ok()), 1);
+    let winner = left.or(right)?;
+    ar.reverse_settlement(&manager,company,&json!({"settlement_id":winner["id"],"effective_date":"2026-07-27","reference":"reverse-race"})).await?;
+    let race_ap = [
+        json!({"credit_document_id":ap_id("credit"),"target_document_id":ap_id("invoice"),"effective_date":"2026-07-26","amount":"20","reference":"race-a"}),
+        json!({"credit_document_id":ap_id("credit"),"target_document_id":ap_id("invoice"),"effective_date":"2026-07-26","amount":"20","reference":"race-b"}),
+    ];
+    let (left, right) = tokio::join!(
+        ap.apply_credit(&manager, company, &race_ap[0]),
+        ap.apply_credit(&manager, company, &race_ap[1])
+    );
+    assert_eq!(usize::from(left.is_ok()) + usize::from(right.is_ok()), 1);
+    let winner = left.or(right)?;
+    ap.reverse_settlement(&manager,company,&json!({"settlement_id":winner["id"],"effective_date":"2026-07-27","reference":"reverse-race"})).await?;
+    tied(&ar, &ap, &reviewer, company, date(2026, 7, 31)).await?;
+    let before_fault = ledger
+        .trial_balance(&reviewer, company, date(2026, 7, 31), None)
+        .await?;
+    let ar_before_fault = ar
+        .aged_receivables(&reviewer, company, date(2026, 7, 31), &Default::default())
+        .await?;
+    let ap_before_fault = ap
+        .aged_payables(&reviewer, company, date(2026, 7, 31), &Default::default())
+        .await?;
+    // The owned cash entry has been attempted before this deliberately late fault.
+    db.get().await?.batch_execute("CREATE FUNCTION walkthrough_credit_fault() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.reference='late-fault' THEN RAISE EXCEPTION 'disposable late settlement fault'; END IF; RETURN NEW; END $$; CREATE TRIGGER walkthrough_credit_fault BEFORE INSERT ON finance_receivables_settlements FOR EACH ROW EXECUTE FUNCTION walkthrough_credit_fault(); CREATE TRIGGER walkthrough_credit_fault BEFORE INSERT ON finance_payables_settlements FOR EACH ROW EXECUTE FUNCTION walkthrough_credit_fault();").await?;
+    let late_ar = json!({"credit_document_id":ar_id("credit"),"effective_date":"2026-07-28","amount":"1","cash_account_id":config["bank"],"reference":"late-fault"});
+    let late_ap = json!({"credit_document_id":ap_id("credit"),"effective_date":"2026-07-28","amount":"1","cash_account_id":config["bank"],"reference":"late-fault"});
+    assert!(ar.refund_credit(&manager, company, &late_ar).await.is_err());
+    assert!(ap.refund_credit(&manager, company, &late_ap).await.is_err());
+    db.get().await?.batch_execute("DROP TRIGGER walkthrough_credit_fault ON finance_receivables_settlements; DROP TRIGGER walkthrough_credit_fault ON finance_payables_settlements; DROP FUNCTION walkthrough_credit_fault();").await?;
+    assert_eq!(
+        before_fault,
+        ledger
+            .trial_balance(&reviewer, company, date(2026, 7, 31), None)
+            .await?
+    );
+    assert_eq!(
+        ar_before_fault.through_settlement_number,
+        ar.aged_receivables(&reviewer, company, date(2026, 7, 31), &Default::default())
+            .await?
+            .through_settlement_number
+    );
+    assert_eq!(
+        ap_before_fault.through_settlement_number,
+        ap.aged_payables(&reviewer, company, date(2026, 7, 31), &Default::default())
+            .await?
+            .through_settlement_number
+    );
+    let year = ledger
+        .list_fiscal_years(&reviewer, company)
+        .await?
+        .remove(0);
+    let july = year
+        .periods
+        .iter()
+        .find(|p| p.period_number == 7)
+        .unwrap()
+        .id;
+    for period in year.periods.iter().filter(|p| p.period_number <= 7) {
+        ledger
+            .close_period(&reviewer, company, period.id, None)
+            .await?;
+    }
+    let mut closed_ar = late_ar.clone();
+    closed_ar["reference"] = json!("closed-period");
+    let mut closed_ap = late_ap.clone();
+    closed_ap["reference"] = json!("closed-period");
+    assert!(ar
+        .refund_credit(&manager, company, &closed_ar)
+        .await
+        .is_err());
+    assert!(ap
+        .refund_credit(&manager, company, &closed_ap)
+        .await
+        .is_err());
+    ledger
+        .reopen_period(
+            &reviewer,
+            company,
+            july,
+            "Continue disposable settlement proof",
+        )
+        .await?;
+    // Future entryless events advance their own stream but do not alter July amounts.
+    let future_ar=ar.apply_credit(&manager,company,&json!({"credit_document_id":ar_id("credit"),"target_document_id":ar_id("invoice"),"effective_date":"2026-09-01","amount":"5","reference":"future-application"})).await?;
+    let future_ap=ap.apply_credit(&manager,company,&json!({"credit_document_id":ap_id("credit"),"target_document_id":ap_id("invoice"),"effective_date":"2026-09-01","amount":"5","reference":"future-application"})).await?;
+    assert_eq!(
+        ar_before_fault.total,
+        ar.aged_receivables(&reviewer, company, date(2026, 7, 31), &Default::default())
+            .await?
+            .total
+    );
+    assert_eq!(
+        ap_before_fault.total,
+        ap.aged_payables(&reviewer, company, date(2026, 7, 31), &Default::default())
+            .await?
+            .total
+    );
+    ar.reverse_settlement(&manager,company,&json!({"settlement_id":future_ar["id"],"effective_date":"2026-09-02","reference":"reverse-future"})).await?;
+    ap.reverse_settlement(&manager,company,&json!({"settlement_id":future_ap["id"],"effective_date":"2026-09-02","reference":"reverse-future"})).await?;
+    // Correct at conversion only after dependent settlements have been reversed.
+    let mut replacement_ar = stage_ar.clone();
+    replacement_ar["source_reference"] = json!("REPLACEMENT-AR");
+    replacement_ar["replaces_batch_id"] = a["id"].clone();
+    replacement_ar["reason"] = json!("Correct source system identification");
+    replacement_ar["csv"] = json!(ar_csv.replace("source-system", "corrected-system"));
+    let mut replacement_ap = stage_ap.clone();
+    replacement_ap["source_reference"] = json!("REPLACEMENT-AP");
+    replacement_ap["replaces_batch_id"] = b["id"].clone();
+    replacement_ap["reason"] = json!("Correct source system identification");
+    replacement_ap["csv"] = json!(ap_csv.replace("source-system", "corrected-system"));
+    ar.stage_opening_import(&manager, company, &replacement_ar)
+        .await?;
+    ap.stage_opening_import(&manager, company, &replacement_ap)
+        .await?;
+    replacement_ar["staged"] = json!(true);
+    replacement_ar["csv"] = json!("");
+    replacement_ap["staged"] = json!(true);
+    replacement_ap["csv"] = json!("");
+    let replaced_ar = ar
+        .import_opening_invoices(&reviewer, company, &replacement_ar)
+        .await?;
+    let replaced_ap = ap
+        .import_opening_bills(&reviewer, company, &replacement_ap)
+        .await?;
+    assert_ne!(replaced_ar["id"], a["id"]);
+    assert_ne!(replaced_ap["id"], b["id"]);
+    tied(&ar, &ap, &reviewer, company, date(2026, 7, 31)).await?;
+    assert_eq!(
+        serde_json::to_value(&old_ap)?,
+        serde_json::to_value(
+            ap.aged_payables(
+                &reviewer,
+                company,
+                date(2026, 7, 31),
+                &AgingQuery {
+                    through_entry_number: old_ap.pins().through_entry_number,
+                    through_opening_batch_id: old_ap.pins().through_opening_batch_id,
+                    through_settlement_number: old_ap.pins().through_settlement_number,
+                    ..Default::default()
+                }
+            )
+            .await?
+        )?
+    );
+
     // An unrelated owner remains a visible difference on its own control.
     let amount = Money::parse("1", before.minor_units)?;
     ledger
