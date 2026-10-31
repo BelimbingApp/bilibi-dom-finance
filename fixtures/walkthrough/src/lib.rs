@@ -135,12 +135,14 @@ pub async fn install(db: &Db, services: &Services) -> Result<Installed> {
     // assignment on a fixture rerun: an empty mutation poisons its boundary.
     let assigned = db
         .get()
-        .await?
+        .await
+        .map_err(Error::from)?
         .query_opt(
             "SELECT id FROM user_desks WHERE tenant_id=1 AND company_id=2 AND person_id=1",
             &[],
         )
-        .await?
+        .await
+        .map_err(Error::from)?
         .is_some();
     if !assigned {
         services
