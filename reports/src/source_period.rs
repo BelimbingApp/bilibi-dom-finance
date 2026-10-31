@@ -236,10 +236,10 @@ async fn review(
                             "Enter the filing or remittance date.",
                         )
                     })?;
-            if event_date >= opening.entry.entry_date {
+            if event_date < start || event_date >= opening.entry.entry_date {
                 return Err(invalid(
                     &format!("{path}.event_date"),
-                    "The filing or remittance must precede conversion.",
+                    "The filing or remittance must not precede the source period and must precede conversion.",
                 ));
             }
             fact["reference"] = json!(row["reference"].as_str().unwrap_or("").trim());
@@ -403,14 +403,14 @@ inventory::submit! { Contribution::new(DEFINITIONS,"finance/reports.source-perio
 struct AttachmentSource {
     kind: &'static str,
     label: &'static str,
-    capability: &'static str,
+    capabilities: &'static [&'static str],
 }
 impl bilibi_finance_attachments::Source for AttachmentSource {
     fn label(&self) -> &'static str {
         self.label
     }
-    fn view_capability(&self) -> &'static str {
-        self.capability
+    fn view_capabilities(&self) -> &'static [&'static str] {
+        self.capabilities
     }
     fn document<'a>(
         &'a self,
@@ -421,20 +421,22 @@ impl bilibi_finance_attachments::Source for AttachmentSource {
     ) -> bilibi_finance_attachments::SourceFuture<'a> {
         Box::pin(async move {
             bilibi_finance_attachments::on_source_client!(client, |sql| {
-                crate::authorize(sql, scope, company, self.capability)
-                    .await
-                    .map_err(|e| match e {
-                        crate::ReportsError::Unauthorized => {
-                            bilibi_finance_attachments::SourceRefusal::Unauthorized
-                        }
-                        crate::ReportsError::CompanyNotFound => {
-                            bilibi_finance_attachments::SourceRefusal::NotFound
-                        }
-                        crate::ReportsError::Failed(e) => {
-                            bilibi_finance_attachments::SourceRefusal::Failed(e)
-                        }
-                        _ => bilibi_finance_attachments::SourceRefusal::Failed(Error::Invalid),
-                    })?;
+                for capability in self.capabilities {
+                    crate::authorize(sql, scope, company, capability)
+                        .await
+                        .map_err(|e| match e {
+                            crate::ReportsError::Unauthorized => {
+                                bilibi_finance_attachments::SourceRefusal::Unauthorized
+                            }
+                            crate::ReportsError::CompanyNotFound => {
+                                bilibi_finance_attachments::SourceRefusal::NotFound
+                            }
+                            crate::ReportsError::Failed(e) => {
+                                bilibi_finance_attachments::SourceRefusal::Failed(e)
+                            }
+                            _ => bilibi_finance_attachments::SourceRefusal::Failed(Error::Invalid),
+                        })?;
+                }
                 let row = sql.query_opt("SELECT source_reference,conversion_date::text FROM finance_reports_source_periods WHERE tenant_id=$1 AND company_id=$2 AND id=$3 AND kind=$4", &[&scope.tenant(), &company, &id, &self.kind]).await.map_err(Error::from)?.ok_or(bilibi_finance_attachments::SourceRefusal::NotFound)?;
                 Ok(bilibi_finance_attachments::SourceDocument {
                     label: format!("{} {}", self.label, row.get::<_, String>(0)),
@@ -448,33 +450,33 @@ impl bilibi_finance_attachments::Source for AttachmentSource {
     }
 }
 macro_rules! source {
-    ($id:literal, $kind:literal, $label:literal, $cap:expr) => {
-        inventory::submit! { Contribution::new(bilibi_finance_attachments::SOURCES,$id,Provenance {module:MODULE,source:file!(),line:line!()}, &bilibi_finance_attachments::SourceDefinition { source: &AttachmentSource { kind: $kind, label: $label, capability: $cap } }) }
+    ($id:literal, $kind:literal, $label:literal, $caps:expr) => {
+        inventory::submit! { Contribution::new(bilibi_finance_attachments::SOURCES,$id,Provenance {module:MODULE,source:file!(),line:line!()}, &bilibi_finance_attachments::SourceDefinition { source: &AttachmentSource { kind: $kind, label: $label, capabilities: $caps } }) }
     };
 }
 source!(
     "finance/reports/source_comparative",
     "comparative",
     "Source comparative",
-    VIEW
+    &[VIEW]
 );
 source!(
     "finance/reports/source_movement",
     "movement",
     "Source monthly movement",
-    VIEW
+    &[VIEW]
 );
 source!(
     "finance/reports/source_sst",
     "sst",
     "Source SST return",
-    bilibi_finance_sst::VIEW
+    &[VIEW, bilibi_finance_sst::VIEW]
 );
 source!(
     "finance/reports/source_payroll",
     "payroll",
     "Source payroll remittance",
-    bilibi_finance_payroll::VIEW
+    &[VIEW, bilibi_finance_payroll::VIEW]
 );
 
 pub(crate) async fn evidence_page(

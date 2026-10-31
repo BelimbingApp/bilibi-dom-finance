@@ -1,7 +1,10 @@
 //! Reviewed source-period schedules, shared with the agent contract.
 use crate::{MODULE, VIEW};
 use askama::Template;
-use bilibi_agent_api::page::{Call, PageContracts};
+use bilibi_agent_api::{
+    page::{Call, PageContracts},
+    Error as ContractError,
+};
 use bilibi_database::{Error, Result};
 use bilibi_module_registry::{
     contributions::{Access, Method, PageWrites, Pending, Route, PAGE_WRITES, ROUTES},
@@ -164,7 +167,12 @@ impl State {
             .read(scope, key, &input)
             .await
             .map(|v| v["result"].clone())
-            .map_err(|_| Error::NotFound)
+            .map_err(|error| match error {
+                ContractError::Forbidden => Error::Forbidden,
+                ContractError::NotFound => Error::NotFound,
+                ContractError::Backend(error) => error,
+                _ => Error::Internal,
+            })
     }
     async fn body(&mut self, scope: &Scope) -> Result<LiveBody> {
         let company = Self::company(scope)?;
@@ -176,7 +184,7 @@ impl State {
         }
         let list = match self.read(scope, LIST, input).await {
             Ok(list) => list,
-            Err(_) => {
+            Err(Error::Forbidden) => {
                 self.records.clear();
                 let mut body = render(Header {
                     title: Html::text("Source-period schedules"),
@@ -211,6 +219,7 @@ impl State {
                     ..LiveBody::default()
                 });
             }
+            Err(error) => return Err(error),
         };
         self.records = list["records"].as_array().cloned().unwrap_or_default();
         let mut body = render(Header {

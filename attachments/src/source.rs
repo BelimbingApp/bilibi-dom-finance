@@ -7,7 +7,7 @@
 //! (`finance/payables/bill`), the id stored with each attachment. The
 //! attachments facade asks it again on every read and write.
 //!
-//! `view_capability` is what the owning module asks to read its records:
+//! `view_capabilities` are what the owning module asks to read its records:
 //! every metadata read of an attachment (`get_attachment`, the lists, the
 //! source documents page) also needs it and leaves out the attachments of a
 //! source whose records the caller cannot read, so the attachments grant
@@ -88,8 +88,8 @@ pub type SourceFuture<'a> =
 pub trait Source: Send + Sync {
     /// The kind of record, as a person reads it (`"Bill"`).
     fn label(&self) -> &'static str;
-    /// The capability the owning module asks to read its records.
-    fn view_capability(&self) -> &'static str;
+    /// The capabilities the owning module asks to read its records.
+    fn view_capabilities(&self) -> &'static [&'static str];
     /// The record `document_id` of `company_id`, read with the caller's scope.
     fn document<'a>(
         &'a self,
@@ -122,7 +122,12 @@ fn validate(entries: &[Entry]) -> bilibi_module_registry::Result<()> {
                 && kind.as_bytes()[0].is_ascii_lowercase()
         }) && entry.id.len() <= 100
             && !definition.source.label().trim().is_empty()
-            && !definition.source.view_capability().is_empty();
+            && !definition.source.view_capabilities().is_empty()
+            && definition
+                .source
+                .view_capabilities()
+                .iter()
+                .all(|capability| !capability.is_empty());
         if !valid {
             return Err(RegistryError::Contribution(format!(
                 "invalid attachment source {} at {}:{}",

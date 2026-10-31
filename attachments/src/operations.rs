@@ -77,14 +77,30 @@ impl Attachments {
         if !positive(document_id) {
             return Err(AttachmentError::NotFound);
         }
+        crate::on_source_client!(client, |sql| self
+            .authorize_source(sql, scope, company_id, source)
+            .await)?;
         Ok(source
             .source
             .document(client, scope, company_id, document_id)
             .await?)
     }
 
+    async fn authorize_source(
+        &self,
+        client: &impl GenericClient,
+        scope: &Scope,
+        company_id: i64,
+        source: &Registered,
+    ) -> Result<()> {
+        for capability in source.source.view_capabilities() {
+            authorize(client, scope, company_id, capability).await?;
+        }
+        Ok(())
+    }
+
     /// An attachment the caller may read: the source must be mounted and its
-    /// view capability held.
+    /// view capabilities held.
     pub(crate) async fn readable_attachment(
         &self,
         client: &Client,
@@ -96,7 +112,8 @@ impl Attachments {
             .any_attachment(client, scope, company_id, attachment_id)
             .await?;
         let source = self.source_of(&attachment)?;
-        authorize(client, scope, company_id, source.source.view_capability()).await?;
+        self.authorize_source(client, scope, company_id, source)
+            .await?;
         Ok((attachment, source))
     }
 
@@ -148,8 +165,7 @@ impl Attachments {
         Ok((attachment, source))
     }
 
-    /// The sources of the company's attachments the caller can read: one
-    /// capability check per source.
+    /// The sources of the company's attachments the caller can read.
     pub(crate) async fn readable_sources(
         &self,
         client: &(impl GenericClient + Sync),
@@ -159,14 +175,10 @@ impl Attachments {
         let mut readable = Vec::new();
         for source in store::sources(client, scope.tenant(), company_id).await? {
             if let Some(registered) = self.sources.get(&source) {
-                if authorize(
-                    client,
-                    scope,
-                    company_id,
-                    registered.source.view_capability(),
-                )
-                .await
-                .is_ok()
+                if self
+                    .authorize_source(client, scope, company_id, registered)
+                    .await
+                    .is_ok()
                 {
                     readable.push(source);
                 }
@@ -738,14 +750,10 @@ impl Attachments {
         let client = self.db.get().await.map_err(Error::from)?;
         authorize(&**client, scope, company_id, VIEW).await?;
         let registered = self.registered(source)?;
-        if authorize(
-            &**client,
-            scope,
-            company_id,
-            registered.source.view_capability(),
-        )
-        .await
-        .is_err()
+        if self
+            .authorize_source(&**client, scope, company_id, registered)
+            .await
+            .is_err()
             || !positive(document_id)
         {
             return Ok(Vec::new());
