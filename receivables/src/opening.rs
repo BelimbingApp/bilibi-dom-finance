@@ -535,10 +535,19 @@ impl Receivables {
             let account = chart.iter().find(|a| a.id == id).ok_or(Error::Internal)?;
             let balance = balances.get(&id).copied().unwrap_or(Money::ZERO);
             let expected = context.balances.get(&id).copied().unwrap_or(Money::ZERO);
+            if expected == Money::ZERO && (!debits.contains_key(&id) || !credits.contains_key(&id))
+            {
+                return Err(invalid(
+                    "opening_account_classifications",
+                    format!(
+                        "{} may be classified as a zero-balance receivables control only with offsetting invoice and customer-credit rows",
+                        account.code
+                    ),
+                ));
+            }
             if balance != expected {
                 return Err(invalid("csv", format!("opening invoices on {} total {} but the approved opening balance is {} (difference {})", account.code, balance.display(book.minor_units), expected.display(book.minor_units), (balance - expected).display(book.minor_units))));
             }
-            balances.entry(id).or_insert(Money::ZERO);
             reconciliation.push(json!({"gross_debits":debits.get(&id).copied().unwrap_or(Money::ZERO),"gross_credits":credits.get(&id).copied().unwrap_or(Money::ZERO),"account_id":id,"account_code":account.code,"register_balance":balance,"opening_balance":expected,"difference":Money::ZERO}));
         }
         let account_ids: Vec<i64> = control_accounts.iter().copied().collect();

@@ -191,6 +191,7 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
             "mapping",
             "mismatch",
             "omitted",
+            "unused_zero",
         ] {
             let mut wrong = input.clone();
             if change == "omitted" {
@@ -198,6 +199,13 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
                     .as_object_mut()
                     .unwrap()
                     .remove(&account("1110").to_string());
+            } else if change == "unused_zero" {
+                let (code, kind) = if input == &ar_input {
+                    ("1200", "receivables_control")
+                } else {
+                    ("2100", "payables_control")
+                };
+                wrong["opening_account_classifications"][account(code).to_string()] = json!(kind);
             } else {
                 let source = wrong["csv"].as_str().unwrap();
                 wrong["csv"] = json!(match change {

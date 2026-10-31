@@ -530,11 +530,20 @@ impl Payables {
             let account = chart.iter().find(|a| a.id == id).ok_or(Error::Internal)?;
             let balance = balances.get(&id).copied().unwrap_or(Money::ZERO);
             let expected = context.balances.get(&id).copied().unwrap_or(Money::ZERO);
+            if expected == Money::ZERO && (!debits.contains_key(&id) || !credits.contains_key(&id))
+            {
+                return Err(invalid(
+                    "opening_account_classifications",
+                    format!(
+                        "{} may be classified as a zero-balance payables control only with offsetting bill and supplier-credit rows",
+                        account.code
+                    ),
+                ));
+            }
             let signed = Money::ZERO - balance;
             if signed != expected {
                 return Err(invalid("csv", format!("opening bills on {} total {} but the approved opening balance is {} (difference {})", account.code, signed.display(book.minor_units), expected.display(book.minor_units), (signed - expected).display(book.minor_units))));
             }
-            balances.entry(id).or_insert(Money::ZERO);
             reconciliation.push(json!({"gross_debits":credits.get(&id).copied().unwrap_or(Money::ZERO),"gross_credits":debits.get(&id).copied().unwrap_or(Money::ZERO),"account_id":id,"account_code":account.code,"register_balance":balance,"opening_balance":Money::ZERO-expected,"ledger_opening_balance":expected,"balance_basis":"credit_positive","difference":Money::ZERO}));
         }
         let source_ids: Vec<&str> = rows
