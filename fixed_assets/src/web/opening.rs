@@ -125,11 +125,18 @@ impl Opening {
     }
     fn errors(&self, key: &str) -> Vec<String> {
         self.fields
-            .get(key)
-            .cloned()
-            .unwrap_or_default()
-            .into_iter()
-            .map(|e| bilibi_ui::error_sentence(field_label(key), &e))
+            .iter()
+            .filter(|(path, _)| path.as_str() == key || path.starts_with(&format!("{key}.")))
+            .flat_map(|(path, messages)| {
+                messages.iter().map(move |message| {
+                    let detail = if path == key {
+                        message.clone()
+                    } else {
+                        format!("{path}: {message}")
+                    };
+                    bilibi_ui::error_sentence(field_label(key), &detail)
+                })
+            })
             .collect()
     }
     fn fail(&mut self, error: ContractError) {
@@ -274,8 +281,11 @@ impl Opening {
                 for (key, messages) in &self.fields {
                     for message in messages {
                         summary.push(
-                            format!("conversion-{key}"),
-                            bilibi_ui::error_sentence(field_label(key), message),
+                            format!("conversion-{}", key.split('.').next().unwrap_or(key)),
+                            bilibi_ui::error_sentence(
+                                field_label(key.split('.').next().unwrap_or(key)),
+                                message,
+                            ),
                         );
                     }
                 }
