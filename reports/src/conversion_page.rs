@@ -118,6 +118,18 @@ impl State {
             .expect("conversion account columns"),
         }
     }
+    fn reset_company(&mut self, company: Option<i64>) {
+        self.company = company;
+        self.values.clear();
+        self.errors.clear();
+        self.message.clear();
+        self.document = Value::Null;
+        self.review = None;
+        self.confirm = false;
+        self.path.clear();
+        self.offset = 0;
+        self.list_after = 0;
+    }
     async fn read(&self, s: &Scope, key: &str, input: Value) -> std::result::Result<Value, String> {
         self.pages
             .contracts
@@ -355,11 +367,7 @@ impl State {
         let mut body = Html::EMPTY;
         let company = s.current_company().map(|c| c.get());
         if self.company != company {
-            self.document = Value::Null;
-            self.review = None;
-            self.path.clear();
-            self.offset = 0;
-            self.company = company;
+            self.reset_company(company);
         }
         let name = if let Some(company) = s.current_company() {
             let c = self.pages.db.get().await?;
@@ -666,11 +674,9 @@ impl State {
 impl LiveState<Scope, Error> for State {
     fn update<'a>(&'a mut self, r: LiveRequest<'a, Scope>) -> LiveFuture<'a, Error> {
         Box::pin(async move {
-            if self.company != r.scope.current_company().map(|c| c.get()) {
-                self.review = None;
-                self.document = Value::Null;
-                self.path.clear();
-                self.offset = 0;
+            let company = r.scope.current_company().map(|c| c.get());
+            if self.company != company {
+                self.reset_company(company);
                 return self.view(r.scope).await;
             }
             if let LiveInput::Event(v) = r.input {

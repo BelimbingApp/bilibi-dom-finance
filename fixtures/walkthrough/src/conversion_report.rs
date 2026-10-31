@@ -311,6 +311,13 @@ pub async fn before(db: &Db, services: &Services) -> Outcome<Kept> {
         preview["sources"]["bank"]["match_opening_item"]["rows"][0]["opening_item_id"],
         opening_item
     );
+    let bank_account_changes = preview["sources"]["bank"]["bank_account_change"]["rows"]
+        .as_array()
+        .ok_or("retained bank account changes")?;
+    assert!(!bank_account_changes.is_empty());
+    assert!(bank_account_changes
+        .iter()
+        .all(|row| { row["bank_account_id"] == bank.id && row["changed_by_user_id"] == s.user() }));
     assert_eq!(
         preview["bank_bridges"][0]["source_activity_after_finalisation"],
         false

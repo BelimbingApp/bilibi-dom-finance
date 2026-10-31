@@ -258,6 +258,7 @@ impl Reports {
                 "opening_item",
                 "match_opening_item",
                 "bank_account",
+                "bank_account_change",
                 "statement",
                 "statement_line",
                 "match",
