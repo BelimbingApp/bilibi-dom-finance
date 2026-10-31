@@ -405,10 +405,26 @@ impl Default for DocumentPageQuery {
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct DocumentPage {
-    pub documents: Vec<Document>,
+    pub documents: Vec<DocumentPageRow>,
     pub total: i64,
     pub page: i64,
     pub page_size: i64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DocumentPageRow {
+    pub id: i64,
+    pub document_number: Option<i64>,
+    pub document_type: String,
+    pub party_code: String,
+    pub party_name: String,
+    pub party_document_number: Option<String>,
+    pub document_date: String,
+    pub total: Decimal,
+    pub currency_code: String,
+    pub status: String,
+    pub match_status: Option<String>,
+    pub opening: bool,
 }
 
 pub struct Payables {

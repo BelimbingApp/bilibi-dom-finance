@@ -211,6 +211,6 @@ Stage a replacement export, then approve the complete reconciliation independent
 
 For browser/MCP parity, serve the disposable `conversion` fixture, provision credentials with `agent-operations conversion-credentials`, then run `fixtures/walkthrough/conversion-lifecycle-operations.py`. This mode uses the same independent reviewer for both doors; the default contractor fixture retains its Core fact masks.
 
-The Bills page reads `finance.payables.document.page`, with `source` (`ordinary` or `opening`), `status`, `document_type`, `search`, `page` and `page_size` (25, 50 or 100). The cursor-based `finance.payables.document.list` also accepts `source`. Both retain the caller's company and view permission. The opening dialog uses the existing `finance.payables.opening.import` and `.stage` preview/commit contracts.
+The Bills page reads `finance.payables.document.page`, with `source` (`ordinary` or `opening`), `status`, `document_type`, `search`, `page` and `page_size` (25, 50 or 100). Its result contains only displayed bill-row fields, not document lines, tax groups, corrections or match history. The cursor-based `finance.payables.document.list` also accepts `source`. Both retain the caller's company and view permission. The opening dialog uses the existing `finance.payables.opening.import` and `.stage` preview/commit contracts.
 
 Readers can open the opening dialog to inspect retained source batches. The import form still requires the module's existing opening-write permission, and approval checks run in the shared contract.

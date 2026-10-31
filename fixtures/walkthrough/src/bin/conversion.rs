@@ -891,6 +891,45 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
     );
     drop(c);
     conversion_lifecycle::prove(db, services, &config, [a, b, asset_batch], run.id).await?;
+    let scale_company = 5;
+    let scale_config = setup(db, services, scale_company).await?;
+    let mut scale_csv = String::from("source_id,customer_code,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind\n");
+    for n in 0..2101 {
+        let amount = if n == 0 { "900" } else { "1" };
+        scale_csv.push_str(&format!("scale-{n},company_010,SCALE-ROW-{n},2026-05-15,2026-06-30,{amount},{amount},1100,company\n"));
+    }
+    ar.import_opening_invoices(
+        &s,
+        scale_company,
+        &json!({"source_reference":"AR-SCALE","currency_code":"MYR","series_id":scale_config["invoice_series"],"csv":scale_csv,"opening_account_classifications":scale_config["opening_account_classifications"]}),
+    )
+    .await?;
+    let client = db.get().await?;
+    let page = registry
+        .call(
+            &**client,
+            &s,
+            "finance.receivables.document.page",
+            &json!({"company_id":scale_company,"source":"opening","search":"SCALE-ROW","sort":"total","direction":"asc","page":999,"page_size":25}),
+        )
+        .await?;
+    assert_eq!(page["result"]["total"], 2101);
+    assert_eq!(page["result"]["page"], 85);
+    assert_eq!(page["result"]["documents"].as_array().unwrap().len(), 1);
+    let bills = registry
+        .call(
+            &**client,
+            &s,
+            "finance.payables.document.page",
+            &json!({"company_id":company,"source":"opening","page":1,"page_size":25}),
+        )
+        .await?;
+    let bill = bills["result"]["documents"][0]
+        .as_object()
+        .ok_or("opening bill page row missing")?;
+    assert!(bill.contains_key("party_code") && bill.contains_key("match_status"));
+    assert!(!bill.contains_key("lines") && !bill.contains_key("match_events"));
+    println!("Opening list contract proof: SQL filtering, sorting, count, clamping and lightweight rows passed.");
     Ok(())
 }
 async fn prove_historical_controls(db: &Db, services: &Services) -> Outcome<()> {

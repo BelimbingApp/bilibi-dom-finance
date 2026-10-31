@@ -207,12 +207,19 @@ impl Index {
         }
         Ok(())
     }
-    /// A filter, page or period change keeps the list state and period but
-    /// drops the report pins, as Bilimbi's `patch_state` does.
     fn canonical(&self) -> HashMap<String, String> {
         let mut query = self.list.to_params();
         query.extend(self.period_params());
+        query.extend(
+            PINS.into_iter()
+                .filter_map(|key| self.query.get(key).map(|value| (key.into(), value.clone()))),
+        );
         query
+    }
+    fn clear_pins(&mut self) {
+        for key in PINS {
+            self.query.remove(key);
+        }
     }
     fn period_params(&self) -> HashMap<String, String> {
         self.period
@@ -735,6 +742,7 @@ impl Index {
         let clock = self.clock(s).await?;
         if let Some(outcome) = self.period.as_mut().and_then(|p| p.event(event, v, &clock)) {
             if let Outcome::Applied(p) = outcome {
+                self.clear_pins();
                 self.period
                     .as_mut()
                     .expect("period initialized")
@@ -748,8 +756,14 @@ impl Index {
             "clear-flash" => {
                 clear_flash(&mut self.flash, v);
             }
-            "filter" => self.list.apply_filters(&params::form_values(v, "filters")),
-            "page" => self.list.put_page(v["page"].as_str()),
+            "filter" => {
+                self.clear_pins();
+                self.list.apply_filters(&params::form_values(v, "filters"));
+            }
+            "page" => {
+                self.clear_pins();
+                self.list.put_page(v["page"].as_str());
+            }
             "grid" => {
                 self.columns.handle(&params::string_values(v));
             }

@@ -1,12 +1,12 @@
 //! The invoices and credit notes list, and its New invoice and New credit
-//! note dialogs. Reads `document.list`, `customer.list` and `series.list`;
+//! note dialogs. Reads `document.page`, `customer.list` and `series.list`;
 //! saving a draft calls `draft.create`.
 use super::opening::Opening;
 use super::{
     format::{self as f, Errors},
     render, Flash, Pages, Written, INVOICES,
 };
-use crate::{Customer, Document, Series, MANAGE_DOCUMENTS, VIEW};
+use crate::{records::DocumentPageRow, Customer, Document, Series, MANAGE_DOCUMENTS, VIEW};
 use bilibi_database::{Error, Result};
 use bilibi_tenancy::Scope;
 use bilibi_ui::{
@@ -75,11 +75,11 @@ pub(super) struct Documents {
     pages: Pages,
     list: ListState,
     columns: ListColumns,
-    all: Vec<Document>,
+    documents: Vec<DocumentPageRow>,
     customers: Vec<Customer>,
     series: Vec<Series>,
     figures: f::Figures,
-    cut: bool,
+    total: u64,
     can_add: bool,
     create: Option<Draft>,
     opening: Option<Opening>,
@@ -109,11 +109,11 @@ impl Documents {
             list: ListState::parse(query, SPEC.clone()).map_err(|_| Error::Internal)?,
             columns: ListColumns::mount("receivables-invoices-table", columns)
                 .map_err(|_| Error::Internal)?,
-            all: vec![],
+            documents: vec![],
             customers: vec![],
             series: vec![],
             figures: f::Figures::default(),
-            cut: false,
+            total: 0,
             can_add: false,
             create: None,
             opening: None,
@@ -130,19 +130,39 @@ impl Documents {
     }
 
     async fn load(&mut self, scope: &Scope) -> Result<()> {
-        let mut input = json!({});
-        if let Some(source) = self.list.filters.get("source").filter(|v| !v.is_empty()) {
-            input["source"] = json!(source);
+        let mut input = json!({"search":self.list.search,"page":self.list.page,"page_size":self.list.page_size});
+        for (key, input_key) in [
+            ("source", "source"),
+            ("kind", "kind"),
+            ("status", "status"),
+            ("customer", "customer_id"),
+        ] {
+            if let Some(value) = self.list.filters.get(key).filter(|value| !value.is_empty()) {
+                input[input_key] = if input_key == "customer_id" {
+                    json!(value.parse::<i64>().map_err(|_| Error::Invalid)?)
+                } else {
+                    json!(value)
+                };
+            }
         }
-        (self.all, self.cut) = self
+        if let Some(sort) = self.list.sort_by.as_deref() {
+            input["sort"] = json!(sort);
+        }
+        if let Some(direction) = self.list.sort_dir {
+            input["direction"] = json!(if direction == SortDir::Asc {
+                "asc"
+            } else {
+                "desc"
+            });
+        }
+        let page = self
             .pages
-            .read_all(
-                scope,
-                "finance.receivables.document.list",
-                input,
-                ("after", "next_after"),
-            )
+            .read(scope, "finance.receivables.document.page", input)
             .await?;
+        self.documents =
+            serde_json::from_value(page["documents"].clone()).map_err(|_| Error::Internal)?;
+        self.total = page["total"].as_u64().ok_or(Error::Internal)?;
+        self.list.page = page["page"].as_u64().ok_or(Error::Internal)?;
         self.customers = self
             .pages
             .read_all(
@@ -184,60 +204,30 @@ impl Documents {
         format!("{code} · {name}")
     }
 
-    fn shown(&mut self) -> (Vec<Document>, u64) {
-        let search = self.list.search.trim().to_lowercase();
-        let filter = |key: &str| self.list.filters.get(key).cloned().unwrap_or_default();
-        let (kind, status, customer) = (filter("kind"), filter("status"), filter("customer"));
-        let mut rows: Vec<&Document> = self
-            .all
-            .iter()
-            .filter(|d| kind.is_empty() || d.kind == kind)
-            .filter(|d| match status.as_str() {
-                "" => true,
-                "unpaid" => {
-                    d.kind == "invoice"
-                        && d.status == "issued"
-                        && d.outstanding.is_some_and(|m| m.is_positive())
-                }
-                other => d.status == other,
-            })
-            .filter(|d| customer.is_empty() || d.customer_id.to_string() == customer)
-            .filter(|d| {
-                search.is_empty()
-                    || reference(d).to_lowercase().contains(&search)
-                    || self.customer_name(d).to_lowercase().contains(&search)
-                    || d.description
-                        .as_ref()
-                        .is_some_and(|t| t.to_lowercase().contains(&search))
-            })
-            .collect();
-        match self.list.sort_by.as_deref() {
-            Some("issue_date") => rows.sort_by(|a, b| a.issue_date.cmp(&b.issue_date)),
-            Some("due_date") => rows.sort_by(|a, b| a.due_date.cmp(&b.due_date)),
-            Some("total") => rows.sort_by_key(|d| d.total.amount()),
-            _ => rows.sort_by_key(|d| d.id),
-        }
-        if self.list.sort_dir == Some(SortDir::Desc) {
-            rows.reverse();
-        }
-        let total = rows.len() as u64;
-        let size = self.list.page_size.max(1);
-        self.list.page = self.list.page.clamp(1, total.div_ceil(size).max(1));
-        let from = ((self.list.page - 1) * size) as usize;
-        (
-            rows.into_iter()
-                .skip(from)
-                .take(size as usize)
-                .cloned()
-                .collect(),
-            total,
-        )
+    fn page_customer_name(&self, d: &DocumentPageRow) -> String {
+        let customer = self.customers.iter().find(|c| c.id == d.customer_id);
+        let name = d
+            .party_name
+            .as_deref()
+            .or(customer.map(|c| c.name.as_str()))
+            .unwrap_or("Customer unavailable");
+        let code = d
+            .party_code
+            .as_deref()
+            .or(customer.map(|c| c.code.as_str()))
+            .unwrap_or("");
+        format!("{code} · {name}")
+    }
+
+    fn page_reference(d: &DocumentPageRow) -> String {
+        d.document_reference
+            .clone()
+            .unwrap_or_else(|| format!("Draft #{}", d.id))
     }
 
     async fn body(&mut self, scope: &Scope) -> Result<String> {
         let framed = self.framed;
-        let (shown, total) = self.shown();
-        self.columns.load(&shown, |d| d.id.to_string());
+        self.columns.load(&self.documents, |d| d.id.to_string());
         let mut actions = if self.can_add {
             let mut a = render(CreateButton {
                 noun: "Invoice",
@@ -335,7 +325,7 @@ impl Documents {
             )
         })?;
         let mut rows = Vec::new();
-        for d in &shown {
+        for d in &self.documents {
             let mut row = FlexRow::new(d.id.to_string());
             row.dom_id = Some(format!("receivables-invoice-{}", d.id));
             rows.push(
@@ -347,11 +337,11 @@ impl Documents {
                         record_id: &d.id.to_string(),
                         href: &format!("{INVOICES}/{}", d.id),
                         class: "font-medium text-ink-strong hover:underline",
-                        body: Html::text(&reference(d)),
+                        body: Html::text(&Self::page_reference(d)),
                     })?,
                 )
                 .cell("kind", Cell::text(f::kind_label(&d.kind)))
-                .cell("customer", Cell::text(self.customer_name(d)))
+                .cell("customer", Cell::text(self.page_customer_name(d)))
                 .cell("issue_date", Cell::text(f::optional(&d.issue_date)))
                 .cell("due_date", Cell::text(f::optional(&d.due_date)))
                 .slot("total", f::tabular(&self.figures.money(d.total))?)
@@ -365,11 +355,7 @@ impl Documents {
                 )
                 .cell(
                     "source",
-                    Cell::text(if d.opening.is_some() {
-                        "Opening"
-                    } else {
-                        "Ordinary"
-                    }),
+                    Cell::text(if d.opening { "Opening" } else { "Ordinary" }),
                 )
                 .slot("status", f::status_badge(&d.status)?),
             );
@@ -387,7 +373,10 @@ impl Documents {
         table.add_query = &self.columns.add_query;
         table.empty = Some(TableEmpty::Content(render(EmptyState::missing(
             "No invoices",
-            if self.all.is_empty() {
+            if self.total == 0
+                && self.list.search.is_empty()
+                && self.list.filters.values().all(String::is_empty)
+            {
                 "Start an invoice for a customer. It stays a draft until you issue it."
             } else {
                 "No invoice or credit note matches the current filters."
@@ -398,15 +387,10 @@ impl Documents {
             filters_event: "filter",
             ..Pagination::new(
                 "receivables-invoices-pagination",
-                PageCounts::new(self.list.page, self.list.page_size, total),
+                PageCounts::new(self.list.page, self.list.page_size, self.total),
                 &SIZES,
             )
         })?);
-        if self.cut {
-            content.push(&Html::text(
-                "Only the first documents are listed. Search to narrow them.",
-            ));
-        }
         let mut body = render(Header {
             title: Html::text("Invoices"),
             title_actions: bilibi_ui::Html::EMPTY,
@@ -603,11 +587,15 @@ impl Documents {
                 self.list.apply_filters(&params::form_values(v, "filters"));
                 self.load(scope).await?;
             }
-            "page" => self.list.put_page(v["page"].as_str()),
+            "page" => {
+                self.list.put_page(v["page"].as_str());
+                self.load(scope).await?;
+            }
             "grid" => {
                 if let ColumnsOutcome::Sort(column) = self.columns.handle(&params::string_values(v))
                 {
                     self.list.next_sort(&column);
+                    self.load(scope).await?;
                 }
             }
             kind @ ("show_create_invoice" | "show_create_credit_note") => {

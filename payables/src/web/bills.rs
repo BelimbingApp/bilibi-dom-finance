@@ -1,7 +1,7 @@
 //! Bilimbi Payables.Web.BillsLive: filters, paging and built-in ListColumns.
 use super::opening::Opening;
 use super::{company, format, render, Pages, INDEX, NEW_BILL};
-use crate::{CREATE_DOCUMENTS, VIEW};
+use crate::{DocumentPageRow, CREATE_DOCUMENTS, VIEW};
 use askama::Template;
 use bilibi_database::{Error, Result};
 use bilibi_finance_ledger::{MinorUnits, Money};
@@ -12,9 +12,7 @@ use bilibi_ui::{
     FilterToolbar, FlashGroup, FlexRow, FlexTable, Html, ListColumns, ListSpec, ListState,
     PageCounts, Pagination, RecordLink, StatusKind, TableEmpty, ToolbarControl,
 };
-use rust_decimal::Decimal;
-use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::json;
 use std::{
     collections::HashMap,
     sync::{Arc, LazyLock},
@@ -49,7 +47,7 @@ pub(super) struct Bills {
     pages: Pages,
     list: ListState,
     columns: ListColumns,
-    documents: Vec<BillRow>,
+    documents: Vec<DocumentPageRow>,
     opening: Option<Opening>,
     can_open: bool,
     success: bool,
@@ -251,7 +249,7 @@ impl Bills {
                     )
                     .cell(
                         "party",
-                        Cell::text(format!("{} · {}", d.party.code, d.party.name)),
+                        Cell::text(format!("{} · {}", d.party_code, d.party_name)),
                     )
                     .cell(
                         "party_document_number",
@@ -270,11 +268,7 @@ impl Bills {
                     )
                     .cell(
                         "source",
-                        Cell::text(if d.opening.is_some() {
-                            "Opening"
-                        } else {
-                            "Ordinary"
-                        }),
+                        Cell::text(if d.opening { "Opening" } else { "Ordinary" }),
                     )
                     .slot("status", format::status(&d.status)?)
                     .slot(
@@ -429,26 +423,4 @@ impl LiveState<Scope, Error> for Bills {
 )]
 struct Tabular {
     text: String,
-}
-
-// The list consumes the operation's read projection; money stays decimal until
-// displayed with the book's minor units, and never becomes write input.
-#[derive(Deserialize)]
-struct BillRow {
-    id: i64,
-    document_number: Option<i64>,
-    document_type: String,
-    party: PartyRow,
-    party_document_number: Option<String>,
-    document_date: String,
-    total: Decimal,
-    currency_code: String,
-    status: String,
-    match_status: Option<String>,
-    opening: Option<Value>,
-}
-#[derive(Deserialize)]
-struct PartyRow {
-    code: String,
-    name: String,
 }

@@ -133,6 +133,25 @@ pub struct Document {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct DocumentPageRow {
+    pub opening: bool,
+    pub id: i64,
+    pub kind: String,
+    pub status: String,
+    pub customer_id: i64,
+    pub issue_date: Option<String>,
+    pub due_date: Option<String>,
+    pub description: Option<String>,
+    #[serde(deserialize_with = "money")]
+    pub total: Money,
+    #[serde(deserialize_with = "optional_money")]
+    pub outstanding: Option<Money>,
+    pub document_reference: Option<String>,
+    pub party_code: Option<String>,
+    pub party_name: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Allocation {
     pub document_id: i64,
     #[serde(deserialize_with = "money")]
