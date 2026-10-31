@@ -130,6 +130,12 @@ pub async fn install(db: &Db, services: &Services) -> Result<Installed> {
         .reconcile()
         .await?;
     let ledger = services.get::<Ledger>(SERVICE).map_err(Error::from)?;
+    let administrator = sign_in(db, services, 1, 4).await?;
+    services
+        .get::<bilibi_core::user::UserService>("core/user.accounts")
+        .map_err(Error::from)?
+        .set_desk(&administrator, 2, 1, true)
+        .await?;
     let manager = sign_in(db, services, 1, MANAGER).await?;
     let book = match ledger.get_book(&manager, COMPANY).await {
         Err(LedgerError::BookNotOpen) => {
