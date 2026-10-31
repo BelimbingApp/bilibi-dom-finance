@@ -2,6 +2,7 @@
 //! clean Company 002, then facade controls on Company 003. No product seeds.
 #[path = "../conversion_lifecycle.rs"]
 mod conversion_lifecycle;
+use bilibi_agent_api::{Handler, Registry};
 use bilibi_authz::{RoleDefinition, VocabularyContribution, VOCABULARY};
 use bilibi_database::{pool, Db};
 use bilibi_finance_fixed_assets::{
@@ -371,6 +372,123 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         .await?;
     let b = ap.import_opening_bills(&s, company, &ap_input).await?;
     assert_eq!(b, ap.import_opening_bills(&s, company, &ap_input).await?);
+    // The residuals are opening balances, not source-period transactions.
+    assert!(ar
+        .tax_totals(&s, company, &Default::default())
+        .await?
+        .is_empty());
+    assert!(ap
+        .tax_totals(&s, company, &Default::default())
+        .await?
+        .is_empty());
+    assert!(ar
+        .received_tax_totals(
+            &s,
+            company,
+            &bilibi_finance_receivables::ReceivedTaxOptions::new(
+                date(2026, 1, 1),
+                date(2027, 12, 31)
+            )
+        )
+        .await?
+        .is_empty());
+    assert!(ar
+        .list_payments(&s, company, &Default::default())
+        .await?
+        .is_empty());
+    assert!(ap
+        .list_payments(&s, company, &Default::default())
+        .await?
+        .is_empty());
+    let sst = services.get::<bilibi_finance_sst::Sst>(bilibi_finance_sst::SERVICE)?;
+    assert!(sst
+        .list_returns(&s, company, None, None, None)
+        .await?
+        .is_empty());
+    // Retain source summaries through the shared reviewed operation. They are
+    // evidence and cannot create a posting, return, payment or tax line.
+    let registry = services.get::<Registry>("base/agent_api.registry")?;
+    let key = "finance.reports.source_period.import";
+    let Handler::SafeWrite(import) = registry.operations[key].definition.handler else {
+        panic!("source schedule import must be a reviewed write");
+    };
+    for (kind, from, to, rows) in [
+        (
+            "comparative",
+            "2025-01-01",
+            "2025-12-31",
+            json!([{"source_id":"cash","account_id":config["bank"],"side":"debit","amount":"100.00"}]),
+        ),
+        (
+            "movement",
+            "2026-06-01",
+            "2026-06-30",
+            json!([{"source_id":"sales","account_id":config["expense"],"side":"debit","amount":"20.00"}]),
+        ),
+        (
+            "sst",
+            "2026-03-01",
+            "2026-04-30",
+            json!([{"source_id":"return","authority":"Tax authority","reference":"FILED-1","event_date":"2026-05-15","amount":"10.00"}]),
+        ),
+        (
+            "payroll",
+            "2026-05-01",
+            "2026-05-31",
+            json!([{"source_id":"remittance","authority":"Payroll authority","reference":"PAID-1","event_date":"2026-06-15","amount":"8.00"}]),
+        ),
+    ] {
+        let input = json!({"company_id":company,"kind":kind,"source_reference":format!("HISTORY-{kind}"),"source_system":"Source system","currency_code":"MYR","accounting_timezone":"Asia/Kuala_Lumpur","period_start":from,"period_end":to,"rows":rows});
+        let mut raw = db.get().await?;
+        let mut tx = l
+            .write(
+                &mut raw,
+                &s,
+                company,
+                &[bilibi_finance_ledger::MANAGE_ACCOUNTS],
+                "walkthrough.source-period",
+            )
+            .await?;
+        let preview = import.preview(tx.sql(), &s, &input).await?.envelope(key);
+        assert_eq!(
+            preview["result"]["changes"]["rows"][0]["source_id"],
+            rows[0]["source_id"]
+        );
+        assert_eq!(
+            preview["result"]["changes"]["rows"][0]["amount"],
+            rows[0]["amount"]
+        );
+        import.commit(&mut tx, &s, &input).await?;
+        tx.commit().await?;
+        let mut retry = db.get().await?;
+        let tx = l
+            .write(
+                &mut retry,
+                &s,
+                company,
+                &[bilibi_finance_ledger::MANAGE_ACCOUNTS],
+                "walkthrough.source-period-refusal",
+            )
+            .await?;
+        assert!(import.preview(tx.sql(), &s, &input).await.is_err());
+        tx.rollback().await?;
+    }
+    assert_eq!(
+        trial,
+        l.trial_balance(&s, company, date(2026, 7, 1), None).await?
+    );
+    assert!(ar
+        .tax_totals(&s, company, &Default::default())
+        .await?
+        .is_empty());
+    assert!(ap
+        .tax_totals(&s, company, &Default::default())
+        .await?
+        .is_empty());
+    assert!(sst
+        .list_returns(&s, company, None, None, None)
+        .await?
+        .is_empty());
     let asset_batch = assets
         .import_opening_register(&s, company, &asset_input)
         .await?;
@@ -547,6 +665,18 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
     let docs = ar.list_documents(&s, company, &Default::default()).await?;
     let invoice = docs[0].id;
     let payment=ar.record_payment(&s,company,&json!({"series_id":config["payment_series"],"customer_id":config["customer_id"],"payment_date":"2026-07-15","amount":"1000","deposit_account_id":config["bank"],"allocations":[{"document_id":invoice,"amount":"1000"}]})).await?;
+    // A later receipt of an opening residual also creates no source tax share.
+    assert!(ar
+        .received_tax_totals(
+            &s,
+            company,
+            &bilibi_finance_receivables::ReceivedTaxOptions::new(
+                date(2026, 1, 1),
+                date(2027, 12, 31)
+            )
+        )
+        .await?
+        .is_empty());
     assert_eq!(
         ar.get_document(&s, company, invoice)
             .await?
