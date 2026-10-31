@@ -82,7 +82,7 @@ pub(crate) async fn pin(
     let incompatible=c.query_opt("SELECT e.id FROM finance_receivables_settlements e WHERE e.tenant_id=$1 AND e.company_id=$2 AND e.effective_date<=$6::text::date AND (
      (e.entry_number IS NOT NULL AND ((e.settlement_number<=$3)<>(e.entry_number<=$4)))
      OR (e.settlement_number<=$3 AND (EXISTS(SELECT 1 FROM finance_receivables_opening_items i WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id IN (e.credit_document_id,e.target_document_id) AND i.batch_id>$5)
-     OR EXISTS(SELECT 1 FROM finance_receivables_settlements o WHERE o.tenant_id=$1 AND o.company_id=$2 AND o.id=e.reverses_settlement_id AND o.settlement_number>$3)))) LIMIT 1",&[&s.tenant(),&company,&pin,&entry,&batch,&day.to_string()]).await?.is_some();
+     OR EXISTS(SELECT 1 FROM finance_receivables_documents item WHERE item.tenant_id=$1 AND item.company_id=$2 AND item.id IN (e.credit_document_id,e.target_document_id) AND (item.ledger_entry_number IS NULL OR item.ledger_entry_number>$4))\n     OR EXISTS(SELECT 1 FROM finance_receivables_settlements o WHERE o.tenant_id=$1 AND o.company_id=$2 AND o.id=e.reverses_settlement_id AND o.settlement_number>$3)))) LIMIT 1",&[&s.tenant(),&company,&pin,&entry,&batch,&day.to_string()]).await?.is_some();
     if incompatible {
         return Err(invalid("through_settlement_number","the entry, opening-batch and settlement boundaries split a settlement from its entry, source item or original event"));
     }

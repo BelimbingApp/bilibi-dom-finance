@@ -525,6 +525,35 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
     let current_ap = ap
         .aged_payables(&reviewer, company, date(2026, 7, 31), &Default::default())
         .await?;
+    // An entryless action still requires both referenced postings inside the tuple.
+    assert!(ar
+        .aged_receivables(
+            &reviewer,
+            company,
+            date(2026, 7, 31),
+            &AgingOptions {
+                through_entry_number: Some(0),
+                through_opening_batch_id: Some(current_ar.through_opening_batch_id),
+                through_settlement_number: Some(current_ar.through_settlement_number),
+                ..Default::default()
+            }
+        )
+        .await
+        .is_err());
+    assert!(ap
+        .aged_payables(
+            &reviewer,
+            company,
+            date(2026, 7, 31),
+            &AgingQuery {
+                through_entry_number: Some(0),
+                through_opening_batch_id: Some(current_ap.through_opening_batch_id),
+                through_settlement_number: Some(current_ap.through_settlement_number),
+                ..Default::default()
+            }
+        )
+        .await
+        .is_err());
     assert_eq!(old_ar.through_entry_number, current_ar.through_entry_number);
     assert_eq!(
         old_ar.through_opening_batch_id,

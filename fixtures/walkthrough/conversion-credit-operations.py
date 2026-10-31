@@ -137,6 +137,8 @@ for module in ["receivables", "payables"]:
     changed = operation(prefix + ".credit.apply", **common, target_document_id=target, amount="1", reference="MCP-same-control")
     require(preview(changed).get("valid") is False, "changed settlement retry accepted")
     require(not succeeded(commit(stale, stale_review)), "stale refund review double-spent a credit")
+    incompatible = invoke("read", {"key": prefix + ".aging.get", "input": {"company_id": company, "as_of": "2026-07-10", "through_entry_number": 0, "through_opening_batch_id": before["through_opening_batch_id"], "through_settlement_number": event["settlement_number"]}})
+    require("error" in incompatible, "entryless application was split from a referenced posting")
     after = aging(module)
     require(before["through_entry_number"] == after["through_entry_number"] and before["through_opening_batch_id"] == after["through_opening_batch_id"] and before["through_settlement_number"] < after["through_settlement_number"], "entryless application moved the wrong boundaries")
     require(aging(module, **pins(before)) == before, "old tuple changed after application")
