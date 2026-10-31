@@ -6,7 +6,6 @@ use bilibi_finance_attachments::NewFile;
 use bilibi_finance_ledger::{Ledger, Money, NewEntry, NewLine};
 use bilibi_finance_reconciliation::{NewMatch, NewReconciliation, Reconciliation};
 use bilibi_finance_reports::Reports;
-use bilibi_finance_walkthrough_fixture::sign_in;
 
 use bilibi_module_registry::Services;
 use bilibi_tenancy::{Authentication, ProofFuture};
@@ -191,7 +190,7 @@ pub async fn before(db: &Db, services: &Services) -> Outcome<Kept> {
     ] {
         grants.set_direct(&s, 2, unrelated, Some(false)).await?;
     }
-    let viewer = sign_in(db, services, 1, 2).await?;
+    let viewer = crate::in_company(db, services, 2, COMPANY).await?;
     let statement = reconciliation
         .import_statement(
             &viewer,
@@ -578,7 +577,7 @@ pub async fn after(db: &Db, services: &Services, kept: Kept) -> Outcome<()> {
             entry_only_bridge["finalised_boundary"][axis]
         );
     }
-    let importer = sign_in(db, services, 1, 2).await?;
+    let importer = crate::in_company(db, services, 2, COMPANY).await?;
     let imported = reconciliation
         .import_statement(
             &importer,
@@ -769,7 +768,7 @@ pub async fn after(db: &Db, services: &Services, kept: Kept) -> Outcome<()> {
         authentication,
         user: 3,
     };
-    let scope = sign_in(db, services, 1, 3).await?;
+    let scope = crate::in_company(db, services, 3, COMPANY).await?;
     let preview = plans.preview(&signer, &sign).await?;
     assert_eq!(preview["valid"], true, "{preview}");
     let attestation = preview["results"][0]["preview"]["result"]["attestation"]

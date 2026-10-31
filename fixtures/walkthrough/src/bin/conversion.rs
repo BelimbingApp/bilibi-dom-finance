@@ -63,7 +63,7 @@ async fn setup(db: &Db, services: &Services, company: i64) -> Outcome<Value> {
     // Workplace reach is explicit on the pinned Platform. Capability grants
     // alone do not let a fixture preparer or reviewer work in another company.
     let users = services.get::<bilibi_core::user::UserService>("core/user.accounts")?;
-    for person in [1, 4] {
+    for person in [1, 4, 5, 6] {
         let assigned = db
             .get()
             .await?
@@ -1385,6 +1385,13 @@ async fn main() -> Outcome<()> {
     // Identity-only fixture repair: the reviewer has a real Person affiliation,
     // so browser sessions can choose the current company. No business rows use SQL.
     db.get().await?.batch_execute("INSERT INTO persons(id,tenant_id,code,name,kind,email) VALUES(4,1,'person_4','Conversion reviewer','human','admin@example.test') ON CONFLICT DO NOTHING; INSERT INTO person_affiliations(id,tenant_id,person_id,organisation_id,title,work_email) VALUES(3,1,4,1,'Reviewer','admin@example.test') ON CONFLICT DO NOTHING; UPDATE users SET person_id=4 WHERE tenant_id=1 AND id=4 AND person_id IS NULL; INSERT INTO user_desks(tenant_id,person_id,company_id) SELECT tenant_id,person_id,1 FROM users WHERE tenant_id=1 AND id=4 AND person_id IS NOT NULL ON CONFLICT DO NOTHING;").await?;
+    db.get().await?.batch_execute("INSERT INTO persons(id,tenant_id,code,name,kind,email) VALUES(5,1,'conversion_viewer','Conversion statement preparer','human','viewer@example.test'),(6,1,'conversion_staff','Conversion independent signer','human','staff@example.test') ON CONFLICT DO NOTHING;
+    INSERT INTO person_affiliations(id,tenant_id,person_id,organisation_id,title) VALUES(4,1,5,1,'Statement preparer'),(5,1,6,1,'Independent signer') ON CONFLICT DO NOTHING;
+    UPDATE users SET person_id=5 WHERE tenant_id=1 AND id=2 AND person_id IS NULL;
+    UPDATE users SET person_id=6 WHERE tenant_id=1 AND id=3 AND person_id IS NULL;
+    INSERT INTO user_desks(tenant_id,person_id,company_id) VALUES(1,5,1),(1,6,1) ON CONFLICT DO NOTHING;
+    SELECT setval(pg_get_serial_sequence('persons','id'),GREATEST((SELECT max(id) FROM persons),1));
+    SELECT setval(pg_get_serial_sequence('person_affiliations','id'),GREATEST((SELECT max(id) FROM person_affiliations),1));").await?;
     let admin = sign_in(&db, &app.services, 1, 4).await?;
     let storage_root = std::env::var("BILIBI_ATTACHMENTS_DEMO_ROOT").unwrap_or_else(|_| {
         std::env::temp_dir()
