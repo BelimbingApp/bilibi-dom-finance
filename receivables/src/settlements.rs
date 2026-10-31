@@ -30,6 +30,9 @@ fn owner(number: i64) -> EntryOwner {
         record: format!("credit-settlement:{number}"),
     }
 }
+async fn cash_controls(c: &dyn OperationClient, s: &Scope, company: i64) -> Result<Vec<i64>> {
+    Ok(c.query("SELECT receivable_account_id FROM finance_receivables_documents WHERE tenant_id=$1 AND company_id=$2 AND receivable_account_id IS NOT NULL UNION SELECT receivable_account_id FROM finance_receivables_setups WHERE tenant_id=$1 AND company_id=$2",&[&s.tenant(),&company]).await?.iter().map(|r|r.get(0)).collect())
+}
 fn reversal(date: Date, reference: &str) -> Reversal {
     Reversal {
         entry_date: date,
@@ -281,13 +284,14 @@ impl Receivables {
             None
         };
         let chart = self.ledger.list_accounts_on(c, s, company).await?;
+        let cash_controls = cash_controls(c, s, company).await?;
         if let Some(cash) = cash {
             if original.is_none()
                 && !chart.iter().any(|a| {
                     a.id == cash
                         && a.postable()
                         && a.account_type == bilibi_finance_ledger::AccountType::Asset
-                        && !controls.contains(&a.id)
+                        && !cash_controls.contains(&a.id)
                 })
             {
                 return Err(invalid(
@@ -460,6 +464,7 @@ impl Receivables {
         let control = source["receivable_account_id"]
             .as_i64()
             .ok_or(Error::Internal)?;
+        let cash_controls = cash_controls(c, s, company).await?;
         let accounts = self
             .ledger
             .list_accounts_on(c, s, company)
@@ -469,6 +474,7 @@ impl Receivables {
                 a.postable()
                     && a.account_type == bilibi_finance_ledger::AccountType::Asset
                     && a.id != control
+                    && !cash_controls.contains(&a.id)
             })
             .collect::<Vec<_>>();
         let book = self.ledger.get_book_on(c, s, company).await?;

@@ -468,6 +468,10 @@ impl Opening {
                     .enumerate()
                 {
                     let id = account["id"].as_i64().ok_or(Error::Internal)?.to_string();
+                    let zero = account["opening_balance"]
+                        .as_str()
+                        .and_then(|v| bilibi_finance_ledger::Money::parse(v, units).ok())
+                        == Some(bilibi_finance_ledger::Money::ZERO);
                     let opening_balance = account["opening_balance"]
                         .as_str()
                         .and_then(|value| bilibi_finance_ledger::Money::parse(value, units).ok())
@@ -494,9 +498,10 @@ impl Opening {
                             format!("conversion[opening_account_classifications][{id}]"),
                         )
                         .label(format!(
-                            "{} · {} *",
+                            "{} · {}{}",
                             account["name"].as_str().unwrap_or(""),
-                            account["code"].as_str().unwrap_or("")
+                            account["code"].as_str().unwrap_or(""),
+                            if zero { "" } else { " *" }
                         ))
                         .aria_label(format!(
                             "Classify {}",
@@ -507,7 +512,7 @@ impl Opening {
                             selected_classifications
                                 .get(&id)
                                 .and_then(Value::as_str)
-                                .unwrap_or(""),
+                                .unwrap_or(if zero { "not_a_control" } else { "" }),
                         )
                         .errors(if index == 0 {
                             self.errors("opening_account_classifications")
