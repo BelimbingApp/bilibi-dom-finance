@@ -61,11 +61,13 @@ pub(super) struct Opening {
     balance_columns: ListColumns,
     stage_columns: ListColumns,
     class_columns: ListColumns,
+    evidence: super::source_evidence::EvidenceView,
 }
 impl Opening {
     pub(super) fn new(pages: Pages) -> Result<Self> {
         Ok(Self {
             completed: false,
+            evidence: Default::default(),
             pages,
             values: json!({}),
             fields: BTreeMap::new(),
@@ -564,7 +566,7 @@ impl Opening {
             }
             if let Some(evidence) = facts["source_evidence"].as_object() {
                 for (source, facts) in evidence {
-                    body.push(&super::source_evidence::render(source, facts, units)?);
+                    body.push(&self.evidence.render(source, facts, units)?);
                 }
             }
             if review.contract != STAGE {
@@ -764,6 +766,9 @@ impl Opening {
                     }
                 }
                 "cancel_opening" => self.review = None,
+                event if event.starts_with("source_evidence_grid:") => {
+                    self.evidence.handle(event, &params::string_values(value));
+                }
                 "class_grid" => {
                     self.class_columns.handle(&params::string_values(value));
                 }

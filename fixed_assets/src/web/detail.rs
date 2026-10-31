@@ -12,6 +12,7 @@ pub(super) struct Detail {
     schedule: ListColumns,
     charges: ListColumns,
     events: ListColumns,
+    evidence: super::source_evidence::EvidenceView,
     dispose: Draft,
     reverse: Draft,
     void: Draft,
@@ -64,6 +65,7 @@ impl Detail {
             .ok_or(Error::NotFound)?;
         Ok(Self {
             pages: pages.clone(),
+            evidence: Default::default(),
             asset_id,
             schedule: cols(
                 "asset-schedule",
@@ -200,7 +202,7 @@ impl Detail {
             help: "",
         })
     }
-    async fn body(&self, s: &Scope) -> Result<String> {
+    async fn body(&mut self, s: &Scope) -> Result<String> {
         let (units, accounts) = self.pages.account_context(s).await?;
         let display = self.pages.display(s).await?;
         let read = match company(s) {
@@ -287,7 +289,7 @@ impl Detail {
                 })?);
             }
             if let Some(opening) = &d.opening {
-                assumptions.push(&super::source_evidence::render(
+                assumptions.push(&self.evidence.render(
                     opening["source_id"].as_str().unwrap_or(""),
                     &opening["source_evidence"],
                     units.ok_or(Error::Internal)?,
@@ -413,6 +415,10 @@ impl Detail {
     async fn event(&mut self, s: &Scope, credential: &str, v: &serde_json::Value) -> Result<()> {
         let event = v["type"].as_str().unwrap_or("");
         match event {
+            event if event.starts_with("source_evidence_grid:") => {
+                self.evidence.handle(event, &params::string_values(v));
+                return Ok(());
+            }
             "clear-flash" => {
                 clear_flash(&mut self.flash, v);
                 return Ok(());
