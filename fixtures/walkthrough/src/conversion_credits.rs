@@ -377,7 +377,15 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         .iter()
         .any(|r| r["payload"]["csv"] == ap_csv));
     assert!(ledger
-        .get_entry(&reviewer, company, before.through_entry_number)
+        .get_entry(
+            &reviewer,
+            company,
+            ledger
+                .opening_context_on(&**db.get().await?, &reviewer, company)
+                .await?
+                .entry
+                .id
+        )
         .await?
         .owner
         .is_none());
@@ -391,7 +399,7 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
     assert_eq!(
         before,
         ledger
-            .trial_balance(&reviewer, company, date(2026, 7, 31), None)
+            .trial_balance(&reviewer, company, date(2026, 7, 1), None)
             .await?
     );
     let current_ar = ar
