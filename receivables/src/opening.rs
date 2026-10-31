@@ -51,6 +51,40 @@ pub(super) struct Prepared {
     existing: Option<Value>,
 }
 
+pub(super) fn historical_control_codes(input: &Value) -> Result<BTreeSet<String>> {
+    let Some(values) = input["historical_control_account_codes"].as_array() else {
+        return if input["historical_control_account_codes"].is_null() {
+            Ok(BTreeSet::new())
+        } else {
+            Err(invalid(
+                "historical_control_account_codes",
+                "must be an array of account codes",
+            ))
+        };
+    };
+    if values.len() > 10_000 {
+        return Err(invalid(
+            "historical_control_account_codes",
+            "must contain at most 10000 account codes",
+        ));
+    }
+    let mut codes = BTreeSet::new();
+    for value in values {
+        let code = value.as_str().unwrap_or("").trim();
+        if code.is_empty()
+            || code.chars().count() > 50
+            || code.contains('\0')
+            || !codes.insert(code.to_owned())
+        {
+            return Err(invalid(
+                "historical_control_account_codes",
+                "must contain unique account codes of 1 to 50 characters",
+            ));
+        }
+    }
+    Ok(codes)
+}
+
 impl Receivables {
     pub(super) async fn opening_context(
         &self,
@@ -62,6 +96,25 @@ impl Receivables {
         self.authorize_on(c, s, company, VIEW).await?;
         let opening = self.ledger.opening_context_on(c, s, company).await?;
         let book = self.ledger.get_book_on(c, s, company).await?;
+        let configured = store::find(c, store::SETUPS, s.tenant(), company, None)
+            .await?
+            .and_then(|setup| setup["receivable_account_id"].as_i64());
+        let historical_control_accounts = self
+            .ledger
+            .list_accounts_on(c, s, company)
+            .await?
+            .into_iter()
+            .filter(|account| {
+                account.account_type == AccountType::Asset
+                    && account.postable()
+                    && Some(account.id) != configured
+                    && opening
+                        .balances
+                        .get(&account.id)
+                        .is_some_and(|balance| balance.is_positive())
+            })
+            .map(|account| json!({"code":account.code,"name":account.name}))
+            .collect::<Vec<_>>();
         let after = input["items_after"].as_i64().unwrap_or(0);
         let limit = input["limit"].as_i64().unwrap_or(200).clamp(1, 500);
         let items: Vec<Value> = c.query("SELECT to_jsonb(i) FROM finance_receivables_opening_items i WHERE tenant_id=$1 AND company_id=$2 AND id>$3 ORDER BY id LIMIT $4", &[&s.tenant(), &company, &after, &(limit + 1)]).await?.iter().map(|row| row.get(0)).collect();
@@ -74,7 +127,7 @@ impl Receivables {
         };
         let total: i64 = c.query_opt("SELECT count(*) FROM finance_receivables_opening_items WHERE tenant_id=$1 AND company_id=$2", &[&s.tenant(), &company]).await?.ok_or(Error::Internal)?.get(0);
         Ok(
-            json!({"opening":opening,"book":book,"batch":c.query_opt("SELECT to_jsonb(b) || jsonb_build_object('state','reconciled') FROM finance_receivables_opening_batches b WHERE tenant_id=$1 AND company_id=$2 ORDER BY id DESC LIMIT 1",&[&s.tenant(),&company]).await?.map(|r|r.get::<_,Value>(0)),"stages":c.query("SELECT to_jsonb(s)-'payload'||jsonb_build_object('part_count',payload->'part_count','csv_bytes',octet_length(payload->>'csv')) FROM finance_receivables_opening_stages s WHERE tenant_id=$1 AND company_id=$2 ORDER BY id",&[&s.tenant(),&company]).await?.iter().map(|r|r.get::<_,Value>(0)).collect::<Vec<_>>(),"decisions":c.query("SELECT to_jsonb(d) FROM finance_receivables_opening_decisions d WHERE tenant_id=$1 AND company_id=$2 ORDER BY id",&[&s.tenant(),&company]).await?.iter().map(|r|r.get::<_,Value>(0)).collect::<Vec<_>>(),"header":HEADER,"items":items,"item_count":total,"items_next":next}),
+            json!({"opening":opening,"book":book,"historical_control_accounts":historical_control_accounts,"batch":c.query_opt("SELECT to_jsonb(b) || jsonb_build_object('state','reconciled') FROM finance_receivables_opening_batches b WHERE tenant_id=$1 AND company_id=$2 ORDER BY id DESC LIMIT 1",&[&s.tenant(),&company]).await?.map(|r|r.get::<_,Value>(0)),"stages":c.query("SELECT to_jsonb(s)-'payload'||jsonb_build_object('part_count',payload->'part_count','historical_control_account_codes',payload->'historical_control_account_codes','csv_bytes',octet_length(payload->>'csv')) FROM finance_receivables_opening_stages s WHERE tenant_id=$1 AND company_id=$2 ORDER BY id",&[&s.tenant(),&company]).await?.iter().map(|r|r.get::<_,Value>(0)).collect::<Vec<_>>(),"decisions":c.query("SELECT to_jsonb(d) FROM finance_receivables_opening_decisions d WHERE tenant_id=$1 AND company_id=$2 ORDER BY id",&[&s.tenant(),&company]).await?.iter().map(|r|r.get::<_,Value>(0)).collect::<Vec<_>>(),"header":HEADER,"items":items,"item_count":total,"items_next":next}),
         )
     }
 
@@ -111,6 +164,7 @@ impl Receivables {
         let series = store::find(c, store::SERIES, s.tenant(), company, Some(series_id))
             .await?
             .ok_or(ReceivableError::SeriesNotFound)?;
+        let historical_control_codes = historical_control_codes(input)?;
         let existing = c.query_opt("SELECT to_jsonb(b) || jsonb_build_object('state','reconciled') FROM finance_receivables_opening_batches b WHERE tenant_id=$1 AND company_id=$2 AND source_reference=$3",&[&s.tenant(),&company,&reference]).await?.map(|r|r.get::<_,Value>(0));
         if let Some(batch) = existing {
             if batch["source_reference"] != reference
@@ -127,10 +181,12 @@ impl Receivables {
                 let review: Value = row.get(0);
                 if review["replaces_batch_id"] != input["replaces_batch_id"]
                     || review["reason"] != input["reason"]
+                    || review["historical_control_account_codes"]
+                        != json!(&historical_control_codes)
                 {
                     return Err(invalid(
                         "source_reference",
-                        "already identifies different correction instructions",
+                        "already identifies different correction instructions or historical control mapping",
                     ));
                 }
             }
@@ -177,6 +233,25 @@ impl Receivables {
                 "csv",
                 "the receivables control account must be active and postable",
             ));
+        }
+        let mut control_accounts = BTreeSet::from([control]);
+        for code in &historical_control_codes {
+            let account = chart
+                .iter()
+                .find(|a| a.code == *code && a.account_type == AccountType::Asset && a.postable())
+                .ok_or_else(|| {
+                    invalid(
+                        "historical_control_account_codes",
+                        format!("{code} must identify an active, postable asset account"),
+                    )
+                })?;
+            if account.id == control {
+                return Err(invalid(
+                    "historical_control_account_codes",
+                    format!("{code} is already the configured receivables control account"),
+                ));
+            }
+            control_accounts.insert(account.id);
         }
         let requested: std::collections::HashSet<String> = parsed
             .iter()
@@ -271,36 +346,26 @@ impl Receivables {
             }
             let account = chart
                 .iter()
-                .find(|a| a.code == row[7] && a.account_type == AccountType::Asset && a.postable())
+                .find(|a| a.code == row[7] && control_accounts.contains(&a.id))
                 .ok_or_else(|| {
-                    fail("control_account_code must identify an active, postable asset account")
+                    fail("control_account_code must identify the configured or an explicitly mapped historical receivables control account")
                 })?;
             let balance = balances.entry(account.id).or_insert(Money::ZERO);
             *balance = Money::new((*balance + residual).amount(), book.minor_units)
                 .map_err(|e| fail(&e.to_string()))?;
             rows.push(json!({"source_id":row[0],"customer_id":customer_id,"customer_code":row[1],"party_kind":row[8],"customer_name":customer_name,"customer":customer,"document_reference":row[2],"document_date":date.to_string(),"due_date":due.to_string(),"original_total":original,"outstanding":residual,"settled_before_conversion":original-residual,"account_id":account.id,"account_code":account.code}));
         }
-        if context
-            .balances
-            .get(&control)
-            .is_some_and(|b| *b != Money::ZERO)
-            && !balances.contains_key(&control)
-        {
-            return Err(invalid(
-                "csv",
-                "the register must include the configured receivables control account",
-            ));
-        }
         let mut reconciliation = Vec::new();
-        for (&id, &balance) in &balances {
+        for &id in &control_accounts {
             let account = chart.iter().find(|a| a.id == id).ok_or(Error::Internal)?;
+            let balance = balances.get(&id).copied().unwrap_or(Money::ZERO);
             let expected = context.balances.get(&id).copied().unwrap_or(Money::ZERO);
             if balance != expected {
                 return Err(invalid("csv", format!("opening invoices on {} total {} but the approved opening balance is {} (difference {})", account.code, balance.display(book.minor_units), expected.display(book.minor_units), (balance - expected).display(book.minor_units))));
             }
             reconciliation.push(json!({"account_id":id,"account_code":account.code,"register_balance":balance,"opening_balance":expected,"difference":Money::ZERO}));
         }
-        let account_ids: Vec<i64> = balances.keys().copied().collect();
+        let account_ids: Vec<i64> = control_accounts.iter().copied().collect();
         if c.query_opt("SELECT id FROM finance_receivables_payments WHERE tenant_id=$1 AND company_id=$2 AND deposit_account_id=ANY($3::bigint[]) LIMIT 1", &[&s.tenant(), &company, &account_ids]).await?.is_some() {
             return Err(invalid("csv", "an account used for receipt deposits cannot be a receivables control"));
         }
@@ -336,7 +401,7 @@ impl Receivables {
             )
             .await?;
         Ok(Prepared {
-            review: json!({"state":"previewed","replaces_batch_id":input["replaces_batch_id"],"reason":input["reason"],"staged":input["staged"]==true,"conversion_date":context.entry.entry_date.to_string(),"entry_id":context.entry.id,"entry_number":context.entry.entry_number,"source_reference":reference,"currency_code":book.currency_code,"minor_units":book.minor_units,"rows":rows,"reconciliation":reconciliation,"posts":false,"approval":approval,"already_imported":false}),
+            review: json!({"state":"previewed","replaces_batch_id":input["replaces_batch_id"],"reason":input["reason"],"staged":input["staged"]==true,"conversion_date":context.entry.entry_date.to_string(),"entry_id":context.entry.id,"entry_number":context.entry.entry_number,"source_reference":reference,"currency_code":book.currency_code,"minor_units":book.minor_units,"historical_control_account_codes":historical_control_codes,"rows":rows,"reconciliation":reconciliation,"posts":false,"approval":approval,"already_imported":false}),
             context,
             rows,
             balances,

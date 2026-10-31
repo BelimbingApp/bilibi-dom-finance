@@ -207,7 +207,7 @@ async fn main() -> Outcome<()> {
     write!(
         file,
         "{}",
-        json!({"company_id":company,"series_id":series.id,"ar_csv":ar_csv,"ap_csv":ap_csv})
+        json!({"company_id":company,"series_id":series.id,"ar_csv":ar_csv,"ap_csv":ap_csv,"ar_historical_control_account_codes":["1110"],"ap_historical_control_account_codes":["2010"]})
     )?;
     let access = app
         .services

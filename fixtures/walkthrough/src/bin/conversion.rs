@@ -890,8 +890,24 @@ async fn prove_historical_controls(db: &Db, services: &Services) -> Outcome<()> 
     let trial = ledger
         .trial_balance(&reviewer, company, date(2026, 7, 1), None)
         .await?;
-    let ar_input = json!({"source_reference":"MULTI-AR","currency_code":"MYR","series_id":config["invoice_series"],"csv":MULTI_AR});
-    let ap_input = json!({"source_reference":"MULTI-AP","currency_code":"MYR","csv":MULTI_AP});
+    let ar_input = json!({"source_reference":"MULTI-AR","currency_code":"MYR","series_id":config["invoice_series"],"historical_control_account_codes":["1110"],"csv":MULTI_AR});
+    let ap_input = json!({"source_reference":"MULTI-AP","currency_code":"MYR","historical_control_account_codes":["2010"],"csv":MULTI_AP});
+    let mut incomplete = ar_input.clone();
+    incomplete["csv"] = json!(MULTI_AR.lines().take(2).collect::<Vec<_>>().join("\n") + "\n");
+    let refusal = ar
+        .import_opening_invoices(&reviewer, company, &incomplete)
+        .await
+        .expect_err("an uncovered historical receivables control must be refused");
+    let refusal = format!("{refusal:?}");
+    assert!(refusal.contains("1110") && refusal.contains("500.00"));
+    let mut incomplete = ap_input.clone();
+    incomplete["csv"] = json!(MULTI_AP.lines().take(2).collect::<Vec<_>>().join("\n") + "\n");
+    let refusal = ap
+        .import_opening_bills(&reviewer, company, &incomplete)
+        .await
+        .expect_err("an uncovered historical payables control must be refused");
+    let refusal = format!("{refusal:?}");
+    assert!(refusal.contains("2010") && refusal.contains("-300.00"));
     let mut wrong = ar_input.clone();
     wrong["csv"] = json!(MULTI_AR
         .replace(",2500,1100", ",2400,1100")
@@ -991,7 +1007,7 @@ async fn prove_historical_controls(db: &Db, services: &Services) -> Outcome<()> 
             .await?
             .tied_out
     );
-    println!("PASS: historical controls reconcile per account and settle and reverse on the saved controls");
+    println!("PASS: historical controls refuse uncovered balances, reconcile per account, and settle and reverse on the saved controls");
     Ok(())
 }
 #[tokio::main]

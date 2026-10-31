@@ -16,7 +16,7 @@ use bilibi_ui::{
     FlashGroup, FlexRow, FlexTable, Form, Header, Html, InputKind, ListColumns, Modal, ModalWidth,
     PageVariant, StatusKind,
 };
-use bilibi_ui::{Choice, Combobox};
+use bilibi_ui::{Choice, Combobox, MultiSelect};
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, sync::Arc};
 pub(crate) const PAGES: &str = "finance/receivables.opening-pages";
@@ -54,9 +54,25 @@ fn field_label(key: &str) -> &str {
         "series_id" => "Opening invoice series",
         "source_reference" => "Source reference",
         "currency_code" => "Book currency",
+        "historical_control_account_codes" => "Historical control accounts",
         "override_reason" => "Approval exception reason",
         _ => key,
     }
+}
+
+fn posted_values(payload: &Value, key: &str) -> Vec<String> {
+    let mut values = Vec::new();
+    let mut keep = |value: &Value| {
+        if let Some(text) = value.as_str().filter(|text| !text.is_empty()) {
+            values.push(text.to_owned());
+        }
+    };
+    match payload.get(format!("conversion[{key}][]")) {
+        Some(Value::Array(items)) => items.iter().take(10_001).for_each(&mut keep),
+        Some(value) => keep(value),
+        None => {}
+    }
+    values
 }
 
 fn render(t: impl Template) -> Result<Html> {
@@ -374,6 +390,55 @@ impl Opening {
                     fields.push(&render(field)?);
                 }
 
+                let historical_control_accounts = context["historical_control_accounts"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|account| {
+                        Some(Choice::new(
+                            format!(
+                                "{} · {}",
+                                account["name"].as_str()?,
+                                account["code"].as_str()?
+                            ),
+                            account["code"].as_str()?,
+                        ))
+                    })
+                    .collect();
+                let selected_controls = self.values["historical_control_account_codes"]
+                    .as_array()
+                    .or_else(|| {
+                        context["stages"]
+                            .as_array()
+                            .and_then(|stages| stages.last())
+                            .and_then(|stage| stage["historical_control_account_codes"].as_array())
+                    })
+                    .or_else(|| {
+                        context["decisions"]
+                            .as_array()
+                            .and_then(|decisions| decisions.last())
+                            .and_then(|decision| {
+                                decision["review"]["historical_control_account_codes"].as_array()
+                            })
+                    })
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect();
+                fields.push(&render(
+                    MultiSelect::in_form("conversion", "historical_control_account_codes")
+                        .id("conversion-historical_control_account_codes")
+                        .label("Historical control accounts")
+                        .placeholder("No historical controls")
+                        .selection_label(
+                            ":count historical control selected|:count historical controls selected",
+                        )
+                        .options(historical_control_accounts)
+                        .values(selected_controls)
+                        .hint("Select every other asset account in this invoice register; the configured control is included automatically."),
+                )?);
+
                 let mut options = Vec::new();
                 let mut series_input = json!({"company_id":company,"page_size":100});
                 loop {
@@ -617,13 +682,18 @@ impl LiveState<Scope, Error> for Opening {
                     "preview_opening" => {
                         self.review = None;
                         self.fields.clear();
-                        let fields = params::form_values_checked(
+                        let historical_control_account_codes =
+                            posted_values(value, "historical_control_account_codes");
+                        let mut fields = params::form_values_checked(
                             value,
                             "conversion",
                             crate::opening_csv::MAX_BYTES,
                         )
                         .map_err(Error::refused)?;
+                        fields.remove("historical_control_account_codes][");
                         self.values = json!(fields);
+                        self.values["historical_control_account_codes"] =
+                            json!(historical_control_account_codes);
                         let mut input = self.values.clone();
                         input["company_id"] = r
                             .scope
@@ -648,6 +718,13 @@ impl LiveState<Scope, Error> for Opening {
                         let staged = self.values["mode"] == "reconcile";
                         if let Some(object) = input.as_object_mut() {
                             object.remove("mode");
+                            if object
+                                .get("historical_control_account_codes")
+                                .and_then(Value::as_array)
+                                .is_some_and(Vec::is_empty)
+                            {
+                                object.remove("historical_control_account_codes");
+                            }
                             for key in ["part", "part_count", "replaces_batch_id"] {
                                 let value = object
                                     .get(key)
