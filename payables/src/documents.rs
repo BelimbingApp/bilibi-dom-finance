@@ -947,21 +947,38 @@ impl Payables {
     ) -> Result<DocumentPage> {
         let c = self.db.get().await.map_err(Error::from)?;
         authorize(&**c, s, company, VIEW).await?;
+        self.page_documents_on(&**c, s, company, q).await
+    }
+
+    pub(crate) async fn page_documents_on(
+        &self,
+        c: &dyn OperationClient,
+        s: &Scope,
+        company: i64,
+        q: &DocumentPageQuery,
+    ) -> Result<DocumentPage> {
+        crate::agent_operations::authorize_on(c, s, company, VIEW).await?;
         filters(&q.document_type, &q.status)?;
+        if q.source
+            .as_deref()
+            .is_some_and(|source| !matches!(source, "ordinary" | "opening"))
+        {
+            return Err(PayablesError::InvalidOption);
+        }
         if q.page < 1 || ![25, 50, 100].contains(&q.page_size) || q.search.chars().count() > 255 {
             return Err(PayablesError::InvalidOption);
         }
         let search = q.search.trim();
         // Bilimbi page_documents: literal substring search in the party's
         // snapshot and own number, then clamp before reading the last page.
-        let total: i64=c.query_one("SELECT count(*) FROM finance_payables_documents WHERE tenant_id=$1 AND company_id=$2 AND ($3::text IS NULL OR document_type=$3) AND ($4::text IS NULL OR status=$4) AND (strpos(lower(party_code),lower($5))>0 OR strpos(lower(party_name),lower($5))>0 OR strpos(lower(COALESCE(party_document_number,'')),lower($5))>0)",&[&s.tenant(),&company,&q.document_type,&q.status,&search]).await?.get(0);
+        let total: i64=c.query_opt("SELECT count(*) FROM finance_payables_documents WHERE tenant_id=$1 AND company_id=$2 AND ($3::text IS NULL OR document_type=$3) AND ($4::text IS NULL OR status=$4) AND (strpos(lower(party_code),lower($5))>0 OR strpos(lower(party_name),lower($5))>0 OR strpos(lower(COALESCE(party_document_number,'')),lower($5))>0) AND ($6::text IS NULL OR EXISTS (SELECT 1 FROM finance_payables_opening_items i WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=finance_payables_documents.id)=($6='opening'))",&[&s.tenant(),&company,&q.document_type,&q.status,&search,&q.source]).await?.ok_or(Error::Internal)?.get(0);
         let page = q.page.min(((total + q.page_size - 1) / q.page_size).max(1));
         let offset = (page - 1) * q.page_size;
-        let rows=c.query("SELECT id FROM finance_payables_documents WHERE tenant_id=$1 AND company_id=$2 AND ($3::text IS NULL OR document_type=$3) AND ($4::text IS NULL OR status=$4) AND (strpos(lower(party_code),lower($5))>0 OR strpos(lower(party_name),lower($5))>0 OR strpos(lower(COALESCE(party_document_number,'')),lower($5))>0) ORDER BY document_date DESC,id DESC LIMIT $6 OFFSET $7",&[&s.tenant(),&company,&q.document_type,&q.status,&search,&q.page_size,&offset]).await?;
+        let rows=c.query("SELECT id FROM finance_payables_documents WHERE tenant_id=$1 AND company_id=$2 AND ($3::text IS NULL OR document_type=$3) AND ($4::text IS NULL OR status=$4) AND (strpos(lower(party_code),lower($5))>0 OR strpos(lower(party_name),lower($5))>0 OR strpos(lower(COALESCE(party_document_number,'')),lower($5))>0) AND ($6::text IS NULL OR EXISTS (SELECT 1 FROM finance_payables_opening_items i WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=finance_payables_documents.id)=($6='opening')) ORDER BY document_date DESC,id DESC LIMIT $7 OFFSET $8",&[&s.tenant(),&company,&q.document_type,&q.status,&search,&q.source,&q.page_size,&offset]).await?;
         let mut documents = Vec::new();
         for row in rows {
             documents.push(
-                store::document(&**c, s.tenant(), company, row.get(0))
+                store::document(c, s.tenant(), company, row.get(0))
                     .await?
                     .ok_or(PayablesError::DocumentNotFound)?,
             );

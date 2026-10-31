@@ -10,7 +10,6 @@ mod opening;
 mod opening_csv;
 mod opening_lifecycle;
 mod opening_operations;
-mod opening_web;
 mod vendors;
 pub use vendors::{SupplierHistory, Vendor, VendorInput};
 mod payments;
@@ -66,7 +65,7 @@ inventory::submit! { Module {
             ("finance-payables-007-opening-lifecycle", include_str!("../migrations/007-opening-lifecycle.sql")),
         ("finance-payables-008-core-party-code", include_str!("../migrations/008-core-party-code.sql")),
     ],
-    services: &[Service {id:opening_web::PAGES,factory:|services| Ok(Arc::new(bilibi_ui::page::PageService::<Scope,Error>(Arc::new(opening_web::Pages {db:services.get::<Db>("base/database.pool")?.as_ref().clone(),contracts:services.get(bilibi_agent_api::page::SERVICE)?,plans:services.get("base/agent_api.plans")?}))))},Service { id: SERVICE, factory: |s| { let payables = Arc::new(Payables {
+    services: &[Service { id: SERVICE, factory: |s| { let payables = Arc::new(Payables {
         db: s.get::<Db>("base/database.pool")?.as_ref().clone(),
         ledger: s.get(bilibi_finance_ledger::SERVICE)?,
         parties: s.get("base/tenancy.parties")?,
@@ -76,6 +75,7 @@ inventory::submit! { Module {
         records: s.get(bilibi_records::SERVICE)?,
         parties: s.get("base/tenancy.parties")?,
         contracts: s.get(bilibi_agent_api::page::SERVICE)?,
+        plans: s.get("base/agent_api.plans")?,
         db: s.get::<Db>("base/database.pool")?.as_ref().clone(),
         payables: s.get(SERVICE)?,
         ledger: s.get(bilibi_finance_ledger::SERVICE)?,
@@ -384,6 +384,7 @@ impl Default for DocumentQuery {
 }
 #[derive(Clone, Debug)]
 pub struct DocumentPageQuery {
+    pub source: Option<String>,
     pub document_type: Option<String>,
     pub status: Option<String>,
     pub search: String,
@@ -393,6 +394,7 @@ pub struct DocumentPageQuery {
 impl Default for DocumentPageQuery {
     fn default() -> Self {
         Self {
+            source: None,
             document_type: None,
             status: None,
             search: String::new(),
@@ -401,7 +403,7 @@ impl Default for DocumentPageQuery {
         }
     }
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct DocumentPage {
     pub documents: Vec<Document>,
     pub total: i64,

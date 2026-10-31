@@ -1,5 +1,7 @@
 # Opening bills
 
+Open **Payables → Bills**, then choose **Opening bills**. Use the list's **Source** filter to find opening bills; each row opens the same bill page as an ordinary bill. The batch preview is a review dialog, separate from the record list.
+
 Read finance.payables.opening.context for the current company's approved conversion entry, book precision, exact CSV header, retained batch and imported item identifiers. Prepare setup and mapping in separate reviewed writes; plans preview dependent steps before executing earlier steps.
 
 Use finance.payables.opening.import with company_id, source_reference, currency_code and csv. Read opening_accounts from finance.payables.opening.context. Supply opening_account_classifications as an array of account_id and classification pairs. Classify each asset as receivables_control or not_a_control, and each liability as payables_control or not_a_control. An unclassified account blocks review, including an old-system control that was never configured here. Preview the complete classification and register, then inspect each source ID, date, amount and account mapping before committing the exact reviewed input once. Every payables control must reconcile exactly, including a control with no CSV rows. Import creates no ledger entry or source-period tax lines. The reviewer must be independent of the opening journal's source preparer. An override_reason invokes the existing duty-separation controls and records an exception; it is not a bypass.
