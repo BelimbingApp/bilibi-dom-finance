@@ -176,8 +176,8 @@ impl State {
                 .pointer("/report/content/minor_units")
                 .or_else(|| self.document.get("minor_units"))
                 .and_then(Value::as_u64)
-                .and_then(|n| u8::try_from(n).ok())
-                .and_then(|n| bilibi_finance_ledger::MinorUnits::new(n).ok());
+                .and_then(|n| i64::try_from(n).ok())
+                .and_then(bilibi_finance_ledger::MinorUnits::new);
             if let Some(units) = units {
                 if let Ok(m) = bilibi_finance_ledger::Money::parse(&text, units) {
                     return m.display(units);

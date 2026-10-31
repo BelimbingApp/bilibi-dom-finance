@@ -91,12 +91,12 @@ pub struct TaxTotal {
     pub taxable_amount: Money,
     pub tax_amount: Money,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct OtherPosting {
     pub owner_module: Option<String>,
     pub balance: Money,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct ControlAccount {
     pub account_id: i64,
     pub code: String,
@@ -107,10 +107,11 @@ pub struct ControlAccount {
     pub other_postings: Vec<OtherPosting>,
     pub difference: Money,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct TieOut {
     pub through_opening_batch_id: i64,
     pub company_id: i64,
+    #[serde(serialize_with = "date_text")]
     pub as_of: Date,
     pub through_entry_number: i64,
     pub currency_code: String,

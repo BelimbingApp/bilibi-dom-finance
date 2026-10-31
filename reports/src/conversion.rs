@@ -1,8 +1,8 @@
 //! Domain-owned conversion evidence. Compose the owners, freeze their answers;
 //! never infer a clean conversion merely because the trial balance balances.
 use crate::{
-    authorize, issued, json, pack_owner, Reports, ReportsError, Result, ISSUE, MODULE, SIGN_OFF,
-    VIEW,
+    authorize, issued, json as encode, pack_owner, Reports, ReportsError, Result, ISSUE, MODULE,
+    SIGN_OFF, VIEW,
 };
 use bilibi_database::{Change, Error, MutationTransaction};
 use bilibi_finance_ledger::{Approval, Money, Preparer, TotalsQuery};
@@ -30,9 +30,10 @@ impl Reports {
             .build_transaction()
             .isolation_level(tokio_postgres::IsolationLevel::RepeatableRead)
             .start()
-            .await?;
+            .await
+            .map_err(Error::from)?;
         let report = self.conversion_on(&tx, scope, company, as_of).await?;
-        tx.commit().await?;
+        tx.commit().await.map_err(Error::from)?;
         Ok(report)
     }
 
@@ -165,7 +166,7 @@ impl Reports {
             )
             .await
             .map_err(source_error)?;
-        let mut asset_snapshot = json(&assets)?;
+        let mut asset_snapshot = encode(&assets)?;
         for row in asset_snapshot["rows"]
             .as_array_mut()
             .ok_or(Error::Internal)?
@@ -197,7 +198,7 @@ impl Reports {
                         if page.next.is_none() {break page.fields;}
                         after=page.next;
                     };
-                    datasets.insert(dataset.to_string(),json!({"fields":fields,"rows":rows,"through_id":rows.last().and_then(|r|r["id"].as_i64()).unwrap_or(0),"sha256":format!("{:x}",Sha256::digest(serde_json::to_vec(&rows).map_err(|_|Error::Internal)?))}));
+                    datasets.insert(dataset.to_string(),json!({"fields":fields,"rows":rows,"through_id":rows.last().and_then(|r|r["id"].as_i64()).unwrap_or(0),"sha256":Sha256::digest(serde_json::to_vec(&rows).map_err(|_|Error::Internal)?).iter().map(|b|format!("{b:02x}")).collect::<String>()}));
                 }
                 evidence.insert($key.into(),Value::Object(datasets));
             }};
@@ -418,7 +419,7 @@ impl Reports {
                 })
             })
             .await?;
-        json(&row)
+        encode(&row)
     }
 
     pub(crate) async fn conversion_issued_on(
@@ -433,7 +434,7 @@ impl Reports {
             .await?
             .filter(|r| r.kind == KIND)
             .ok_or(ReportsError::ReportNotFound)?;
-        let signs=c.query("SELECT to_jsonb(s) FROM finance_reports_conversion_signoffs s WHERE tenant_id=$1 AND company_id=$2 AND report_id=$3 ORDER BY id",&[&s.tenant(),&company,&id]).await?.iter().map(|r|r.get::<_,Value>(0)).collect::<Vec<_>>();
+        let signs=c.query("SELECT to_jsonb(s) FROM finance_reports_conversion_signoffs s WHERE tenant_id=$1 AND company_id=$2 AND report_id=$3 ORDER BY id",&[&s.tenant(),&company,&id]).await.map_err(Error::from)?.iter().map(|r|r.get::<_,Value>(0)).collect::<Vec<_>>();
         Ok(json!({"report":row,"signoffs":signs}))
     }
 
@@ -456,7 +457,7 @@ impl Reports {
                 ]))
             })?;
         let id = report["report"]["id"].as_i64().ok_or(Error::Internal)?;
-        if tx.sql().query_opt("SELECT id FROM finance_reports_conversion_signoffs WHERE tenant_id=$1 AND company_id=$2 AND report_id=$3",&[&s.tenant(),&company,&id]).await?.is_some(){return Err(ReportsError::Ledger(bilibi_finance_ledger::LedgerError::Invalid(vec![bilibi_finance_ledger::FieldError::new("report_id","This report is already signed.")])));}
+        if tx.sql().query_opt("SELECT id FROM finance_reports_conversion_signoffs WHERE tenant_id=$1 AND company_id=$2 AND report_id=$3",&[&s.tenant(),&company,&id]).await.map_err(Error::from)?.is_some(){return Err(ReportsError::Ledger(bilibi_finance_ledger::LedgerError::Invalid(vec![bilibi_finance_ledger::FieldError::new("report_id","This report is already signed.")])));}
         let approval = Self::conversion_approval(report, None)?;
         self.ledger
             .check_approval(tx, s, company, &approval)
