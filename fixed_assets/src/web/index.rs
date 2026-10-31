@@ -863,7 +863,7 @@ impl LiveState<Scope, Error> for Index {
                     }
                     "close_opening" => self.opening = None,
                     "preview_opening" | "import_opening" | "cancel_opening" | "stage_grid"
-                    | "balance_grid" | "opening_grid" | "clear-flash"
+                    | "balance_grid" | "class_grid" | "opening_grid" | "clear-flash"
                         if self.opening.is_some() =>
                     {
                         let opening = self.opening.as_mut().expect("opening dialog");

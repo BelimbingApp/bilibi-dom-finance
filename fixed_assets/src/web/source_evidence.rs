@@ -8,8 +8,17 @@ pub(super) fn render(source: &str, evidence: &Value, units: MinorUnits) -> Resul
     if evidence.is_null() {
         return Ok(Html::EMPTY);
     }
+    let dom = format!(
+        "source-evidence-{}",
+        source
+            .as_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    );
+    let policy_dom = format!("{dom}-policy");
     let mut body = Html::render(&Alert {
-        id: "source-evidence-policy",
+        id: &policy_dom,
         body: Html::text("Source history and tax schedules are retained evidence. They create no posting, change no prospective estimate and are separate from subsequent depreciation activity."),
         ..Default::default()
     }).map_err(|_| Error::Internal)?;
@@ -88,20 +97,21 @@ pub(super) fn render(source: &str, evidence: &Value, units: MinorUnits) -> Resul
         if rows.is_empty() {
             continue;
         }
+        let table_dom = format!("{dom}-{kind}");
         let columns = ListColumns::mount(
-            kind,
+            &table_dom,
             fields
                 .iter()
                 .map(|(key, label)| BuiltinColumn::new(key, label))
                 .collect(),
         )
         .map_err(|_| Error::Internal)?;
-        let mut table = FlexTable::new(kind, columns.flex_columns(), rows);
+        let mut table = FlexTable::new(&table_dom, columns.flex_columns(), rows);
         table.caption = label;
         body.push(&Html::render(&table).map_err(|_| Error::Internal)?);
     }
     Html::render(&Card {
-        id: "source-evidence",
+        id: &dom,
         title: &format!("Source evidence: {source}"),
         body,
         ..Default::default()

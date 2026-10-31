@@ -91,7 +91,7 @@ impl FixedAssets {
         }
         if !retry && c.query_opt("SELECT id FROM finance_fixed_assets_opening_batches WHERE tenant_id=$1 AND company_id=$2 AND source_reference=$3",&[&s.tenant(),&company,&reference]).await?.is_some() {return Err(invalid("source_reference","has already been reconciled; use a new source reference"));}
         Ok(
-            json!({"state":"previewed","source_reference":reference,"part":part,"part_count":count,"received_parts":stages.iter().map(|r|r.get::<_,i32>(0)).collect::<Vec<_>>(),"rows":rows.len()-1,"already_staged":retry,"posts":false,"settleable":false}),
+            json!({"state":"previewed","source_reference":reference,"part":part,"part_count":count,"received_parts":stages.iter().map(|r|r.get::<_,i32>(0)).collect::<Vec<_>>(),"source_evidence":evidence,"rows":rows.len()-1,"already_staged":retry,"posts":false,"settleable":false}),
         )
     }
     /// Retain one immutable source batch. An identical retry is a no-op.

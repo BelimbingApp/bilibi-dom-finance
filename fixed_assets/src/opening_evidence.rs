@@ -101,6 +101,9 @@ pub(super) fn read(
     } else {
         65536
     };
+    if raw.to_string().contains("\\u0000") {
+        return Err(fail("source evidence must not contain null characters"));
+    }
     if raw.to_string().len() > max || map.len() > 10000 {
         return Err(fail(
             "source evidence is too large; stage smaller source batches",

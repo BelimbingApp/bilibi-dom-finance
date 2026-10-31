@@ -558,12 +558,10 @@ impl Opening {
             }
             if review.contract != STAGE {
                 body.push(&render(table)?);
-                for row in facts["rows"].as_array().into_iter().flatten() {
-                    body.push(&super::source_evidence::render(
-                        row["source_id"].as_str().unwrap_or(""),
-                        &row["source_evidence"],
-                        units,
-                    )?);
+            }
+            if let Some(evidence) = facts["source_evidence"].as_object() {
+                for (source, facts) in evidence {
+                    body.push(&super::source_evidence::render(source, facts, units)?);
                 }
             }
             if review.contract != STAGE {

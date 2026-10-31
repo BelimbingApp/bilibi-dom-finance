@@ -430,7 +430,38 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         .await?;
     let ar_input = json!({"source_reference":"AR-SOURCE","currency_code":"MYR","series_id":config["invoice_series"],"csv":AR,"opening_account_classifications":config["opening_account_classifications"]});
     let ap_input = json!({"source_reference":"AP-SOURCE","currency_code":"MYR","csv":AP,"opening_account_classifications":config["opening_account_classifications"]});
-    let asset_input = json!({"source_reference":"ASSET-SOURCE","currency_code":"MYR","csv":config["assets"].as_str().unwrap().replace(",12000,1800,96,0", ",11000,800,96,0") + &format!("asset-4,Fully depreciated,{revision},2024-06-01,2024-07-01,1000,1000,0,0\n", revision=config["revision"])});
+    let mut asset_input = json!({"source_reference":"ASSET-SOURCE","currency_code":"MYR","csv":config["assets"].as_str().unwrap().replace(",12000,1800,96,0", ",11000,800,96,0") + &format!("asset-4,Fully depreciated,{revision},2024-06-01,2024-07-01,1000,1000,0,0\n", revision=config["revision"])});
+    asset_input["source_evidence"] = json!({"asset-3":{
+        "history":[
+            {"kind":"impairment","effective_date":"2025-12-31","amount":"200.00","reference":"Source impairment","note":"Historical source assessment"},
+            {"kind":"impairment_reversal","effective_date":"2026-01-31","amount":"200.00","reference":"Source reversal","note":"Source assessment reversed before cut-off"},
+            {"kind":"disposal","effective_date":"2026-02-28","amount":"1000.00","reference":"Source partial disposal","note":"CSV cost is the remaining source asset"},
+            {"kind":"residual_value_change","effective_date":"2026-06-30","residual_value":"0.00","reference":"Source estimate","note":"Residual reassessed before cut-off"},
+            {"kind":"estimate_change","effective_date":"2026-06-30","remaining_life_months":96,"method":"Source method","reference":"Source estimate","note":"CSV freezes the current prospective estimate"}
+        ],
+        "source_period_expense":[{"from":"2026-01-01","through":"2026-06-30","amount":"600.00","reference":"Source YTD bridge"}],
+        "tax_capital_allowances":[{"from":"2025-01-01","through":"2025-12-31","qualifying_expenditure":"12000.00","allowances":"2400.00","reference":"Source tax computation"}]
+    }});
+    for bad_evidence in [
+        json!({"unknown":{}}),
+        json!({"asset-3":{"unknown":true}}),
+        json!({"asset-3":{"history":[{"kind":"impairment","effective_date":"2026-07-01","amount":"1.00","reference":"Future","note":"Refused"}]}}),
+        json!({"asset-3":{"history":[{"kind":"impairment","effective_date":"2026-06-30","amount":"1.001","reference":"Precision","note":"Refused"}]}}),
+        json!({"asset-3":{"history":[{"kind":"residual_value_change","effective_date":"2026-06-30","reference":"Missing estimate","note":"Refused"}]}}),
+        json!({"asset-3":{"source_period_expense":[{"from":"2026-06-30","through":"2026-01-01","amount":"1","reference":"Backwards period"}]}}),
+        json!({"asset-3":{"tax_capital_allowances":[{"from":"2025-01-01","through":"2025-12-31","qualifying_expenditure":"1","allowances":"-1","reference":"Negative tax allowance"}]}}),
+    ] {
+        let mut wrong = asset_input.clone();
+        wrong["source_evidence"] = bad_evidence;
+        let refusal = assets
+            .import_opening_register(&s, company, &wrong)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(refusal, bilibi_finance_fixed_assets::FixedAssetsError::Invalid(ref fields) if fields[0].field == "source_evidence"),
+            "{refusal:?}"
+        );
+    }
     for input in [&ar_input, &ap_input, &asset_input] {
         assert!(input["csv"].as_str().is_some());
     }
@@ -648,9 +679,87 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         .list_returns(&s, company, None, None, None)
         .await?
         .is_empty());
-    let asset_batch = assets
-        .import_opening_register(&s, company, &asset_input)
+    // Independent staged approval carries each asset's evidence with its CSV.
+    let lines: Vec<_> = asset_input["csv"].as_str().unwrap().lines().collect();
+    for (part, line) in lines.iter().skip(1).enumerate() {
+        let mut staged = asset_input.clone();
+        staged["part"] = json!(part + 1);
+        staged["part_count"] = json!(2);
+        staged["csv"] = json!(format!("{}\n{line}\n", lines[0]));
+        if part == 1 {
+            staged["source_evidence"] = json!({});
+        }
+        assets
+            .stage_opening_import(&manager, company, &staged)
+            .await?;
+        assets
+            .stage_opening_import(&manager, company, &staged)
+            .await?;
+        let mut changed = staged.clone();
+        if part == 0 {
+            changed["source_evidence"]["asset-3"]["history"][0]["note"] =
+                json!("Changed source bytes");
+            assert!(assets
+                .stage_opening_import(&manager, company, &changed)
+                .await
+                .is_err());
+        }
+    }
+    let reconcile =
+        json!({"source_reference":"ASSET-SOURCE","currency_code":"MYR","csv":"","staged":true});
+    assert!(assets
+        .import_opening_register(&manager, company, &reconcile)
+        .await
+        .is_err());
+    let Handler::SafeWrite(asset_import) = registry.operations
+        ["finance.fixed_assets.opening.import"]
+        .definition
+        .handler
+    else {
+        panic!("opening import must be reviewed");
+    };
+    let mut raw = db.get().await?;
+    let mut tx = l
+        .write(
+            &mut raw,
+            &s,
+            company,
+            &[bilibi_finance_fixed_assets::ACQUIRE],
+            "walkthrough.opening-evidence",
+        )
         .await?;
+    let review = asset_import
+        .preview(tx.sql(), &s, &reconcile)
+        .await?
+        .envelope("finance.fixed_assets.opening.import");
+    let facts = &review["result"]["changes"];
+    assert_eq!(facts["class_totals"].as_array().unwrap().len(), 1);
+    assert_eq!(facts["class_totals"][0]["cost"], "12000");
+    assert_eq!(facts["class_totals"][0]["accumulated_depreciation"], "1800");
+    assert!(facts["month_convention"]
+        .as_str()
+        .unwrap()
+        .contains("mid-month"));
+    assert_eq!(
+        facts["rows"][0]["source_evidence"]["history"]
+            .as_array()
+            .unwrap()
+            .len(),
+        5
+    );
+    asset_import.commit(&mut tx, &s, &reconcile).await?;
+    tx.commit().await?;
+    drop(raw);
+    let asset_batch = assets
+        .import_opening_register(&s, company, &reconcile)
+        .await?;
+    let mut changed = asset_input.clone();
+    changed["source_evidence"]["asset-3"]["history"][0]["note"] =
+        json!("Different retained evidence");
+    assert!(assets
+        .import_opening_register(&s, company, &changed)
+        .await
+        .is_err());
     assert_eq!(
         asset_batch,
         assets
@@ -750,6 +859,24 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
     assert_eq!(
         register.rows[0].accumulated.shown(trial.minor_units),
         "800.00"
+    );
+    let retained = assets
+        .get_asset(&s, company, register.rows[0].asset.id)
+        .await?;
+    let evidence = &retained.opening.as_ref().unwrap()["source_evidence"];
+    assert_eq!(evidence["history"].as_array().unwrap().len(), 5);
+    assert_eq!(evidence["source_period_expense"][0]["amount"], "600.00");
+    assert_eq!(
+        evidence["tax_capital_allowances"][0]["allowances"],
+        "2400.00"
+    );
+    assert_eq!(
+        assets
+            .evidence_page(&s, company, "opening_item", Some(500), None)
+            .await?
+            .rows
+            .len(),
+        2
     );
     assert!(register.rows[1].schedule.is_empty());
     assert_eq!(
