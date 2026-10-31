@@ -45,6 +45,8 @@ struct Lines {
 pub(super) struct Document {
     pages: Pages,
     id: i64,
+    balance_input: Value,
+    balance_pins: Value,
     record: Option<Record>,
     customer: Option<Customer>,
     series: Option<Series>,
@@ -70,12 +72,18 @@ pub(super) struct Document {
 }
 
 impl Document {
-    pub(super) fn new(pages: Pages, path: &HashMap<String, String>) -> Result<Self> {
+    pub(super) fn new(
+        pages: Pages,
+        path: &HashMap<String, String>,
+        query: &HashMap<String, String>,
+    ) -> Result<Self> {
         Ok(Self {
             write_offs: super::write_offs::Journals::new()?,
             credit_actions: super::credits::Credits::new()?,
             pages,
             id: params::positive_id(path.get("id").map(String::as_str)).unwrap_or(0),
+            balance_input: super::credits::balance_query(query)?,
+            balance_pins: Value::Null,
             record: None,
             customer: None,
             series: None,
@@ -141,16 +149,17 @@ impl Document {
     }
 
     async fn load(&mut self, scope: &Scope) -> Result<()> {
+        let mut input = self.balance_input.clone();
+        input["document_id"] = json!(self.id);
         self.record = match self
             .pages
-            .read(
-                scope,
-                "finance.receivables.document.get",
-                json!({"document_id": self.id}),
-            )
+            .read(scope, "finance.receivables.document.get", input)
             .await
         {
-            Ok(value) => serde_json::from_value(value).ok(),
+            Ok(value) => {
+                self.balance_pins = value["balance_pins"].clone();
+                serde_json::from_value(value).ok()
+            }
             Err(Error::NotFound) => None,
             Err(error) => return Err(error),
         };
@@ -396,6 +405,26 @@ impl Document {
                     .figures
                     .with_currency_opt(d.outstanding, &d.currency_code),
             ));
+        }
+        if let Some(pins) = self.balance_pins.as_object() {
+            for (key, label) in [
+                ("as_of", "Balance as of"),
+                ("through_entry_number", "Read through ledger entry"),
+                ("through_opening_batch_id", "Read through opening batch"),
+                ("through_settlement_number", "Read through settlement"),
+            ] {
+                items.push(f::fact(
+                    label,
+                    &pins
+                        .get(key)
+                        .map(|v| {
+                            v.as_str()
+                                .map(str::to_owned)
+                                .unwrap_or_else(|| v.to_string())
+                        })
+                        .unwrap_or_default(),
+                ));
+            }
         }
         if let Some(opening) = &d.opening {
             items.push(f::fact(

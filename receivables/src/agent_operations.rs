@@ -515,7 +515,11 @@ impl ReadHandler for Read {
                         json!(service.aged_receivables(scope, company, as_of, &options).await?)
                     }
                     Self::Customer => json!(service.get_customer(scope, company, id(input,"customer_id")?).await?),
-                    Self::Document => json!(documents::read(client,tenant,company,id(input,"document_id")?).await?),
+                    Self::Document => {
+                        let mut record=json!(documents::read(client,tenant,company,id(input,"document_id")?).await?);
+                        if !input["as_of"].is_null(){let balance=service.document_balance_at(scope,company,id(input,"document_id")?,input).await?;record["outstanding"]=balance["outstanding"].clone();record["balance_pins"]=balance["balance_pins"].clone();}
+                        record
+                    },
                     Self::DocumentPage => {
                         let kind = input["kind"].as_str();
                         let status = input["status"].as_str();
@@ -845,7 +849,7 @@ inventory::submit! { Contribution::new(DEFINITIONS,"finance/receivables.operatio
         Operation {key:"finance.receivables.customer.get",title:"Read a customer",summary:"Read one customer with its linked company (name, status, tax ID, registration number, email, phone as you may see them) and its own payment terms and availability.",keywords:&[],capability:VIEW,input:customer,output,handler:Handler::Read(&Read::Customer),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.document.list",title:"List receivables documents",summary:"Read drafts, issued invoices and credit notes, or discarded drafts by identifier with optional filters.",keywords:&[],capability:VIEW,input:documents,output,handler:Handler::Read(&Read::Documents),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.document.page",title:"Read invoices page",summary:"Read a bounded invoices page after applying source, type, status, customer and search filters, stable sorting, count and offset in SQL.",keywords:&["opening"],capability:VIEW,input:document_page,output,handler:Handler::Read(&Read::DocumentPage),channels:Channels::Every,step_up:&[]},
-        Operation {key:"finance.receivables.document.get",title:"Read a receivables document",summary:"Read saved lines, tax and party snapshots, entry identifiers and current outstanding.",keywords:&[],capability:VIEW,input:document,output,handler:Handler::Read(&Read::Document),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.receivables.document.get",title:"Read a receivables document",summary:"Read saved lines, tax and party snapshots, entry identifiers and current outstanding.",keywords:&[],capability:VIEW,input:dated_document,output,handler:Handler::Read(&Read::Document),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.payment.list",title:"List receipts",summary:"Read numbered receipts with allocations and reversal, by identifier and optional customer.",keywords:&[],capability:VIEW,input:payments,output,handler:Handler::Read(&Read::Payments),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.payment.get",title:"Read a receipt",summary:"Read the original receipt, its allocations and optional dated reversal.",keywords:&[],capability:VIEW,input:payment,output,handler:Handler::Read(&Read::Payment),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.aging.get",title:"Read receivables aging",summary:"Read who owes what as of a date, by days overdue, per customer and invoice, with the pinned posting number it was read at. Also requires ledger view.",keywords:&[],capability:VIEW,input:aging,output,handler:Handler::Read(&Read::Aging),channels:Channels::Every,step_up:&[]},
@@ -865,3 +869,16 @@ inventory::submit! { Contribution::new(DEFINITIONS,"finance/receivables.operatio
     ],
     guides:&[Guide {key:"finance.receivables",title:"Receivables drafts, issuance and receipts",summary:"Configure, draft, review and issue invoices or credit notes; settle and correct receipts without editing posted evidence.",keywords:&[],capability:VIEW,body:include_str!("../guide.md")}],
 }) }
+
+fn dated_document() -> Value {
+    let mut s = document();
+    s["properties"]["as_of"] = json!({"type":"string","format":"date"});
+    for key in [
+        "through_entry_number",
+        "through_opening_batch_id",
+        "through_settlement_number",
+    ] {
+        s["properties"][key] = json!({"type":"integer","minimum":0});
+    }
+    s
+}

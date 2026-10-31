@@ -305,7 +305,7 @@ impl Page<Scope, Error> for Pages {
                     (state.body(scope).await?, None)
                 }
                 "bill" => {
-                    let mut state = bill::Bill::new(self.clone(), r.path)?;
+                    let mut state = bill::Bill::new(self.clone(), r.path, r.query)?;
                     state.reload(scope).await?;
                     (state.body(scope).await?, state.title())
                 }
@@ -355,7 +355,7 @@ impl Page<Scope, Error> for Pages {
             let state: Box<dyn bilibi_ui::page::LiveState<Scope, Error>> = match r.operation {
                 "vendors" => Box::new(vendors::Vendors::new(self.clone(), r.query)?),
                 "bills" => Box::new(bills::Bills::new(self.clone(), r.query, r.framed)?),
-                "bill" => Box::new(bill::Bill::new(self.clone(), r.path)?),
+                "bill" => Box::new(bill::Bill::new(self.clone(), r.path, r.query)?),
                 "bill_new" | "note_new" => Box::new(bill_form::BillForm::new(
                     self.clone(),
                     r.operation == "note_new",

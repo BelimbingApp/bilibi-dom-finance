@@ -342,7 +342,7 @@ impl Aging {
                     row.slot(
                         "invoice",
                         f::link(
-                            &format!("{INVOICES}/{}", d.document_id),
+                            &format!("{INVOICES}/{}?as_of={}&through_entry_number={}&through_opening_batch_id={}&through_settlement_number={}",d.document_id,r.as_of,r.through_entry_number,r.through_opening_batch_id,r.through_settlement_number),
                             d.document_reference.as_deref().unwrap_or("Invoice"),
                         )?,
                     )
@@ -399,7 +399,7 @@ impl Aging {
                         .slot(
                             "invoice",
                             f::link(
-                                &format!("{INVOICES}/{}", credit.document_id),
+                                &format!("{INVOICES}/{}?as_of={}&through_entry_number={}&through_opening_batch_id={}&through_settlement_number={}",credit.document_id,r.as_of,r.through_entry_number,r.through_opening_batch_id,r.through_settlement_number),
                                 credit
                                     .document_reference
                                     .as_deref()

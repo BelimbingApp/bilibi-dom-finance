@@ -481,3 +481,56 @@ impl Receivables {
         Ok(json!({"targets":targets,"next_after_id":next,"cash_accounts":accounts,"book":book}))
     }
 }
+
+impl Receivables {
+    // A record drill-down replays the report tuple; its current remaining
+    // amount must never replace the historical figure a person followed.
+    pub(super) async fn document_balance_at(
+        &self,
+        s: &Scope,
+        company: i64,
+        document: i64,
+        input: &Value,
+    ) -> Result<Value> {
+        let day: Date = input["as_of"]
+            .as_str()
+            .and_then(|v| v.parse().ok())
+            .ok_or_else(|| invalid("as_of", "must be YYYY-MM-DD"))?;
+        let mut connection = self.db.get().await.map_err(Error::from)?;
+        let client: &mut tokio_postgres::Client = &mut connection;
+        let tx = client
+            .build_transaction()
+            .isolation_level(tokio_postgres::IsolationLevel::RepeatableRead)
+            .start()
+            .await
+            .map_err(Error::from)?;
+        bilibi_company::authorize_work_target(&tx, s, company, VIEW)
+            .await
+            .map_err(crate::refusal)?;
+        let entry = self
+            .ledger
+            .entry_boundary_on(&tx, s, company, input["through_entry_number"].as_i64())
+            .await?;
+        let batch =
+            crate::opening::pin(&tx, s, company, input["through_opening_batch_id"].as_i64())
+                .await?;
+        let settlement = pin(
+            &tx,
+            s,
+            company,
+            input["through_settlement_number"].as_i64(),
+            entry,
+            batch,
+            day,
+        )
+        .await?;
+        let amount:rust_decimal::Decimal=tx.query_opt("SELECT CASE WHEN d.issue_date<=$3::text::date AND d.ledger_entry_number<=$4 AND NOT EXISTS(SELECT 1 FROM finance_receivables_opening_items i JOIN finance_receivables_opening_batches b ON b.tenant_id=$1 AND b.company_id=$2 AND b.id=i.batch_id WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=d.id AND (b.conversion_date>$3::text::date OR b.id>$5 OR EXISTS(SELECT 1 FROM finance_receivables_opening_decisions x WHERE x.tenant_id=$1 AND x.company_id=$2 AND x.batch_id=b.id AND x.effective_date>$3::text::date) OR EXISTS(SELECT 1 FROM finance_receivables_opening_decisions x WHERE x.tenant_id=$1 AND x.company_id=$2 AND x.replaces_batch_id=b.id AND x.batch_id<=$5 AND x.effective_date<=$3::text::date))) THEN finance_receivables_residual($1,$2,d.id,$3::text::date,$4,$6) ELSE 0 END FROM finance_receivables_documents d WHERE d.tenant_id=$1 AND d.company_id=$2 AND d.id=$7 AND d.kind IN ('invoice','opening_credit') AND d.status='issued'",&[&s.tenant(),&company,&day.to_string(),&entry,&batch,&settlement,&document]).await.map_err(Error::from)?.ok_or_else(||invalid("document_id","must identify an issued invoice, posted bill or opening credit"))?.get(0);
+        let units = self.ledger.get_book_on(&tx, s, company).await?.minor_units;
+        let amount =
+            Money::new(amount, units).map_err(|e| invalid("document_id", e.to_string()))?;
+        tx.commit().await.map_err(Error::from)?;
+        Ok(
+            json!({"outstanding":amount,"balance_pins":{"as_of":day.to_string(),"through_entry_number":entry,"through_opening_batch_id":batch,"through_settlement_number":settlement}}),
+        )
+    }
+}

@@ -600,7 +600,7 @@ impl Pages {
             "invoices" => State::Invoices(Box::new(documents::Documents::new(
                 pages, r.query, r.framed,
             )?)),
-            "invoice" => State::Invoice(Box::new(document::Document::new(pages, r.path)?)),
+            "invoice" => State::Invoice(Box::new(document::Document::new(pages, r.path, r.query)?)),
             "receipts" => {
                 State::Receipts(Box::new(payments::Payments::new(pages, r.query, r.framed)?))
             }

@@ -25,6 +25,8 @@ enum Dialog {
 pub(super) struct Bill {
     pages: Pages,
     id: i64,
+    balance_input: Value,
+    balance_pins: Value,
     document: Option<Document>,
     units: Option<MinorUnits>,
     accounts: Vec<(i64, String, String)>,
@@ -38,10 +40,16 @@ pub(super) struct Bill {
 }
 
 impl Bill {
-    pub(super) fn new(pages: Pages, path: &HashMap<String, String>) -> Result<Self> {
+    pub(super) fn new(
+        pages: Pages,
+        path: &HashMap<String, String>,
+        query: &HashMap<String, String>,
+    ) -> Result<Self> {
         Ok(Self {
             pages,
             id: params::positive_id(path.get("id").map(String::as_str)).unwrap_or(0),
+            balance_input: super::credits::balance_query(query)?,
+            balance_pins: Value::Null,
             document: None,
             units: None,
             accounts: vec![],
@@ -100,6 +108,26 @@ impl Bill {
             None => None,
         };
         (self.units, self.accounts) = self.pages.account_context(scope).await?;
+        if !self.balance_input["as_of"].is_null() {
+            let mut input = self.balance_input.clone();
+            input["company_id"] = json!(company(scope).ok_or(Error::Unauthorized)?);
+            input["document_id"] = json!(self.id);
+            let answer = self
+                .pages
+                .contracts
+                .read(scope, "finance.payables.document.get", &input)
+                .await
+                .map_err(|_| Error::Invalid)?;
+            self.balance_pins = answer["result"]["balance_pins"].clone();
+            if let Some(d) = &mut self.document {
+                if let Some(units) = self.units {
+                    d.outstanding = answer["result"]["outstanding"]
+                        .as_str()
+                        .and_then(|v| bilibi_finance_ledger::Money::parse(v, units).ok());
+                }
+            }
+        }
+
         if let Some(d) = &self.document {
             self.credit_actions
                 .load(&self.pages, scope, d.id, &d.document_type)
@@ -242,6 +270,26 @@ impl Bill {
                 value,
                 ..Fact::default()
             });
+        }
+        if let Some(pins) = self.balance_pins.as_object() {
+            for (key, label) in [
+                ("as_of", "Balance as of"),
+                ("through_entry_number", "Read through ledger entry"),
+                ("through_opening_batch_id", "Read through opening batch"),
+                ("through_settlement_number", "Read through settlement"),
+            ] {
+                items.push(f::fact(
+                    label,
+                    &pins
+                        .get(key)
+                        .map(|v| {
+                            v.as_str()
+                                .map(str::to_owned)
+                                .unwrap_or_else(|| v.to_string())
+                        })
+                        .unwrap_or_default(),
+                ));
+            }
         }
         if let Some(opening) = &d.opening {
             items.push(f::fact(

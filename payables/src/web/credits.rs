@@ -562,3 +562,24 @@ impl Credits {
         Ok(())
     }
 }
+
+/// A drill-down carries the complete amount tuple in the existing record URL.
+pub(super) fn balance_query(query: &std::collections::HashMap<String, String>) -> Result<Value> {
+    let mut input = json!({});
+    if let Some(day) = query.get("as_of") {
+        input["as_of"] = json!(day);
+    }
+    for key in [
+        "through_entry_number",
+        "through_opening_batch_id",
+        "through_settlement_number",
+    ] {
+        if let Some(value) = query.get(key) {
+            input[key] = json!(value.parse::<i64>().map_err(|_| Error::Invalid)?);
+        }
+    }
+    if input.as_object().is_some_and(|o| o.len() > 1) && input["as_of"].is_null() {
+        return Err(Error::Invalid);
+    }
+    Ok(input)
+}

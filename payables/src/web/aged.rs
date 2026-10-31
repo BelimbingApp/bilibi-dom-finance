@@ -159,6 +159,7 @@ impl Aged {
                     render(BillLink {
                         id: d.id,
                         text: format!("{} #{}", f::kind(&d.kind), d.document_number),
+                        query:self.aged.as_ref().map(|r|format!("?as_of={}&through_entry_number={}&through_opening_batch_id={}&through_settlement_number={}",r.as_of,r.through_entry_number,r.through_opening_batch_id,r.through_settlement_number)).unwrap_or_default(),
                     })?,
                 )
                 .cell(
@@ -345,10 +346,11 @@ struct DateForm {
 
 #[derive(Template)]
 #[template(
-    source = r#"<a href="/finance/payables/bills/{{ id }}" class="font-medium text-ink-strong hover:underline">{{ text }}</a>"#,
+    source = r#"<a href="/finance/payables/bills/{{ id }}{{ query }}" class="font-medium text-ink-strong hover:underline">{{ text }}</a>"#,
     ext = "html"
 )]
 struct BillLink {
+    query: String,
     id: i64,
     text: String,
 }
