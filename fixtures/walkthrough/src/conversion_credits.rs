@@ -342,6 +342,21 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
     let old_ap = ap
         .aged_payables(&reviewer, company, date(2026, 7, 31), &Default::default())
         .await?;
+    let reports =
+        services.get::<bilibi_finance_reports::Reports>(bilibi_finance_reports::SERVICE)?;
+    let conversion = reports
+        .conversion_report(&reviewer, company, date(2026, 7, 31), &Default::default())
+        .await?;
+    let conversion_pins: bilibi_finance_reports::ConversionPins =
+        serde_json::from_value(conversion["pins"].clone())?;
+    assert_eq!(
+        conversion_pins.receivables_settlement_number,
+        Some(old_ar.through_settlement_number)
+    );
+    assert_eq!(
+        conversion_pins.payables_settlement_number,
+        Some(old_ap.through_settlement_number)
+    );
     assert_eq!(old_ar.gross_debits.to_string(), "120.0000");
     assert_eq!(old_ar.customers[0].credits.len(), 3);
     assert_eq!(old_ap.parties[0].credits.len(), 3);
@@ -785,6 +800,12 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
     let replaced_ap = ap
         .import_opening_bills(&reviewer, company, &replacement_ap)
         .await?;
+    let replay = reports
+        .conversion_report(&reviewer, company, date(2026, 7, 31), &conversion_pins)
+        .await?;
+    assert_eq!(conversion["receivables"], replay["receivables"]);
+    assert_eq!(conversion["payables"], replay["payables"]);
+    assert_eq!(conversion["pins"], replay["pins"]);
     assert_ne!(replaced_ar["id"], a["id"]);
     assert_ne!(replaced_ap["id"], b["id"]);
     tied(&ar, &ap, &reviewer, company, date(2026, 7, 31)).await?;
