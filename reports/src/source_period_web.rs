@@ -485,7 +485,11 @@ impl State {
                 ..Default::default()
             })?
             .to_string(),
-            query: self.id.is_none().then(|| self.query()).unwrap_or_default(),
+            query: if self.id.is_none() {
+                self.query()
+            } else {
+                Default::default()
+            },
             ..LiveBody::default()
         })
     }
@@ -638,7 +642,7 @@ impl State {
             body: Html::text("Preview schedule"),
             ..Button::default()
         })?;
-        Ok(render(Card {
+        render(Card {
             id: "source-period-create",
             body: render(Form {
                 id: "source-period-form",
@@ -649,7 +653,7 @@ impl State {
                 ..Form::default()
             })?,
             ..Card::default()
-        })?)
+        })
     }
 }
 impl LiveState<Scope, Error> for State {
