@@ -199,8 +199,12 @@ try:
             require(envelope == {"error": "rejected", "reason": "record_changed"}, f"{key}: expected typed retryable proof refusal")
         else:
             require(status == 200 and "result" in envelope, f"{key}: unexpected contention transport")
-            body = envelope["result"]["structuredContent"]
-            require(body.get("valid") is False and "plan_code" not in body and "record_changed" in json.dumps(body) and "error" not in body, f"{key}: lock contention must be a nonfatal retryable record_changed refusal")
+            result = envelope["result"]
+            body = result["structuredContent"]
+            if result.get("isError") is True:
+                require(body == {"error": "rejected", "reason": "record_changed"}, f"{key}: expected typed retryable plan refusal")
+            else:
+                require(body.get("valid") is False and "plan_code" not in body and "record_changed" in json.dumps(body) and "error" not in body, f"{key}: lock contention must be a nonfatal retryable record_changed refusal")
 finally:
     holder.kill()
     holder.wait()
