@@ -4,6 +4,7 @@ mod aged;
 mod bill;
 mod bill_form;
 mod bills;
+mod credits;
 mod format;
 mod opening;
 mod payment;
@@ -387,6 +388,13 @@ fn render(fragment: impl Template) -> Result<Html> {
 inventory::submit! { bilibi_module_registry::Contribution::new(bilibi_module_registry::contributions::PAGE_WRITES, PAGES, bilibi_module_registry::Provenance { module: MODULE, source: file!(), line: line!() }, &bilibi_module_registry::contributions::PageWrites {
     service: PAGES,
     contracts: &[
+        ("preview_credit", "finance.payables.credit.apply"),
+        ("preview_credit", "finance.payables.credit.refund"),
+        ("preview_credit", "finance.payables.settlement.reverse"),
+        ("commit_credit", "finance.payables.credit.apply"),
+        ("commit_credit", "finance.payables.credit.refund"),
+        ("commit_credit", "finance.payables.settlement.reverse"),
+
         ("preview_opening", "finance.payables.opening.import"),
         ("import_opening", "finance.payables.opening.import"),
         ("preview_opening", "finance.payables.opening.stage"),

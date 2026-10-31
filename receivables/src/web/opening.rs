@@ -145,7 +145,9 @@ impl Opening {
                 "conversion-balances",
                 vec![
                     BuiltinColumn::new("account", "Account"),
-                    BuiltinColumn::new("register", "Register balance").right(),
+                    BuiltinColumn::new("debits", "Gross debits").right(),
+                    BuiltinColumn::new("credits", "Gross credits").right(),
+                    BuiltinColumn::new("register", "Net register balance").right(),
                     BuiltinColumn::new("opening", "Opening balance").right(),
                     BuiltinColumn::new("difference", "Difference").right(),
                 ],
@@ -155,6 +157,10 @@ impl Opening {
                 "conversion-rows",
                 vec![
                     BuiltinColumn::new("source", "Source ID"),
+                    BuiltinColumn::new("type", "Item and source type"),
+                    BuiltinColumn::new("system", "Source system"),
+                    BuiltinColumn::new("currency", "Currency"),
+                    BuiltinColumn::new("tax", "Source tax facts"),
                     BuiltinColumn::new("record", "Record"),
                     BuiltinColumn::new("date", "Original date"),
                     BuiltinColumn::new("original", "Original total").right(),
@@ -311,7 +317,7 @@ impl Opening {
                     id: "conversion-boundary",
                     kind: StatusKind::Info,
                     body: Html::text(
-                        "Import positive residual invoices, including partially settled invoices. Map each row to its control account and review each approved opening balance. Opening credits, source-period tax detail and historical transactions remain outside this import.",
+                        "Import invoices and unapplied credits, including partly settled items. Retain source gross and tax facts, map each item to its original control, and review each control separately. No new tax or ledger entry is posted.",
                     ),
                     ..Alert::default()
                 })?;
@@ -598,6 +604,13 @@ impl Opening {
                     FlexRow::new(text("source_id"))
                         .cell("source", Cell::text(text("source_id")))
                         .cell(
+                            "type",
+                            Cell::text(format!("{} · {}", text("item_kind"), text("source_kind"))),
+                        )
+                        .cell("system", Cell::text(text("source_system")))
+                        .cell("currency", Cell::text(text("currency_code")))
+                        .cell("tax", Cell::text(r["source_tax_facts"].to_string()))
+                        .cell(
                             "record",
                             Cell::text(format!(
                                 "{} · {}",
@@ -671,6 +684,8 @@ impl Opening {
                                 "account",
                                 Cell::text(row["account_code"].as_str().unwrap_or("")),
                             )
+                            .cell("debits", Cell::text(money(&row["gross_debits"])))
+                            .cell("credits", Cell::text(money(&row["gross_credits"])))
                             .cell("register", Cell::text(money(&row["register_balance"])))
                             .cell("opening", Cell::text(money(&row["opening_balance"])))
                             .cell("difference", Cell::text(money(&row["difference"])))

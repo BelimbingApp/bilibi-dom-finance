@@ -526,7 +526,7 @@ impl ReadHandler for Read {
                         let page_size = input["page_size"].as_i64().unwrap_or(25);
                         let sort = input["sort"].as_str().unwrap_or("number");
                         let direction = input["direction"].as_str().unwrap_or("desc");
-                        if kind.is_some_and(|value| !Receivables::document_kinds().contains(&value))
+                        if kind.is_some_and(|value| !["invoice","credit_note","opening_credit"].contains(&value))
                             || status.is_some_and(|value| {
                                 !matches!(value, "draft" | "issued" | "unpaid" | "discarded")
                             })

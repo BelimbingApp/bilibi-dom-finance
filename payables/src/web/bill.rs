@@ -29,6 +29,7 @@ pub(super) struct Bill {
     units: Option<MinorUnits>,
     accounts: Vec<(i64, String, String)>,
     dialog: Option<Dialog>,
+    credit_actions: super::credits::Credits,
     reason: String,
     flash: Option<(StatusKind, String)>,
     lines: ListColumns,
@@ -45,6 +46,7 @@ impl Bill {
             units: None,
             accounts: vec![],
             dialog: None,
+            credit_actions: super::credits::Credits::new()?,
             reason: String::new(),
             flash: None,
             lines: columns(
@@ -91,14 +93,22 @@ impl Bill {
         self.document = match company(scope) {
             Some(c) => self
                 .pages
-                .payables
-                .get_document(scope, c, self.id)
+                .contracts
+                .read(
+                    scope,
+                    "finance.payables.document.get",
+                    &json!({"company_id":c,"document_id":self.id}),
+                )
                 .await
-                .ok(),
+                .ok()
+                .and_then(|v| serde_json::from_value(v["result"].clone()).ok()),
             None => None,
         };
         (self.units, self.accounts) = self.pages.account_context(scope).await?;
         if let Some(d) = &self.document {
+            self.credit_actions
+                .load(&self.pages, scope, d.id, &d.document_type)
+                .await?;
             self.lines.load(&d.lines, |l| l.id.to_string());
             self.events.load(&d.match_events, |e| e.id.to_string());
             if let Some(e) = f::last_match(d) {
@@ -471,6 +481,10 @@ impl Bill {
             events: (!d.match_events.is_empty())
                 .then(|| table(&self.events, "events_grid", "Match events", event_rows))
                 .transpose()?,
+            credit_actions: self
+                .credit_actions
+                .body(&self.pages, d.id, &d.document_type, &d.settlements, units)
+                .await?,
             dialog,
         }
         .render()
@@ -480,6 +494,14 @@ impl Bill {
     async fn event(&mut self, scope: &Scope, credential: &str, v: &Value) -> Result<bool> {
         let event = v["type"].as_str().ok_or(Error::Invalid)?;
         match event {
+            "ask_credit_apply" | "ask_credit_refund" | "ask_credit_reverse" | "cancel_credit"
+            | "change_credit" | "preview_credit" | "commit_credit" | "credit_grid" => {
+                self.credit_actions
+                    .event(&self.pages, scope, credential, v, self.id)
+                    .await?;
+                return Ok(true);
+            }
+
             "clear-flash" => {
                 if self
                     .flash
@@ -741,6 +763,7 @@ struct View<'a> {
     matches: Option<Html>,
     events: Option<Html>,
     dialog: Option<Html>,
+    credit_actions: Html,
 }
 impl View<'_> {
     fn subtitle(&self) -> askama::Result<Html> {

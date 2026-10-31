@@ -66,12 +66,14 @@ pub(super) struct Document {
     tax_cols: ListColumns,
     applied_cols: ListColumns,
     write_offs: super::write_offs::Journals,
+    credit_actions: super::credits::Credits,
 }
 
 impl Document {
     pub(super) fn new(pages: Pages, path: &HashMap<String, String>) -> Result<Self> {
         Ok(Self {
             write_offs: super::write_offs::Journals::new()?,
+            credit_actions: super::credits::Credits::new()?,
             pages,
             id: params::positive_id(path.get("id").map(String::as_str)).unwrap_or(0),
             record: None,
@@ -156,6 +158,9 @@ impl Document {
         self.can_manage = self.pages.allowed(scope, MANAGE_DOCUMENTS).await?;
         self.can_issue = self.pages.allowed(scope, ISSUE).await?;
         let Some(d) = &self.record else { return Ok(()) };
+        self.credit_actions
+            .load(&self.pages, scope, d.id, &d.kind)
+            .await?;
         let customer_id = d.customer_id;
         let series_id = d.series_id;
         let issued = d.status == "issued";
@@ -766,6 +771,18 @@ impl Document {
                 .write_offs
                 .body(&d, &self.accounts, &self.figures, &display)?,
         );
+        body.push(
+            &self
+                .credit_actions
+                .body(
+                    &self.pages,
+                    d.id,
+                    &d.kind,
+                    &d.settlements,
+                    self.figures.units(),
+                )
+                .await?,
+        );
         body.push(&attachments_slot()?);
 
         let modal = if let Some(dialog) =
@@ -1070,6 +1087,13 @@ impl Document {
 
     async fn event(&mut self, scope: &Scope, credential: &str, v: &Value) -> Result<()> {
         match v["type"].as_str().ok_or(Error::Invalid)? {
+            "ask_credit_apply" | "ask_credit_refund" | "ask_credit_reverse" | "cancel_credit"
+            | "change_credit" | "preview_credit" | "commit_credit" | "credit_grid" => {
+                self.credit_actions
+                    .event(&self.pages, scope, credential, v, self.id)
+                    .await?;
+            }
+
             "ask_submit_write_off"
             | "ask_approve_write_off"
             | "ask_reject_write_off"

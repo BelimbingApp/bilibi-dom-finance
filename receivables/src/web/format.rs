@@ -12,7 +12,9 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 pub(super) fn kind_label(kind: &str) -> &'static str {
-    if kind == "credit_note" {
+    if kind == "opening_credit" {
+        "Opening credit"
+    } else if kind == "credit_note" {
         "Credit note"
     } else {
         "Invoice"
@@ -358,6 +360,10 @@ pub(crate) struct Figures {
 }
 
 impl Figures {
+    pub(super) fn units(&self) -> Option<MinorUnits> {
+        self.units
+    }
+
     pub(super) fn book(currency: &str, minor_units: u32) -> Self {
         Self {
             currency: currency.into(),
@@ -445,6 +451,10 @@ pub(super) fn group(id: &str, heading: &str, body: Html) -> Result<Html> {
 }
 
 impl Figures {
+    pub(super) fn units(&self) -> Option<MinorUnits> {
+        self.units
+    }
+
     pub(super) fn with_currency_opt(&self, value: Option<Money>, fallback: &str) -> String {
         value.map_or_else(|| "—".into(), |m| self.with_currency(m, fallback))
     }
