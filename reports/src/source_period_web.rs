@@ -275,16 +275,21 @@ impl State {
                 .as_i64()
                 .and_then(bilibi_finance_ledger::MinorUnits::new)
                 .ok_or(Error::Internal)?;
-            let columns = ListColumns::mount(
-                "source-period-detail-rows",
-                vec![
-                    BuiltinColumn::new("source", "Source ID"),
-                    BuiltinColumn::new("item", "Account or reference"),
-                    BuiltinColumn::new("side", "Side or authority"),
-                    BuiltinColumn::new("amount", "Amount").right(),
-                ],
-            )
-            .map_err(|_| Error::Internal)?;
+            let statutory = self.kind == "sst" || self.kind == "payroll";
+            let mut detail_columns = vec![
+                BuiltinColumn::new("source", "Source ID"),
+                BuiltinColumn::new("item", "Account or reference"),
+                BuiltinColumn::new("side", "Side or authority"),
+            ];
+            if statutory {
+                detail_columns.extend([
+                    BuiltinColumn::new("event_date", "Event date"),
+                    BuiltinColumn::new("status", "Status"),
+                ]);
+            }
+            detail_columns.push(BuiltinColumn::new("amount", "Amount").right());
+            let columns = ListColumns::mount("source-period-detail-rows", detail_columns)
+                .map_err(|_| Error::Internal)?;
             let rows = record["rows"]
                 .as_array()
                 .into_iter()
@@ -305,11 +310,19 @@ impl State {
                         .as_str()
                         .or_else(|| r["authority"].as_str())
                         .unwrap_or("");
-                    FlexRow::new(r["source_id"].as_str().unwrap_or(""))
+                    let mut row = FlexRow::new(r["source_id"].as_str().unwrap_or(""))
                         .cell("source", Cell::text(r["source_id"].as_str().unwrap_or("")))
                         .cell("item", Cell::text(item))
-                        .cell("side", Cell::text(side))
-                        .cell("amount", Cell::text(amount))
+                        .cell("side", Cell::text(side));
+                    if statutory {
+                        row = row
+                            .cell(
+                                "event_date",
+                                Cell::text(r["event_date"].as_str().unwrap_or("")),
+                            )
+                            .cell("status", Cell::text(r["status"].as_str().unwrap_or("")));
+                    }
+                    row.cell("amount", Cell::text(amount))
                 })
                 .collect();
             let mut table =
