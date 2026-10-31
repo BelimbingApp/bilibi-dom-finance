@@ -1041,7 +1041,7 @@ fn document_page_schema() -> Value {
         json!({
             "source":{"type":"string","enum":["ordinary","opening"]},
             "status":{"type":"string","enum":["draft","approved","held","posted","voided"]},
-            "document_type":{"type":"string","enum":["bill","debit_note"]},
+            "document_type":{"type":"string","enum":["bill","debit_note","opening_credit"]},
             "search":string(255), "page":{"type":"integer","minimum":1},
             "page_size":{"type":"integer","enum":[25,50,100]}
         }),
@@ -1056,7 +1056,8 @@ fn list_schema(kind: &str) -> Value {
     if kind == "document" {
         props["status"] =
             json!({"type":"string","enum":["draft","approved","held","posted","voided"]});
-        props["document_type"] = json!({"type":"string","enum":["bill","debit_note"]});
+        props["document_type"] =
+            json!({"type":"string","enum":["bill","debit_note","opening_credit"]});
         props["corrects_document_id"] = identifier();
         props["source"] = json!({"type":"string","enum":["ordinary","opening"]});
     }

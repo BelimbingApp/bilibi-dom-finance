@@ -112,6 +112,9 @@ for module in ["receivables", "payables"]:
     prefix = "finance." + module
     records = read(prefix + ".document.list", source="opening")["records"]
     documents = {row["opening"]["source_id"]: row for row in records}
+    kind = {"kind" if module == "receivables" else "document_type": "opening_credit"}
+    require(len(read(prefix + ".document.list", source="opening", **kind)["records"]) == 3, "credit list filter omitted rows")
+    require(read(prefix + ".document.page", source="opening", **kind)["total"] == 3, "credit page filter omitted rows")
     credit, target = documents["credit"]["id"], documents["invoice"]["id"]
     before = aging(module)
     wrong_party = operation(prefix + ".credit.apply", credit_document_id=documents["zero-credit"]["id"], target_document_id=documents["zero-invoice"]["id"], amount="1", effective_date="2026-07-10", reference="MCP-wrong-party")
