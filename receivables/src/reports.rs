@@ -229,7 +229,7 @@ impl Receivables {
             .await
             .map_err(Error::from)?;
         let result = self
-            .aged_receivables_on(&tx, scope, company, as_of, options)
+            .aged_receivables_on(&*tx, scope, company, as_of, options)
             .await?;
         tx.commit().await.map_err(Error::from)?;
         Ok(result)
@@ -477,7 +477,7 @@ impl Receivables {
             days.entry(r.get(1)).or_default().insert(r.get(0));
         }
         for (day, ids) in days {
-            for d in balances(&**client, scope, company, &day, pin, None).await? {
+            for d in balances(&**client, scope, company, &day, pin, None, i64::MAX).await? {
                 let id: i64 = d.get("id");
                 let amount: Decimal = d.get("outstanding");
                 if !ids.contains(&id) || amount <= Decimal::ZERO {
@@ -563,7 +563,7 @@ impl Receivables {
             .await
             .map_err(Error::from)?;
         let result = self
-            .tie_out_control_accounts_on(&tx, scope, company, as_of, pins)
+            .tie_out_control_accounts_on(&*tx, scope, company, as_of, pins)
             .await?;
         tx.commit().await.map_err(Error::from)?;
         Ok(result)

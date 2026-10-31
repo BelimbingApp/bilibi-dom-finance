@@ -224,6 +224,7 @@ pub(crate) async fn document_record(
         None
     };
     Ok(Some(Document {
+        settlements:c.query("SELECT to_jsonb(e) FROM finance_payables_settlements e WHERE e.tenant_id=$1 AND e.company_id=$2 AND (e.credit_document_id=$3 OR e.target_document_id=$3) ORDER BY e.settlement_number",&[&tenant,&company,&id]).await?.iter().map(|r|r.get(0)).collect(),
         opening: c.query_opt("SELECT i.source_facts || jsonb_build_object('source_reference',b.source_reference,'conversion_date',b.conversion_date::text,'batch_id',b.id,'replaced_by_batch_id',(SELECT x.batch_id FROM finance_payables_opening_decisions x WHERE x.tenant_id=$1 AND x.company_id=$2 AND x.replaces_batch_id=b.id)) FROM finance_payables_opening_items i JOIN finance_payables_opening_batches b ON b.id=i.batch_id AND b.tenant_id=$1 AND b.company_id=$2 WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=$3",&[&tenant,&company,&id]).await?.map(|r|r.get(0)),
         id,
         vendor_id: crate::vendors::mapped(c, tenant, company, &text(&v, "party_key")?).await?,

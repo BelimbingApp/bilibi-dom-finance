@@ -80,7 +80,7 @@ pub(super) async fn replaceable(
 fn filters(kind: &Option<String>, status: &Option<String>) -> Result<()> {
     if kind
         .as_ref()
-        .is_some_and(|k| !matches!(k.as_str(), "bill" | "debit_note"))
+        .is_some_and(|k| !matches!(k.as_str(), "bill" | "debit_note" | "opening_credit"))
         || status.as_ref().is_some_and(|k| {
             !matches!(
                 k.as_str(),

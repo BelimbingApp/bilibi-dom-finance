@@ -797,7 +797,7 @@ fn history() -> Value {
 fn documents() -> Value {
     let mut p = page_fields();
     p["source"] = choice(&["ordinary", "opening"]);
-    p["kind"] = choice(Receivables::document_kinds());
+    p["kind"] = choice(&["invoice", "credit_note", "opening_credit"]);
     p["status"] = choice(&["draft", "issued", "discarded"]);
     p["customer_id"] = identifier();
     schema(&[], p)
@@ -807,7 +807,7 @@ fn document_page() -> Value {
         &[],
         json!({
             "source":choice(&["ordinary","opening"]),
-            "kind":choice(Receivables::document_kinds()),
+            "kind":choice(&["invoice","credit_note","opening_credit"]),
             "status":choice(&["draft","issued","unpaid","discarded"]),
             "customer_id":identifier(),
             "search":string(255),

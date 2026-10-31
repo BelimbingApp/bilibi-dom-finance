@@ -116,7 +116,7 @@ impl Receivables {
         if query
             .kind
             .as_deref()
-            .is_some_and(|s| !Self::document_kinds().contains(&s))
+            .is_some_and(|s| !["invoice", "credit_note", "opening_credit"].contains(&s))
             || query
                 .status
                 .as_deref()

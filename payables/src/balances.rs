@@ -204,7 +204,7 @@ impl Payables {
             .start()
             .await
             .map_err(Error::from)?;
-        let result = self.aged_payables_on(&tx, s, company, as_of, q).await?;
+        let result = self.aged_payables_on(&*tx, s, company, as_of, q).await?;
         tx.commit().await.map_err(Error::from)?;
         Ok(result)
     }
@@ -376,7 +376,7 @@ impl Payables {
             .await
             .map_err(Error::from)?;
         let result = self
-            .tie_out_control_accounts_on(&tx, s, company, as_of, pins)
+            .tie_out_control_accounts_on(&*tx, s, company, as_of, pins)
             .await?;
         tx.commit().await.map_err(Error::from)?;
         Ok(result)
