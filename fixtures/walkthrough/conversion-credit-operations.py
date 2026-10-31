@@ -59,11 +59,15 @@ def commit(op, review):
     return invoke("commit", {"operations": [op], "plan_code": review["plan_code"]})
 
 
+def succeeded(result):
+    return "error" not in result and "results" in result
+
+
 def write(op):
     review = preview(op)
     require(review.get("valid") is True, op["key"] + " preview refused")
     result = commit(op, review)
-    require("results" in result, op["key"] + " commit refused")
+    require(succeeded(result), op["key"] + " commit refused")
     return result["results"][0]["result"]["result"]["record"]
 
 
@@ -96,7 +100,7 @@ for module, source in [("receivables", "ar"), ("payables", "ap")]:
         require(any(row["source_tax_facts"] == {"status": "unknown"} for row in facts["rows"]), "unknown tax facts lost")
         require(any(row["source_tax_facts"].get("tax_total") == "0" for row in facts["rows"]), "supplied zero tax lost")
     result = commit(op, review)
-    require("results" in result, module + " mixed-register commit refused")
+    require(succeeded(result), module + " mixed-register commit refused")
     batch = result["results"][0]["result"]["result"]["record"]
     require(write(op)["id"] == batch["id"], "identical import retry created a new batch")
     changed = operation(op["key"], **(values | {"csv": values["csv"].replace("source-system", "changed-system")}))
@@ -119,10 +123,10 @@ for module in ["receivables", "payables"]:
     stale_review = preview(stale)
     require(stale_review.get("valid") is True, "pre-application refund review refused")
     result = commit(apply, review)
-    require("results" in result, "same-control application failed")
+    require(succeeded(result), "same-control application failed")
     event = result["results"][0]["result"]["result"]["record"]
     require(event["entry_id"] is None, "same-control application created an entry")
-    require("results" not in commit(stale, stale_review), "stale refund review double-spent a credit")
+    require(not succeeded(commit(stale, stale_review)), "stale refund review double-spent a credit")
     after = aging(module)
     require(before["through_entry_number"] == after["through_entry_number"] and before["through_opening_batch_id"] == after["through_opening_batch_id"] and before["through_settlement_number"] < after["through_settlement_number"], "entryless application moved the wrong boundaries")
     require(aging(module, **pins(before)) == before, "old tuple changed after application")
@@ -143,8 +147,8 @@ for module in ["receivables", "payables"]:
     require(all(review.get("valid") is True for review in reviews), "race reviews refused before any commit")
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         results = list(executor.map(lambda pair: commit(*pair), zip(races, reviews)))
-    require(sum("results" in result for result in results) == 1, "competing reviews double-spent or both failed")
-    winner = next(result["results"][0]["result"]["result"]["record"] for result in results if "results" in result)
+    require(sum(succeeded(result) for result in results) == 1, "competing reviews double-spent or both failed")
+    winner = next(result["results"][0]["result"]["result"]["record"] for result in results if succeeded(result))
     write(operation(prefix + ".settlement.reverse", settlement_id=winner["id"], effective_date="2026-07-15", reference="MCP-reverse-race", override_reason=exception))
     transfer = write(operation(prefix + ".credit.apply", credit_document_id=documents["historical-credit"]["id"], target_document_id=target, amount="10", effective_date="2026-07-20", reference="MCP-transfer", override_reason=exception))
     require(transfer["entry_id"] is not None, "different-control application has no owned entry")
