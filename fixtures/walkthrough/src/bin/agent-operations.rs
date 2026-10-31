@@ -23,6 +23,7 @@ bilibi_walkthrough_fixture::walkthrough_module_roles!();
 bilibi_finance_walkthrough_fixture::walkthrough_ledger_roles!();
 bilibi_finance_walkthrough_fixture::walkthrough_attachments_roles!();
 bilibi_finance_walkthrough_fixture::walkthrough_einvoice_roles!();
+bilibi_finance_walkthrough_fixture::walkthrough_reconciliation_roles!();
 
 // H2 shares the credential bootstrap, never product seeds or production roles.
 bilibi_finance_walkthrough_fixture::walkthrough_receivables_roles!();
@@ -77,6 +78,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     for user in [1, 7] {
         for key in bilibi_finance_fixed_assets::CAPABILITIES {
+            grants.set_direct(&admin, user, key, Some(true)).await?;
+        }
+        for key in bilibi_finance_reconciliation::CAPABILITIES {
             grants.set_direct(&admin, user, key, Some(true)).await?;
         }
     }

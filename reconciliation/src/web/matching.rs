@@ -10,8 +10,8 @@ use super::{
     DENIED,
 };
 use crate::{
-    BankAccount, LedgerItem, Match, MatchStatus, NewMatch, PageOptions, StatementLineItem,
-    MANAGE_MATCHES,
+    BankAccount, LedgerItem, Match, MatchStatus, NewMatch, OpeningItem, PageOptions,
+    StatementLineItem, MANAGE_MATCHES,
 };
 use askama::Template;
 use bilibi_database::{Error, Result};
@@ -32,6 +32,7 @@ struct Loaded {
     account: BankAccount,
     lines: Vec<StatementLineItem>,
     entries: Vec<LedgerItem>,
+    opening_items: Vec<OpeningItem>,
     suggestions: BTreeMap<i64, LedgerItem>,
     /// Standing matches, newest first.
     matches: Vec<Match>,
@@ -55,6 +56,7 @@ pub(super) struct Matching {
     flash: Option<(StatusKind, String)>,
     redirect: Option<String>,
     follow: Follow,
+    opening_match: super::opening_match::OpeningMatch,
 }
 
 fn columns(id: &str, values: &[(&str, &str)]) -> Result<ListColumns> {
@@ -89,6 +91,7 @@ struct View<'a> {
     match_count: Option<usize>,
     lines: Html,
     entries: Html,
+    opening_match: Html,
     matches: Html,
     selected_lines: usize,
     selected_entries: usize,
@@ -230,6 +233,7 @@ impl Matching {
             flash: None,
             redirect: None,
             follow: Follow::default(),
+            opening_match: super::opening_match::OpeningMatch::new(id),
         })
     }
     pub(super) fn follow(mut self, follow: Follow) -> Self {
@@ -300,6 +304,7 @@ impl Matching {
             account,
             lines: unmatched.lines,
             entries: unmatched.entries,
+            opening_items: unmatched.opening_items,
             suggestions: unmatched.suggestions,
             matches,
             units,
@@ -347,8 +352,34 @@ impl Matching {
         Ok(allowed)
     }
 
-    async fn event(&mut self, scope: &Scope, v: &serde_json::Value) -> Result<()> {
+    async fn event(
+        &mut self,
+        scope: &Scope,
+        credential: &str,
+        v: &serde_json::Value,
+    ) -> Result<()> {
         match event_type(v)? {
+            event @ ("opening_match_change"
+            | "preview_opening_match"
+            | "commit_opening_match"
+            | "cancel_opening_match") => {
+                let Some(loaded) = &self.loaded else {
+                    return Ok(());
+                };
+                let items = loaded.opening_items.clone();
+                let lines = loaded.lines.clone();
+                if self
+                    .opening_match
+                    .event(&self.pages, scope, credential, event, v, (&items, &lines))
+                    .await?
+                {
+                    self.flash = Some((
+                        StatusKind::Success,
+                        "Opening item matched without another ledger entry.".into(),
+                    ));
+                    self.load(scope).await?;
+                }
+            }
             "clear-flash" => clear_flash(&mut self.flash, v),
             grid @ ("lines_grid" | "entries_grid" | "matches_grid") => {
                 let columns = match grid {
@@ -417,6 +448,44 @@ impl Matching {
                     return Ok(());
                 };
                 if !self.may_match(scope).await? {
+                    return Ok(());
+                }
+                let is_opening = self
+                    .loaded
+                    .as_ref()
+                    .and_then(|l| l.matches.iter().find(|m| m.id == match_id))
+                    .is_some_and(|m| !m.opening_items.is_empty());
+                if is_opening {
+                    let call = bilibi_agent_api::page::Call {
+                        scope,
+                        credential,
+                        service: super::PAGES,
+                        event: "unmatch",
+                        contract: "finance.reconciliation.opening.unmatch",
+                    };
+                    let result=self.pages.contracts.submit(&call,serde_json::json!({"company_id":company(scope)?,"match_id":match_id,"reason":self.reason})).await;
+                    match result {
+                        Ok(_) => {
+                            self.flash =
+                                Some((StatusKind::Success, "Opening item unmatched.".into()));
+                            self.unmatching = None;
+                            self.load(scope).await?;
+                        }
+                        Err(e) => {
+                            self.flash = Some((
+                                StatusKind::Error,
+                                match e {
+                                    bilibi_agent_api::Error::InvalidInput(fields) => fields
+                                        .values()
+                                        .flatten()
+                                        .cloned()
+                                        .collect::<Vec<_>>()
+                                        .join(" "),
+                                    _ => "The opening item could not be unmatched.".into(),
+                                },
+                            ));
+                        }
+                    }
                     return Ok(());
                 }
                 let result = self
@@ -569,7 +638,12 @@ impl Matching {
         let display = self.pages.display(scope).await?;
         let mut rows = vec![];
         for m in &l.matches {
-            let total: Decimal = m.entries.iter().map(|e| e.amount.amount()).sum();
+            let total: Decimal = m
+                .entries
+                .iter()
+                .map(|e| e.amount.amount())
+                .chain(m.opening_items.iter().map(|i| i.amount.amount()))
+                .sum();
             let time = display.render(m.matched_at, Format::DateTime, Precision::Minute);
             let mut row = FlexRow::new(m.id.to_string())
                 .cell("match", Cell::text(m.match_number.to_string()))
@@ -580,6 +654,11 @@ impl Matching {
                         m.entries
                             .iter()
                             .map(|e| e.entry_number.to_string())
+                            .chain(
+                                m.opening_items
+                                    .iter()
+                                    .map(|i| format!("Opening {}", i.source_id)),
+                            )
                             .collect::<Vec<_>>()
                             .join(", "),
                     ),
@@ -639,6 +718,13 @@ impl Matching {
             match_count: Some(l.matches.len()),
             lines,
             entries,
+            opening_match: {
+                let mut html =
+                    self.opening_match
+                        .body(&l.opening_items, &l.lines, l.units, l.can_match)?;
+                html.push(&self.opening_match.modal(&self.pages).await?);
+                html
+            },
             matches,
             selected_lines: self.selected_lines.len(),
             selected_entries: self.selected_entries.len(),
@@ -688,7 +774,7 @@ impl LiveState<Scope, Error> for Matching {
                     self.follow.posted();
                     self.load(request.scope).await?
                 }
-                LiveInput::Event(v) => self.event(request.scope, v).await?,
+                LiveInput::Event(v) => self.event(request.scope, request.credential, v).await?,
             }
             if let Some(redirect) = self.redirect.take() {
                 return Ok(LiveBody {

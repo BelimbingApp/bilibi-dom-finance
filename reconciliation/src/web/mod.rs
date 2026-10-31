@@ -4,6 +4,8 @@ mod account;
 mod format;
 mod index;
 mod matching;
+mod opening;
+mod opening_match;
 mod reconciliation;
 
 use crate::{Reconciliation, MODULE};
@@ -36,6 +38,8 @@ pub(crate) struct Pages {
     pub attachments: Arc<Attachments>,
     pub display: Arc<DisplayPolicy>,
     pub locales: Arc<Locales>,
+    pub contracts: Arc<bilibi_agent_api::page::PageContracts>,
+    pub plans: Arc<bilibi_agent_api::plans::Plans>,
 }
 
 // Menu group (a bookkeeper's section of the Finance menu); its pages sit under it.
@@ -327,6 +331,6 @@ fn flash_map(flash: &Option<(bilibi_ui::StatusKind, String)>) -> bilibi_ui::Flas
 // the facade rather than an operation contract (`base/agent_api` page).
 inventory::submit! { bilibi_module_registry::Contribution::new(bilibi_module_registry::contributions::PAGE_WRITES, PAGES, bilibi_module_registry::Provenance { module: MODULE, source: file!(), line: line!() }, &bilibi_module_registry::contributions::PageWrites {
     service: PAGES,
-    contracts: &[],
+    contracts: &[("preview_opening", "finance.reconciliation.opening.import"), ("import_opening", "finance.reconciliation.opening.import"), ("preview_opening_match", "finance.reconciliation.opening.match"), ("commit_opening_match", "finance.reconciliation.opening.match"), ("unmatch", "finance.reconciliation.opening.unmatch")],
     pending: bilibi_module_registry::contributions::Pending::Every { reason: "Bank accounts, statement imports, matching, finalising and abandoning write through the Reconciliation facade; no contract yet." },
 }) }

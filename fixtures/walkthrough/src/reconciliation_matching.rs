@@ -1134,6 +1134,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
                 through_entry_number: Some(stored.through_entry_number),
                 through_statement_number: Some(stored.through_statement_number),
                 through_match_event_number: Some(stored.through_match_event_number),
+                through_opening_id: Some(stored.through_opening_id),
             },
         )
         .await?;

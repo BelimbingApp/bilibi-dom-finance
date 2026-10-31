@@ -1,9 +1,10 @@
 //! Bank reconciliation, module `finance/reconciliation` (Bilimbi
 //! `Bilimbi.Finance.Reconciliation`): a company's bank accounts, each mapped
 //! to one ledger account and carrying the import mapping its bank's CSV export
-//! is read through, and the bank statements imported for them; the matches
-//! between statement lines and the ledger's postings on that account; the
-//! reconciliations of an account as of a statement end date; and the bank
+//! is read through, and the bank statements imported for them; the opening
+//! bridge between an approved opening entry, the source statement and its
+//! outstanding items; the matches between statement lines and the book side;
+//! the reconciliations of an account as of a statement end date; and the bank
 //! charges and interest posted from statement lines.
 //!
 //! Every function takes the sealed [`Scope`] it was handed and an explicit
@@ -32,18 +33,21 @@
 //!
 //! A statement and its lines are inserted in one transaction, together with
 //! the file itself kept whole as the statement's source document through
-//! `finance/attachments` ([`StatementSource`]), and are never changed or
-//! deleted. The same file (by SHA-256) and the same line (by fingerprint) are
-//! refused a second time; PostgreSQL refuses them on its own as well.
+//! `finance/attachments` ([`STATEMENT_SOURCE`]), and are never changed or
+//! deleted. Opening bridges expose their retained source statements through
+//! [`OPENING_BRIDGE_SOURCE`]. The same statement file (by SHA-256) and the
+//! same line (by fingerprint) are refused a second time; PostgreSQL refuses
+//! them on its own as well.
 //!
 //! A match groups statement lines of a bank account with ledger entries on
-//! its ledger account whose sides agree, and is undone only by an appended
-//! `unmatched` event with a reason; PostgreSQL refuses a line or an entry in
-//! two standing matches. A reconciliation reads its figures at pinned entry,
-//! statement and match-event numbers, is finalised once its difference is
-//! zero by someone other than whoever opened it (or as the ledger's approval
-//! exception while the company does not separate duties), and keeps the
-//! matches it counted for good.
+//! its ledger account, or with one outstanding opening item, whose sides
+//! agree. It is undone only by an appended `unmatched` event with a reason;
+//! PostgreSQL refuses a line, entry or opening item in two standing matches.
+//! A reconciliation reads its figures at pinned entry, statement, match-event
+//! and opening-bridge boundaries, is finalised once its difference is zero by
+//! someone other than whoever opened it (or as the ledger's approval exception
+//! while the company does not separate duties), and keeps the matches it
+//! counted for good.
 //!
 //! Results are plain records; the schema, SQL and validation stay private.
 mod bank_accounts;
@@ -53,6 +57,8 @@ mod evidence;
 mod import;
 mod mapping;
 mod matching;
+mod opening;
+mod opening_operations;
 mod posting;
 mod reconciliations;
 mod source;
@@ -69,7 +75,7 @@ pub use mapping::{
     Column, ImportMapping, AMOUNT_SIGNS, DATE_FORMATS, DECIMAL_SEPARATORS, DELIMITERS,
 };
 pub use posting::KINDS as POSTING_KINDS;
-pub use source::STATEMENT_SOURCE;
+pub use source::{OPENING_BRIDGE_SOURCE, STATEMENT_SOURCE};
 
 use bilibi_database::{Db, Error, MutationTransaction};
 use bilibi_finance_attachments::{AttachmentError, Attachments, NewFile};
@@ -91,20 +97,28 @@ inventory::submit! {
     Module {
         id: MODULE, layer: Layer::Domains,
         dependencies: &[
-            "base/authz", "base/database", "base/datetime", "base/locale", "base/menu", "base/tenancy", "base/ui", "core/company", "finance/attachments", "finance/ledger",
+            "base/agent_api", "base/authz", "base/database", "base/datetime", "base/locale", "base/menu", "base/party_ids", "base/tenancy", "base/ui", "core/company", "finance/attachments", "finance/ledger",
         ],
-        migrations: &[("finance-reconciliation-001-reconciliation", include_str!("../migrations/001-reconciliation.sql"))],
-        services: &[Service { id: SERVICE, factory: |services| Ok(Arc::new(Reconciliation {
-            db: services.get::<Db>("base/database.pool")?.as_ref().clone(),
-            ledger: services.get(bilibi_finance_ledger::SERVICE)?,
-            attachments: services.get(bilibi_finance_attachments::SERVICE)?,
-        })) }, Service { id: web::PAGES, factory: |services| Ok(Arc::new(PageService::<Scope, Error>(Arc::new(web::Pages {
+        migrations: &[("finance-reconciliation-001-reconciliation", include_str!("../migrations/001-reconciliation.sql")),
+            ("finance-reconciliation-002-opening-bridge", include_str!("../migrations/002-opening-bridge.sql"))],
+        services: &[Service { id: SERVICE, factory: |services| {
+            let reconciliation = Arc::new(Reconciliation {
+                db: services.get::<Db>("base/database.pool")?.as_ref().clone(),
+                ledger: services.get(bilibi_finance_ledger::SERVICE)?,
+                attachments: services.get(bilibi_finance_attachments::SERVICE)?,
+                parties: services.get("base/tenancy.parties")?,
+            });
+            opening_operations::bind(reconciliation.clone())?;
+            Ok(reconciliation)
+        } }, Service { id: web::PAGES, factory: |services| Ok(Arc::new(PageService::<Scope, Error>(Arc::new(web::Pages {
             db: services.get::<Db>("base/database.pool")?.as_ref().clone(),
             reconciliation: services.get(SERVICE)?,
             ledger: services.get(bilibi_finance_ledger::SERVICE)?,
             attachments: services.get(bilibi_finance_attachments::SERVICE)?,
             display: services.get("base/datetime.display")?,
             locales: services.get("base/locale.locales")?,
+            contracts: services.get(bilibi_agent_api::page::SERVICE)?,
+            plans: services.get("base/agent_api.plans")?,
         })))) }],
     }
 }
@@ -458,6 +472,20 @@ pub struct LedgerItem {
     pub amount: Money,
 }
 
+/// One outstanding source item already included in the opening ledger entry.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct OpeningItem {
+    pub id: i64,
+    pub bridge_id: i64,
+    pub source_id: String,
+    #[serde(serialize_with = "as_text")]
+    pub item_date: Date,
+    #[serde(serialize_with = "as_text")]
+    pub conversion_date: Date,
+    pub description: String,
+    pub amount: Money,
+}
+
 /// What stands unmatched on a bank account, from
 /// [`Reconciliation::unmatched_items`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -466,6 +494,8 @@ pub struct Unmatched {
     pub lines: Vec<StatementLineItem>,
     /// Entries on the ledger account with no standing match, by date and id.
     pub entries: Vec<LedgerItem>,
+    /// Source items included in the opening balance but not yet cleared.
+    pub opening_items: Vec<OpeningItem>,
     /// A statement line's id to the entry suggested for it: the same amount
     /// within the account's match window, by reference and then the nearest
     /// date, each entry suggested once.
@@ -504,7 +534,8 @@ pub struct MatchEvent {
 }
 
 /// A match: its statement lines, its entries as they were matched (by entry
-/// number), and its events. The database numbers it per company.
+/// number), any opening items, and its events. The database numbers it per
+/// company.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Match {
     pub id: i64,
@@ -518,16 +549,18 @@ pub struct Match {
     pub status: MatchStatus,
     pub statement_line_ids: Vec<i64>,
     pub entries: Vec<LedgerItem>,
+    pub opening_items: Vec<OpeningItem>,
     pub events: Vec<MatchEvent>,
 }
 
-/// The numbers a reconciliation's figures are read at, each the latest when
+/// The boundaries a reconciliation's figures are read at, each the latest when
 /// `None` (0 or more): how a finalised reconciliation's figures reproduce.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Pins {
     pub through_entry_number: Option<i64>,
     pub through_statement_number: Option<i64>,
     pub through_match_event_number: Option<i64>,
+    pub through_opening_id: Option<i64>,
 }
 
 /// What opens (or previews) a reconciliation: the statement's `end_date` and
@@ -549,6 +582,8 @@ pub enum ItemKind {
     Entry,
     /// Matched, but cleared after the end date on one side.
     Timing,
+    /// An outstanding source item already included in the opening entry.
+    OpeningItem,
 }
 impl ItemKind {
     pub fn as_str(self) -> &'static str {
@@ -556,17 +591,23 @@ impl ItemKind {
             Self::StatementLine => "statement_line",
             Self::Entry => "entry",
             Self::Timing => "timing",
+            Self::OpeningItem => "opening_item",
         }
     }
     pub fn parse(value: &str) -> Option<Self> {
-        [Self::StatementLine, Self::Entry, Self::Timing]
-            .into_iter()
-            .find(|kind| kind.as_str() == value)
+        [
+            Self::StatementLine,
+            Self::Entry,
+            Self::Timing,
+            Self::OpeningItem,
+        ]
+        .into_iter()
+        .find(|kind| kind.as_str() == value)
     }
 }
 
-/// One item of a reconciliation: the statement line, the entry or the match
-/// (`timing`) it is about, dated, described and signed as the difference
+/// One item of a reconciliation: the statement line, entry, opening item or
+/// match (`timing`) it is about, dated, described and signed as the difference
 /// counts it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ReconciliationItem {
@@ -574,6 +615,7 @@ pub struct ReconciliationItem {
     pub statement_line_id: Option<i64>,
     pub entry_id: Option<i64>,
     pub match_id: Option<i64>,
+    pub opening_item_id: Option<i64>,
     #[serde(serialize_with = "as_text")]
     pub item_date: Date,
     pub description: String,
@@ -583,7 +625,8 @@ pub struct ReconciliationItem {
 
 /// A reconciliation's figures: the book balance through the end date, the
 /// difference (zero once explained), the book's currency, the entry,
-/// statement and match-event numbers they were read at, and the items.
+/// statement, match-event and opening-bridge boundaries they were read at,
+/// and the items.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Figures {
     pub book_balance: Money,
@@ -593,6 +636,7 @@ pub struct Figures {
     pub through_entry_number: i64,
     pub through_statement_number: i64,
     pub through_match_event_number: i64,
+    pub through_opening_id: i64,
     pub items: Vec<ReconciliationItem>,
 }
 
@@ -638,6 +682,7 @@ pub struct ReconciliationEvent {
     pub through_entry_number: Option<i64>,
     pub through_statement_number: Option<i64>,
     pub through_match_event_number: Option<i64>,
+    pub through_opening_id: Option<i64>,
     pub recorded_by_user_id: i64,
     pub recorded_by_impersonator_id: Option<i64>,
     #[serde(serialize_with = "as_text")]
@@ -716,6 +761,7 @@ pub struct Reconciliation {
     db: Db,
     ledger: Arc<Ledger>,
     attachments: Arc<Attachments>,
+    parties: Arc<bilibi_tenancy::PartyProofs>,
 }
 
 impl Reconciliation {
@@ -1086,6 +1132,7 @@ impl Reconciliation {
         Ok(Unmatched {
             lines: sides.lines,
             entries: sides.entries,
+            opening_items: sides.opening_items,
             suggestions,
         })
     }
@@ -1280,6 +1327,7 @@ impl Reconciliation {
             pins.through_entry_number,
             pins.through_statement_number,
             pins.through_match_event_number,
+            pins.through_opening_id,
         ]
         .into_iter()
         .flatten()
@@ -1562,6 +1610,7 @@ impl Reconciliation {
                     through_match_event_number: event
                         .through_match_event_number
                         .ok_or(Error::Internal)?,
+                    through_opening_id: event.through_opening_id.ok_or(Error::Internal)?,
                     items: reconciliations::items(&**client, tenant, company_id, found.id).await?,
                 })
             }
