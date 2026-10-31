@@ -111,7 +111,7 @@ for module in ["receivables", "payables"]:
     common = {"credit_document_id": credit, "effective_date": "2026-07-10", "override_reason": exception}
     apply = operation(prefix + ".credit.apply", **common, target_document_id=target, amount="20", reference="MCP-same-control")
     review = preview(apply)
-    require(review.get("valid") is True, "application review refused")
+    require(review.get("valid") is True, "application review refused: " + json.dumps([r.get("error") for r in review.get("results", [])]))
     require(review["results"][0]["preview"]["result"]["changes"]["posts"] is False, "same-control review invented an entry")
     stale = operation(prefix + ".credit.refund", **common, amount="20", cash_account_id=config["bank"], reference="MCP-stale-refund")
     stale_review = preview(stale)

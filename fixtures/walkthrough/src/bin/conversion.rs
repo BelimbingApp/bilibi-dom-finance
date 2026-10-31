@@ -1623,6 +1623,8 @@ async fn launcher_credentials(db: &Db, services: &Services) -> Outcome<()> {
         let users = services.get::<bilibi_core::user::UserService>("core/user.accounts")?;
         for company in [8, 9] {
             users.set_desk(&scope, company, person, true).await?;
+            services.get::<Ledger>(bilibi_finance_ledger::SERVICE)?
+                .set_duty_separation(&scope,company,false,Some("Disposable single-person browser/MCP parity fixture; retain every same-person approval exception")).await?;
         }
     }
     let access = services.get::<AgentAccess>("core/agent_access.grants")?;
