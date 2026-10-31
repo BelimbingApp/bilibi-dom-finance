@@ -797,7 +797,8 @@ impl Reports {
     }
 
     /// The stored issued copy (`finance.ledger.view`); it never recomputes a
-    /// figure or a label. `ReportNotFound` for a missing id or another
+    /// figure or a label. Conversion copies also require every source view.
+    /// `ReportNotFound` for a missing id or another
     /// company's.
     pub async fn get_issued_report(
         &self,

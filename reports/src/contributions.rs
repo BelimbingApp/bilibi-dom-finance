@@ -1,6 +1,6 @@
 //! What the module adds to the shared catalogs (Bilimbi
-//! `Bilimbi.Finance.Reports.Contributions`): its two capability keys verbatim
-//! and the `tenant_owner` role holding both. Reports read ledger figures, so
+//! `Bilimbi.Finance.Reports.Contributions`): its two capability keys verbatim,
+//! conversion sign-off, and the `tenant_owner` role holding all three. Reports read ledger figures, so
 //! they stand on the ledger's capabilities: viewing them is viewing the ledger
 //! (`finance.ledger.view`), and arranging them is part of keeping the chart of
 //! accounts (`finance.ledger.accounts.manage`, the sections setting's editor
