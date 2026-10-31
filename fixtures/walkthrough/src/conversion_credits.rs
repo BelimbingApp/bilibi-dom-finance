@@ -493,6 +493,54 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         serde_json::to_value(&replay_ap)?
     );
     tied(&ar, &ap, &reviewer, company, date(2026, 7, 31)).await?;
+    // Ordinary receipts and supplier payments share the dated capacity check.
+    let receipt_input = json!({"series_id":config["payment_series"],"customer_id":config["customer_id"],"payment_date":"2026-07-11","amount":"81","deposit_account_id":config["bank"],"allocations":[{"document_id":ar_id("invoice"),"amount":"81"}]});
+    assert!(ar
+        .record_payment(&reviewer, company, &receipt_input)
+        .await
+        .is_err());
+    let mut receipt_input = receipt_input;
+    receipt_input["amount"] = json!("5");
+    receipt_input["allocations"][0]["amount"] = json!("5");
+    let receipt = ar
+        .record_payment(&reviewer, company, &receipt_input)
+        .await?;
+    let mut payment_input = bilibi_finance_payables::NewPayment {
+        payment_date: date(2026, 7, 11),
+        vendor_id: config["vendor_id"].as_i64(),
+        supplier_key: None,
+        paid_from_account_id: config["bank"].as_i64().unwrap(),
+        reference: Some("credit-capacity".into()),
+        description: None,
+        allocations: vec![bilibi_finance_payables::AllocationInput {
+            document_id: ap_id("invoice"),
+            amount: Money::parse("81", before.minor_units)?,
+        }],
+    };
+    assert!(ap
+        .submit_payment(&manager, company, &payment_input)
+        .await
+        .is_err());
+    payment_input.allocations[0].amount = Money::parse("5", before.minor_units)?;
+    let request = ap.submit_payment(&manager, company, &payment_input).await?;
+    let payment = ap.approve_payment(&reviewer, company, request.id).await?;
+    tied(&ar, &ap, &reviewer, company, date(2026, 7, 31)).await?;
+    ar.reverse_payment(
+        &reviewer,
+        company,
+        receipt.id,
+        &json!({"reversal_date":"2026-07-12","reason":"Disposable dated capacity proof"}),
+    )
+    .await?;
+    ap.reverse_payment(
+        &reviewer,
+        company,
+        payment.id,
+        date(2026, 7, 12),
+        Some("Disposable dated capacity proof".into()),
+    )
+    .await?;
+    tied(&ar, &ap, &reviewer, company, date(2026, 7, 31)).await?;
     let mut too_much = apply_ar.clone();
     too_much["reference"] = json!("too-much");
     too_much["amount"] = json!("11");
