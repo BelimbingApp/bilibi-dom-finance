@@ -448,6 +448,17 @@ impl Opening {
                         .and_then(|value| bilibi_finance_ledger::Money::parse(value, units).ok())
                         .map(|value| value.display(units))
                         .ok_or(Error::Internal)?;
+                    let options = match account["account_type"].as_str() {
+                        Some("asset") => vec![
+                            Choice::new("Receivables control", "receivables_control"),
+                            Choice::new("Not a control", "not_a_control"),
+                        ],
+                        Some("liability") => vec![
+                            Choice::new("Payables control", "payables_control"),
+                            Choice::new("Not a control", "not_a_control"),
+                        ],
+                        _ => return Err(Error::Internal),
+                    };
                     fields.push(&render(
                         Combobox::new(
                             if index == 0 {
@@ -466,11 +477,7 @@ impl Opening {
                             "Classify {}",
                             account["code"].as_str().unwrap_or("")
                         ))
-                        .options(vec![
-                            Choice::new("Receivables control", "receivables_control"),
-                            Choice::new("Payables control", "payables_control"),
-                            Choice::new("Not a control", "not_a_control"),
-                        ])
+                        .options(options)
                         .value(
                             selected_classifications
                                 .get(&id)
