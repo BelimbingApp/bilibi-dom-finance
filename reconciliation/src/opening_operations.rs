@@ -107,6 +107,27 @@ impl ReadHandler for Context {
         })
     }
 }
+struct Current;
+impl ReadHandler for Current {
+    fn owner(&self) -> &'static str {
+        MODULE
+    }
+    fn call<'a>(
+        &'a self,
+        c: &'a dyn OperationClient,
+        s: &'a Scope,
+        input: &'a Value,
+    ) -> OperationFuture<'a> {
+        Box::pin(async move {
+            Ok(owner()
+                .map_err(failure)?
+                .opening_current(c, s, company(input).map_err(failure)?, input)
+                .await
+                .map_err(failure)?
+                .into())
+        })
+    }
+}
 struct Import;
 impl WriteHandler for Import {
     fn owner(&self) -> &'static str {
@@ -237,8 +258,9 @@ impl WriteHandler for UnmatchOpening {
     }
 }
 inventory::submit! { Contribution::new(DEFINITIONS,"finance/reconciliation.opening",Provenance{module:MODULE,source:file!(),line:line!()},&Definitions{operations:&[
+    Operation{key:"finance.reconciliation.opening.current",title:"Read current opening bank bridge",summary:"Read the current opening bridge for a bank account.",keywords:&["conversion"],capability:VIEW,input:context_schema,output,handler:Handler::Read(&Current),channels:Channels::Every,step_up:&[]},
     Operation{key:"finance.reconciliation.opening.context",title:"Read opening bank bridge",summary:"Read the approved opening balances, bank account and retained opening items.",keywords:&["conversion"],capability:VIEW,input:context_schema,output,handler:Handler::Read(&Context),channels:Channels::Every,step_up:&[]},
     Operation{key:"finance.reconciliation.opening.import",title:"Record opening bank bridge",summary:"Review source statement balance and outstanding items against the approved opening entry; record without posting again.",keywords:&["conversion"],capability:MANAGE_RECONCILIATIONS,input:schema,output,handler:Handler::SafeWrite(&Import),channels:Channels::Every,step_up:&[]},
-    Operation{key:"finance.reconciliation.opening.match",title:"Match an opening item",summary:"Review and match an outstanding opening item to a later statement line without posting again.",keywords:&["conversion","matching"],capability:MANAGE_MATCHES,input:match_schema,output,handler:Handler::SafeWrite(&MatchOpening),channels:Channels::Every,step_up:&[]},
+    Operation{key:"finance.reconciliation.opening.match",title:"Match an opening item",summary:"Review and match an outstanding opening item to a statement line on or after conversion without posting again.",keywords:&["conversion","matching"],capability:MANAGE_MATCHES,input:match_schema,output,handler:Handler::SafeWrite(&MatchOpening),channels:Channels::Every,step_up:&[]},
     Operation{key:"finance.reconciliation.opening.unmatch",title:"Unmatch an opening item",summary:"Unmatch an opening item with a reason unless a finalised reconciliation counted the match.",keywords:&["conversion","matching"],capability:MANAGE_MATCHES,input:unmatch_schema,output,handler:Handler::SafeWrite(&UnmatchOpening),channels:Channels::Every,step_up:&[]}
 ],guides:&[]}) }

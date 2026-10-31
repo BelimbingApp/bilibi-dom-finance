@@ -113,16 +113,12 @@ key = "finance.reconciliation.opening"
 source = dict(bank_account_id=account, source_reference="BANK-BRIDGE-1", statement_source="Source statement 2026-07-01, retained with conversion records", statement_balance="10200", currency_code="MYR", csv="source_id,item_date,description,amount\nPAY-1,2026-06-28,Outstanding payment,-500\nDEP-1,2026-06-30,Deposit in transit,300\n")
 context = read(channel, key+".context", company, "approver", bank_account_id=account)
 before = sql("SELECT count(*) FROM finance_ledger_entries WHERE company_id=2")
-if os.environ.get("BANK_BRIDGE_RESUME") == "1":
-    require(context["bridge"] is not None and context["bridge"]["source_reference"] == source["source_reference"], "resume requires the original bridge")
-    record = context["bridge"]
-else:
-    require(context["bridge"] is None, "needs an empty bridge")
-    refused(channel, key+".import", company, "statement balance", who="approver", **(source | {"statement_balance":"10201"}))
-    require(sql("SELECT count(*) FROM finance_reconciliation_opening_bridges WHERE company_id=2") == "0", "mismatch wrote a bridge")
-    record = write(channel, key+".import", company, **source)
-    retry = write(channel, key+".import", company, **source)
-    require(record["id"] == retry["id"], "retry did not return the same bridge")
+require(context["bridge"] is None, "needs an empty bridge")
+refused(channel, key+".import", company, "statement balance", who="approver", **(source | {"statement_balance":"10201"}))
+require(sql("SELECT count(*) FROM finance_reconciliation_opening_bridges WHERE company_id=2") == "0", "mismatch wrote a bridge")
+record = write(channel, key+".import", company, **source)
+retry = write(channel, key+".import", company, **source)
+require(record["id"] == retry["id"], "retry did not return the same bridge")
 corrected = source | {"source_reference":"BANK-BRIDGE-2", "replaces_bridge_id":record["id"], "reason":"Correct source description", "csv":source["csv"].replace("Outstanding payment", "Outstanding cheque")}
 record = write(channel, key+".import", company, **corrected)
 require(sql("SELECT count(*) FROM finance_reconciliation_opening_bridges WHERE company_id=2") == "2", "correction did not retain both bridges")
@@ -135,4 +131,4 @@ for source_id, ref in [("PAY-1", "PAY-1"), ("DEP-1", "DEP-1")]:
     refused(channel, key+".match", company, "matched", who="approver", bank_account_id=account, opening_item_id=item, statement_line_id=line)
 subprocess.run([os.environ["BANK_BRIDGE_PROOF_BIN"], "report"], check=True)
 require(sql("SELECT count(*) FROM finance_ledger_entries WHERE company_id=2") == before, "clearing posted another entry")
-print("MCP opening bridge proof passed: mismatch, exact retry, correction, two later clearings, duplicate refusal and independent finalisation; no new ledger entry")
+print("MCP opening bridge proof passed: mismatch, exact retry, correction, conversion-day and later clearings, retained statement, duplicate refusal and independent finalisation; no new ledger entry")

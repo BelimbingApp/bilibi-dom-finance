@@ -26,6 +26,16 @@ pub(super) struct Prepared {
 }
 
 impl Reconciliation {
+    async fn current_opening_bridge(
+        &self,
+        c: &dyn OperationClient,
+        s: &Scope,
+        company: i64,
+        account: i64,
+    ) -> Result<Option<Value>> {
+        Ok(c.query_opt("SELECT to_jsonb(b) FROM finance_reconciliation_opening_bridges b WHERE tenant_id=$1 AND company_id=$2 AND bank_account_id=$3 AND NOT EXISTS (SELECT 1 FROM finance_reconciliation_opening_bridges r WHERE r.replaces_bridge_id=b.id) ORDER BY id DESC LIMIT 1", &[&s.tenant(), &company, &account]).await?.map(|r| r.get::<_, Value>(0)))
+    }
+
     async fn authorize_on(
         &self,
         c: &dyn OperationClient,
@@ -60,7 +70,7 @@ impl Reconciliation {
         let row = c.query_opt("SELECT id,name,ledger_account_id,active FROM finance_reconciliation_bank_accounts WHERE tenant_id=$1 AND company_id=$2 AND id=$3", &[&s.tenant(), &company, &account]).await?.ok_or(ReconciliationError::BankAccountNotFound)?;
         let opening = self.ledger.opening_context_on(c, s, company).await?;
         let book = self.ledger.get_book_on(c, s, company).await?;
-        let bridge = c.query_opt("SELECT to_jsonb(b) FROM finance_reconciliation_opening_bridges b WHERE tenant_id=$1 AND company_id=$2 AND bank_account_id=$3 AND NOT EXISTS (SELECT 1 FROM finance_reconciliation_opening_bridges r WHERE r.replaces_bridge_id=b.id) ORDER BY id DESC LIMIT 1", &[&s.tenant(), &company, &account]).await?.map(|r| r.get::<_, Value>(0));
+        let bridge = self.current_opening_bridge(c, s, company, account).await?;
         let items = if let Some(id) = bridge.as_ref().and_then(|b| b["id"].as_i64()) {
             c.query("SELECT to_jsonb(i) FROM finance_reconciliation_opening_items i WHERE tenant_id=$1 AND company_id=$2 AND bridge_id=$3 ORDER BY id", &[&s.tenant(), &company, &id]).await?.iter().map(|r| r.get::<_, Value>(0)).collect::<Vec<_>>()
         } else {
@@ -68,6 +78,26 @@ impl Reconciliation {
         };
         Ok(
             json!({"account":{"id":account,"name":row.get::<_,String>(1),"ledger_account_id":row.get::<_,i64>(2),"active":row.get::<_,bool>(3)}, "opening":opening,"book":book,"bridge":bridge,"items":items,"header":HEADER}),
+        )
+    }
+
+    pub(super) async fn opening_current(
+        &self,
+        c: &dyn OperationClient,
+        s: &Scope,
+        company: i64,
+        input: &Value,
+    ) -> Result<Value> {
+        self.authorize_on(c, s, company, VIEW).await?;
+        let account = input["bank_account_id"]
+            .as_i64()
+            .filter(|id| *id > 0)
+            .ok_or_else(|| invalid("bank_account_id", "choose a bank account"))?;
+        if c.query_opt("SELECT id FROM finance_reconciliation_bank_accounts WHERE tenant_id=$1 AND company_id=$2 AND id=$3", &[&s.tenant(), &company, &account]).await?.is_none() {
+            return Err(ReconciliationError::BankAccountNotFound);
+        }
+        Ok(
+            json!({"bridge_id":self.current_opening_bridge(c, s, company, account).await?.and_then(|bridge| bridge["id"].as_i64())}),
         )
     }
 
@@ -191,7 +221,7 @@ impl Reconciliation {
         }
         if c.query_opt("SELECT r.id FROM finance_reconciliation_reconciliations r JOIN finance_reconciliation_reconciliation_events e ON e.reconciliation_id=r.id AND e.action='finalised' WHERE r.tenant_id=$1 AND r.company_id=$2 AND r.bank_account_id=$3 LIMIT 1", &[&tenant,&company,&account_id]).await?.is_some() { return Err(invalid("bank_account_id", "a finalised reconciliation prevents changing the opening bridge")); }
         if c.query_opt("SELECT m.id FROM finance_reconciliation_matches m JOIN finance_reconciliation_match_events e ON e.match_id=m.id AND e.action='matched' WHERE m.tenant_id=$1 AND m.company_id=$2 AND m.bank_account_id=$3 AND NOT EXISTS (SELECT 1 FROM finance_reconciliation_match_events u WHERE u.match_id=m.id AND u.action='unmatched') LIMIT 1", &[&tenant,&company,&account_id]).await?.is_some() { return Err(invalid("bank_account_id", "unmatch the account before recording or correcting its opening bridge")); }
-        if c.query_opt("SELECT id FROM finance_reconciliation_statement_lines WHERE tenant_id=$1 AND company_id=$2 AND bank_account_id=$3 AND line_date <= $4::text::date LIMIT 1", &[&tenant,&company,&account_id,&context.entry.entry_date.to_string()]).await?.is_some() { return Err(invalid("bank_account_id", "opening conversion must precede statement lines dated on or before the conversion date")); }
+        if c.query_opt("SELECT id FROM finance_reconciliation_statement_lines WHERE tenant_id=$1 AND company_id=$2 AND bank_account_id=$3 AND line_date < $4::text::date LIMIT 1", &[&tenant,&company,&account_id,&context.entry.entry_date.to_string()]).await?.is_some() { return Err(invalid("bank_account_id", "opening conversion must not follow an earlier statement line")); }
         let parsed = csv::parse(csv.as_bytes(), ",")
             .map_err(|e| invalid("csv", format!("cannot read CSV: {e:?}")))?;
         if parsed
@@ -302,10 +332,10 @@ impl Reconciliation {
         }
         let line_date: String = line_row.get(0);
         let conversion_date: String = item_row.get(4);
-        if line_date <= conversion_date {
+        if line_date < conversion_date {
             return Err(invalid(
                 "statement_line_id",
-                "must be after the conversion date",
+                "must be on or after the conversion date",
             ));
         }
         Ok(

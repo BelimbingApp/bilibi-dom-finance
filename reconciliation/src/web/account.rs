@@ -211,6 +211,7 @@ impl Account {
         Ok((statements, reconciliations, files))
     }
     async fn body(&mut self, scope: &Scope) -> Result<String> {
+        self.opening.clear_bridge();
         let account = told(
             self.pages
                 .reconciliation
@@ -565,6 +566,22 @@ impl LiveState<Scope, Error> for Account {
                 ..Default::default()
             })
         })
+    }
+    fn panels(&self) -> Vec<PanelSpec> {
+        let Some(bridge) = self.opening.bridge() else {
+            return vec![];
+        };
+        vec![PanelSpec {
+            id: "reconciliation-opening-attachments".into(),
+            embed: bilibi_finance_attachments::PANEL_EMBED.into(),
+            path: [
+                ("panel".into(), "reconciliation-opening-attachments".into()),
+                ("source".into(), crate::OPENING_BRIDGE_SOURCE.into()),
+                ("document".into(), bridge.to_string()),
+            ]
+            .into(),
+            query: HashMap::new(),
+        }]
     }
 }
 

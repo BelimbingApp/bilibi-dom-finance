@@ -146,6 +146,13 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'unmatch the account before recording the opening bridge' USING ERRCODE = 'restrict_violation';
   END IF;
+  IF EXISTS (
+    SELECT 1 FROM finance_reconciliation_statement_lines s
+    WHERE s.tenant_id = NEW.tenant_id AND s.company_id = NEW.company_id
+      AND s.bank_account_id = NEW.bank_account_id AND s.line_date < NEW.conversion_date
+  ) THEN
+    RAISE EXCEPTION 'opening conversion follows an earlier statement line' USING ERRCODE = 'restrict_violation';
+  END IF;
   RETURN NEW;
 END $$;
 CREATE TRIGGER finance_reconciliation_opening_bridge_guard BEFORE INSERT ON finance_reconciliation_opening_bridges
@@ -215,8 +222,8 @@ CREATE TRIGGER finance_reconciliation_opening_entry_not_matchable BEFORE INSERT 
 
 CREATE FUNCTION finance_reconciliation_opening_statement_cutoff() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-  IF EXISTS (SELECT 1 FROM finance_reconciliation_opening_bridges b WHERE b.tenant_id=NEW.tenant_id AND b.company_id=NEW.company_id AND b.bank_account_id=NEW.bank_account_id AND NEW.line_date <= b.conversion_date) THEN
-    RAISE EXCEPTION 'statement line is not after opening conversion' USING ERRCODE = 'restrict_violation';
+  IF EXISTS (SELECT 1 FROM finance_reconciliation_opening_bridges b WHERE b.tenant_id=NEW.tenant_id AND b.company_id=NEW.company_id AND b.bank_account_id=NEW.bank_account_id AND NEW.line_date < b.conversion_date) THEN
+    RAISE EXCEPTION 'statement line is before opening conversion' USING ERRCODE = 'restrict_violation';
   END IF;
   RETURN NEW;
 END $$;

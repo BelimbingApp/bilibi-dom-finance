@@ -118,8 +118,8 @@ async fn check_cutover(
 ) -> Result<(), ReconciliationError> {
     if let Some(row) = client.query_opt("SELECT to_char(conversion_date,'YYYY-MM-DD') FROM finance_reconciliation_opening_bridges WHERE tenant_id=$1 AND company_id=$2 AND bank_account_id=$3 ORDER BY id DESC LIMIT 1", &[&tenant,&company_id,&account]).await.map_err(bilibi_database::Error::from)? {
         let date: Date = row.get::<_,String>(0).parse().map_err(|_| bilibi_database::Error::Internal)?;
-        if lines.iter().any(|line| line.date <= date) {
-            return Err(ReconciliationError::Invalid(vec![crate::FieldError::new("file", format!("statement lines must be after the opening conversion date {date}"))]));
+        if lines.iter().any(|line| line.date < date) {
+            return Err(ReconciliationError::Invalid(vec![crate::FieldError::new("file", format!("statement lines must be on or after the opening conversion date {date}"))]));
         }
     }
     Ok(())

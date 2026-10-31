@@ -32,9 +32,11 @@
 //!
 //! A statement and its lines are inserted in one transaction, together with
 //! the file itself kept whole as the statement's source document through
-//! `finance/attachments` ([`StatementSource`]), and are never changed or
-//! deleted. The same file (by SHA-256) and the same line (by fingerprint) are
-//! refused a second time; PostgreSQL refuses them on its own as well.
+//! `finance/attachments` ([`STATEMENT_SOURCE`]), and are never changed or
+//! deleted. Opening bridges expose their retained source statements through
+//! [`OPENING_BRIDGE_SOURCE`]. The same statement file (by SHA-256) and the
+//! same line (by fingerprint) are refused a second time; PostgreSQL refuses
+//! them on its own as well.
 //!
 //! A match groups statement lines of a bank account with ledger entries on
 //! its ledger account whose sides agree, and is undone only by an appended
@@ -71,7 +73,7 @@ pub use mapping::{
     Column, ImportMapping, AMOUNT_SIGNS, DATE_FORMATS, DECIMAL_SEPARATORS, DELIMITERS,
 };
 pub use posting::KINDS as POSTING_KINDS;
-pub use source::STATEMENT_SOURCE;
+pub use source::{OPENING_BRIDGE_SOURCE, STATEMENT_SOURCE};
 
 use bilibi_database::{Db, Error, MutationTransaction};
 use bilibi_finance_attachments::{AttachmentError, Attachments, NewFile};

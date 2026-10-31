@@ -1,7 +1,9 @@
 //! Disposable conversion bridge proof; run around the MCP operation walkthrough.
 use bilibi_database::pool;
-use bilibi_finance_attachments::NewFile;
-use bilibi_finance_reconciliation::{NewReconciliation, Pins, Reconciliation};
+use bilibi_finance_attachments::{Attachments, NewFile};
+use bilibi_finance_reconciliation::{
+    NewReconciliation, Pins, Reconciliation, OPENING_BRIDGE_SOURCE,
+};
 use bilibi_finance_walkthrough_fixture::sign_in;
 use jiff::civil::date;
 
@@ -33,6 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await
         .map_err(|e| format!("admin sign in: {e}"))?;
     let bank = services.get::<Reconciliation>(bilibi_finance_reconciliation::SERVICE)?;
+    let attachments = services.get::<Attachments>(bilibi_finance_attachments::SERVICE)?;
     let account = bank
         .list_bank_accounts(&reviewer, 2)
         .await
@@ -65,7 +68,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
             .await
             .map_err(|e| format!("configure storage: {e}"))?;
-            let file = NewFile { file_name:"clearing.csv".into(), content_type:Some("text/csv".into()), content:b"Date,Details,Ref,Amount,Balance\n2026-07-02,Payment cleared,PAY-1,-500,9700\n2026-07-03,Deposit cleared,DEP-1,300,10000\n".to_vec() };
+            let bridge_id = db
+                .get()
+                .await?
+                .query_one(
+                    "SELECT b.id FROM finance_reconciliation_opening_bridges b WHERE b.company_id=2 AND b.bank_account_id=$1 AND NOT EXISTS (SELECT 1 FROM finance_reconciliation_opening_bridges r WHERE r.replaces_bridge_id=b.id)",
+                    &[&account.id],
+                )
+                .await?
+                .get::<_, i64>(0);
+            let source_bytes = b"Source bank statement at 2026-07-01: balance MYR 10,200.00";
+            let source = attachments
+                .attach(
+                    &reviewer,
+                    2,
+                    OPENING_BRIDGE_SOURCE,
+                    bridge_id,
+                    &NewFile {
+                        file_name: "source-statement.txt".into(),
+                        content_type: Some("text/plain".into()),
+                        content: source_bytes.to_vec(),
+                    },
+                )
+                .await?;
+            let kept = attachments.read_attachment(&reviewer, 2, source.id).await?;
+            assert_eq!(kept.bytes.as_slice(), source_bytes);
+            assert_eq!(source.document_id, bridge_id);
+            assert_eq!(source.document_date, date(2026, 7, 1));
+            assert_eq!(source.source, OPENING_BRIDGE_SOURCE);
+            let file = NewFile { file_name:"clearing.csv".into(), content_type:Some("text/csv".into()), content:b"Date,Details,Ref,Amount,Balance\n2026-07-01,Payment cleared,PAY-1,-500,9700\n2026-07-03,Deposit cleared,DEP-1,300,10000\n".to_vec() };
             let imported = bank
                 .import_statement(&reviewer, 2, account.id, &file)
                 .await
@@ -75,7 +106,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .import_statement(&reviewer, 2, account.id, &file)
                 .await
                 .is_err());
-            println!("Opening report balances with two source items; statement imported and duplicate refused");
+            println!("Opening report balances with two source items; source statement retained; conversion-day statement imported and duplicate refused");
         }
         Some("report") => {
             let input = request(date(2026, 7, 3), "10000");

@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 
 const IMPORT: &str = "finance.reconciliation.opening.import";
 const CONTEXT: &str = "finance.reconciliation.opening.context";
+const CURRENT: &str = "finance.reconciliation.opening.current";
 
 #[derive(Template)]
 #[template(
@@ -32,6 +33,7 @@ struct Review {
 
 pub(super) struct Opening {
     account: i64,
+    bridge: Option<i64>,
     open: bool,
     values: Value,
     fields: BTreeMap<String, Vec<String>>,
@@ -43,6 +45,7 @@ impl Opening {
     pub(super) fn new(account: i64) -> Result<Self> {
         Ok(Self {
             account,
+            bridge: None,
             open: false,
             values: json!({}),
             fields: BTreeMap::new(),
@@ -59,6 +62,12 @@ impl Opening {
             )
             .map_err(|_| Error::Internal)?,
         })
+    }
+    pub(super) fn bridge(&self) -> Option<i64> {
+        self.bridge
+    }
+    pub(super) fn clear_bridge(&mut self) {
+        self.bridge = None;
     }
     fn failure(&mut self, error: ContractError) {
         match error {
@@ -87,16 +96,35 @@ impl Opening {
         }
     }
     pub(super) async fn body(&mut self, pages: &Pages, scope: &Scope) -> Result<Html> {
-        if !pages.allowed(scope, crate::MANAGE_RECONCILIATIONS).await? {
-            return Ok(Html::EMPTY);
+        let can_manage = pages.allowed(scope, crate::MANAGE_RECONCILIATIONS).await?;
+        let mut result = if can_manage {
+            render(Button {
+                id: "open-bank-opening",
+                button_type: "button",
+                event: "open_bank_opening",
+                body: Html::text("Opening bank items"),
+                ..Button::default()
+            })?
+        } else {
+            Html::EMPTY
+        };
+        let current = pages
+            .contracts
+            .read(
+                scope,
+                CURRENT,
+                &json!({"company_id":company(scope)?,"bank_account_id":self.account}),
+            )
+            .await;
+        if let Ok(current) = &current {
+            self.bridge = current["result"]["bridge_id"].as_i64();
+            if self.bridge.is_some() {
+                result.push(&render(AttachmentsSlot)?);
+            }
         }
-        let mut result = render(Button {
-            id: "open-bank-opening",
-            button_type: "button",
-            event: "open_bank_opening",
-            body: Html::text("Opening bank items"),
-            ..Button::default()
-        })?;
+        if !can_manage {
+            return Ok(result);
+        }
         if !self.open && self.review.is_none() {
             return Ok(result);
         }
@@ -158,7 +186,7 @@ impl Opening {
                     "Source statement",
                     InputKind::Text,
                     true,
-                    "Identify the bank statement and where it is kept.",
+                    "Identify the bank statement; attach it after recording.",
                 ),
                 (
                     "statement_balance",
@@ -481,3 +509,10 @@ impl Opening {
         Ok(None)
     }
 }
+
+#[derive(Template)]
+#[template(
+    source = r#"<div id="reconciliation-opening-attachments-slot" class="mt-4" data-live-ignore><div id="reconciliation-opening-attachments"></div></div>"#,
+    ext = "html"
+)]
+struct AttachmentsSlot;
