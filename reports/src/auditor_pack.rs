@@ -377,17 +377,23 @@ impl Reports {
         let mut issued = files.csv_writer("issued-reports.csv")?;
         let mut after = None;
         loop {
-            let mut page = if coverage == Coverage::All {
-                self.evidence_page_on(tx, scope, company, "issued", None, after)
+            let page = if coverage == Coverage::All {
+                self.evidence_page_on(tx, scope, company, "issued", Some(1), after)
                     .await?
             } else {
                 // Conversion snapshots contain every source's data. A ledger-only
                 // pack explicitly excludes them instead of weakening their grants.
-                crate::issued::page(tx, scope.tenant(), company, "issued", None, after).await?
+                crate::issued::page(
+                    tx,
+                    scope.tenant(),
+                    company,
+                    "issued",
+                    Some(1),
+                    after,
+                    Some(crate::conversion::KIND),
+                )
+                .await?
             };
-            if coverage == Coverage::Ledger {
-                page.rows.retain(|r| r["kind"] != crate::conversion::KIND);
-            }
             issued.page(&page.fields, &page.rows)?;
             match page.next {
                 Some(next) => after = Some(next),

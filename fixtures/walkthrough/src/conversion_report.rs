@@ -40,11 +40,9 @@ pub struct Kept {
 const COMPANY: i64 = 3;
 const VIEWS: &[&str] = &[
     bilibi_finance_ledger::VIEW,
-    bilibi_finance_attachments::VIEW,
     bilibi_finance_receivables::VIEW,
     bilibi_finance_payables::VIEW,
     bilibi_finance_reconciliation::VIEW,
-    bilibi_finance_einvoice::VIEW,
     bilibi_finance_payroll::VIEW,
     bilibi_finance_sst::VIEW,
     bilibi_finance_fixed_assets::VIEW,
@@ -96,9 +94,31 @@ pub async fn before(db: &Db, services: &Services) -> Outcome<Kept> {
             },
         )
         .await?;
+    let grants = services.get::<bilibi_authz::grants::Grants>("base/authz.grants")?;
+    for cap in VIEWS {
+        grants.set_direct(&s, 2, cap, Some(true)).await?;
+    }
+    grants
+        .set_direct(
+            &s,
+            2,
+            bilibi_finance_reconciliation::IMPORT_STATEMENTS,
+            Some(true),
+        )
+        .await?;
+    grants
+        .set_direct(&s, 2, bilibi_finance_attachments::CREATE, Some(true))
+        .await?;
+    for unrelated in [
+        bilibi_finance_attachments::VIEW,
+        bilibi_finance_einvoice::VIEW,
+    ] {
+        grants.set_direct(&s, 2, unrelated, Some(false)).await?;
+    }
+    let viewer = sign_in(db, services, 1, 2).await?;
     let statement = reconciliation
         .import_statement(
-            &s,
+            &viewer,
             COMPANY,
             bank.id,
             &NewFile {
@@ -131,7 +151,6 @@ pub async fn before(db: &Db, services: &Services) -> Outcome<Kept> {
             },
         )
         .await?;
-    let grants = services.get::<bilibi_authz::grants::Grants>("base/authz.grants")?;
     for capability in [
         bilibi_finance_ledger::VIEW,
         bilibi_finance_reconciliation::VIEW,
@@ -182,13 +201,9 @@ pub async fn before(db: &Db, services: &Services) -> Outcome<Kept> {
     assert!(kept.content.get("accounts").is_none());
     let pending = plans.preview(&authority, &op).await?;
     assert_eq!(pending["valid"], true);
-    for cap in VIEWS {
-        grants.set_direct(&s, 2, cap, Some(true)).await?;
-    }
     grants
         .set_direct(&s, 2, bilibi_finance_reports::ISSUE, Some(false))
         .await?;
-    let viewer = sign_in(db, services, 1, 2).await?;
     assert_eq!(
         registry
             .read(
@@ -345,6 +360,38 @@ pub async fn after(db: &Db, services: &Services, kept: Kept) -> Outcome<()> {
             &Default::default(),
         )
         .await?;
+    let entry_only = reports
+        .conversion_report(&s, COMPANY, date(2026, 8, 1))
+        .await?;
+    let entry_only_bridge = entry_only["bank_bridges"]
+        .as_array()
+        .and_then(|rows| rows.iter().find(|row| row["account"]["id"] == kept.bank_id))
+        .ok_or("conversion bank bridge after entries")?;
+    assert!(Money::parse(
+        entry_only_bridge["change_since_bridge"]
+            .as_str()
+            .ok_or("bank bridge entry-only change")?,
+        units,
+    )?
+    .is_zero());
+    assert_eq!(
+        entry_only_bridge["source_activity_after_finalisation"],
+        true
+    );
+    assert!(
+        entry_only_bridge["source_boundary"]["through_entry_number"]
+            .as_i64()
+            .unwrap()
+            > entry_only_bridge["finalised_boundary"]["through_entry_number"]
+                .as_i64()
+                .unwrap()
+    );
+    for axis in ["through_statement_number", "through_match_event_number"] {
+        assert_eq!(
+            entry_only_bridge["source_boundary"][axis],
+            entry_only_bridge["finalised_boundary"][axis]
+        );
+    }
     let imported = reconciliation
         .import_statement(
             &s,
@@ -457,10 +504,29 @@ pub async fn after(db: &Db, services: &Services, kept: Kept) -> Outcome<()> {
         "issuer signed own work"
     );
     let signer = Authority {
-        authentication,
+        authentication: authentication.clone(),
         user: 2,
     };
-    let scope = sign_in(db, services, 1, 2).await?;
+    assert_eq!(
+        plans.preview(&signer, &sign).await?["valid"],
+        false,
+        "statement importer signed retained source work"
+    );
+    let grants = services.get::<bilibi_authz::grants::Grants>("base/authz.grants")?;
+    for cap in VIEWS {
+        grants.set_direct(&s, 3, cap, Some(true)).await?;
+    }
+    for unrelated in [
+        bilibi_finance_attachments::VIEW,
+        bilibi_finance_einvoice::VIEW,
+    ] {
+        grants.set_direct(&s, 3, unrelated, Some(false)).await?;
+    }
+    let signer = Authority {
+        authentication,
+        user: 3,
+    };
+    let scope = sign_in(db, services, 1, 3).await?;
     let preview = plans.preview(&signer, &sign).await?;
     assert_eq!(preview["valid"], true, "{preview}");
     let done = plans
@@ -493,7 +559,7 @@ pub async fn after(db: &Db, services: &Services, kept: Kept) -> Outcome<()> {
         )
         .await?;
     assert_eq!(read["result"]["report"]["content"], kept.content);
-    assert_eq!(read["result"]["signoffs"][0]["signed_by_user_id"], 2);
+    assert_eq!(read["result"]["signoffs"][0]["signed_by_user_id"], 3);
     let list = registry
         .read(
             db,

@@ -1918,6 +1918,25 @@ impl Ledger {
         entries::list(client, scope.tenant(), company_id, query).await
     }
 
+    pub async fn latest_account_entry_number_on(
+        &self,
+        client: &dyn bilibi_agent_api::OperationClient,
+        scope: &Scope,
+        company_id: i64,
+        account_id: i64,
+        through: Date,
+    ) -> Result<i64> {
+        authorize(client, scope, company_id, VIEW).await?;
+        Ok(entries::latest_account_entry_number(
+            client,
+            scope.tenant(),
+            company_id,
+            account_id,
+            through,
+        )
+        .await?)
+    }
+
     /// Subscribes to the company's postings (`finance.ledger.view`). After
     /// the transaction that posts an entry commits, the subscription hears
     /// [`PostingEvent::Posted`] for it, from any process; a rolled-back post

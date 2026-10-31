@@ -859,7 +859,16 @@ impl Reports {
             return source_period::evidence_page(client, scope.tenant(), company_id, limit, after)
                 .await;
         }
-        let page = issued::page(client, scope.tenant(), company_id, dataset, limit, after).await?;
+        let page = issued::page(
+            client,
+            scope.tenant(),
+            company_id,
+            dataset,
+            limit,
+            after,
+            None,
+        )
+        .await?;
         if dataset == "conversion_signoff"
             || page.rows.iter().any(|r| r["kind"] == conversion::KIND)
         {

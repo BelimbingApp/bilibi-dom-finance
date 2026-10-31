@@ -9,8 +9,10 @@ use bilibi_finance_ledger::{Approval, Money, Preparer, TotalsQuery};
 use bilibi_party_ids::OrganisationId;
 use bilibi_tenancy::Scope;
 use jiff::civil::Date;
+use serde::Serialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::io::{self, Write};
 use tokio_postgres::{GenericClient, Transaction};
 
 pub(crate) const KIND: &str = "conversion";
@@ -45,7 +47,7 @@ impl Reports {
         capability: &str,
     ) -> Result<()> {
         authorize(c, s, company, capability).await?;
-        pack_owner::authorize_sources(
+        pack_owner::authorize_conversion_sources(
             c,
             s,
             OrganisationId::new(company).map_err(|_| ReportsError::CompanyNotFound)?,
@@ -183,22 +185,26 @@ impl Reports {
             json!({"account_id":a.id,"code":a.code,"name":a.name,"source_balance":source_balance,"source_debit_balance":source_balance.max(Money::ZERO),"source_credit_balance":(-source_balance).max(Money::ZERO),"target_balance":target_balance,"movement":target_balance-source_balance})
         }).collect();
         let mut evidence = serde_json::Map::new();
+        let mut retained_bytes = 0usize;
         // Each source owns both authorization and its frozen explicit field lists.
         // Never silently cut a register at one evidence page.
         macro_rules! retain {
             ($key:literal,$owner:expr,$datasets:expr) => {{
                 let mut datasets=serde_json::Map::new();
                 for dataset in $datasets {
-                    let mut after=None; let mut rows:Vec<Value>=Vec::new(); let mut bytes=0usize;
+                    let mut after=None; let mut rows:Vec<Value>=Vec::new();
                     let fields=loop {
                         let page=$owner.evidence_page_on(c,s,company,dataset,Some(500),after).await.map_err(source_error)?;
-                        bytes+=serde_json::to_vec(&page.rows).map_err(|_|Error::Internal)?.len();
-                        if bytes>MAX_BYTES {return Err(ReportsError::InvalidOption);}
-                        for row in page.rows { rows.push(evidence_row(&page.fields,&row)?); }
+                        for row in page.rows {
+                            let row=evidence_row(&page.fields,&row)?;
+                            retained_bytes=retained_bytes.checked_add(serialized_len(&row)?).ok_or(ReportsError::InvalidOption)?;
+                            if retained_bytes>MAX_BYTES {return Err(ReportsError::InvalidOption);}
+                            rows.push(row);
+                        }
                         if page.next.is_none() {break page.fields;}
                         after=page.next;
                     };
-                    datasets.insert(dataset.to_string(),json!({"fields":fields,"rows":rows,"through_id":rows.last().and_then(|r|r["id"].as_i64()).unwrap_or(0),"sha256":Sha256::digest(serde_json::to_vec(&rows).map_err(|_|Error::Internal)?).iter().map(|b|format!("{b:02x}")).collect::<String>()}));
+                    datasets.insert(dataset.to_string(),json!({"fields":fields,"rows":rows,"through_id":rows.last().and_then(|r|r["id"].as_i64()).unwrap_or(0),"sha256":serialized_hash(&rows)?}));
                 }
                 evidence.insert($key.into(),Value::Object(datasets));
             }};
@@ -384,12 +390,13 @@ impl Reports {
                 })
                 .and_then(|b| b.figures.as_ref())
                 .map(|f| {
-                    json!({"through_statement_number":f.through_statement_number,"through_match_event_number":f.through_match_event_number})
+                    json!({"through_entry_number":f.through_entry_number,"through_statement_number":f.through_statement_number,"through_match_event_number":f.through_match_event_number})
                 });
             let source_activity_after_finalisation = bridge.as_ref().is_some_and(|b| {
                 b.status == bilibi_finance_reconciliation::ReconciliationStatus::Finalised
                     && b.figures.as_ref().is_some_and(|f| {
-                        source_boundary.through_statement_number > f.through_statement_number
+                        source_boundary.through_entry_number > f.through_entry_number
+                            || source_boundary.through_statement_number > f.through_statement_number
                             || source_boundary.through_match_event_number
                                 > f.through_match_event_number
                     })
@@ -423,7 +430,7 @@ impl Reports {
             let stale = bank["source_activity_after_finalisation"] == true;
             if incomplete || changed || stale {
                 differences.push(if stale {
-                    json!({"area":"bank","kind":"bank_bridge_stale","bank_account_id":bank["account"]["id"],"reason":"Statement or match activity through the report date was recorded after this bridge was finalised. Finalise a new reconciliation that includes it."})
+                    json!({"area":"bank","kind":"bank_bridge_stale","bank_account_id":bank["account"]["id"],"reason":"Ledger, statement or match activity through the report date was recorded after this bridge was finalised. Finalise a new reconciliation that includes it."})
                 } else {
                     json!({"area":"bank","bank_account_id":bank["account"]["id"],"reason":"Review the bridge's status, end date and changes since finalisation; it does not establish a complete tie-out at the report date."})
                 });
@@ -440,11 +447,7 @@ impl Reports {
             "schedule_limits":["Bank evidence retains statement and match activity with finalised reconciliation bridges. Open or stale bridges require a new reconciliation; no conversion bank bridge is inferred.","Tax and payroll evidence is retained where recorded. Legacy returns, payroll year-to-date and filing completeness require the accountant's external schedules and reviewer references."],
             "schedule_reviews":{"bank":{"status":"not_assessed"},"tax":{"status":"not_assessed"},"payroll":{"status":"not_assessed"}},
             "assessment":"Unassessed. Zero numerical differences do not establish completeness or accountant approval. Other-owner control postings remain visible; opening recognition is evidence, not a reclassification."});
-        if serde_json::to_vec(&report)
-            .map_err(|_| Error::Internal)?
-            .len()
-            > MAX_BYTES
-        {
+        if serialized_len(&report)? > MAX_BYTES {
             return Err(ReportsError::InvalidOption);
         }
         Ok(report)
@@ -568,6 +571,9 @@ impl Reports {
                             ("opened_by_user_id", "opened_by_impersonator_id"),
                             ("actor_user_id", "actor_impersonator_id"),
                             ("finalised_by_user_id", "finalised_by_impersonator_id"),
+                            ("imported_by_user_id", "imported_by_impersonator_id"),
+                            ("changed_by_user_id", "changed_by_impersonator_id"),
+                            ("matched_by_user_id", "matched_by_impersonator_id"),
                         ] {
                             if let Some(user_id) = source[person].as_i64() {
                                 prepared.push(Preparer {
@@ -592,6 +598,48 @@ impl Reports {
             override_reason: reason,
         })
     }
+}
+
+struct ByteCounter(usize);
+impl Write for ByteCounter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0 = self
+            .0
+            .checked_add(bytes.len())
+            .ok_or_else(|| io::Error::other("serialized value is too large"))?;
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn serialized_len(value: &impl Serialize) -> Result<usize> {
+    let mut counter = ByteCounter(0);
+    serde_json::to_writer(&mut counter, value).map_err(|_| Error::Internal)?;
+    Ok(counter.0)
+}
+
+struct DigestWriter(Sha256);
+impl Write for DigestWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0.update(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn serialized_hash(value: &impl Serialize) -> Result<String> {
+    let mut writer = DigestWriter(Sha256::new());
+    serde_json::to_writer(&mut writer, value).map_err(|_| Error::Internal)?;
+    Ok(writer
+        .0
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
 }
 fn source_error<E: std::fmt::Display>(error: E) -> ReportsError {
     ReportsError::Ledger(bilibi_finance_ledger::LedgerError::Invalid(vec![

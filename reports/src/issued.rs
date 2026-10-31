@@ -170,10 +170,15 @@ pub(crate) async fn page(
     dataset: &str,
     limit: Option<i64>,
     after: Option<i64>,
+    excluded_kind: Option<&str>,
 ) -> Result<EvidencePage> {
     let limit = limit.unwrap_or(DEFAULT_LIMIT);
     let after = after.unwrap_or(0);
-    if !DATASETS.contains(&dataset) || !(1..=500).contains(&limit) || after < 0 {
+    if !DATASETS.contains(&dataset)
+        || !(1..=500).contains(&limit)
+        || after < 0
+        || (dataset != "issued" && excluded_kind.is_some())
+    {
         return Err(ReportsError::InvalidOption);
     }
     if dataset == "conversion_signoff" {
@@ -200,9 +205,10 @@ pub(crate) async fn page(
                 "SELECT COALESCE(json_agg(t ORDER BY t.id),'[]'::json) FROM (SELECT id,tenant_id,company_id,kind,\
                  implementation_version,through_entry_number,content,chart,layout,membership,issued_by_user_id,\
                  issued_by_impersonator_id,to_char(issued_at,'{ISO}') AS issued_at FROM finance_reports_issued \
-                 WHERE tenant_id=$1 AND company_id=$2 AND id>$3 ORDER BY id LIMIT $4) t"
+                 WHERE tenant_id=$1 AND company_id=$2 AND id>$3 \
+                   AND ($5::text IS NULL OR kind <> $5) ORDER BY id LIMIT $4) t"
             ),
-            &[&tenant, &company_id, &after, &limit],
+            &[&tenant, &company_id, &after, &limit, &excluded_kind],
         )
         .await
         .map_err(Error::from)?;

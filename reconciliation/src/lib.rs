@@ -565,6 +565,7 @@ pub struct Pins {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct ActivityBoundary {
+    pub through_entry_number: i64,
     pub through_statement_number: i64,
     pub through_match_event_number: i64,
 }
@@ -1643,9 +1644,19 @@ impl Reconciliation {
         through: Date,
     ) -> Result<ActivityBoundary> {
         authorize(client, scope, company_id, VIEW).await?;
-        bank_accounts::find(client, scope.tenant(), company_id, bank_account_id)
+        let account = bank_accounts::find(client, scope.tenant(), company_id, bank_account_id)
             .await?
             .ok_or(ReconciliationError::BankAccountNotFound)?;
+        let through_entry_number = self
+            .ledger
+            .latest_account_entry_number_on(
+                client,
+                scope,
+                company_id,
+                account.ledger_account_id,
+                through,
+            )
+            .await?;
         let (through_statement_number, through_match_event_number) = matching::activity_boundary(
             client,
             scope.tenant(),
@@ -1655,6 +1666,7 @@ impl Reconciliation {
         )
         .await?;
         Ok(ActivityBoundary {
+            through_entry_number,
             through_statement_number,
             through_match_event_number,
         })
