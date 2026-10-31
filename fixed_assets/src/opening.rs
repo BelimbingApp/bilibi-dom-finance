@@ -199,17 +199,26 @@ impl FixedAssets {
             }
             let months: i32 = row[7]
                 .parse()
-                .map_err(|_| fail("remaining_life_months must be 1 to 1200"))?;
-            if !(1..=1200).contains(&months) {
-                return Err(fail("remaining_life_months must be 1 to 1200"));
+                .map_err(|_| fail("remaining_life_months must be 0 to 1200"))?;
+            if !(0..=1200).contains(&months) {
+                return Err(fail("remaining_life_months must be 0 to 1200"));
+            }
+            if months == 0 && accumulated + residual != cost {
+                return Err(fail(
+                    "zero remaining life requires carrying value to equal residual value",
+                ));
             }
             use jiff::ToSpan;
-            context
-                .entry
-                .entry_date
-                .first_of_month()
-                .checked_add((months - 1).months())
-                .map_err(|_| fail("the prospective schedule exceeds the supported date range"))?;
+            if months > 0 {
+                context
+                    .entry
+                    .entry_date
+                    .first_of_month()
+                    .checked_add((months - 1).months())
+                    .map_err(|_| {
+                        fail("the prospective schedule exceeds the supported date range")
+                    })?;
+            }
             // An opening register freezes an explicit prospective straight-line estimate.
             // No historical schedule is reconstructed or caught up.
             let mut facts = json!({"source_id":row[0],"description":row[1],"category_revision_id":revision,"acquisition_date":acquisition.to_string(),"in_service_date":service.to_string(),"cost":cost,"accumulated_depreciation":accumulated,"remaining_life_months":months,"residual_value":residual,"carrying_value":cost-accumulated,"method":"straight_line","opening_date":context.entry.entry_date.to_string(),"category_method":r["method"]});
