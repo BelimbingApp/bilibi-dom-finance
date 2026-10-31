@@ -43,7 +43,9 @@ asset category; it is not evidence of general asset lifecycle MCP operations.
 Run `conversion` without `serve` afterward for Company 003's facade proof:
 source accumulation differing from lifetime projection, prospective depreciation,
 settlement reversals, report reproduction across entryless imports, independent
-approval, unauthorized-write refusal and permanent source evidence, then the
-staged 10,000-row and replacement lifecycle (`src/conversion_lifecycle.rs`). Each
-binary refuses ordinary production setup; these are accounting walkthroughs, not
+approval, unauthorized-write refusal and permanent source evidence. It also
+retains comparative, monthly movement, SST and payroll source schedules without
+creating postings, returns, payments or tax lines. It then runs the staged
+10,000-row and replacement lifecycle (`src/conversion_lifecycle.rs`). Each binary
+refuses ordinary production setup; these are accounting walkthroughs, not
 production seeds or a historical transaction migration tool.

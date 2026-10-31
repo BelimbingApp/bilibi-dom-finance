@@ -3,11 +3,14 @@
 //! ledger: profit and loss for date ranges, the balance sheet and the cash
 //! position as of dates, headline figures for a period against the one before
 //! it, and the entries behind any account's figure. They are management
-//! reports for the company's own use, not statutory financial statements.
+//! reports for the company's own use, not statutory financial statements. The
+//! module also retains source-period conversion schedules as evidence without
+//! turning them into postings, tax returns, payroll runs or remittances.
 //!
-//! Every figure comes from the [`Ledger`] facade; this module stores issued
-//! snapshots and reads none of the ledger's tables. Every function takes the
-//! sealed [`Scope`] it was handed and an explicit company id, and authorizes
+//! Every report figure comes from the [`Ledger`] facade; this module stores
+//! issued snapshots and source-period evidence and reads none of the ledger's
+//! tables. Every function takes the sealed [`Scope`] it was handed and an
+//! explicit company id, and authorizes
 //! the ledger's view capability (`finance.ledger.view`) for the scope's actor
 //! and that company when it runs, through Core Company's `authorize_target`: a
 //! missing grant, or a sibling company without tenant-wide reach, is

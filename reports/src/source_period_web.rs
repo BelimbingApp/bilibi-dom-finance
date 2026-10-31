@@ -100,6 +100,13 @@ struct State {
     columns: ListColumns,
 }
 impl State {
+    fn query(&self) -> HashMap<String, String> {
+        let mut query = HashMap::from([("kind".into(), self.kind.clone())]);
+        if self.after > 0 {
+            query.insert("after".into(), self.after.to_string());
+        }
+        query
+    }
     fn new(pages: Pages, r: &PageRequest<'_, Scope>) -> Result<Self> {
         let selected = if r.operation == "detail" {
             r.path.get("kind")
@@ -200,6 +207,7 @@ impl State {
                         ..Default::default()
                     })?
                     .to_string(),
+                    query: self.query(),
                     ..LiveBody::default()
                 });
             }
@@ -455,6 +463,7 @@ impl State {
                 ..Default::default()
             })?
             .to_string(),
+            query: self.id.is_none().then(|| self.query()).unwrap_or_default(),
             ..LiveBody::default()
         })
     }
