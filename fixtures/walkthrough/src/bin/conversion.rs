@@ -378,7 +378,10 @@ async fn prove_opening_invoice_page_scale(db: &Db, services: &Services) -> Outco
         )
         .await?;
     assert_eq!(current_page["result"]["total"], 1);
-    assert_eq!(current_page["result"]["documents"][0]["id"], current_draft.id);
+    assert_eq!(
+        current_page["result"]["documents"][0]["id"],
+        current_draft.id
+    );
     println!("Opening invoice scale proof: staged reconciliation, SQL source/search filtering, sorting, count and clamping passed.");
     Ok(())
 }

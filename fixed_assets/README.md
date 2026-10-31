@@ -121,7 +121,7 @@ Asset categories and disposal forms choose accounts from the ledger's account-li
 
 ## Opening asset register at conversion
 
-Import the source asset register after the opening trial balance is approved, before registering ordinary acquisitions. Open **Fixed assets → Fixed assets → Opening asset register** (`/finance/fixed-assets/register`) for the current company. Create category revisions with the approved cost, accumulated depreciation, expense and disposal accounts first.
+Import the source asset register after the opening trial balance is approved, before registering ordinary acquisitions. Open **Fixed assets → Fixed assets** (`/finance/fixed-assets/register`) for the current company, then choose **Opening asset register**. Create category revisions with the approved cost, accumulated depreciation, expense and disposal accounts first.
 
 Use this UTF-8 CSV header:
 
@@ -173,6 +173,6 @@ For the live browser and MCP continuation proof, start the existing conversion f
 
 Opening assets share the Fixed assets list and asset pages. **Source** and **Status** are columns and filters. Choose **Opening asset register** on the list to review and approve a complete or staged register through the existing opening contracts. The batch review is a dialog; there is no separate opening menu item or route. `finance.fixed_assets.register.get` accepts `source` (`ordinary` or `opening`) and `status` (`in_service`, `disposed` or `voided`). These filters select rows; reconciliation still covers the **whole register** at the same four pins. The reproduce link keeps the filters.
 
-For the three opening-list browser proofs, run the `conversion` walkthrough with `prepare-launcher` on a fresh disposable database and set `BILIBI_OPENING_PROOF_CONFIG` to a private output file. It prepares Companies 001, 002 and 004 and names their counterparty so launcher demo retirement keeps it, without serving the app. Start that database through the Platform's `./bilibi start` with a unique HTTPS `.localhost` name. Sign in as `ai@agent.my` / `bilibi-dev`; startup retires the old walkthrough accounts. To exercise MCP against that launched app, run the same binary with `launcher-credentials`, `BILIBI_AGENT_PROOF=disposable`, the exact HTTPS `APP_ORIGIN`, and `BILIBI_AGENT_CREDENTIALS` naming a new private file. It grants a short-lived OAuth connection to the launcher's administrator and never prints its token.
+The shared browser, MCP and focused list-proof commands are in the [conversion walkthrough](../fixtures/walkthrough/README.md#accounting-system-conversion).
 
 Readers can open the opening dialog to inspect retained source batches. The import form still requires the module's existing opening-write permission, and approval checks run in the shared contract.

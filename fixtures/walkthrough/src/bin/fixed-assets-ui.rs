@@ -264,7 +264,7 @@ async fn main() -> Outcome<()> {
     )
     .await?;
     assert_eq!(applied.query["to"], "2026-12-31");
-    has(&applied, "Ledger reconciliation as of 2026-12-31");
+    has(&applied, "Whole register reconciliation as of 2026-12-31");
     let mut ids = Vec::new();
     let mut entries = Vec::new();
     for label in [
