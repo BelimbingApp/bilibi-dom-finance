@@ -18,7 +18,7 @@ pub(super) struct Credits {
     context: Value,
     draft: Option<Draft>,
     columns: ListColumns,
-    message: Option<String>,
+    message: Option<(StatusKind, String)>,
 }
 struct Draft {
     action: String,
@@ -157,10 +157,10 @@ impl Credits {
             return Ok(Html::EMPTY);
         }
         let mut body=render(SectionHeading{title:"Credit settlements",description:"Applications and refunds retain their original controls and dates. A same-control application changes no ledger entry.",actions,..SectionHeading::default()})?;
-        if let Some(message) = &self.message {
+        if let Some((kind, message)) = &self.message {
             body.push(&render(Alert {
                 id: "credit-message",
-                kind: StatusKind::Info,
+                kind: *kind,
                 body: Html::text(message),
                 ..Alert::default()
             })?);
@@ -241,6 +241,12 @@ impl Credits {
                         "Available credit",
                         money(&f["available_credit"], units),
                     ));
+                    if !f["available_target"].is_null() {
+                        items.push(fact(
+                            "Available invoice or bill",
+                            money(&f["available_target"], units),
+                        ));
+                    }
                 }
                 for account in f["controls"].as_array().into_iter().flatten() {
                     items.push(fact(
@@ -426,7 +432,10 @@ impl Credits {
             return Ok(());
         }
         if !pages.allowed(s, POST_PAYMENTS).await? {
-            self.message = Some("You do not have permission to settle this credit.".into());
+            self.message = Some((
+                StatusKind::Error,
+                "You do not have permission to settle this credit.".into(),
+            ));
             return Ok(());
         }
         if let Some(action) = event.strip_prefix("ask_credit_") {
@@ -540,7 +549,8 @@ impl Credits {
                     {
                         Ok(_) => {
                             self.draft = None;
-                            self.message = Some("Credit settlement recorded.".into());
+                            self.message =
+                                Some((StatusKind::Success, "Credit settlement recorded.".into()));
                         }
                         Err(_) => {
                             d.fields.insert("base".into(),vec!["The reviewed details changed or the settlement was refused. Review it again.".into()]);

@@ -258,7 +258,9 @@ impl Receivables {
                     .ok_or(Error::Internal)?,
                 impersonator_id: target_facts["issued_by_impersonator_id"].as_i64(),
             });
-            if original.is_none() && lowest(c, s.tenant(), company, target, day).await? < amount {
+            let target_capacity = lowest(c, s.tenant(), company, target, day).await?;
+            available_target = json!(target_capacity);
+            if original.is_none() && target_capacity < amount {
                 return Err(invalid(
                     "amount",
                     "exceeds the target's available balance at this date or a later recorded date",
