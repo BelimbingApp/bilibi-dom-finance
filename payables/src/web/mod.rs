@@ -5,6 +5,7 @@ mod bill;
 mod bill_form;
 mod bills;
 mod format;
+mod opening;
 mod payment;
 mod payment_form;
 mod payments;
@@ -50,6 +51,7 @@ pub(crate) struct Pages {
     pub payables: Arc<Payables>,
     pub ledger: Arc<Ledger>,
     pub contracts: Arc<PageContracts>,
+    pub plans: Arc<bilibi_agent_api::plans::Plans>,
     pub display: Arc<DisplayPolicy>,
     pub locales: Arc<Locales>,
 }
@@ -299,7 +301,7 @@ impl Page<Scope, Error> for Pages {
                 "bills" => {
                     let mut state = bills::Bills::new(self.clone(), r.query, r.framed)?;
                     state.reload(scope).await?;
-                    (state.body()?, None)
+                    (state.body(scope).await?, None)
                 }
                 "bill" => {
                     let mut state = bill::Bill::new(self.clone(), r.path)?;
@@ -385,6 +387,10 @@ fn render(fragment: impl Template) -> Result<Html> {
 inventory::submit! { bilibi_module_registry::Contribution::new(bilibi_module_registry::contributions::PAGE_WRITES, PAGES, bilibi_module_registry::Provenance { module: MODULE, source: file!(), line: line!() }, &bilibi_module_registry::contributions::PageWrites {
     service: PAGES,
     contracts: &[
+        ("preview_opening", "finance.payables.opening.import"),
+        ("import_opening", "finance.payables.opening.import"),
+        ("preview_opening", "finance.payables.opening.stage"),
+        ("import_opening", "finance.payables.opening.stage"),
         ("create_vendor", "finance.payables.vendor.create"),
         ("save_vendor", "finance.payables.vendor.update"),
         ("confirm_vendor_mapping", "finance.payables.vendor.map_supplier_key"),

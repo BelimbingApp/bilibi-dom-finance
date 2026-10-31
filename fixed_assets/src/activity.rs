@@ -304,7 +304,7 @@ impl FixedAssets {
         let end = period.last_of_month();
         activity.chronological(end)?;
         let report = self
-            .report_on(c, s, company, end, &ReportPins::default())
+            .register_report_on(c, s, company, end, &ReportPins::default())
             .await?;
         let mut charges = Vec::new();
         let mut skipped = Vec::new();
@@ -595,7 +595,7 @@ impl FixedAssets {
             return Err(FixedAssetsError::AlreadyDisposed);
         }
         let report = self
-            .report_on(c, s, company, date, &ReportPins::default())
+            .register_report_on(c, s, company, date, &ReportPins::default())
             .await?;
         let row = report
             .rows

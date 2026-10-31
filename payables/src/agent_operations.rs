@@ -832,6 +832,7 @@ enum Read {
     Taxes,
     Document,
     Documents,
+    DocumentPage,
     Request,
     Requests,
     Payment,
@@ -885,24 +886,30 @@ impl ReadHandler for Read {
                     },
                     Self::SupplierHistory=>json!({"records":owner()?.supplier_history_on(c,s,company).await?}),
                     Self::Settings=>json!({"settings":store::settings(c,tenant,company).await?.map(|(_,s)|s)}),
+                    Self::DocumentPage=>json!(owner()?.page_documents_on(c,s,company,&DocumentPageQuery {
+                        source:opt(v,"source"), document_type:opt(v,"document_type"), status:opt(v,"status"),
+                        search:opt(v,"search").unwrap_or_default(), page:v["page"].as_i64().unwrap_or(1),
+                        page_size:v["page_size"].as_i64().unwrap_or(25),
+                    }).await?),
                     Self::Document=>document_value(store::document_record(c,tenant,company,id(v,"document_id")?).await?.ok_or(PayablesError::DocumentNotFound)?),
                     Self::Request=>json!(payments::request(c,tenant,company,id(v,"request_id")?).await?),
                     Self::Payment=>json!(payments::payment(c,tenant,company,id(v,"payment_id")?).await?),
                     Self::Taxes|Self::Documents|Self::Requests|Self::Payments=>{
                         let vendor=v["vendor_id"].as_i64();
+                        let source=opt(v,"source");
                         let status=opt(v,"status"); let party=opt(v,"party_key");let kind=opt(v,"document_type"); let corrects=v["corrects_document_id"].as_i64();
                         // Cursor and ordering use the same stable ID. These
                         // agent lists deliberately don't reuse page offsets.
                         let query=match self {
                             Self::Taxes=>"SELECT id FROM finance_payables_tax_codes WHERE tenant_id=$1 AND company_id=$2 AND id>$3 ORDER BY id LIMIT $4".to_owned(),
-                            Self::Documents=>"SELECT id FROM finance_payables_documents WHERE tenant_id=$1 AND company_id=$2 AND id>$3 AND ($5::text IS NULL OR status=$5) AND ($6::text IS NULL OR party_key=$6) AND ($7::text IS NULL OR document_type=$7) AND ($8::bigint IS NULL OR corrects_document_id=$8) AND ($9::bigint IS NULL OR party_key IN (SELECT supplier_key FROM finance_payables_vendor_keys WHERE tenant_id=$1 AND company_id=$2 AND vendor_id=$9)) ORDER BY id LIMIT $4".to_owned(),
+                            Self::Documents=>"SELECT id FROM finance_payables_documents WHERE tenant_id=$1 AND company_id=$2 AND id>$3 AND ($5::text IS NULL OR status=$5) AND ($6::text IS NULL OR party_key=$6) AND ($7::text IS NULL OR document_type=$7) AND ($8::bigint IS NULL OR corrects_document_id=$8) AND ($9::bigint IS NULL OR party_key IN (SELECT supplier_key FROM finance_payables_vendor_keys WHERE tenant_id=$1 AND company_id=$2 AND vendor_id=$9)) AND ($10::text IS NULL OR EXISTS (SELECT 1 FROM finance_payables_opening_items i WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=finance_payables_documents.id)=($10='opening')) ORDER BY id LIMIT $4".to_owned(),
                             Self::Requests=>format!("SELECT r.id FROM finance_payables_payment_requests r LEFT JOIN finance_payables_payment_request_events e ON e.tenant_id=r.tenant_id AND e.company_id=r.company_id AND e.request_id=r.id WHERE r.tenant_id=$1 AND r.company_id=$2 AND r.id{cmp}$3 AND ($5::text IS NULL OR COALESCE(e.event,'submitted')=$5) AND ($6::text IS NULL OR r.party_key=$6) AND ($7::bigint IS NULL OR r.party_key IN (SELECT supplier_key FROM finance_payables_vendor_keys WHERE tenant_id=$1 AND company_id=$2 AND vendor_id=$7)) ORDER BY r.id {order} LIMIT $4"),
                             _=>format!("SELECT id FROM finance_payables_payments WHERE tenant_id=$1 AND company_id=$2 AND id{cmp}$3 AND ($5::text IS NULL OR party_key=$5) AND ($6::bigint IS NULL OR party_key IN (SELECT supplier_key FROM finance_payables_vendor_keys WHERE tenant_id=$1 AND company_id=$2 AND vendor_id=$6)) ORDER BY id {order} LIMIT $4"),
                         };
                         let n=limit+1;
                         let mut params:Vec<&(dyn tokio_postgres::types::ToSql+Sync)>=vec![&tenant,&company,&after,&n];
                         match self {
-                            Self::Documents => { params.push(&status); params.push(&party); params.push(&kind); params.push(&corrects); params.push(&vendor); }
+                            Self::Documents => { params.push(&status); params.push(&party); params.push(&kind); params.push(&corrects); params.push(&vendor); params.push(&source); }
                             Self::Requests => { params.push(&status); params.push(&party); params.push(&vendor); }
                             Self::Payments => { params.push(&party); params.push(&vendor); },
                             _ => {}
@@ -1025,6 +1032,18 @@ fn request_id() -> Value {
 fn payment_id() -> Value {
     schema(&["payment_id"], json!({"payment_id":identifier()}))
 }
+fn document_page_schema() -> Value {
+    schema(
+        &[],
+        json!({
+            "source":{"type":"string","enum":["ordinary","opening"]},
+            "status":{"type":"string","enum":["draft","approved","held","posted","voided"]},
+            "document_type":{"type":"string","enum":["bill","debit_note"]},
+            "search":string(255), "page":{"type":"integer","minimum":1},
+            "page_size":{"type":"integer","enum":[25,50,100]}
+        }),
+    )
+}
 fn list_schema(kind: &str) -> Value {
     let mut props = json!({"after_id":{"type":"integer","minimum":0},"page_size":{"type":"integer","minimum":1,"maximum":100}});
     if kind != "tax" && kind != "vendor" {
@@ -1036,6 +1055,7 @@ fn list_schema(kind: &str) -> Value {
             json!({"type":"string","enum":["draft","approved","held","posted","voided"]});
         props["document_type"] = json!({"type":"string","enum":["bill","debit_note"]});
         props["corrects_document_id"] = identifier();
+        props["source"] = json!({"type":"string","enum":["ordinary","opening"]});
     }
     if kind == "request" {
         props["status"] = json!({"type":"string","enum":["submitted","posted","rejected"]});
@@ -1058,7 +1078,8 @@ inventory::submit! {Contribution::new(DEFINITIONS,"finance/payables.operations",
         Operation {key:"finance.payables.settings.get",title:"Read payables settings",summary:"Read the control account and matching tolerances; null before configuration.",keywords:&[],capability:VIEW,input:||schema(&[],json!({})),output,handler:Handler::Read(&Read::Settings),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.payables.tax_code.list",title:"List payables tax codes",summary:"Read configured tax codes by ID with a bounded cursor.",keywords:&[],capability:VIEW,input:||list_schema("tax"),output,handler:Handler::Read(&Read::Taxes),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.payables.document.get",title:"Read a payable document",summary:"Read a bill or debit note, immutable line and tax snapshots, status and outstanding.",keywords:&[],capability:VIEW,input:document_id,output,handler:Handler::Read(&Read::Document),channels:Channels::Every,step_up:&[]},
-        Operation {key:"finance.payables.document.list",title:"List payable documents",summary:"Read bills and debit notes by ID, optionally filtered by party, type and status.",keywords:&[],capability:VIEW,input:||list_schema("document"),output,handler:Handler::Read(&Read::Documents),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.payables.document.page",title:"Read bills page",summary:"Read bills and debit notes with source and status filters, search, SQL totals and bounded page offsets.",keywords:&["opening"],capability:VIEW,input:document_page_schema,output,handler:Handler::Read(&Read::DocumentPage),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.payables.document.list",title:"List payable documents",summary:"Read bills and debit notes by ID, optionally filtered by source, party, type and status.",keywords:&[],capability:VIEW,input:||list_schema("document"),output,handler:Handler::Read(&Read::Documents),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.payables.payment_request.get",title:"Read a payment request",summary:"Read retained allocations, submitter, decision and posted payment ID.",keywords:&[],capability:VIEW,input:request_id,output,handler:Handler::Read(&Read::Request),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.payables.payment_request.list",title:"List payment requests",summary:"Read requests by ID, oldest first or with newest_first newest first, with party and status filters and a bounded cursor.",keywords:&[],capability:VIEW,input:||list_schema("request"),output,handler:Handler::Read(&Read::Requests),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.payables.payment.get",title:"Read a payable payment",summary:"Read a posted payment, allocations, entry and reversal identifiers.",keywords:&[],capability:VIEW,input:payment_id,output,handler:Handler::Read(&Read::Payment),channels:Channels::Every,step_up:&[]},

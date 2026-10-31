@@ -1,6 +1,6 @@
 //! What the module adds to the shared catalogs (Bilimbi
-//! `Bilimbi.Finance.Reports.Contributions`): its two capability keys verbatim
-//! and the `tenant_owner` role holding both. Reports read ledger figures, so
+//! `Bilimbi.Finance.Reports.Contributions`): its two capability keys verbatim,
+//! conversion sign-off, and the `tenant_owner` role holding all three. Reports read ledger figures, so
 //! they stand on the ledger's capabilities: viewing them is viewing the ledger
 //! (`finance.ledger.view`), and arranging them is part of keeping the chart of
 //! accounts (`finance.ledger.accounts.manage`, the sections setting's editor
@@ -15,7 +15,9 @@ pub const ISSUE: &str = "finance.reports.issue";
 /// Generates and downloads a company auditor pack.
 pub const EXPORT: &str = "finance.reports.reports-export";
 
-pub const CAPABILITIES: [&str; 2] = [ISSUE, EXPORT];
+/// Records an accountant attestation against an issued conversion snapshot.
+pub const SIGN_OFF: &str = "finance.reports.sign-off";
+pub const CAPABILITIES: [&str; 3] = [ISSUE, EXPORT, SIGN_OFF];
 
 macro_rules! provenance {
     () => {
@@ -33,8 +35,8 @@ pub(crate) use provenance;
 // the module needs no sibling to have declared one. The keys are unchanged.
 inventory::submit! { Contribution::new(VOCABULARY, "finance/reports", provenance!(), &VocabularyContribution {
     domains: &["finance"],
-    verbs: &["issue", "reports-export"],
-    capabilities: &[C::tenant(ISSUE), C::tenant(EXPORT)],
+    verbs: &["issue", "reports-export", "sign-off"],
+    capabilities: &[C::tenant(ISSUE), C::tenant(EXPORT), C::tenant(SIGN_OFF)],
     roles: &[RoleDefinition {
         code: "tenant_owner", name: "Tenant Owner", description: "Contributed system role; reconciled explicitly",
         grant_all: false, capabilities: &CAPABILITIES,
@@ -168,3 +170,21 @@ bilibi_menu::contribute!(
 inventory::submit! { bilibi_module_registry::Contribution::new(bilibi_module_registry::contributions::PAGE_WRITES, crate::setup_page::PAGES, bilibi_module_registry::Provenance { module: MODULE, source: file!(), line: line!() }, &bilibi_module_registry::contributions::PageWrites {
     service: crate::setup_page::PAGES, contracts: &[], pending: bilibi_module_registry::contributions::Pending::None,
 }) }
+
+// One list and record home for every issued conversion report and its sign-off.
+inventory::submit! { Contribution::new(ROUTES,"finance/reports.conversions",provenance!(),&Route {company_scope:bilibi_module_registry::contributions::CompanyScope::Company,method:Method::Get,path:"/finance/reports/conversions",service:crate::conversion_page::SERVICE,operation:"conversions",access:Access::Capability(crate::VIEW),framed:true}) }
+inventory::submit! { Contribution::new(ROUTES,"finance/reports.conversion",provenance!(),&Route {company_scope:bilibi_module_registry::contributions::CompanyScope::Company,method:Method::Get,path:"/finance/reports/conversions/{report_id}",service:crate::conversion_page::SERVICE,operation:"conversion",access:Access::Capability(crate::VIEW),framed:true}) }
+bilibi_menu::contribute!(
+    "finance/reports",
+    bilibi_menu::MenuItem::page(
+        "finance.reports.conversions",
+        "Conversion reports",
+        "/finance/reports/conversions"
+    )
+    .company_scoped()
+    .icon("gmdi-money-r")
+    .under("finance.group.bookkeeping")
+    .requires(bilibi_menu::Requirement::Capability(crate::VIEW))
+    .order(6)
+);
+inventory::submit! { Contribution::new(bilibi_module_registry::contributions::PAGE_WRITES,"finance/reports.conversion-pages",provenance!(),&bilibi_module_registry::contributions::PageWrites {service:crate::conversion_page::SERVICE,contracts:&[("review_issue","finance.reports.conversion.issue"),("issue","finance.reports.conversion.issue"),("review_sign","finance.reports.conversion.sign"),("sign","finance.reports.conversion.sign")],pending:bilibi_module_registry::contributions::Pending::None}) }

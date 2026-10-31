@@ -10,6 +10,7 @@ mod customers;
 mod document;
 mod documents;
 mod format;
+mod opening;
 mod payment;
 mod payments;
 mod settings;
@@ -152,6 +153,11 @@ route!("finance/receivables.settings", SETTINGS, "settings");
 inventory::submit! { Contribution::new(PAGE_WRITES, PAGES, Provenance { module: MODULE, source: file!(), line: line!() }, &PageWrites {
     service: PAGES,
     contracts: &[
+        ("preview_opening", "finance.receivables.opening.import"),
+        ("import_opening", "finance.receivables.opening.import"),
+        ("preview_opening", "finance.receivables.opening.stage"),
+        ("import_opening", "finance.receivables.opening.stage"),
+
         ("save_write_off", "finance.receivables.write_off.submit"),
         ("save_write_off", "finance.receivables.write_off.approve"),
         ("save_write_off", "finance.receivables.write_off.reject"),

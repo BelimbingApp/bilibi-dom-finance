@@ -121,7 +121,7 @@ Asset categories and disposal forms choose accounts from the ledger's account-li
 
 ## Opening asset register at conversion
 
-Import the source asset register after the opening trial balance is approved, before registering ordinary acquisitions. Open **Fixed assets → Opening asset register** (`/finance/fixed-assets/opening`) for the current company. Create category revisions with the approved cost, accumulated depreciation, expense and disposal accounts first.
+Import the source asset register after the opening trial balance is approved, before registering ordinary acquisitions. Open **Fixed assets → Fixed assets** (`/finance/fixed-assets/register`) for the current company, then choose **Opening asset register**. Create category revisions with the approved cost, accumulated depreciation, expense and disposal accounts first.
 
 Use this UTF-8 CSV header:
 
@@ -155,7 +155,8 @@ MCP and `/api/v1` expose the same category preparation, acquisitions, depreciati
 | --- | --- | --- |
 | `category.list` | None | Categories, current defaults and immutable revisions |
 | `category.save` | Optional `category_id` to revise; otherwise `name`; complete account IDs, `method`, `life_months`, optional `annual_rate`, `reason` | New immutable revision |
-| `register.get`, `schedule.get` | `as_of`; optional four report pins | Register, projected schedules and account reconciliation |
+| `register.get` | `as_of`; optional `source`, `status` and four report pins | Filtered register rows, projected schedules and whole-register account reconciliation |
+| `schedule.get` | `as_of`; optional four report pins | Register, projected schedules and account reconciliation |
 | `asset.get` | `asset_id` | Frozen assumptions, source facts, schedule, posted charges and events |
 | `asset.acquire` | `source` (`entry` or `bill`), `source_id`, `line_number`, `category_revision_id`, `description`, `in_service_date`; optional residual and assumption overrides | Asset without a new acquisition posting |
 | `run.list` | None | Runs newest month first, with items, exceptions and reversals |
@@ -169,3 +170,9 @@ Reads return `records`, `record` or `report`; writes return `record`. Amounts ar
 An ordered transaction-local review fence compares the complete normalized posting and source facts again immediately before each write. The plan engine previews every step before executing any, so a dependent step that changes the next step’s reviewed result refuses and rolls back the whole plan. Commit prerequisites separately and obtain a fresh review. Category revisions retain account eligibility; run reviews retain the dated register and exact posting; disposals and corrections retain their source and ledger controls. No preview allocates record IDs or posts entries. A review that finds the company row held by another write is refused as `record_changed` and writes nothing; review again.
 
 For the live browser and MCP continuation proof, start the existing conversion fixture on a fresh database with `--bin conversion -- serve assets-lifecycle`, `BILIBI_AGENT_PROOF=disposable`, a private `BILIBI_AGENT_CREDENTIALS` path, and matching `APP_ORIGIN`/`BIND_ADDR`. Company 001 is available for browser category preparation, opening import, depreciation, disposal/reversal and reproduced reconciliation. Set `BILIBI_AGENT_URL` to the same origin and run `fixtures/walkthrough/fixed-assets-operations.py` against Company 002 using the saved OAuth credentials. Both start with approved source balances and open fiscal periods; the wire proof creates its own category through MCP.
+
+Opening assets share the Fixed assets list and asset pages. **Source** and **Status** are columns and filters. Choose **Opening asset register** on the list to review and approve a complete or staged register through the existing opening contracts. The batch review is a dialog; there is no separate opening menu item or route. `finance.fixed_assets.register.get` accepts `source` (`ordinary` or `opening`) and `status` (`in_service`, `disposed` or `voided`). These filters select rows; reconciliation still covers the **whole register** at the same four pins. The reproduce link keeps the filters.
+
+The shared browser, MCP and focused list-proof commands are in the [conversion walkthrough](../fixtures/walkthrough/README.md#accounting-system-conversion).
+
+Readers can open the opening dialog to inspect retained source batches. The import form still requires the module's existing opening-write permission, and approval checks run in the shared contract.

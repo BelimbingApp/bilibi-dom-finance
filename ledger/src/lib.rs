@@ -1917,6 +1917,25 @@ impl Ledger {
         entries::list(client, scope.tenant(), company_id, query).await
     }
 
+    pub async fn latest_account_entry_number_on(
+        &self,
+        client: &(impl GenericClient + Sync),
+        scope: &Scope,
+        company_id: i64,
+        account_id: i64,
+        through: Date,
+    ) -> Result<i64> {
+        authorize(client, scope, company_id, VIEW).await?;
+        Ok(entries::latest_account_entry_number(
+            client,
+            scope.tenant(),
+            company_id,
+            account_id,
+            through,
+        )
+        .await?)
+    }
+
     /// Subscribes to the company's postings (`finance.ledger.view`). After
     /// the transaction that posts an entry commits, the subscription hears
     /// [`PostingEvent::Posted`] for it, from any process; a rolled-back post
@@ -2066,14 +2085,26 @@ impl Ledger {
         company_id: i64,
         query: &TotalsQuery,
     ) -> Result<OwnerTotals> {
-        let window = totals::Window::new(query)?;
         let client = self.db.get().await.map_err(Error::from)?;
-        authorize(&**client, scope, company_id, VIEW).await?;
+        self.account_totals_by_owner_on(&**client, scope, company_id, query)
+            .await
+    }
+
+    /// Owner totals on the caller's snapshot, with the same authorization and pins.
+    pub async fn account_totals_by_owner_on(
+        &self,
+        client: &dyn bilibi_agent_api::OperationClient,
+        scope: &Scope,
+        company_id: i64,
+        query: &TotalsQuery,
+    ) -> Result<OwnerTotals> {
+        let window = totals::Window::new(query)?;
+        agent_operations::authorize_on(client, scope, company_id, VIEW).await?;
         let tenant = scope.tenant();
-        let book = books::find(&**client, tenant, company_id)
+        let book = books::find(client, tenant, company_id)
             .await?
             .ok_or(LedgerError::BookNotOpen)?;
-        let (through, rows) = totals::by_owner(&**client, tenant, company_id, &window).await?;
+        let (through, rows) = totals::by_owner(client, tenant, company_id, &window).await?;
         Ok(Totals {
             company_id,
             from: window.from,

@@ -175,7 +175,10 @@ impl WriteHandler for Import {
                 .import_opening_on(tx, s, company, input)
                 .await
                 .map_err(failure)?;
-            Ok(json!({"record":record,"path":"/finance/receivables/opening"}).into())
+            Ok(
+                json!({"record":record,"path":"/finance/receivables/invoices?source=opening"})
+                    .into(),
+            )
         })
     }
 }
@@ -218,7 +221,10 @@ impl WriteHandler for Stage {
                 .stage_opening_on(tx, s, company, input)
                 .await
                 .map_err(failure)?;
-            Ok(json!({"record":record,"path":"/finance/receivables/opening"}).into())
+            Ok(
+                json!({"record":record,"path":"/finance/receivables/invoices?source=opening"})
+                    .into(),
+            )
         })
     }
 }

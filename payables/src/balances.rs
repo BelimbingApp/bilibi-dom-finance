@@ -91,12 +91,12 @@ pub struct TaxTotal {
     pub taxable_amount: Money,
     pub tax_amount: Money,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct OtherPosting {
     pub owner_module: Option<String>,
     pub balance: Money,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct ControlAccount {
     pub account_id: i64,
     pub code: String,
@@ -107,10 +107,11 @@ pub struct ControlAccount {
     pub other_postings: Vec<OtherPosting>,
     pub difference: Money,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct TieOut {
     pub through_opening_batch_id: i64,
     pub company_id: i64,
+    #[serde(serialize_with = "date_text")]
     pub as_of: Date,
     pub through_entry_number: i64,
     pub currency_code: String,
@@ -313,15 +314,26 @@ impl Payables {
         as_of: Date,
         pins: &BalancePins,
     ) -> Result<TieOut> {
-        // Release this connection before reading the ledger through its facade.
-        {
-            let c = self.db.get().await.map_err(Error::from)?;
-            authorize(&**c, s, company, VIEW).await?;
-        }
+        let client = self.db.get().await.map_err(Error::from)?;
+        self.tie_out_control_accounts_on(&**client, s, company, as_of, pins)
+            .await
+    }
+
+    /// Authorized control tie-out on the caller's snapshot, including other owners.
+    pub async fn tie_out_control_accounts_on(
+        &self,
+        client: &(impl tokio_postgres::GenericClient + Sync),
+        s: &Scope,
+        company: i64,
+        as_of: Date,
+        pins: &BalancePins,
+    ) -> Result<TieOut> {
+        authorize(client, s, company, VIEW).await?;
         fence(pins.through_entry_number)?;
         let ledger = self
             .ledger
-            .account_totals_by_owner(
+            .account_totals_by_owner_on(
+                client,
                 s,
                 company,
                 &TotalsQuery {
@@ -331,16 +343,15 @@ impl Payables {
                 },
             )
             .await?;
-        let chart = self.ledger.list_accounts(s, company).await?;
-        let c = self.db.get().await.map_err(Error::from)?;
+        let chart = self.ledger.list_accounts_on(client, s, company).await?;
         let opening_pin =
-            crate::opening::pin(&**c, s, company, pins.through_opening_batch_id).await?;
-        let rows=c.query(&format!("SELECT b.payable_account_id,sum(o.owed) FROM ({OWED}) o JOIN finance_payables_documents b ON b.id=o.id AND b.tenant_id=$1 AND b.company_id=$2 WHERE NOT EXISTS(SELECT 1 FROM finance_payables_opening_items i WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=b.id AND (i.batch_id>$5 OR EXISTS(SELECT 1 FROM finance_payables_opening_decisions own WHERE own.tenant_id=$1 AND own.company_id=$2 AND own.batch_id=i.batch_id AND own.effective_date>$3::text::date) OR EXISTS(SELECT 1 FROM finance_payables_opening_decisions x WHERE x.tenant_id=$1 AND x.company_id=$2 AND x.replaces_batch_id=i.batch_id AND x.effective_date<=$3::text::date AND x.batch_id<=$5))) GROUP BY b.payable_account_id"),&[&s.tenant(),&company,&as_of.to_string(),&ledger.through_entry_number,&opening_pin]).await?;
+            crate::opening::pin(client, s, company, pins.through_opening_batch_id).await?;
+        let rows=client.query(&format!("SELECT b.payable_account_id,sum(o.owed) FROM ({OWED}) o JOIN finance_payables_documents b ON b.id=o.id AND b.tenant_id=$1 AND b.company_id=$2 WHERE NOT EXISTS(SELECT 1 FROM finance_payables_opening_items i WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=b.id AND (i.batch_id>$5 OR EXISTS(SELECT 1 FROM finance_payables_opening_decisions own WHERE own.tenant_id=$1 AND own.company_id=$2 AND own.batch_id=i.batch_id AND own.effective_date>$3::text::date) OR EXISTS(SELECT 1 FROM finance_payables_opening_decisions x WHERE x.tenant_id=$1 AND x.company_id=$2 AND x.replaces_batch_id=i.batch_id AND x.effective_date<=$3::text::date AND x.batch_id<=$5))) GROUP BY b.payable_account_id"),&[&s.tenant(),&company,&as_of.to_string(),&ledger.through_entry_number,&opening_pin]).await?;
         let mut subledger = BTreeMap::new();
         for r in rows {
             subledger.insert(r.get::<_, i64>(0), store::money(r.get(1))?);
         }
-        let ids=c.query("SELECT payable_account_id FROM finance_payables_documents WHERE tenant_id=$1 AND company_id=$2 AND payable_account_id IS NOT NULL UNION SELECT payable_account_id FROM finance_payables_settings WHERE tenant_id=$1 AND company_id=$2",&[&s.tenant(),&company]).await?;
+        let ids=client.query("SELECT payable_account_id FROM finance_payables_documents WHERE tenant_id=$1 AND company_id=$2 AND payable_account_id IS NOT NULL UNION SELECT payable_account_id FROM finance_payables_settings WHERE tenant_id=$1 AND company_id=$2",&[&s.tenant(),&company]).await?;
         let mut accounts = Vec::new();
         for r in ids {
             let id: i64 = r.get(0);

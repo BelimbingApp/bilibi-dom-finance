@@ -569,6 +569,13 @@ pub struct Pins {
     pub through_opening_id: Option<i64>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct ActivityBoundary {
+    pub through_entry_number: i64,
+    pub through_statement_number: i64,
+    pub through_match_event_number: i64,
+}
+
 /// What opens (or previews) a reconciliation: the statement's `end_date` and
 /// the `statement_balance` it shows that day, in decimal notation no finer
 /// than the book's currency.
@@ -1570,19 +1577,31 @@ impl Reconciliation {
         reconciliation_id: i64,
     ) -> Result<BankReconciliation> {
         let client = self.db.get().await.map_err(Error::from)?;
-        authorize(&**client, scope, company_id, VIEW).await?;
+        self.get_reconciliation_on(&**client, scope, company_id, reconciliation_id)
+            .await
+    }
+
+    /// Authorized bank bridge, including its frozen finalisation, on the caller's snapshot.
+    pub async fn get_reconciliation_on(
+        &self,
+        client: &(impl tokio_postgres::GenericClient + Sync),
+        scope: &Scope,
+        company_id: i64,
+        reconciliation_id: i64,
+    ) -> Result<BankReconciliation> {
+        authorize(client, scope, company_id, VIEW).await?;
         let tenant = scope.tenant();
-        let mut found = reconciliations::find(&**client, tenant, company_id, reconciliation_id)
+        let mut found = reconciliations::find(client, tenant, company_id, reconciliation_id)
             .await?
             .ok_or(ReconciliationError::ReconciliationNotFound)?;
-        let account = bank_accounts::find(&**client, tenant, company_id, found.bank_account_id)
+        let account = bank_accounts::find(client, tenant, company_id, found.bank_account_id)
             .await?
             .ok_or(ReconciliationError::BankAccountNotFound)?;
         found.figures = match found.status {
             ReconciliationStatus::Open => Some(
                 reconciliations::compute(
                     &self.ledger,
-                    &**client,
+                    client,
                     scope,
                     company_id,
                     &account,
@@ -1599,10 +1618,7 @@ impl Reconciliation {
                     .iter()
                     .find(|event| event.action == "finalised")
                     .ok_or(Error::Internal)?;
-                let book = self
-                    .ledger
-                    .get_book_on(&**client, scope, company_id)
-                    .await?;
+                let book = self.ledger.get_book_on(client, scope, company_id).await?;
                 Some(Figures {
                     book_balance: event.book_balance.ok_or(Error::Internal)?,
                     difference: event.difference.ok_or(Error::Internal)?,
@@ -1616,12 +1632,49 @@ impl Reconciliation {
                         .through_match_event_number
                         .ok_or(Error::Internal)?,
                     through_opening_id: event.through_opening_id.ok_or(Error::Internal)?,
-                    items: reconciliations::items(&**client, tenant, company_id, found.id).await?,
+                    items: reconciliations::items(client, tenant, company_id, found.id).await?,
                 })
             }
             ReconciliationStatus::Abandoned => None,
         };
         Ok(found)
+    }
+
+    pub async fn activity_boundary_on(
+        &self,
+        client: &(impl tokio_postgres::GenericClient + Sync),
+        scope: &Scope,
+        company_id: i64,
+        bank_account_id: i64,
+        through: Date,
+    ) -> Result<ActivityBoundary> {
+        authorize(client, scope, company_id, VIEW).await?;
+        let account = bank_accounts::find(client, scope.tenant(), company_id, bank_account_id)
+            .await?
+            .ok_or(ReconciliationError::BankAccountNotFound)?;
+        let through_entry_number = self
+            .ledger
+            .latest_account_entry_number_on(
+                client,
+                scope,
+                company_id,
+                account.ledger_account_id,
+                through,
+            )
+            .await?;
+        let (through_statement_number, through_match_event_number) = matching::activity_boundary(
+            client,
+            scope.tenant(),
+            company_id,
+            bank_account_id,
+            through,
+        )
+        .await?;
+        Ok(ActivityBoundary {
+            through_entry_number,
+            through_statement_number,
+            through_match_event_number,
+        })
     }
 
     /// The bank account's reconciliations, oldest first, with their status
