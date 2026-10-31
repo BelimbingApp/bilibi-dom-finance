@@ -6,6 +6,7 @@ use bilibi_agent_api::{
     ReadHandler, WriteHandler, DEFINITIONS,
 };
 use bilibi_module_registry::{Contribution, Provenance, RegistryError};
+use bilibi_tenancy::OrganisationDirectory;
 use serde_json::json;
 use std::{sync::OnceLock, time::Duration};
 
@@ -123,15 +124,18 @@ impl Einvoice {
         company: i64,
         capability: &str,
     ) -> Result<bilibi_tenancy::NamedOrganisation> {
-        self.parties
-            .organisation_target(
+        bilibi_company::authorize_work_target(client, scope, company, capability)
+            .await
+            .map_err(refusal)?;
+        bilibi_company::Directory
+            .lookup(
                 client,
                 scope,
                 OrganisationId::new(company).map_err(|_| EinvoiceError::CompanyNotFound)?,
-                capability,
             )
             .await
-            .map_err(refusal)
+            .map_err(refusal)?
+            .ok_or(EinvoiceError::CompanyNotFound)
     }
 
     async fn operation_issue(

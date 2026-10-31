@@ -50,7 +50,7 @@ inventory::submit! { Module {
         db: s.get::<Db>("base/database.pool")?.as_ref().clone(),
         ledger: s.get(bilibi_finance_ledger::SERVICE)?,
         payables: s.get(bilibi_finance_payables::SERVICE)?,
-        parties: s.get("base/tenancy.parties")?,
+
     }); opening_operations::bind(assets.clone())?; operations::bind(assets.clone())?; Ok(assets) } }, Service { id: web::PAGES, factory: |s| Ok(Arc::new(bilibi_ui::page::PageService::<Scope, Error>(Arc::new(web::Pages {
         contracts: s.get(bilibi_agent_api::page::SERVICE)?,
         db: s.get::<Db>("base/database.pool")?.as_ref().clone(),
@@ -272,7 +272,6 @@ pub struct FixedAssets {
     db: Db,
     ledger: Arc<Ledger>,
     payables: Arc<Payables>,
-    parties: Arc<bilibi_tenancy::PartyProofs>,
 }
 impl FixedAssets {
     async fn write<'c>(

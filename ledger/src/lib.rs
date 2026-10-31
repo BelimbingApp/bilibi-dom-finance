@@ -134,7 +134,6 @@ inventory::submit! {
             ("finance-ledger-013-journal-list", include_str!("../migrations/013-journal-list.sql")),
         ],
         services: &[Service { id: SERVICE, factory: |services| {
-            agent_operations::bind(services.get("base/tenancy.parties")?)?;
             journal_approvals::bind(services.get(bilibi_workflow::SERVICE)?)?;
             saved_templates::bind(services.get("base/settings.store")?)?;
             currency::bind(

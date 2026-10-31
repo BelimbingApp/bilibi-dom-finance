@@ -106,7 +106,7 @@ async fn read_opening_bridge(
     company_id: i64,
     bridge_id: i64,
 ) -> Result<SourceDocument, SourceRefusal> {
-    bilibi_company::authorize_target(client, scope, company_id, VIEW)
+    bilibi_company::authorize_work_target(client, scope, company_id, VIEW)
         .await
         .map_err(|error| match error {
             Error::Forbidden | Error::Unauthorized => SourceRefusal::Unauthorized,

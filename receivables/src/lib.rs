@@ -170,14 +170,7 @@ impl Receivables {
         company: i64,
         capability: &str,
     ) -> Result<()> {
-        self.parties
-            .organisation_target(
-                client,
-                scope,
-                bilibi_party_ids::OrganisationId::new(company)
-                    .map_err(|_| ReceivableError::CompanyNotFound)?,
-                capability,
-            )
+        bilibi_company::authorize_work_target(client, scope, company, capability)
             .await
             .map(|_| ())
             .map_err(refusal)

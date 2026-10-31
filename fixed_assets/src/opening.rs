@@ -31,14 +31,7 @@ impl FixedAssets {
         company: i64,
         cap: &str,
     ) -> Result<()> {
-        self.parties
-            .organisation_target(
-                c,
-                s,
-                bilibi_party_ids::OrganisationId::new(company)
-                    .map_err(|_| FixedAssetsError::CompanyNotFound)?,
-                cap,
-            )
+        bilibi_company::authorize_work_target(c, s, company, cap)
             .await
             .map(|_| ())
             .map_err(|e| match e {

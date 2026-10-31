@@ -7,24 +7,19 @@ use bilibi_agent_api::{
 };
 use bilibi_finance_ledger::MinorUnits;
 use bilibi_module_registry::{Contribution, Provenance, RegistryError};
-use bilibi_party_ids::OrganisationId;
-use bilibi_tenancy::PartyProofs;
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, sync::OnceLock};
 
-static OWNER: OnceLock<(Arc<Payables>, Arc<PartyProofs>)> = OnceLock::new();
-pub(super) fn bind(
-    owner: Arc<Payables>,
-    parties: Arc<PartyProofs>,
-) -> bilibi_module_registry::Result<()> {
+static OWNER: OnceLock<Arc<Payables>> = OnceLock::new();
+pub(super) fn bind(owner: Arc<Payables>) -> bilibi_module_registry::Result<()> {
     OWNER
-        .set((owner, parties))
+        .set(owner)
         .map_err(|_| RegistryError::Service("duplicate payables operation binding".into()))
 }
 fn owner() -> Result<&'static Payables> {
     OWNER
         .get()
-        .map(|(p, _)| p.as_ref())
+        .map(|p| p.as_ref())
         .ok_or_else(|| Error::Internal.into())
 }
 pub(super) async fn authorize_on(
@@ -33,16 +28,7 @@ pub(super) async fn authorize_on(
     company: i64,
     cap: &str,
 ) -> Result<()> {
-    OWNER
-        .get()
-        .ok_or(Error::Internal)?
-        .1
-        .organisation_target(
-            c,
-            s,
-            OrganisationId::new(company).map_err(|_| PayablesError::CompanyNotFound)?,
-            cap,
-        )
+    bilibi_company::authorize_work_target(c, s, company, cap)
         .await
         .map(|_| ())
         .map_err(refusal)

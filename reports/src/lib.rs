@@ -104,7 +104,7 @@ inventory::submit! {
                 sst: services.get(bilibi_finance_sst::SERVICE)?,
                 fixed_assets: services.get(bilibi_finance_fixed_assets::SERVICE)?,
             },
-        }); agent_operations::bind(reports.clone(), services.get("base/tenancy.parties")?)?; Ok(reports) } }, Service { id: "finance/reports.pages", factory: |services| {
+        }); agent_operations::bind(reports.clone())?; Ok(reports) } }, Service { id: "finance/reports.pages", factory: |services| {
             Ok(Arc::new(bilibi_ui::page::PageService::<Scope, Error>(Arc::new(web::Pages {
                 reports: services.get(SERVICE)?,
                 contracts: services.get(bilibi_agent_api::page::SERVICE)?,

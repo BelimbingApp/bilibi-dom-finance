@@ -106,7 +106,7 @@ inventory::submit! {
                 db: services.get::<Db>("base/database.pool")?.as_ref().clone(),
                 ledger: services.get(bilibi_finance_ledger::SERVICE)?,
                 attachments: services.get(bilibi_finance_attachments::SERVICE)?,
-                parties: services.get("base/tenancy.parties")?,
+
             });
             opening_operations::bind(reconciliation.clone())?;
             Ok(reconciliation)
@@ -767,7 +767,6 @@ pub struct Reconciliation {
     db: Db,
     ledger: Arc<Ledger>,
     attachments: Arc<Attachments>,
-    parties: Arc<bilibi_tenancy::PartyProofs>,
 }
 
 impl Reconciliation {

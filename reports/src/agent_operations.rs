@@ -8,7 +8,7 @@ use bilibi_database::{Error, MutationTransaction};
 use bilibi_module_registry::{Contribution, Provenance, RegistryError};
 use bilibi_party_ids::OrganisationId;
 use bilibi_settings::Target;
-use bilibi_tenancy::{PartyProofs, Scope};
+use bilibi_tenancy::Scope;
 use serde_json::{json, Value};
 use std::{
     collections::BTreeMap,
@@ -16,14 +16,10 @@ use std::{
 };
 
 static OWNER: OnceLock<Arc<Reports>> = OnceLock::new();
-static PARTIES: OnceLock<Arc<PartyProofs>> = OnceLock::new();
-pub(crate) fn bind(owner: Arc<Reports>, parties: Arc<PartyProofs>) -> Result<(), RegistryError> {
+pub(crate) fn bind(owner: Arc<Reports>) -> Result<(), RegistryError> {
     OWNER
         .set(owner)
-        .map_err(|_| RegistryError::Service("duplicate report operations".into()))?;
-    PARTIES
-        .set(parties)
-        .map_err(|_| RegistryError::Service("duplicate report party proofs".into()))
+        .map_err(|_| RegistryError::Service("duplicate report operations".into()))
 }
 const MANAGE: &str = bilibi_finance_ledger::MANAGE_ACCOUNTS;
 fn invalid(field: &str, text: &str) -> bilibi_agent_api::Error {
@@ -39,11 +35,7 @@ async fn read(
         .as_i64()
         .and_then(|id| OrganisationId::new(id).ok())
         .ok_or_else(|| invalid("company_id", "Choose a company."))?;
-    PARTIES
-        .get()
-        .ok_or(Error::Internal)?
-        .organisation_target(client, scope, company, capability)
-        .await?;
+    bilibi_company::authorize_work_target(client, scope, company.get(), capability).await?;
     Ok(OWNER
         .get()
         .ok_or(Error::Internal)?
@@ -137,11 +129,7 @@ impl ReadHandler for SetupRead {
                 .as_i64()
                 .and_then(|id| OrganisationId::new(id).ok())
                 .ok_or_else(|| invalid("company_id", "Choose a company."))?;
-            PARTIES
-                .get()
-                .ok_or(Error::Internal)?
-                .organisation_target(client, scope, company, VIEW)
-                .await?;
+            bilibi_company::authorize_work_target(client, scope, company.get(), VIEW).await?;
             // A read holds no company lock, so the facades' own connections are safe here.
             let overview = OWNER
                 .get()
