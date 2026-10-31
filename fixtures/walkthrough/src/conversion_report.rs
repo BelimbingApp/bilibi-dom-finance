@@ -262,6 +262,22 @@ pub async fn before(db: &Db, services: &Services) -> Outcome<Kept> {
         .as_array()
         .unwrap()
         .is_empty());
+    let schedules = preview["sources"]["reports"]["source_period"]["rows"]
+        .as_array()
+        .ok_or("retained source-period schedules")?;
+    assert_eq!(schedules.len(), 4);
+    for kind in ["comparative", "movement", "sst", "payroll"] {
+        let row = schedules
+            .iter()
+            .find(|row| row["kind"] == kind)
+            .ok_or("retained schedule kind")?;
+        assert_eq!(row["source_reference"], format!("HISTORY-{kind}"));
+        assert_eq!(row["recorded_by_user_id"], s.user());
+        assert!(!row["facts"]
+            .as_array()
+            .ok_or("source schedule facts")?
+            .is_empty());
+    }
     let opening_bridges = preview["sources"]["bank"]["opening_bridge"]["rows"]
         .as_array()
         .ok_or("retained opening bank bridges")?;

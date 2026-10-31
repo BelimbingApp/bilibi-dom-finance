@@ -822,7 +822,7 @@ impl Reports {
     /// The datasets [`Reports::evidence_page`] exports, one per table this
     /// module owns.
     pub fn evidence_datasets() -> Vec<&'static str> {
-        vec!["issued", "source_period"]
+        vec!["issued", "conversion_signoff", "source_period"]
     }
 
     /// One ID-ordered evidence page of `dataset` with explicit fields, rows
