@@ -56,6 +56,8 @@ struct State {
     offset: usize,
     columns: ListColumns,
     list_after: i64,
+    list_columns: ListColumns,
+    account_columns: ListColumns,
 }
 fn render(t: impl Template) -> Result<Html> {
     Html::render(&t).map_err(|_| Error::Internal)
@@ -92,6 +94,26 @@ impl State {
             )
             .expect("conversion columns"),
             list_after: 0,
+            list_columns: ListColumns::mount(
+                "conversion-list",
+                vec![
+                    BuiltinColumn::new("report", "Report"),
+                    BuiltinColumn::new("date", "Reporting date"),
+                    BuiltinColumn::new("pin", "Through entry"),
+                    BuiltinColumn::new("status", "Status"),
+                ],
+            )
+            .expect("conversion list columns"),
+            account_columns: ListColumns::mount(
+                "conversion-accounts",
+                vec![
+                    BuiltinColumn::new("account", "Account"),
+                    BuiltinColumn::new("source", "Source balance").right(),
+                    BuiltinColumn::new("target", "Target balance").right(),
+                    BuiltinColumn::new("movement", "Movement").right(),
+                ],
+            )
+            .expect("conversion account columns"),
         }
     }
     async fn read(&self, s: &Scope, key: &str, input: Value) -> std::result::Result<Value, String> {
@@ -163,6 +185,100 @@ impl State {
             }
         }
         text
+    }
+    fn issued_list(&mut self) -> Result<Html> {
+        let data = self.document["rows"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        self.list_columns.load(&data, |r| r["id"].to_string());
+        let mut rows = Vec::new();
+        for r in &data {
+            let id = r["id"].as_i64().ok_or(Error::Internal)?;
+            rows.push(
+                FlexRow::new(id.to_string())
+                    .slot(
+                        "report",
+                        render(Button {
+                            href: &format!("{PATH}/{id}"),
+                            body: Html::text(format!("Report {id}")),
+                            ..Button::default()
+                        })?,
+                    )
+                    .cell("date", Cell::text(r["as_of"].as_str().unwrap_or("")))
+                    .cell("pin", Cell::text(r["through_entry_number"].to_string()))
+                    .cell(
+                        "status",
+                        Cell::text(if r["signed"] == true {
+                            "Signed"
+                        } else {
+                            "Issued; unsigned"
+                        }),
+                    ),
+            );
+        }
+        let mut table = FlexTable::new("conversion-list", self.list_columns.flex_columns(), rows);
+        table.caption = "Issued conversion reports";
+        table.zoom = self.list_columns.zoom;
+        table.suggestions = self.list_columns.flex_suggestions();
+        render(table)
+    }
+    fn account_table(&mut self) -> Result<Html> {
+        let data = self.current().as_array().cloned().unwrap_or_default();
+        self.offset = self.offset.min(data.len().saturating_sub(1) / 100 * 100);
+        let selected = &data[self.offset..(self.offset + 100).min(data.len())];
+        self.account_columns
+            .load(selected, |r| r["account_id"].to_string());
+        let rows = selected
+            .iter()
+            .map(|r| {
+                FlexRow::new(r["account_id"].to_string())
+                    .cell(
+                        "account",
+                        Cell::text(format!(
+                            "{} · {}",
+                            r["name"].as_str().unwrap_or(""),
+                            r["code"].as_str().unwrap_or("")
+                        )),
+                    )
+                    .cell(
+                        "source",
+                        Cell::text(self.scalar("balance", &r["source_balance"])),
+                    )
+                    .cell(
+                        "target",
+                        Cell::text(self.scalar("balance", &r["target_balance"])),
+                    )
+                    .cell(
+                        "movement",
+                        Cell::text(self.scalar("movement", &r["movement"])),
+                    )
+            })
+            .collect();
+        let mut table = FlexTable::new(
+            "conversion-accounts",
+            self.account_columns.flex_columns(),
+            rows,
+        );
+        table.caption = "Source and target trial balance by account (debit less credit)";
+        table.zoom = self.account_columns.zoom;
+        table.suggestions = self.account_columns.flex_suggestions();
+        let mut body = render(table)?;
+        body.push(&render(Alert {id:"conversion-account-boundary",kind:StatusKind::Info,body:Html::text(format!("{} accounts; showing {}–{}. Movement includes legitimate target activity and is not itself an unresolved difference.",data.len(),if data.is_empty(){0}else{self.offset+1},(self.offset+100).min(data.len()))),..Alert::default()})?);
+        for (event, title, show) in [
+            ("up", "Back to report", true),
+            ("previous", "Previous accounts", self.offset > 0),
+            ("next", "Next accounts", self.offset + 100 < data.len()),
+        ] {
+            if show {
+                body.push(&render(Button {
+                    event,
+                    body: Html::text(title),
+                    ..Button::default()
+                })?);
+            }
+        }
+        Ok(body)
     }
     fn table(&mut self) -> Result<Html> {
         let entries = self.entries();
@@ -316,7 +432,33 @@ impl State {
                 })?);
             }
             if !self.document.is_null() {
-                body.push(&self.table()?);
+                if self.id.is_none() && self.document.get("rows").is_some() {
+                    body.push(&self.issued_list()?);
+                } else {
+                    let content = if self.id.is_some() {
+                        &self.document["report"]["content"]
+                    } else {
+                        &self.document
+                    };
+                    body.push(&render(Alert {id:"conversion-summary",kind:StatusKind::Info,body:Html::text(format!("Conversion {} · reporting date {} · through entry {} · {} unresolved items. Review every difference, source and schedule limit.",content["conversion_date"].as_str().unwrap_or(""),content["as_of"].as_str().unwrap_or(""),content["through_entry_number"],content["unresolved_differences"].as_array().map_or(0,Vec::len))),..Alert::default()})?);
+                    body.push(&render(Button {
+                        event: "accounts",
+                        body: Html::text("Source and target balances"),
+                        ..Button::default()
+                    })?);
+                    if self.id.is_some() {
+                        body.push(&render(Button {
+                            event: "signoffs",
+                            body: Html::text("Accountant sign-off"),
+                            ..Button::default()
+                        })?);
+                    }
+                    if self.path.last().is_some_and(|p| p == "accounts") {
+                        body.push(&self.account_table()?);
+                    } else {
+                        body.push(&self.table()?);
+                    }
+                }
             }
             if self.id.is_none() {
                 body.push(&render(Button {
@@ -332,19 +474,6 @@ impl State {
                         body: Html::text("More reports"),
                         ..Button::default()
                     })?);
-                }
-                // A stable link opens each issued report at its one record page.
-                for row in self.document["rows"].as_array().into_iter().flatten() {
-                    if let Some(id) = row["id"].as_i64() {
-                        body.push(&render(Button {
-                            href: &format!("{PATH}/{id}"),
-                            body: Html::text(&format!(
-                                "Report {id} · {}",
-                                row["as_of"].as_str().unwrap_or("")
-                            )),
-                            ..Button::default()
-                        })?);
-                    }
                 }
             } else {
                 body.push(&render(Button {
@@ -515,7 +644,22 @@ impl LiveState<Scope, Error> for State {
                     "previous" => self.offset = self.offset.saturating_sub(100),
                     "next" => self.offset = self.offset.saturating_add(100),
                     "grid" => {
-                        self.columns.handle(&params::string_values(v));
+                        let values = params::string_values(v);
+                        self.columns.handle(&values);
+                        self.list_columns.handle(&values);
+                        self.account_columns.handle(&values);
+                    }
+                    "accounts" => {
+                        self.path = if self.id.is_some() {
+                            vec!["report".into(), "content".into(), "accounts".into()]
+                        } else {
+                            vec!["accounts".into()]
+                        };
+                        self.offset = 0;
+                    }
+                    "signoffs" => {
+                        self.path = vec!["signoffs".into()];
+                        self.offset = 0;
                     }
                     "cancel_review" => self.confirm = false,
                     "open_review" => self.confirm = true,

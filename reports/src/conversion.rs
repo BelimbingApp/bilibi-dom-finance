@@ -1,7 +1,8 @@
 //! Domain-owned conversion evidence. Compose the owners, freeze their answers;
 //! never infer a clean conversion merely because the trial balance balances.
 use crate::{
-    authorize, issued, json, pack_owner, Reports, ReportsError, Result, ISSUE, MODULE, VIEW,
+    authorize, issued, json, pack_owner, Reports, ReportsError, Result, ISSUE, MODULE, SIGN_OFF,
+    VIEW,
 };
 use bilibi_database::{Change, Error, MutationTransaction};
 use bilibi_finance_ledger::{Approval, Money, Preparer, TotalsQuery};
@@ -62,7 +63,14 @@ impl Reports {
         self.conversion_access(c, s, company, VIEW).await?;
         let opening = self.ledger.opening_context_on(c, s, company).await?;
         if as_of < opening.entry.entry_date {
-            return Err(ReportsError::InvalidOption);
+            return Err(ReportsError::Ledger(
+                bilibi_finance_ledger::LedgerError::Invalid(vec![
+                    bilibi_finance_ledger::FieldError::new(
+                        "as_of",
+                        "The reporting date cannot precede the conversion date.",
+                    ),
+                ]),
+            ));
         }
         let target = self
             .ledger
@@ -345,12 +353,16 @@ impl Reports {
                 differences.push(json!({"area":"bank","bank_account_id":bank["account"]["id"],"reason":"Review the bridge's status, end date and changes since finalisation; it does not establish a complete tie-out at the report date."}));
             }
         }
+        for area in ["bank", "tax", "payroll"] {
+            differences.push(json!({"area":area,"kind":"schedule_assessment","reason":"The accountant has not assessed this schedule's applicability or completeness."}));
+        }
         let report = json!({"version":1,"company_id":company,"as_of":as_of.to_string(),"conversion_date":opening.entry.entry_date.to_string(),"currency_code":target.currency_code,"minor_units":target.minor_units,"through_entry_number":through,
             "opening":opening,"source_trial_balance":{"rows":comparisons,"basis":"Approved source opening journal only; signed debit less credit balances."},"target_trial_balance":target,"accounts":comparisons,"postings_by_owner":owners,
             "receivables":{"detail":ar_detail,"control":ar},"payables":{"detail":ap_detail,"control":ap},"assets":asset_snapshot,"bank_bridges":bank_bridges,"sources":evidence,
             "unresolved_differences":differences,
             "excluded_history":["Transactions before conversion other than the approved opening journal and retained opening registers.","Previously settled invoice and bill history, historical asset depreciation entries and legacy bank matches are not imported."],
             "schedule_limits":["Bank evidence retains statement and finalised reconciliation bridges. Open bridges require a separate reconciliation; no conversion bank bridge is inferred.","Tax and payroll evidence is retained where recorded. Legacy returns, payroll year-to-date and filing completeness require the accountant's external schedules and reviewer references."],
+            "schedule_reviews":{"bank":{"status":"not_assessed"},"tax":{"status":"not_assessed"},"payroll":{"status":"not_assessed"}},
             "assessment":"Unassessed. Zero numerical differences do not establish completeness or accountant approval. Other-owner control postings remain visible; opening recognition is evidence, not a reclassification."});
         if serde_json::to_vec(&report)
             .map_err(|_| Error::Internal)?
@@ -370,6 +382,13 @@ impl Reports {
         content: Value,
     ) -> Result<Value> {
         self.conversion_access(tx.sql(), s, company, ISSUE).await?;
+        bilibi_company::require_writable(tx.sql(), s, company, true)
+            .await
+            .map_err(|e| {
+                ReportsError::Ledger(bilibi_finance_ledger::LedgerError::Invalid(vec![
+                    bilibi_finance_ledger::FieldError::new("base", e.to_string()),
+                ]))
+            })?;
         let new = issued::NewIssued {
             tenant_id: s.tenant(),
             company_id: company,
@@ -416,6 +435,40 @@ impl Reports {
             .ok_or(ReportsError::ReportNotFound)?;
         let signs=c.query("SELECT to_jsonb(s) FROM finance_reports_conversion_signoffs s WHERE tenant_id=$1 AND company_id=$2 AND report_id=$3 ORDER BY id",&[&s.tenant(),&company,&id]).await?.iter().map(|r|r.get::<_,Value>(0)).collect::<Vec<_>>();
         Ok(json!({"report":row,"signoffs":signs}))
+    }
+
+    pub(crate) async fn sign_conversion_on(
+        &self,
+        tx: &mut MutationTransaction<'_>,
+        s: &Scope,
+        company: i64,
+        report: &Value,
+        reference: String,
+        note: String,
+    ) -> Result<Value> {
+        self.conversion_access(tx.sql(), s, company, SIGN_OFF)
+            .await?;
+        bilibi_company::require_writable(tx.sql(), s, company, true)
+            .await
+            .map_err(|e| {
+                ReportsError::Ledger(bilibi_finance_ledger::LedgerError::Invalid(vec![
+                    bilibi_finance_ledger::FieldError::new("base", e.to_string()),
+                ]))
+            })?;
+        let id = report["report"]["id"].as_i64().ok_or(Error::Internal)?;
+        if tx.sql().query_opt("SELECT id FROM finance_reports_conversion_signoffs WHERE tenant_id=$1 AND company_id=$2 AND report_id=$3",&[&s.tenant(),&company,&id]).await?.is_some(){return Err(ReportsError::Ledger(bilibi_finance_ledger::LedgerError::Invalid(vec![bilibi_finance_ledger::FieldError::new("report_id","This report is already signed.")])));}
+        let approval = Self::conversion_approval(report, None)?;
+        self.ledger
+            .check_approval(tx, s, company, &approval)
+            .await?;
+        let tenant = s.tenant();
+        let user = s.user();
+        let impersonator = s.impersonator().map(|i| i.user());
+        Ok(tx.mutate(move|sql|Box::pin(async move {
+            let row:Value=sql.query_one("INSERT INTO finance_reports_conversion_signoffs(tenant_id,company_id,report_id,reviewer_reference,note,signed_by_user_id,signed_by_impersonator_id) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING to_jsonb(finance_reports_conversion_signoffs)",&[&tenant,&company,&id,&reference,&note,&user,&impersonator]).await?.get(0);
+            let change=Change {kind:"finance.reports.conversion_signoff".into(),id:row["id"].as_i64().ok_or(Error::Internal)?,old:Value::Null,new:row.clone()};
+            Ok((row,vec![change]))
+        })).await?)
     }
 
     pub(crate) fn conversion_approval(report: &Value, reason: Option<String>) -> Result<Approval> {

@@ -4,7 +4,7 @@ use bilibi_agent_api::{
     Channels, Definitions, Handler, Operation, OperationClient, OperationFuture, ReadHandler,
     WriteHandler, DEFINITIONS,
 };
-use bilibi_database::{Change, Error, MutationTransaction};
+use bilibi_database::{Error, MutationTransaction};
 use bilibi_module_registry::{Contribution, Provenance};
 use bilibi_tenancy::Scope;
 use jiff::civil::Date;
@@ -171,6 +171,10 @@ async fn issue_review(
         .map_err(refusal)?;
     report["reviewer_reference"] = json!(text(input, "reviewer_reference", 2000)?);
     report["review_note"] = json!(text(input, "note", 8000)?);
+    report["unresolved_differences"]
+        .as_array_mut()
+        .ok_or(Error::Internal)?
+        .retain(|r| r["kind"] != "schedule_assessment");
     let mut schedules = serde_json::Map::new();
     for area in ["bank", "tax", "payroll"] {
         let status_key = format!("{area}_status");
@@ -192,7 +196,7 @@ async fn issue_review(
             json!({"status":status,"reference_or_reason":reference}),
         );
         if status == "not_assessed" {
-            report["unresolved_differences"].as_array_mut().ok_or(Error::Internal)?.push(json!({"area":area,"reason":"The accountant has not assessed this schedule's applicability or completeness."}));
+            report["unresolved_differences"].as_array_mut().ok_or(Error::Internal)?.push(json!({"area":area,"kind":"schedule_assessment","reason":"The accountant has not assessed this schedule's applicability or completeness."}));
         }
     }
     report["schedule_reviews"] = Value::Object(schedules);
@@ -282,24 +286,12 @@ impl WriteHandler for Sign {
             let v = sign_review(tx.sql(), s, input).await?;
             fence(tx.sql(), &v, true).await?;
             let company = id(input, "company_id")?;
-            let report = id(input, "report_id")?;
-            let approval = Reports::conversion_approval(&v["record"], None).map_err(refusal)?;
-            owner()?
-                .ledger
-                .check_approval(tx, s, company, &approval)
+            let reference = text(input, "reviewer_reference", 2000)?;
+            let note = text(input, "note", 8000)?;
+            let row = owner()?
+                .sign_conversion_on(tx, s, company, &v["record"], reference, note)
                 .await
-                .map_err(|e| invalid("base", e.to_string()))?;
-            let tenant = s.tenant();
-            let user = s.user();
-            let impersonator = s.impersonator().map(|i| i.user());
-            let reference = v["reviewer_reference"]
-                .as_str()
-                .ok_or(Error::Internal)?
-                .to_string();
-            let note = v["note"].as_str().ok_or(Error::Internal)?.to_string();
-            let row=tx.mutate(move|sql|Box::pin(async move {
- let row:Value=sql.query_one("INSERT INTO finance_reports_conversion_signoffs(tenant_id,company_id,report_id,reviewer_reference,note,signed_by_user_id,signed_by_impersonator_id) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING to_jsonb(finance_reports_conversion_signoffs)",&[&tenant,&company,&report,&reference,&note,&user,&impersonator]).await?.get(0);
- let change=Change {kind:"finance.reports.conversion_signoff".into(),id:row["id"].as_i64().ok_or(Error::Internal)?,old:Value::Null,new:row.clone()};Ok((row,vec![change]))})).await?;
+                .map_err(refusal)?;
             Ok(row.into())
         })
     }
