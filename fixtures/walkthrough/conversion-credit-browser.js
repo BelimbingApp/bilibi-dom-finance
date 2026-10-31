@@ -66,6 +66,13 @@ async function opening(module, source) {
     await page.click("#conversion-import");
     await page.wait(600);
   }
+  const filter = 'main select[name="filters[' + (module === "receivables" ? "kind" : "document_type") + ']"]';
+  await page.fill(filter, "opening_credit");
+  await page.wait(filter + ' option[value="opening_credit"][selected]');
+  const credits = await page.eval(() => [...document.querySelectorAll("main a[href]")].filter(a => /\/(?:invoices|bills)\/\d+$/.test(a.getAttribute("href"))).length);
+  requireProof(credits === 3, "The visible opening-credit filter did not retain its three rows");
+  await page.fill(filter, "");
+  await page.wait(filter + ' option[value=""][selected]');
   const records = await page.eval(() => [...document.querySelectorAll("main a[href]")].map(a => a.getAttribute("href")).filter(href => /\/(?:invoices|bills)\/\d+$/.test(href)));
   requireProof(records.length === 5, "Expected the fixture's five mixed opening records on their existing list");
   return { primary: records[3], historical: records[2] };

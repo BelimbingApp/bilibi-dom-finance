@@ -33,7 +33,7 @@ static SPEC: LazyLock<Arc<ListSpec>> = LazyLock::new(|| {
             ),
             (
                 "document_type".into(),
-                Filter::one_of(&["", "bill", "debit_note"], ""),
+                Filter::one_of(&["", "bill", "debit_note", "opening_credit"], ""),
             ),
         ]
         .into(),
