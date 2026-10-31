@@ -929,6 +929,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
             &AgingQuery {
                 bucket_days: vec![60, 30],
                 through_opening_batch_id: None,
+                through_settlement_number: None,
                 through_entry_number: None,
             },
         )

@@ -338,6 +338,7 @@ pub async fn prove(
             &bilibi_finance_receivables::AgingOptions {
                 through_entry_number: old_ar_pins.through_entry_number,
                 through_opening_batch_id: old_ar_pins.through_opening_batch_id,
+                through_settlement_number: old_ar_pins.through_settlement_number,
                 ..Default::default()
             },
         )
