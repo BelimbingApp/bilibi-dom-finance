@@ -893,6 +893,10 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
     );
     drop(c);
     let report = conversion_report::before(db, services).await?;
+    if std::env::args().any(|s| s == "report-browser") {
+        println!("Conversion report browser fixture ready on Company 003; bulk correction proof was not run.");
+        return Ok(());
+    }
     conversion_lifecycle::prove(db, services, &config, [a, b, asset_batch], run.id).await?;
     conversion_report::after(db, services, report).await?;
     Ok(())

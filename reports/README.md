@@ -266,3 +266,5 @@ All source-view grants are required to preview, issue or read a conversion copy,
 Schedule status is `not_assessed` (default), `applicable` or `not_applicable`. Issue requires `finance.reports.issue`; sign requires `finance.reports.sign-off`; every operation also requires all source views. HTTP API, MCP and the page use these same contracts. The page offers the complete retained evidence in sections, 100 records at a time, including source CSV and review references.
 
 Run the conversion walkthrough on a fresh disposable database with `cargo run -p bilibi-finance-walkthrough-fixture --bin conversion`. Its report proof surrounds the existing register-correction lifecycle and checks stale plans, retained source rows beyond one evidence page, permission revocation, backdated control postings, duty separation, immutable issuance and qualified sign-off.
+
+For a small browser fixture, append `-- report-browser` to that command. It keeps Company 003's opening records and an unsigned report, then stops before the bulk corrections. Start the Platform launcher against that database to review, issue and sign through the page.
