@@ -3,8 +3,7 @@
 use bilibi_authz::grants::Grants;
 use bilibi_database::{pool, Error};
 use bilibi_finance_ledger::{
-    AccountType, ApprovalExceptionQuery, LateRecordingQuery, Ledger, MinorUnits, Money, NewAccount,
-    NewBook, NewEntry, NewLine, PostOptions, MANAGE_CONTROLLED_BOOKKEEPING, REVIEW_EXCEPTIONS,
+    ApprovalExceptionQuery, Ledger, NewBook, MANAGE_CONTROLLED_BOOKKEEPING, REVIEW_EXCEPTIONS,
 };
 use bilibi_finance_walkthrough_fixture::sign_in;
 use bilibi_module_registry::Services;
@@ -26,13 +25,18 @@ async fn mount(
 ) -> Outcome<Box<dyn LiveState<Scope, Error>>> {
     let pages = services.get::<PageService<Scope, Error>>("finance/reports.control-pages")?;
     let map = HashMap::new();
+    let query = if operation == "approval-exceptions" {
+        HashMap::from([("area".into(), "other".into())])
+    } else {
+        HashMap::new()
+    };
     Ok(pages
         .0
         .mount(PageRequest {
             operation,
             scope: Some(scope),
             path: &map,
-            query: &map,
+            query: &query,
             body: &[],
             framed: false,
         })
@@ -87,12 +91,12 @@ async fn main() -> Outcome<()> {
     let late_date = today.checked_sub(120.days())?;
     let manager = sign_in(&db, &services, 1, 1).await?;
     let authority = sign_in(&db, &services, 1, 4).await?;
-    // Pages use the sealed affiliation's company, never users.company_id.
+    // A page needs the session's current company, not a user's organisation field.
     // The grant-all fixture administrator is intentionally unaffiliated.
-    let mut missing = mount(&services, &authority, "bookkeeping").await?;
+    let mut missing = mount(&services, &authority, "controls").await?;
     contains(
         &refresh(missing.as_mut(), &authority).await?,
-        "No company is selected",
+        "No current company",
     );
     for capability in [
         bilibi_finance_ledger::REVIEW_LATE_RECORDINGS,
@@ -134,44 +138,24 @@ async fn main() -> Outcome<()> {
             },
         )
         .await?;
-    let debit = ledger
-        .create_account(
-            &manager,
-            1,
-            &NewAccount::new("1000", "Fixture asset", AccountType::Asset),
-        )
-        .await?;
-    let credit = ledger
-        .create_account(
-            &manager,
-            1,
-            &NewAccount::new("3000", "Fixture equity", AccountType::Equity),
-        )
-        .await?;
-    let mut book = mount(&services, &manager, "bookkeeping").await?;
+    let mut book = mount(&services, &manager, "controls").await?;
     let page = refresh(book.as_mut(), &manager).await?;
     contains(
         &page,
         "No fiscal year is open, so no entry can be posted yet.",
     );
-    contains(&page, "Open the first fiscal year");
-    event(
-        book.as_mut(),
-        &manager,
-        json!({"type":"open_dialog","dialog":"fiscal-year"}),
-    )
-    .await?;
-    let invalid = event(
-        book.as_mut(),
-        &manager,
-        json!({"type":"open_fiscal_year","dialog[start_date]":"invalid"}),
-    )
-    .await?;
-    contains(&invalid, "Give the first day of the fiscal year as a date.");
-    let opened = event(book.as_mut(), &manager, json!({"type":"open_fiscal_year","dialog[start_date]":late_date.first_of_month().to_string(),"dialog[end_date]":""})).await?;
-    contains(&opened, "is open.");
-    assert_eq!(ledger.list_fiscal_years(&manager, 1).await?.len(), 1);
-    println!("NT3: first-year warning, invalid date retained, explicit first fiscal year opened through page");
+    contains(&page, "/finance/ledger/fiscal-years");
+    ledger
+        .open_fiscal_year(
+            &manager,
+            1,
+            &bilibi_finance_ledger::NewFiscalYear {
+                start_date: Some(late_date.first_of_month()),
+                end_date: None,
+            },
+        )
+        .await?;
+    println!("NT3: controls link to the single Fiscal years home");
 
     event(
         book.as_mut(),
@@ -228,73 +212,10 @@ async fn main() -> Outcome<()> {
     );
     println!("NT3: controlled off requires reason, Unicode is preserved, override audited, controlled on restored");
 
-    let amount = Money::parse("12.50", MinorUnits::new(2).unwrap())?;
-    let entry = ledger
-        .post_entry(
-            &manager,
-            1,
-            &NewEntry {
-                entry_date: late_date,
-                description: "NT3 late recording".into(),
-                reference: Some("NT3 review proof".into()),
-                lines: vec![
-                    NewLine::debit(debit.id, amount),
-                    NewLine::credit(credit.id, amount),
-                ],
-            },
-            &PostOptions::default(),
-        )
-        .await?;
-    let id = entry.id.to_string();
-    event(
-        book.as_mut(),
-        &manager,
-        json!({"type":"open_dialog","dialog":"review","entry":id}),
-    )
-    .await?;
-    let refused = event(
-        book.as_mut(),
-        &manager,
-        json!({"type":"review","dialog[text]":"Own work"}),
-    )
-    .await?;
     contains(
-        &refused,
-        "An entry is reviewed by someone who did not post it.",
+        &refresh(book.as_mut(), &manager).await?,
+        "/finance/ledger/journals?review=pending",
     );
-    let mut independent = mount(&services, &reviewer_scope, "bookkeeping").await?;
-    event(
-        independent.as_mut(),
-        &reviewer_scope,
-        json!({"type":"open_dialog","entry":id}),
-    )
-    .await?;
-    let reviewed = event(
-        independent.as_mut(),
-        &reviewer_scope,
-        json!({"type":"review","dialog[text]":"Source received after the transaction date"}),
-    )
-    .await?;
-    contains(&reviewed, "Review of entry");
-    assert!(ledger
-        .list_late_recordings(&manager, 1, &LateRecordingQuery::default())
-        .await?[0]
-        .review
-        .is_some());
-    let filter = HashMap::from([
-        ("status".into(), "late".into()),
-        ("review".into(), "reviewed".into()),
-    ]);
-    let filtered = update(book.as_mut(), &manager, LiveInput::Params(&filter)).await?;
-    assert_eq!(
-        filtered.query.get("review").map(String::as_str),
-        Some("reviewed")
-    );
-    contains(&filtered.html, "NT3 late recording");
-    let pending = HashMap::from([("review".into(), "pending".into())]);
-    let filtered = update(book.as_mut(), &manager, LiveInput::Params(&pending)).await?;
-    contains(&filtered.html, "No entries recorded late");
-    println!("NT3: late entry rendered, poster refused, independent review committed, status/review URL filters round-trip");
 
     let mut approvals = mount(&services, &manager, "approval-exceptions").await?;
     let initial = refresh(approvals.as_mut(), &manager).await?;
@@ -370,6 +291,7 @@ async fn main() -> Outcome<()> {
         .review
         .is_some());
     let period = HashMap::from([
+        ("area".into(), "other".into()),
         ("period".into(), "custom".into()),
         ("from".into(), today.to_string()),
         ("to".into(), today.to_string()),
@@ -378,6 +300,7 @@ async fn main() -> Outcome<()> {
     let filtered = update(approvals.as_mut(), &manager, LiveInput::Params(&period)).await?;
     contains(&filtered.html, "exception-review-1");
     let unreadable = HashMap::from([
+        ("area".into(), "other".into()),
         ("period".into(), "custom".into()),
         ("from".into(), "2026-10-20".into()),
         ("to".into(), "2026-10-01".into()),
@@ -411,15 +334,10 @@ async fn main() -> Outcome<()> {
     .await?;
     println!("NT3: period/review filtering, separation reason, require again, approver refused, independent optional-note review committed");
 
-    let mut restricted = mount(&services, &viewer, "bookkeeping").await?;
+    let mut restricted = mount(&services, &viewer, "controls").await?;
     let withheld = refresh(restricted.as_mut(), &viewer).await?;
     // As in Bilimbi, a control the viewer may not use is simply absent.
-    for control in [
-        "controlled-bookkeeping-on",
-        "controlled-bookkeeping-off",
-        "fiscal-year-open",
-        "fiscal-years-open",
-    ] {
+    for control in ["controlled-bookkeeping-on", "controlled-bookkeeping-off"] {
         assert!(
             !withheld.contains(&format!("id=\"{control}\"")),
             "restricted page shows {control:?}"
@@ -467,124 +385,6 @@ async fn main() -> Outcome<()> {
         .await?;
     println!("NT3: withheld controls, forged writes and mid-page grant revocation refuse without losing the live page");
 
-    // Independent reviewers race on the same unreviewed entry: exactly one
-    // review commits; the other page reports AlreadyReviewed and remains live.
-    let second = ledger
-        .post_entry(
-            &manager,
-            1,
-            &NewEntry {
-                entry_date: late_date,
-                description: "NT3 review race".into(),
-                reference: None,
-                lines: vec![
-                    NewLine::debit(debit.id, amount),
-                    NewLine::credit(credit.id, amount),
-                ],
-            },
-            &PostOptions::default(),
-        )
-        .await?;
-    let mut left = mount(&services, &reviewer_scope, "bookkeeping").await?;
-    let mut right = mount(&services, &reviewer_scope, "bookkeeping").await?;
-    for page in [&mut left, &mut right] {
-        event(
-            page.as_mut(),
-            &reviewer_scope,
-            json!({"type":"open_dialog","entry":second.id.to_string()}),
-        )
-        .await?;
-    }
-    let (a, b) = tokio::join!(
-        event(
-            left.as_mut(),
-            &reviewer_scope,
-            json!({"type":"review","dialog[text]":"Race A"})
-        ),
-        event(
-            right.as_mut(),
-            &reviewer_scope,
-            json!({"type":"review","dialog[text]":"Race B"})
-        )
-    );
-    let (a, b) = (a?, b?);
-    assert_eq!(
-        usize::from(a.contains("Review of entry")) + usize::from(b.contains("Review of entry")),
-        1
-    );
-    assert!(
-        a.contains("Someone has already reviewed that entry.")
-            || b.contains("Someone has already reviewed that entry.")
-    );
-    for number in 0..101 {
-        ledger
-            .post_entry(
-                &manager,
-                1,
-                &NewEntry {
-                    entry_date: late_date,
-                    description: format!("NT3 cursor row {number}"),
-                    reference: None,
-                    lines: vec![
-                        NewLine::debit(debit.id, amount),
-                        NewLine::credit(credit.id, amount),
-                    ],
-                },
-                &PostOptions::default(),
-            )
-            .await?;
-    }
-    let approaching = ledger
-        .post_entry(
-            &manager,
-            1,
-            &NewEntry {
-                entry_date: today.checked_sub(50.days())?,
-                description: "NT3 approaching recording".into(),
-                reference: None,
-                lines: vec![
-                    NewLine::debit(debit.id, amount),
-                    NewLine::credit(credit.id, amount),
-                ],
-            },
-            &PostOptions::default(),
-        )
-        .await?;
-    let first_page = ledger
-        .list_late_recordings(
-            &manager,
-            1,
-            &LateRecordingQuery {
-                reviewed: Some(false),
-                ..LateRecordingQuery::default()
-            },
-        )
-        .await?;
-    assert_eq!(first_page.len(), 100);
-    let pending = HashMap::from([("review".into(), "pending".into())]);
-    let first_view = update(book.as_mut(), &manager, LiveInput::Params(&pending)).await?;
-    contains(&first_view.html, "Later entries");
-    let cursor = first_page.last().unwrap().entry_number.to_string();
-    let later = HashMap::from([
-        ("review".into(), "pending".into()),
-        ("after".into(), cursor.clone()),
-    ]);
-    let later_view = update(book.as_mut(), &manager, LiveInput::Params(&later)).await?;
-    assert_eq!(later_view.query.get("after"), Some(&cursor));
-    contains(&later_view.html, "NT3 cursor row 100");
-    let approaching_filter = HashMap::from([("status".into(), "approaching".into())]);
-    let approaching_view = update(
-        book.as_mut(),
-        &manager,
-        LiveInput::Params(&approaching_filter),
-    )
-    .await?;
-    contains(
-        &approaching_view.html,
-        &format!("late-entry-{}", approaching.entry_number),
-    );
-    assert!(!approaching_view.html.contains("NT3 cursor row"));
-    println!("NT3: approaching threshold and 100-row cursor paging proved through facade and page answers");
     let raw = db.get().await?;
     raw.batch_execute("UPDATE companies SET status='archived' WHERE tenant_id=1 AND id=1")
         .await?;
@@ -606,15 +406,12 @@ async fn main() -> Outcome<()> {
     );
     raw.batch_execute("UPDATE companies SET status='active' WHERE tenant_id=1 AND id=1")
         .await?;
-    for statement in [
-        "UPDATE finance_ledger_late_recording_reviews SET reason=reason",
-        "DELETE FROM finance_ledger_approval_exception_reviews",
-    ] {
+    for statement in ["DELETE FROM finance_ledger_approval_exception_reviews"] {
         assert!(
             raw.batch_execute(statement).await.is_err(),
             "append-only refusal missing"
         );
     }
-    println!("NT3 proof passed: concurrent reviews serialize, archived write refuses, append-only review rows refuse direct edits");
+    println!("NT3 proof passed: controls link to record homes, archived write refuses, append-only approval reviews refuse direct edits");
     Ok(())
 }

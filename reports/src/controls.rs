@@ -7,9 +7,8 @@ use bilibi_datetime::{
     Clock, DisplayContext, DisplayPolicy, Format, Period, PeriodFilter, Precision,
 };
 use bilibi_finance_ledger::{
-    ApprovalExceptionQuery, LateRecordingQuery, LateStatus, LedgerError, NewFiscalYear,
-    MANAGE_CONTROLLED_BOOKKEEPING, MANAGE_DUTY_SEPARATION, MANAGE_PERIODS, REVIEW_EXCEPTIONS,
-    REVIEW_LATE_RECORDINGS,
+    ApprovalExceptionQuery, LedgerError, MANAGE_CONTROLLED_BOOKKEEPING, MANAGE_DUTY_SEPARATION,
+    REVIEW_EXCEPTIONS,
 };
 use bilibi_locale::Locales;
 use bilibi_tenancy::Scope;
@@ -22,7 +21,7 @@ use bilibi_ui::{
     Filter, FlashMap, FlexRow, FlexTable, Header, Html, InputKind, ListColumns, ListSpec,
     ListState, Modal, RowMode, SectionHeading, StatusKind, Tab, Tabs, NO_FLASH,
 };
-use jiff::{civil::Date, Timestamp};
+use jiff::Timestamp;
 use serde_json::{json, Value};
 use std::{collections::HashMap, sync::Arc};
 
@@ -32,12 +31,27 @@ pub(crate) struct Pages {
     pub contracts: Arc<bilibi_agent_api::page::PageContracts>,
     pub display: Arc<DisplayPolicy>,
     pub locales: Arc<Locales>,
+    pub parties: Arc<bilibi_tenancy::PartyProofs>,
+}
+
+impl Pages {
+    async fn company_name(&self, scope: &Scope) -> Result<String> {
+        let Some(company) = scope.current_company() else {
+            return Ok(String::new());
+        };
+        let client = self.reports.db.get().await?;
+        Ok(self
+            .parties
+            .organisation_name(&**client, scope, company)
+            .await?
+            .map(|c| c.name)
+            .unwrap_or_else(|| "Company unavailable".into()))
+    }
 }
 
 #[derive(Clone, Copy)]
 enum Dialog {
     ControlledOff,
-    FiscalYear,
     Separation { required: bool },
     Review { id: i64 },
 }
@@ -45,6 +59,7 @@ enum Dialog {
 struct State {
     pages: Pages,
     bookkeeping: bool,
+    company_name: String,
     framed: bool,
     list: ListState,
     columns: Vec<ListColumns>,
@@ -52,7 +67,6 @@ struct State {
     period: Option<PeriodFilter>,
     dialog: Option<Dialog>,
     text: String,
-    dates: HashMap<String, String>,
     flash: Option<(StatusKind, String)>,
 }
 
@@ -64,7 +78,7 @@ impl State {
         framed: bool,
     ) -> Result<Self> {
         let bookkeeping = match operation {
-            "bookkeeping" => true,
+            "controls" => true,
             "approval-exceptions" => false,
             _ => return Err(Error::NotFound),
         };
@@ -74,21 +88,16 @@ impl State {
             omit_defaults: true,
             ..ListSpec::default()
         };
-        spec.filters.insert(
-            "review".into(),
-            Filter::one_of(&["all", "pending", "reviewed"], "all"),
-        );
-        spec.filters.insert("after".into(), Filter::string(""));
-        spec.filters.insert(
-            "area".into(),
-            Filter::one_of(&["journals", "other"], "journals"),
-        );
-        if bookkeeping {
+        if !bookkeeping {
             spec.filters.insert(
-                "status".into(),
-                Filter::one_of(&["all", "approaching", "late"], "all"),
+                "review".into(),
+                Filter::one_of(&["all", "pending", "reviewed"], "all"),
             );
-        } else {
+            spec.filters.insert("after".into(), Filter::string(""));
+            spec.filters.insert(
+                "area".into(),
+                Filter::one_of(&["journals", "other"], "journals"),
+            );
             spec.filters.insert(
                 "period".into(),
                 Filter::one_of(
@@ -108,30 +117,15 @@ impl State {
             }
         }
         let tables: &[(&str, &[(&str, &str)])] = if bookkeeping {
-            &[
-                (
-                    "controlled-bookkeeping-changes",
-                    &[
-                        ("when", "When"),
-                        ("set", "Set to"),
-                        ("reason", "Reason"),
-                        ("by", "By"),
-                    ],
-                ),
-                (
-                    "late-recordings-table",
-                    &[
-                        ("number", "#"),
-                        ("date", "Transaction date"),
-                        ("recorded", "Recorded"),
-                        ("days", "Days"),
-                        ("status", "Status"),
-                        ("description", "Description"),
-                        ("by", "Posted by"),
-                        ("review", "Review"),
-                    ],
-                ),
-            ]
+            &[(
+                "controlled-bookkeeping-changes",
+                &[
+                    ("when", "When"),
+                    ("set", "Set to"),
+                    ("reason", "Reason"),
+                    ("by", "By"),
+                ],
+            )]
         } else {
             &[
                 (
@@ -189,6 +183,7 @@ impl State {
         Ok(Self {
             pages,
             bookkeeping,
+            company_name: String::new(),
             framed,
             list: ListState::parse(query, spec.shared().map_err(|_| Error::Internal)?)
                 .map_err(|_| Error::Invalid)?,
@@ -197,7 +192,6 @@ impl State {
             period: None,
             dialog: None,
             text: String::new(),
-            dates: HashMap::new(),
             flash: None,
         })
     }
@@ -217,7 +211,7 @@ impl State {
     }
     fn path(&self) -> &'static str {
         if self.bookkeeping {
-            "/finance/reports/bookkeeping"
+            "/finance/reports/controls"
         } else {
             "/finance/reports/approval-exceptions"
         }
@@ -290,18 +284,18 @@ impl State {
     fn close(&mut self) {
         self.dialog = None;
         self.text.clear();
-        self.dates.clear();
     }
     fn refused(&mut self, error: LedgerError) {
         let invalid = matches!(error, LedgerError::Invalid(_));
         let text = if invalid {
             match self.dialog {
-                Some(Dialog::FiscalYear) => "Check the fiscal year's dates: it starts on the first of a month and runs to the end of one, up to two years.".into(),
-                Some(Dialog::Review { .. }) if !self.bookkeeping => "Keep the note to 500 characters.".into(),
+                Some(Dialog::Review { .. }) if !self.bookkeeping => {
+                    "Keep the note to 500 characters.".into()
+                }
                 _ => "Give a reason of 1 to 500 characters.".into(),
             }
         } else {
-            refusal(&error, self.bookkeeping)
+            refusal(&error)
         };
         if !invalid {
             self.close();
@@ -372,35 +366,16 @@ impl State {
             if let Some(text) = payload["dialog[text]"].as_str() {
                 self.text = text.into();
             }
-            for key in ["start_date", "end_date"] {
-                if let Some(text) = payload[format!("dialog[{key}]")].as_str() {
-                    self.dates.insert(key.into(), text.into());
-                }
-            }
             return Ok(());
         }
         let capability = match event {
             "turn_on" | "turn_off" if self.bookkeeping => MANAGE_CONTROLLED_BOOKKEEPING,
-            "open_fiscal_year" if self.bookkeeping => MANAGE_PERIODS,
             "change_separation" if !self.bookkeeping => MANAGE_DUTY_SEPARATION,
-            "review" => {
-                if self.bookkeeping {
-                    REVIEW_LATE_RECORDINGS
-                } else {
-                    REVIEW_EXCEPTIONS
-                }
-            }
+            "review" if !self.bookkeeping => REVIEW_EXCEPTIONS,
             "open_dialog" => match dialog_kind {
                 Some("controlled-off") if self.bookkeeping => MANAGE_CONTROLLED_BOOKKEEPING,
-                Some("fiscal-year") if self.bookkeeping => MANAGE_PERIODS,
                 Some("separation") if !self.bookkeeping => MANAGE_DUTY_SEPARATION,
-                Some("review") => {
-                    if self.bookkeeping {
-                        REVIEW_LATE_RECORDINGS
-                    } else {
-                        REVIEW_EXCEPTIONS
-                    }
-                }
+                Some("review") if !self.bookkeeping => REVIEW_EXCEPTIONS,
                 _ => return Ok(()),
             },
             _ => return Ok(()),
@@ -416,7 +391,6 @@ impl State {
             self.close();
             self.dialog = match dialog_kind {
                 Some("controlled-off") => Some(Dialog::ControlledOff),
-                Some("fiscal-year") => Some(Dialog::FiscalYear),
                 Some("separation") => match ledger.get_duty_separation(scope, company).await {
                     Ok(state) => Some(Dialog::Separation {
                         required: !state.required,
@@ -426,15 +400,10 @@ impl State {
                         None
                     }
                 },
-                Some("review") => params::positive_id(
-                    payload[if self.bookkeeping {
-                        "entry"
-                    } else {
-                        "exception"
-                    }]
-                    .as_str(),
-                )
-                .map(|id| Dialog::Review { id }),
+                Some("review") if !self.bookkeeping => {
+                    params::positive_id(payload["exception"].as_str())
+                        .map(|id| Dialog::Review { id })
+                }
                 _ => None,
             };
             return Ok(());
@@ -479,54 +448,6 @@ impl State {
                 }),
                 Err(error) => self.refused(error),
             },
-            ("open_fiscal_year", Some(Dialog::FiscalYear)) => {
-                for key in ["start_date", "end_date"] {
-                    match payload.get(format!("dialog[{key}]")) {
-                        Some(Value::String(text)) => {
-                            self.dates.insert(key.into(), text.into());
-                        }
-                        None => {}
-                        Some(_) => {
-                            self.flash = Some((StatusKind::Error, "Give the first day of the fiscal year as a date. The last day is optional, but must be a date.".into()));
-                            return Ok(());
-                        }
-                    }
-                }
-                let date = |key: &str| -> std::result::Result<Option<Date>, ()> {
-                    match self.dates.get(key).map(String::as_str).unwrap_or("") {
-                        "" => Ok(None),
-                        value => value.parse().map(Some).map_err(|_| ()),
-                    }
-                };
-                let first = ledger
-                    .get_controlled_bookkeeping(scope, company)
-                    .await
-                    .map(|s| s.fiscal_years == 0);
-                // Bilimbi ignores the last day when the first is blank.
-                let start = date("start_date");
-                let end = match start {
-                    Ok(None) => Ok(None),
-                    _ => date("end_date"),
-                };
-                match (start, end, first) {
-                    (_, _, Err(error)) => self.refused(error),
-                    (Ok(start), Ok(end), Ok(first)) if start.is_some() || !first => {
-                        match ledger.open_fiscal_year(scope, company, &NewFiscalYear { start_date: start, end_date: end }).await {
-                            Ok(year) => self.success(format!("Fiscal year {} to {} is open.", year.start_date, year.end_date)), Err(error) => self.refused(error),
-                        }
-                    }
-                    _ => self.flash = Some((StatusKind::Error, "Give the first day of the fiscal year as a date. The last day is optional, but must be a date.".into())),
-                }
-            }
-            ("review", Some(Dialog::Review { id })) if self.bookkeeping => match ledger
-                .record_late_recording_review(scope, company, id, &text)
-                .await
-            {
-                Ok(review) => {
-                    self.success(format!("Review of entry {} recorded.", review.entry_id))
-                }
-                Err(error) => self.refused(error),
-            },
             ("review", Some(Dialog::Review { id })) => match ledger
                 .review_approval_exception(scope, company, id, Some(&text))
                 .await
@@ -543,20 +464,26 @@ impl State {
     }
 
     async fn render(&mut self, scope: &Scope) -> Result<String> {
+        self.company_name = self.pages.company_name(scope).await?;
         let title = if self.bookkeeping {
-            "Bookkeeping"
+            "Bookkeeping controls"
         } else {
             "Approval exceptions"
         };
         let subtitle = if self.bookkeeping {
-            "Controlled bookkeeping, fiscal years, and entries recorded late"
+            "Control posting dates and review changes to bookkeeping controls"
         } else {
             "Same-person approvals and overrides of controls, for someone independent to review."
+        };
+        let subtitle = if self.company_name.is_empty() {
+            subtitle.to_owned()
+        } else {
+            format!("{} · {subtitle}", self.company_name)
         };
         let mut parts = vec![html(Header {
             title: Html::text(title),
             title_actions: bilibi_ui::Html::EMPTY,
-            subtitle,
+            subtitle: &subtitle,
             ..Header::default()
         })?];
         if scope.current_company().is_none() {
@@ -570,7 +497,7 @@ impl State {
             )?);
             return PageView {
                 id: if self.bookkeeping {
-                    "bookkeeping-page"
+                    "bookkeeping-controls-page"
                 } else {
                     "approval-exceptions-page"
                 },
@@ -603,7 +530,7 @@ impl State {
         }
         PageView {
             id: if self.bookkeeping {
-                "bookkeeping-page"
+                "bookkeeping-controls-page"
             } else {
                 "approval-exceptions-page"
             },
@@ -619,7 +546,7 @@ impl State {
                 id: "bookkeeping-refusal",
                 kind: StatusKind::Error,
                 class: "mb-3",
-                body: Html::text(&refusal(error, true)),
+                body: Html::text(&refusal(error)),
             })
         } else if matches!(error, LedgerError::Unauthorized) {
             html(EmptyState::forbidden("view the ledger").id("exceptions-refusal"))
@@ -651,25 +578,7 @@ impl State {
             .list_controlled_bookkeeping_changes(scope, company)
             .await?;
         changes.reverse();
-        let entries = ledger
-            .list_late_recordings(
-                scope,
-                company,
-                &LateRecordingQuery {
-                    status: match self.filter("status") {
-                        "approaching" => Some(LateStatus::Approaching),
-                        "late" => Some(LateStatus::Late),
-                        _ => None,
-                    },
-                    reviewed: self.reviewed(),
-                    limit: Some(100),
-                    after: self.after(),
-                },
-            )
-            .await?;
         let can_manage = self.allowed(scope, MANAGE_CONTROLLED_BOOKKEEPING).await?;
-        let can_year = self.allowed(scope, MANAGE_PERIODS).await?;
-        let can_review = self.allowed(scope, REVIEW_LATE_RECORDINGS).await?;
         let change = controlled.change.as_ref();
         let mut content = html(Summary {
             status_id: "controlled-bookkeeping-status",
@@ -720,41 +629,12 @@ impl State {
         if controlled.controlled && controlled.fiscal_years == 0 {
             content.push(&html(Alert { id: "no-fiscal-year", kind: StatusKind::Warning, class: "mt-4", body: Html::text("No fiscal year is open, so no entry can be posted yet. Open the first fiscal year to start.") })?);
         }
-        let years = if controlled.fiscal_years == 0 {
-            "No fiscal year is open yet.".into()
-        } else {
-            format!(
-                "{} fiscal {} open.",
-                controlled.fiscal_years,
-                if controlled.fiscal_years == 1 {
-                    "year"
-                } else {
-                    "years"
-                }
-            )
-        };
-        if can_year {
-            let year_action = button(
-                "fiscal-year-open",
-                "open_dialog",
-                "dialog",
-                "fiscal-year",
-                if controlled.fiscal_years == 0 {
-                    "Open the first fiscal year"
-                } else {
-                    "Open the next fiscal year"
-                },
-                if controlled.fiscal_years == 0 {
-                    ButtonVariant::Primary
-                } else {
-                    ButtonVariant::Secondary
-                },
-            )?;
-            content.push(&html(YearView {
-                count: &years,
-                action: year_action,
-            })?);
-        }
+        content.push(&html(Button {
+            id: "controls-fiscal-years",
+            href: "/finance/ledger/fiscal-years",
+            body: Html::text("Fiscal years"),
+            ..Button::default()
+        })?);
         if !changes.is_empty() {
             let rows = changes
                 .iter()
@@ -781,134 +661,12 @@ impl State {
             content,
             false,
         )?];
-        let thresholds = bilibi_finance_ledger::Ledger::late_recording_thresholds();
-        let description = format!(
-            "An entry is listed once it is recorded {} or more days after its transaction date, and is late past {} days. Each late entry needs a reason from an independent reviewer, someone who did not post it. The days are whole days from the transaction date to the day it was recorded.",
-            thresholds.approaching_days, thresholds.late_days
-        );
-        let mut filters = self.tabs(
-            "late-recordings-status",
-            "Lateness",
-            "status",
-            &[
-                ("all", "All"),
-                ("approaching", "Approaching"),
-                ("late", "Late"),
-            ],
-        )?;
-        filters.push(&self.tabs(
-            "late-recordings-review",
-            "Review status",
-            "review",
-            &[
-                ("all", "Any review"),
-                ("pending", "Awaiting review"),
-                ("reviewed", "Reviewed"),
-            ],
-        )?);
-        parts.push(section(
-            "late-recordings",
-            "Entries recorded late",
-            &description,
-            html(FiltersView {
-                id: "late-recordings-filters",
-                class: "mt-3 flex flex-wrap items-center gap-4",
-                content: filters,
-            })?,
-            false,
-        )?);
-        let compact = self.columns[1].mode() == RowMode::Compact;
-        let mut rows = Vec::new();
-        for entry in &entries {
-            let mut row = row(
-                &format!("late-entry-{}", entry.entry_number),
-                &[
-                    ("number", entry.entry_number.to_string()),
-                    ("date", entry.entry_date.to_string()),
-                    ("days", entry.days.to_string()),
-                    (
-                        "by",
-                        actor(
-                            Some(entry.posted_by_user_id),
-                            entry.posted_by_impersonator_id,
-                        ),
-                    ),
-                ],
-            );
-            row = row.slot(
-                "recorded",
-                datetime(
-                    display,
-                    entry.posted_at,
-                    &format!("late-entry-at-{}", entry.entry_number),
-                )?,
-            );
-            row = row.slot(
-                "status",
-                classification(
-                    if entry.status == LateStatus::Late {
-                        BadgeKind::Danger
-                    } else {
-                        BadgeKind::Warning
-                    },
-                    if entry.status == LateStatus::Late {
-                        "Late"
-                    } else {
-                        "Approaching"
-                    },
-                )?,
-            );
-            row = row.slot(
-                "description",
-                html(CellView {
-                    id: "",
-                    main: &entry.description,
-                    detail: entry.reference.as_deref().unwrap_or(""),
-                    compact,
-                })?,
-            );
-            let review = match &entry.review {
-                Some(review) => html(CellView {
-                    id: &format!("late-entry-review-{}", entry.entry_number),
-                    main: &review.reason,
-                    detail: &actor(
-                        Some(review.reviewed_by_user_id),
-                        review.reviewed_by_impersonator_id,
-                    ),
-                    compact,
-                })?,
-                None if can_review => review_button(
-                    &format!("late-entry-review-open-{}", entry.entry_number),
-                    "entry",
-                    entry.entry_id,
-                )?,
-                None => Html::text("Awaiting review"),
-            };
-            rows.push(row.slot("review", review));
-        }
-        parts.push(section(
-            "late-recordings-card",
-            "",
-            "",
-            self.table(
-                1,
-                rows,
-                "Entries recorded late",
-                Some((
-                    "late-recordings-empty",
-                    "No entries recorded late",
-                    "Nothing in the ledger was recorded this long after its transaction date.",
-                )),
-            )?,
-            true,
-        )?);
-        if entries.len() == 100 {
-            parts.push(self.next(
-                "late-recordings-next",
-                entries.last().expect("100 entries").entry_number,
-                "Later entries",
-            )?);
-        }
+        parts.push(html(Button {
+            id: "controls-late-journals",
+            href: "/finance/ledger/journals?review=pending",
+            body: Html::text("Journals awaiting late-recording review"),
+            ..Button::default()
+        })?);
         Ok(parts)
     }
     async fn exception_parts(
@@ -1361,17 +1119,6 @@ impl State {
                     "Reason (1 to 500 characters)",
                     true,
                 ),
-                Dialog::FiscalYear => (
-                    "fiscal-year",
-                    "Open a fiscal year",
-                    "A fiscal year is divided into monthly periods, which are open until they are closed. The first year may start on any month; each later year starts the day after the previous one ends. Leave the end date blank for twelve months.",
-                    "open_fiscal_year",
-                    "Open fiscal year",
-                    "Opening…",
-                    ButtonVariant::Primary,
-                    "",
-                    false,
-                ),
                 Dialog::Separation { required: false } => (
                     "duty-separation",
                     "Turn separation of duties off",
@@ -1394,17 +1141,6 @@ impl State {
                     "Reason (optional)",
                     false,
                 ),
-                Dialog::Review { .. } if self.bookkeeping => (
-                    "late-review",
-                    "Record your review",
-                    "Your review is kept with your name and the time; it cannot be changed. You cannot review an entry you posted.",
-                    "review",
-                    "Record review",
-                    "Recording…",
-                    ButtonVariant::Primary,
-                    "Why it was recorded late (1 to 500 characters)",
-                    true,
-                ),
                 Dialog::Review { .. } => (
                     "exception-review",
                     "Record your review",
@@ -1417,26 +1153,7 @@ impl State {
                     false,
                 ),
             };
-        let fields = if matches!(dialog, Dialog::FiscalYear) {
-            vec![
-                Field::in_form("dialog", "start_date")
-                    .id("fiscal-year-start")
-                    .label("First day of the year")
-                    .kind(InputKind::Date)
-                    .value(
-                        self.dates
-                            .get("start_date")
-                            .map(String::as_str)
-                            .unwrap_or(""),
-                    )
-                    .required(),
-                Field::in_form("dialog", "end_date")
-                    .id("fiscal-year-end")
-                    .label("Last day (optional)")
-                    .kind(InputKind::Date)
-                    .value(self.dates.get("end_date").map(String::as_str).unwrap_or("")),
-            ]
-        } else {
+        let fields = {
             let id = if prefix == "exception-review" {
                 "exception-review-note".into()
             } else if prefix == "duty-separation" {
@@ -1465,7 +1182,7 @@ impl State {
         html(Modal {
             id: &format!("{prefix}-modal"),
             title,
-            description,
+            description: &format!("{} · {description}", self.company_name),
             cancel_event: "close_dialog",
             body: form,
             flash: Some(self.flash_map()),
@@ -1574,8 +1291,6 @@ fn section(id: &str, title: &str, description: &str, content: Html, flat: bool) 
     html(Card {
         id,
         inner_class: match id {
-            "late-recordings" => "p-5 sm:p-6 mt-4",
-            "late-recordings-card" => "p-0 mt-3",
             _ if flat => "p-0",
             _ => "p-5 sm:p-6",
         },
@@ -1628,19 +1343,14 @@ fn action_label(action: &str) -> String {
         }
     }
 }
-fn refusal(error: &LedgerError, bookkeeping: bool) -> String {
+fn refusal(error: &LedgerError) -> String {
     match error {
         LedgerError::Unauthorized => "You do not have permission for that action.",
         LedgerError::CompanyArchived => "The company is archived; nothing can be changed.",
         LedgerError::BookNotOpen => "The ledger's book is not open yet.",
         LedgerError::EntryNotFound => "That entry no longer exists.",
         LedgerError::ExceptionNotFound => "That exception no longer exists.",
-        LedgerError::AlreadyReviewed if bookkeeping => "Someone has already reviewed that entry.",
         LedgerError::AlreadyReviewed => "Someone has already reviewed that exception.",
-        LedgerError::NotLateRecorded => "That entry was not recorded late.",
-        LedgerError::ReviewerNotIndependent if bookkeeping => {
-            "An entry is reviewed by someone who did not post it."
-        }
         LedgerError::ReviewerNotIndependent => {
             "An exception is reviewed by someone who neither approved nor prepared what it records."
         }
@@ -1698,7 +1408,7 @@ struct TimeView<'a> {
 impl Page<Scope, Error> for Pages {
     fn title(&self, operation: &str) -> Option<&'static str> {
         match operation {
-            "bookkeeping" => Some("Bookkeeping"),
+            "controls" => Some("Bookkeeping controls"),
             "approval-exceptions" => Some("Approval exceptions"),
             _ => None,
         }
@@ -1779,13 +1489,6 @@ struct NextLink<'a> {
     href: &'a str,
     label: &'a str,
 }
-#[derive(Template)]
-#[template(path = "control_year.html")]
-struct YearView<'a> {
-    count: &'a str,
-    action: Html,
-}
-
 fn classification(kind: BadgeKind, text: &str) -> Result<Html> {
     html(Badge {
         dot: false,

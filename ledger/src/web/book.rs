@@ -1,5 +1,5 @@
 //! The company's book: its currency and decimal places, opened once, and the
-//! two controls kept beside it (the Bookkeeping page changes them).
+//! two controls kept beside it (the Bookkeeping controls page changes them).
 use super::{
     error_text, event_type, no_company, render, shell, unavailable, view, Failure, Flash, Pages,
     Read, Refusal, Review,
@@ -16,7 +16,7 @@ use bilibi_ui::{
 use serde::Deserialize;
 use serde_json::json;
 
-pub(super) const INDEX: &str = "/finance/ledger/book";
+pub(super) const INDEX: &str = "/finance/ledger/books";
 
 /// What `finance.ledger.book.currencies` answers: the enabled currencies with
 /// their ISO 4217 decimal places and the proposed one.
@@ -55,6 +55,7 @@ impl Options {
 
 pub(super) struct Book {
     pages: Pages,
+    company: i64,
     currency: String,
     units: String,
     approver: String,
@@ -68,9 +69,10 @@ pub(super) struct Book {
 }
 
 impl Book {
-    pub(super) fn new(pages: Pages) -> Self {
+    pub(super) fn new(pages: Pages, company: i64) -> Self {
         Self {
             pages,
+            company,
             currency: String::new(),
             units: "2".into(),
             approver: "someone_else".into(),
@@ -86,10 +88,16 @@ impl Book {
 
     async fn view(&mut self, scope: &Scope) -> Result<LiveBody> {
         let mut body = Html::EMPTY;
-        if Pages::company(scope).is_none() {
+        if !self
+            .pages
+            .companies(scope)
+            .await?
+            .iter()
+            .any(|c| c.id == self.company)
+        {
             body.push(&no_company("ledger-book-no-company")?);
         } else {
-            match self.pages.book(scope).await? {
+            match self.pages.book_in(scope, self.company).await? {
                 Err(refused) => {
                     body.push(&unavailable("ledger-book-refused", "the book", &refused)?)
                 }
@@ -106,13 +114,22 @@ impl Book {
                 },
             }
         }
-        let company_name = self.pages.company_name(scope).await?;
+        let company_name = self.pages.company_name_in(scope, self.company).await?;
         let mut page = render(Header {
             title: Html::text("Book"),
             subtitle: &company_name,
             title_actions: bilibi_ui::Html::EMPTY,
             ..Header::default()
         })?;
+        page.push(&render(Button {
+            href: INDEX,
+            body: Html::text("Company books"),
+            ..Button::default()
+        })?);
+        page.push(&render(super::Announce {
+            kind: "finance/ledger.book",
+            record_id: &self.company.to_string(),
+        })?);
         page.push(&body);
         Ok(LiveBody {
             html: shell("ledger-book", PageVariant::Detail, &self.flash, page)?,
@@ -125,7 +142,12 @@ impl Book {
     async fn load_options(&mut self, scope: &Scope) -> Result<()> {
         self.options = match self
             .pages
-            .read(scope, "finance.ledger.book.currencies", json!({}))
+            .read_in(
+                scope,
+                self.company,
+                "finance.ledger.book.currencies",
+                json!({}),
+            )
             .await?
         {
             Read::Found(value) => view::parse(value).unwrap_or_default(),
@@ -163,7 +185,7 @@ impl Book {
         body.push(&render(super::accounts::Note {id:"ledger-book-starter-note",text:"Opening the book creates no accounts. Review this proposal and its optional sections on Chart of accounts, choose another template, or start empty."})?);
         body.push(&render(Button {
             id: "ledger-book-chart",
-            href: super::accounts::INDEX,
+            href: &format!("{}?company={}", super::accounts::INDEX, self.company),
             body: Html::text("Chart of accounts"),
             ..Button::default()
         })?);
@@ -249,12 +271,6 @@ impl Book {
                     value: yes_no(required, "Required", "Not required")?,
                 },
             ],
-        })?);
-        controls.push(&render(Button {
-            id: "ledger-book-approval-settings",
-            href: "/finance/reports/approval-exceptions",
-            body: Html::text("Approval settings"),
-            ..Button::default()
         })?);
         let mut html = render(Card {
             id: "ledger-book-card",
@@ -479,7 +495,10 @@ impl Book {
             detail.push_str(if self.approver == "one_person" { "The currency and decimal places are permanent. Other Finance approvals permit preparer approval and record exceptions. Manual journal rules are set separately on Approval rules." } else { "The currency and decimal places are permanent. Other Finance approvals require another person. Manual journal rules are set separately on Approval rules." });
             html.push(&render(ConfirmDialog {
                 id: "ledger-book-confirm",
-                consequence: &format!("Open the book in {label} with {units} decimal places?"),
+                consequence: &format!(
+                    "Open the book for {} in {label} with {units} decimal places?",
+                    self.pages.company_name_in(scope, self.company).await?
+                ),
                 detail: &detail,
                 confirm: "Open the book",
                 working: "Opening…",
@@ -526,8 +545,9 @@ impl LiveState<Scope, Error> for Book {
                         let units: i64 = self.units.parse().unwrap_or(-1);
                         match self
                             .pages
-                            .review(
+                            .review_in(
                                 r.scope,
+                                self.company,
                                 r.credential,
                                 "review_open",
                                 "finance.ledger.book.open",
@@ -545,7 +565,7 @@ impl LiveState<Scope, Error> for Book {
                         let Some(review) = self.review.take() else {
                             return self.view(r.scope).await;
                         };
-                        if review.input["company_id"].as_i64() != Pages::company(r.scope) {
+                        if review.input["company_id"].as_i64() != Some(self.company) {
                             self.notice = "The company changed. Review the book again.".into();
                             return self.view(r.scope).await;
                         }

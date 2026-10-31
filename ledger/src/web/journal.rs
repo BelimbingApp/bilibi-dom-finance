@@ -6,8 +6,8 @@
 use super::{
     dialog_actions, error_text, event_type, figure, instant,
     journals::{status_badge, INDEX},
-    no_company, opening, render, shell, unavailable, view, who, Announce, EntryLink, Failure,
-    Flash, JournalLink, Pages, Read, Refusal, Review,
+    no_company, render, shell, unavailable, view, who, Announce, EntryLink, Failure, Flash,
+    JournalLink, Pages, Read, Refusal, Review,
 };
 use crate::{APPROVE_JOURNALS, SUBMIT_JOURNALS};
 use bilibi_database::{Error, Result};
@@ -371,20 +371,19 @@ impl Journal {
         columns.load(&journal.lines, |l| l.line_number.to_string());
         let mut rows = Vec::new();
         for line in &journal.lines {
-            let account = chart
-                .iter()
-                .find(|a| a.id == line.account_id)
-                .map_or(format!("Account #{}", line.account_id), |a| {
-                    format!("{} {}", a.code, a.name)
-                });
+            let account = match chart.iter().find(|a| a.id == line.account_id) {
+                Some(account) => super::account_name(account)?,
+                None => Html::text(&format!("Account #{}", line.account_id)),
+            };
             rows.push(
                 FlexRow::new(line.line_number.to_string())
                     .cell("line", Cell::text(line.line_number.to_string()))
                     .slot(
                         "account",
-                        render(super::AccountLink {
-                            id: line.account_id,
-                            label: &account,
+                        render(bilibi_ui::ActionLink {
+                            href: &format!("/finance/ledger/accounts/{}", line.account_id),
+                            body: account,
+                            ..bilibi_ui::ActionLink::default()
                         })?,
                     )
                     .cell(
@@ -453,11 +452,7 @@ impl Journal {
         if can_correct {
             actions.push(&render(Button {
                 id: "ledger-journal-correct",
-                href: &if journal.opening {
-                    format!("{}?correct={}", opening::INDEX, journal.id)
-                } else {
-                    format!("{INDEX}?correct={}", journal.id)
-                },
+                href: &format!("{INDEX}?correct={}", journal.id),
                 body: Html::text("Correct"),
                 ..Button::default()
             })?);
@@ -473,7 +468,7 @@ impl Journal {
             actions.push(&render(Button {
                 id: "ledger-journal-restart",
                 href: &if journal.opening {
-                    opening::INDEX.to_owned()
+                    format!("{INDEX}?opening=1")
                 } else {
                     format!("{INDEX}?copy={}", journal.id)
                 },

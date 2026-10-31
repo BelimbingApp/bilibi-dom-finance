@@ -272,6 +272,7 @@ enum Write {
     Withdraw,
     Replace,
     Reverse,
+    ReviewLate,
     OpenYear,
     ClosePeriod,
     ReopenPeriod,
@@ -293,6 +294,7 @@ impl Write {
             Self::Submit | Self::Withdraw | Self::Replace | Self::Opening => SUBMIT_JOURNALS,
             Self::Approve | Self::Reject => APPROVE_JOURNALS,
             Self::Reverse => POST_ENTRIES,
+            Self::ReviewLate => REVIEW_LATE_RECORDINGS,
             Self::OpenYear | Self::ClosePeriod | Self::CloseYear => MANAGE_PERIODS,
             Self::ReopenPeriod | Self::ReopenYear => REOPEN_PERIODS,
             Self::LockPeriod | Self::LockYear => LOCK_PERIODS,
@@ -336,6 +338,7 @@ impl Write {
             Self::Replace => {
                 "Withdraw your submitted journal and submit the corrected one in its place; the correction needs its own approval and no entry posts."
             }
+            Self::ReviewLate => "Keep an independent review of the late recording, with its reason, reviewer and time. The review cannot be changed.",
             Self::Reverse => {
                 "Post one mirror entry on the chosen date; the original remains. Owned and closing entries cannot use this action."
             }
@@ -591,6 +594,21 @@ impl Write {
                     .map_err(LedgerError::Invalid)?;
                     json!({"before":current,"entry":valid,"posts_when_approval_complete":matches!(self,Self::Approve),"withdraws":matches!(self,Self::Replace),"approval":approval,"journal_policy":journal_policy,"accounts":accounts::list(client,tenant,company).await?,"periods":periods::state(client,tenant,company).await?.years})
                 }
+            }
+            Self::ReviewLate => {
+                let entry_id = id(input, "entry_id")?;
+                let reason = late_recordings::prepare(
+                    client,
+                    scope,
+                    company,
+                    entry_id,
+                    text(input, "reason")?,
+                )
+                .await?;
+                let entry = entries::find(client, tenant, company, entry_id)
+                    .await?
+                    .ok_or(LedgerError::EntryNotFound)?;
+                json!({"entry_id":entry_id,"entry_number":entry.entry_number,"entry_date":entry.entry_date.to_string(),"recording":late_recordings::facts(client,tenant,company,entry_id).await?,"reason":reason})
             }
             Self::Reverse => {
                 let (_, original, valid) = prepare_reverse(
@@ -1073,6 +1091,15 @@ impl WriteHandler for Write {
                 )
                 .await
                 .map_err(invalid)?),
+                Self::ReviewLate => json!(Ledger::record_late_recording_review_on(
+                    tx,
+                    scope,
+                    company,
+                    id(input, "entry_id").map_err(invalid)?,
+                    text(input, "reason").map_err(invalid)?
+                )
+                .await
+                .map_err(invalid)?),
                 Self::Reverse => json!(reverse(
                     tx,
                     scope,
@@ -1304,6 +1331,9 @@ impl ReadHandler for Read {
                         .map(|row| row.get::<_, i64>(0));
                     let mut value = json!(entry);
                     value["request_number"] = json!(request);
+                    value["opening"] = json!(client.query_opt("SELECT o.id FROM finance_ledger_opening_balances o JOIN finance_ledger_journal_events v ON v.journal_id=o.journal_id AND v.tenant_id=o.tenant_id AND v.company_id=o.company_id WHERE o.tenant_id=$1 AND o.company_id=$2 AND v.entry_id=$3", &[&tenant,&company,&entry.id]).await?.is_some());
+                    value["late_recording"] =
+                        late_recordings::facts(client, tenant, company, entry.id).await?;
                     value
                 }
                 Self::Entries => {
@@ -1382,7 +1412,21 @@ impl ReadHandler for Read {
                     let after = optional_date(input, "after_start_date").map_err(invalid)?;
                     let mut rows = years
                         .into_iter()
-                        .filter(|y| after.is_none_or(|d| y.start_date > d));
+                        .filter(|y| after.is_none_or(|d| y.start_date > d))
+                        .filter(|y| {
+                            input["status"].as_str().is_none_or(|status| {
+                                status
+                                    == if y
+                                        .periods
+                                        .iter()
+                                        .all(|p| p.status == crate::PeriodStatus::Locked)
+                                    {
+                                        "locked"
+                                    } else {
+                                        y.status.as_str()
+                                    }
+                            })
+                        });
                     let page: Vec<_> = rows.by_ref().take(limit).collect();
                     let next = rows
                         .next()
@@ -1619,7 +1663,13 @@ fn journals_schema() -> Value {
 fn journal_list_schema() -> Value {
     schema(
         &[],
-        json!({"from":day(),"to":day(),"status":string(32),"source":string(100),"after_time":string(32),"after_id":identifier(),"after_kind":string(16),"account_id":identifier(),"through_entry_number":{"type":"integer","minimum":0},"search":string(20),"page_size":{"type":"integer","minimum":1,"maximum":100}}),
+        json!({"from":day(),"to":day(),"status":string(32),"source":string(100),"recording":{"type":"string","enum":["on_time","approaching","late","unposted"]},"review":{"type":"string","enum":["pending","reviewed"]},"after_time":string(32),"after_id":identifier(),"after_kind":string(16),"account_id":identifier(),"through_entry_number":{"type":"integer","minimum":0},"search":string(20),"page_size":{"type":"integer","minimum":1,"maximum":100}}),
+    )
+}
+fn late_review_schema() -> Value {
+    schema(
+        &["entry_id", "reason"],
+        json!({"entry_id":identifier(), "reason":string(500)}),
     )
 }
 fn entry_schema() -> Value {
@@ -1646,7 +1696,7 @@ fn currencies_schema() -> Value {
 fn years_schema() -> Value {
     schema(
         &[],
-        json!({"after_start_date":day(),"page_size":{"type":"integer","minimum":1,"maximum":100}}),
+        json!({"status":{"type":"string","enum":["open","closed","locked"]},"after_start_date":day(),"page_size":{"type":"integer","minimum":1,"maximum":100}}),
     )
 }
 
@@ -1680,6 +1730,7 @@ inventory::submit! { Contribution::new(DEFINITIONS,"finance/ledger.operations",P
         Operation {key:"finance.ledger.journal.withdraw",title:"Withdraw a journal",summary:"Take back your own submitted journal before approval; it stays on record and no entry posts.",keywords:&[],capability:SUBMIT_JOURNALS,input:withdraw_schema,output,handler:Handler::SafeWrite(&Write::Withdraw),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.journal.replace",title:"Replace a journal",summary:"Withdraw your submitted journal and submit its correction, which needs its own approval.",keywords:&[],capability:SUBMIT_JOURNALS,input:replace_schema,output,handler:Handler::SafeWrite(&Write::Replace),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.journal.reject",title:"Reject a journal",summary:"Record a permanent rejection with a reason and no posting.",keywords:&[],capability:APPROVE_JOURNALS,input:reject_schema,output,handler:Handler::SafeWrite(&Write::Reject),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.ledger.entry.review_late",title:"Review a late recording",summary:"Record a permanent independent review with a reason. Refuses the poster, impersonation overlap and a second review.",keywords:&["late", "review"],capability:REVIEW_LATE_RECORDINGS,input:late_review_schema,output,handler:Handler::SafeWrite(&Write::ReviewLate),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.entry.reverse",title:"Reverse a manual entry",summary:"Post the mirror once, never reverse an owned entry or a year-end closing entry here.",keywords:&[],capability:POST_ENTRIES,input:reverse_schema,output,handler:Handler::SafeWrite(&Write::Reverse),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.fiscal_year.open",title:"Open a fiscal year",summary:"Open the next year and calendar-month periods; the first start date is explicit.",keywords:&[],capability:MANAGE_PERIODS,input:open_year_schema,output,handler:Handler::SafeWrite(&Write::OpenYear),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.ledger.period.close",title:"Close a period",summary:"Close in date order; the last period closes only with its year.",keywords:&[],capability:MANAGE_PERIODS,input:period_schema,output,handler:Handler::SafeWrite(&Write::ClosePeriod),channels:Channels::Every,step_up:&[]},
