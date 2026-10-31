@@ -120,6 +120,8 @@ impl Bill {
                 .map_err(|_| Error::Invalid)?;
             self.balance_pins = answer["result"]["balance_pins"].clone();
             if let Some(d) = &mut self.document {
+                d.settlements = serde_json::from_value(answer["result"]["settlements"].clone())
+                    .map_err(|_| Error::Internal)?;
                 if let Some(units) = self.units {
                     d.outstanding = answer["result"]["outstanding"]
                         .as_str()
