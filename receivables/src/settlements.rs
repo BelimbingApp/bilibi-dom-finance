@@ -177,7 +177,7 @@ impl Receivables {
         let original = if action == "reverse" {
             let number = id(input, "settlement_id")?;
             let event:Value=c.query_opt("SELECT to_jsonb(e) FROM finance_receivables_settlements e WHERE tenant_id=$1 AND company_id=$2 AND id=$3 AND kind<>'reverse' AND NOT EXISTS(SELECT 1 FROM finance_receivables_settlements r WHERE r.tenant_id=$1 AND r.company_id=$2 AND r.reverses_settlement_id=e.id)",&[&s.tenant(),&company,&number]).await?.ok_or_else(||invalid("settlement_id","was not found or has already been reversed"))?.get(0);
-            if day.to_string() < event["effective_date"].as_str().unwrap_or("").to_owned() {
+            if day.to_string().as_str() < event["effective_date"].as_str().unwrap_or("") {
                 return Err(invalid(
                     "effective_date",
                     "cannot precede the original settlement",
@@ -244,7 +244,7 @@ impl Receivables {
                     "must have the same linked party and currency as the credit",
                 ));
             }
-            if day.to_string() < target_facts["issue_date"].as_str().unwrap_or("").to_owned() {
+            if day.to_string().as_str() < target_facts["issue_date"].as_str().unwrap_or("") {
                 return Err(invalid(
                     "effective_date",
                     "cannot precede the target document's date",
