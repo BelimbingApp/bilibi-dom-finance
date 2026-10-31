@@ -153,9 +153,10 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         ("1190", AccountType::Asset),
         ("2190", AccountType::Liability),
     ] {
-        let mut group = NewAccount::new(code, "Source control group", kind);
-        group.is_group = true;
-        ledger.create_account(&reviewer, company, &group).await?;
+        let group = bilibi_finance_ledger::NewAccountGroup::new(code, "Source control group", kind);
+        ledger
+            .create_account_group(&reviewer, company, &group)
+            .await?;
     }
     let chart = ledger.list_accounts(&reviewer, company).await?;
     let account = |code: &str| chart.iter().find(|a| a.code == code).unwrap().id;
