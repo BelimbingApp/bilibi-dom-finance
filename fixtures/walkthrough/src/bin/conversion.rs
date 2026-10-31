@@ -827,12 +827,15 @@ async fn main() -> Outcome<()> {
     grants
         .set_direct(&admin, 1, "admin.company.tenant-wide.manage", Some(true))
         .await?;
-    if std::env::args().any(|s| s == "serve") {
+    if std::env::args().any(|s| s == "serve" || s == "prepare") {
         for company in [1, 2] {
             println!(
                 "Disposable conversion source: {}",
                 setup(&db, &app.services, company).await?
             );
+        }
+        if std::env::args().any(|s| s == "prepare") {
+            return Ok(());
         }
         if std::env::args().any(|s| s == "assets-lifecycle") {
             bilibi_finance_walkthrough_fixture::assets_lifecycle::credentials(&db, &app.services)
