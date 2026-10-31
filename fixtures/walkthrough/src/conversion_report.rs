@@ -4,7 +4,7 @@ use bilibi_agent_api::plans::{PlanAuthority, PlanIdentity, PlannedOperation, Pla
 use bilibi_database::Db;
 use bilibi_finance_attachments::NewFile;
 use bilibi_finance_ledger::{Ledger, Money, NewEntry, NewLine};
-use bilibi_finance_reconciliation::{NewBankAccount, NewMatch, NewReconciliation, Reconciliation};
+use bilibi_finance_reconciliation::{NewMatch, NewReconciliation, Reconciliation};
 use bilibi_finance_reports::Reports;
 use bilibi_finance_walkthrough_fixture::sign_in;
 use bilibi_module_registry::Services;
@@ -100,23 +100,11 @@ pub async fn before(db: &Db, services: &Services) -> Outcome<Kept> {
         .ok_or("bank ledger account")?
         .id;
     let bank = reconciliation
-        .create_bank_account(
-            &s,
-            COMPANY,
-            &NewBankAccount {
-                name: "Conversion bank bridge".into(),
-                ledger_account_id: bank_account_id,
-                import_mapping: json!({
-                    "date":"Date","description":"Details","reference":"Ref","amount":"Amount","balance":"Balance"
-                }),
-                charges_account_id: None,
-                interest_account_id: None,
-                match_window_days: None,
-                active: None,
-                reason: None,
-            },
-        )
-        .await?;
+        .list_bank_accounts(&s, COMPANY)
+        .await?
+        .into_iter()
+        .find(|bank| bank.ledger_account_id == bank_account_id)
+        .ok_or("conversion bank account")?;
     let registry = services.get::<bilibi_agent_api::Registry>("base/agent_api.registry")?;
     let first = [opening_import(
         bank.id,

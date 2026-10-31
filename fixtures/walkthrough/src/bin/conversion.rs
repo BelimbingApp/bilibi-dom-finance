@@ -1054,6 +1054,24 @@ async fn main() -> Outcome<()> {
     // so browser sessions can choose the current company. No business rows use SQL.
     db.get().await?.batch_execute("INSERT INTO persons(id,tenant_id,code,name,kind,email) VALUES(4,1,'person_4','Conversion reviewer','human','admin@example.test') ON CONFLICT DO NOTHING; INSERT INTO person_affiliations(id,tenant_id,person_id,organisation_id,title,work_email) VALUES(3,1,4,1,'Reviewer','admin@example.test') ON CONFLICT DO NOTHING; UPDATE users SET person_id=4,affiliation_id=3,organisation_id=1 WHERE tenant_id=1 AND id=4 AND person_id IS NULL;").await?;
     let admin = sign_in(&db, &app.services, 1, 4).await?;
+    let storage_root = std::env::var("BILIBI_ATTACHMENTS_DEMO_ROOT").unwrap_or_else(|_| {
+        std::env::temp_dir()
+            .join(format!("bilibi-finance-conversion-{}", std::process::id()))
+            .display()
+            .to_string()
+    });
+    std::fs::create_dir_all(&storage_root)?;
+    std::fs::set_permissions(
+        &storage_root,
+        std::os::unix::fs::PermissionsExt::from_mode(0o700),
+    )?;
+    bilibi_finance_walkthrough_fixture::attachments::configure_storage(
+        &db,
+        &app.services,
+        &admin,
+        &storage_root,
+    )
+    .await?;
     let grants = app
         .services
         .get::<bilibi_authz::grants::Grants>("base/authz.grants")?;
