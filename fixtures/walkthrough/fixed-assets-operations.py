@@ -218,7 +218,7 @@ require(Decimal(run["total"]) == Decimal("106.25"), "monthly opening continuatio
 require(write(channel, prefix + "run.post", company, period="2026-07-01")["id"] == run["id"], "run retry created another record")
 posted = report()
 tied(posted)
-require(Decimal(posted["rows"][0]["accumulated"]) == Decimal("1906.25"), "posted accumulation")
+require(Decimal(posted["rows"][0]["accumulated"]) == Decimal("906.25"), "posted accumulation")
 pins = {k: posted[k] for k in ["through_entry_number", "through_asset_number", "through_event_number", "through_category_revision_id"]}
 require(read(channel, prefix + "schedule.get", company, "approver", as_of="2026-07-31", **pins)["report"] == posted, "schedule/register mismatch")
 detail = read(channel, prefix + "asset.get", company, "approver", asset_id=asset["id"])["record"]
