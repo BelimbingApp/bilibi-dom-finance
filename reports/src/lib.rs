@@ -859,23 +859,29 @@ impl Reports {
             return source_period::evidence_page(client, scope.tenant(), company_id, limit, after)
                 .await;
         }
-        let page = issued::page(
-            client,
-            scope.tenant(),
-            company_id,
-            dataset,
-            limit,
-            after,
-            None,
-        )
-        .await?;
-        if dataset == "conversion_signoff"
-            || page.rows.iter().any(|r| r["kind"] == conversion::KIND)
-        {
+        issued::page_options(dataset, limit, after, None)?;
+        if dataset == "conversion_signoff" {
+            self.conversion_access(client, scope, company_id, VIEW)
+                .await?;
+            return issued::page(
+                client,
+                scope.tenant(),
+                company_id,
+                dataset,
+                limit,
+                after,
+                None,
+            )
+            .await;
+        }
+        let selected =
+            issued::select_issued_page(client, scope.tenant(), company_id, limit, after, None)
+                .await?;
+        if selected.kinds.iter().any(|kind| kind == conversion::KIND) {
             self.conversion_access(client, scope, company_id, VIEW)
                 .await?;
         }
-        Ok(page)
+        issued::selected_issued_page(client, scope.tenant(), company_id, selected).await
     }
 
     // Reading

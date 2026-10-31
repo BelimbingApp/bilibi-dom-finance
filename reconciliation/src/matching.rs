@@ -231,7 +231,13 @@ pub(crate) async fn activity_boundary(
                        JOIN finance_reconciliation_statement_lines l ON l.id=ml.statement_line_id \
                        WHERE ml.match_id=m.id AND l.line_date <= $4::text::date) \
                    OR EXISTS (SELECT 1 FROM finance_reconciliation_match_entries me \
-                       WHERE me.match_id=m.id AND me.entry_date <= $4::text::date))),0)::bigint",
+                       WHERE me.match_id=m.id AND me.entry_date <= $4::text::date) \
+                   OR EXISTS (SELECT 1 FROM finance_reconciliation_match_opening_items moi \
+                       JOIN finance_reconciliation_opening_items oi ON oi.id=moi.opening_item_id \
+                       JOIN finance_reconciliation_opening_bridges ob ON ob.id=oi.bridge_id \
+                       WHERE moi.tenant_id=$1 AND moi.company_id=$2 AND moi.match_id=m.id \
+                         AND ob.bank_account_id=$3 \
+                         AND ob.conversion_date <= $4::text::date))),0)::bigint",
             &[&tenant, &company_id, &bank_account_id, &through],
         )
         .await

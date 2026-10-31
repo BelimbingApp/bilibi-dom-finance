@@ -502,10 +502,35 @@ impl State {
             let signed = self.document["signoffs"]
                 .as_array()
                 .is_some_and(|s| !s.is_empty());
+            if self.id.is_none() {
+                let preview = render(Form {
+                    id: "conversion-preview-form",
+                    event: "preview",
+                    body: render(
+                        Field::in_form("conversion", "as_of")
+                            .id("conversion-preview-as-of")
+                            .label("Reporting date")
+                            .kind(InputKind::Date)
+                            .required()
+                            .value(self.values.get("as_of").map(String::as_str).unwrap_or(""))
+                            .errors(self.errors.get("as_of").cloned().unwrap_or_default()),
+                    )?,
+                    actions: render(Button {
+                        button_type: "submit",
+                        body: Html::text("Preview report"),
+                        ..Button::default()
+                    })?,
+                    ..Form::default()
+                })?;
+                body.push(&render(Card {
+                    id: "conversion-preview-card",
+                    body: preview,
+                    ..Card::default()
+                })?);
+            }
             if !signed {
                 let mut fields = Html::EMPTY;
                 for (key, title, kind) in [
-                    ("as_of", "Reporting date", InputKind::Date),
                     (
                         "reviewer_reference",
                         "Reviewer and source references",
@@ -517,9 +542,6 @@ impl State {
                         InputKind::Textarea,
                     ),
                 ] {
-                    if key == "as_of" && self.id.is_some() {
-                        continue;
-                    }
                     fields.push(&render(
                         Field::in_form("conversion", key)
                             .id(format!("conversion-{key}"))
@@ -565,14 +587,6 @@ impl State {
                     }
                 }
                 let mut actions = Html::EMPTY;
-                if self.id.is_none() {
-                    actions.push(&render(Button {
-                        button_type: "button",
-                        event: "preview",
-                        body: Html::text("Preview report"),
-                        ..Button::default()
-                    })?);
-                }
                 actions.push(&render(Button {
                     button_type: "submit",
                     body: Html::text(if self.id.is_some() {

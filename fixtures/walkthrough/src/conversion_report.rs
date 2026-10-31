@@ -34,6 +34,7 @@ impl PlanAuthority for Authority {
 pub struct Kept {
     pub id: i64,
     pub bank_id: i64,
+    pub opening_item_id: i64,
     pub content: Value,
     pub pending: Value,
 }
@@ -120,8 +121,8 @@ pub async fn before(db: &Db, services: &Services) -> Outcome<Kept> {
     let first = [opening_import(
         bank.id,
         "BANK-OPENING-V1",
-        "9500",
-        "source_id,item_date,description,amount\ndeposit-in-transit,2026-06-30,Deposit in transit,500\n",
+        "9400",
+        "source_id,item_date,description,amount\ndeposit-in-transit,2026-06-30,Deposit in transit,500\nlate-clearing,2026-06-30,Later clearing item,100\n",
         None,
     )];
     let review = plans.preview(&authority, &first).await?;
@@ -149,8 +150,8 @@ pub async fn before(db: &Db, services: &Services) -> Outcome<Kept> {
     let corrected = [opening_import(
         bank.id,
         "BANK-OPENING-V2",
-        "9400",
-        "source_id,item_date,description,amount\ndeposit-in-transit,2026-06-30,Corrected deposit in transit,600\n",
+        "9300",
+        "source_id,item_date,description,amount\ndeposit-in-transit,2026-06-30,Corrected deposit in transit,600\nlate-clearing,2026-06-30,Later clearing item,100\n",
         Some(first_bridge),
     )];
     let review = plans.preview(&authority, &corrected).await?;
@@ -177,6 +178,9 @@ pub async fn before(db: &Db, services: &Services) -> Outcome<Kept> {
     let opening_item = opening["items"][0]["id"]
         .as_i64()
         .ok_or("corrected opening bank item")?;
+    let later_opening_item = opening["items"][1]["id"]
+        .as_i64()
+        .ok_or("later opening bank item")?;
     let grants = services.get::<bilibi_authz::grants::Grants>("base/authz.grants")?;
     for cap in VIEWS {
         grants.set_direct(&s, 2, cap, Some(true)).await?;
@@ -206,7 +210,7 @@ pub async fn before(db: &Db, services: &Services) -> Outcome<Kept> {
             bank.id,
             &NewFile {
                 file_name: "conversion-opening-statement.csv".into(),
-                content: b"Date,Details,Ref,Amount,Balance\n2026-07-02,Outstanding deposit,OPENING-DEPOSIT,600,10000\n".to_vec(),
+                content: b"Date,Details,Ref,Amount,Balance\n2026-07-02,Outstanding deposit,OPENING-DEPOSIT,600,9900\n".to_vec(),
                 content_type: Some("text/csv".into()),
             },
         )
@@ -239,7 +243,7 @@ pub async fn before(db: &Db, services: &Services) -> Outcome<Kept> {
             bank.id,
             &NewReconciliation {
                 end_date: Some(date(2026, 8, 1)),
-                statement_balance: "10000".into(),
+                statement_balance: "9900".into(),
             },
         )
         .await?;
@@ -280,7 +284,7 @@ pub async fn before(db: &Db, services: &Services) -> Outcome<Kept> {
         opening_bridges[1]["statement_source"],
         "Source bank statement at conversion"
     );
-    assert_eq!(opening_bridges[1]["statement_balance"], "9400.0000");
+    assert_eq!(opening_bridges[1]["statement_balance"], "9300.0000");
     assert_eq!(opening_bridges[1]["book_balance"], "10000.0000");
     assert_eq!(opening_bridges[1]["replaces_bridge_id"], first_bridge);
     assert_eq!(
@@ -293,14 +297,16 @@ pub async fn before(db: &Db, services: &Services) -> Outcome<Kept> {
     );
     assert_eq!(
         opening_bridges[1]["source_csv"],
-        "source_id,item_date,description,amount\ndeposit-in-transit,2026-06-30,Corrected deposit in transit,600\n"
+        "source_id,item_date,description,amount\ndeposit-in-transit,2026-06-30,Corrected deposit in transit,600\nlate-clearing,2026-06-30,Later clearing item,100\n"
     );
     let opening_items = preview["sources"]["bank"]["opening_item"]["rows"]
         .as_array()
         .ok_or("retained opening bank items")?;
-    assert_eq!(opening_items.len(), 2);
-    assert_eq!(opening_items[1]["source_id"], "deposit-in-transit");
-    assert_eq!(opening_items[1]["amount"], "600.0000");
+    assert_eq!(opening_items.len(), 4);
+    assert_eq!(opening_items[2]["source_id"], "deposit-in-transit");
+    assert_eq!(opening_items[2]["amount"], "600.0000");
+    assert_eq!(opening_items[3]["source_id"], "late-clearing");
+    assert_eq!(opening_items[3]["amount"], "100.0000");
     assert_eq!(
         preview["sources"]["bank"]["match_opening_item"]["rows"][0]["opening_item_id"],
         opening_item
@@ -325,6 +331,21 @@ pub async fn before(db: &Db, services: &Services) -> Outcome<Kept> {
         preview["source_trial_balance"]["rows"]
     );
     assert!(kept.content.get("accounts").is_none());
+    let second = plans.preview(&authority, &op).await?;
+    assert_eq!(second["valid"], true, "{second}");
+    let second = plans
+        .commit(
+            &s,
+            &authority,
+            second["plan_code"]
+                .as_str()
+                .ok_or("no second review code")?,
+            &op,
+        )
+        .await?;
+    let second_id = second["results"][0]["result"]["result"]["id"]
+        .as_i64()
+        .ok_or("second issued conversion report")?;
     let pending = plans.preview(&authority, &op).await?;
     assert_eq!(pending["valid"], true);
     grants
@@ -348,6 +369,21 @@ pub async fn before(db: &Db, services: &Services) -> Outcome<Kept> {
             .content,
         kept.content
     );
+    let mut after = None;
+    let mut issued_ids = Vec::new();
+    loop {
+        let page = reports
+            .evidence_page(&viewer, COMPANY, "issued", Some(500), after)
+            .await?;
+        assert!(page.rows.len() <= 1, "issued bodies were not page-bounded");
+        issued_ids.extend(page.rows.iter().filter_map(|row| row["id"].as_i64()));
+        match page.next {
+            Some(next) => after = Some(next),
+            None => break,
+        }
+    }
+    assert!(issued_ids.contains(&id));
+    assert!(issued_ids.contains(&second_id));
     grants
         .set_direct(&s, 2, bilibi_finance_payroll::VIEW, Some(false))
         .await?;
@@ -373,6 +409,7 @@ pub async fn before(db: &Db, services: &Services) -> Outcome<Kept> {
     Ok(Kept {
         id,
         bank_id: bank.id,
+        opening_item_id: later_opening_item,
         content: kept.content,
         pending,
     })
@@ -550,6 +587,47 @@ pub async fn after(db: &Db, services: &Services, kept: Kept) -> Outcome<()> {
             )
             .await?;
     }
+    let before_opening_match = reports
+        .conversion_report(&s, COMPANY, date(2026, 8, 1))
+        .await?;
+    let before_opening_match = before_opening_match["bank_bridges"]
+        .as_array()
+        .and_then(|rows| rows.iter().find(|row| row["account"]["id"] == kept.bank_id))
+        .ok_or("conversion bank bridge before later opening match")?["source_boundary"]
+        .clone();
+    let later_statement = reconciliation
+        .import_statement(
+            &importer,
+            COMPANY,
+            kept.bank_id,
+            &NewFile {
+                file_name: "conversion-later-opening-clearance.csv".into(),
+                content: b"Date,Details,Ref,Amount,Balance\n2026-08-02,Later opening clearance,OPENING-LATER,100,10100\n".to_vec(),
+                content_type: Some("text/csv".into()),
+            },
+        )
+        .await?;
+    let opening_match = [PlannedOperation {
+        key: "finance.reconciliation.opening.match".into(),
+        input: json!({
+            "company_id": COMPANY,
+            "bank_account_id": kept.bank_id,
+            "opening_item_id": kept.opening_item_id,
+            "statement_line_id": later_statement.statement.lines[0].id,
+        }),
+    }];
+    let review = plans.preview(&issuer, &opening_match).await?;
+    assert_eq!(review["valid"], true, "{review}");
+    plans
+        .commit(
+            &s,
+            &issuer,
+            review["plan_code"]
+                .as_str()
+                .ok_or("no later opening match code")?,
+            &opening_match,
+        )
+        .await?;
     let current = reports
         .conversion_report(&s, COMPANY, date(2026, 8, 1))
         .await?;
@@ -581,6 +659,20 @@ pub async fn after(db: &Db, services: &Services, kept: Kept) -> Outcome<()> {
     )?
     .is_zero());
     assert_eq!(bridge["source_activity_after_finalisation"], true);
+    assert_eq!(
+        bridge["source_boundary"]["through_statement_number"],
+        before_opening_match["through_statement_number"],
+        "a statement containing only a later-dated line crossed the report boundary"
+    );
+    assert!(
+        bridge["source_boundary"]["through_match_event_number"]
+            .as_i64()
+            .unwrap()
+            > before_opening_match["through_match_event_number"]
+                .as_i64()
+                .unwrap(),
+        "an opening-item match did not advance the report-date activity boundary"
+    );
     assert!(
         bridge["source_boundary"]["through_statement_number"]
             .as_i64()
@@ -609,6 +701,7 @@ pub async fn after(db: &Db, services: &Services, kept: Kept) -> Outcome<()> {
         "match_entry",
         "match_event",
         "match_line",
+        "match_opening_item",
     ] {
         assert!(
             current["sources"]["bank"][dataset]["rows"]
