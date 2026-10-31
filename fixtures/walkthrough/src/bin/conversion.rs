@@ -4,7 +4,9 @@
 mod conversion_lifecycle;
 use bilibi_authz::{RoleDefinition, VocabularyContribution, VOCABULARY};
 use bilibi_database::{pool, Db};
-use bilibi_finance_fixed_assets::{Assumptions, FixedAssets, Method, ReportPins, RevisionInput};
+use bilibi_finance_fixed_assets::{
+    Assumptions, DisposalInput, EventInput, FixedAssets, Method, ReportPins, RevisionInput,
+};
 use bilibi_finance_ledger::{
     AccountType, Ledger, Money, NewAccount, NewBook, NewFiscalYear, OpeningBalances, Reversal,
 };
@@ -256,8 +258,7 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         .await?;
     let ar_input = json!({"source_reference":"AR-SOURCE","currency_code":"MYR","series_id":config["invoice_series"],"csv":AR});
     let ap_input = json!({"source_reference":"AP-SOURCE","currency_code":"MYR","csv":AP});
-    let asset_input =
-        json!({"source_reference":"ASSET-SOURCE","currency_code":"MYR","csv":config["assets"]});
+    let asset_input = json!({"source_reference":"ASSET-SOURCE","currency_code":"MYR","csv":config["assets"].as_str().unwrap().replace(",12000,1800,96,0", ",11000,800,96,0") + &format!("asset-4,Fully depreciated,{revision},2024-06-01,2024-07-01,1000,1000,0,0\n", revision=config["revision"])});
     for input in [&ar_input, &ap_input, &asset_input] {
         assert!(input["csv"].as_str().is_some());
     }
@@ -274,10 +275,10 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         .await
         .is_err());
     let mut wrong_asset = asset_input.clone();
-    wrong_asset["csv"] = json!(config["assets"]
+    wrong_asset["csv"] = json!(asset_input["csv"]
         .as_str()
         .unwrap()
-        .replace(",1800,96", ",1801,96"));
+        .replace(",1000,1000,0,0", ",1000,999,0,0"));
     assert!(assets
         .import_opening_register(&s, company, &wrong_asset)
         .await
@@ -459,7 +460,12 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         .all(|r| r.difference.is_zero()));
     assert_eq!(
         register.rows[0].accumulated.shown(trial.minor_units),
-        "1800.00"
+        "800.00"
+    );
+    assert!(register.rows[1].schedule.is_empty());
+    assert_eq!(
+        register.rows[1].accumulated.shown(trial.minor_units),
+        "1000.00"
     );
     assert_eq!(
         register.rows[0].schedule[0].amount.shown(trial.minor_units),
@@ -476,8 +482,56 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         .all(|r| r.difference.is_zero()));
     assert_eq!(
         register.rows[0].accumulated.shown(trial.minor_units),
-        "1906.25"
+        "906.25"
     );
+    let fully_depreciated = register.rows[1].asset.id;
+    assets
+        .dispose(
+            &s,
+            company,
+            fully_depreciated,
+            &DisposalInput {
+                event: EventInput {
+                    effective_date: date(2026, 7, 31),
+                    reason: "Retire fully depreciated asset".into(),
+                },
+                proceeds: Money::ZERO,
+                settlement_account_id: None,
+            },
+        )
+        .await?;
+    let disposed = assets
+        .register_report(&s, company, date(2026, 7, 31), &ReportPins::default())
+        .await?;
+    assert!(disposed.rows[1].disposed);
+    assert!(disposed
+        .reconciliation
+        .iter()
+        .all(|r| r.difference.is_zero()));
+    assets
+        .reverse_disposal(
+            &s,
+            company,
+            fully_depreciated,
+            &EventInput {
+                effective_date: date(2026, 7, 31),
+                reason: "Correct retirement".into(),
+            },
+        )
+        .await?;
+    let restored = assets
+        .register_report(&s, company, date(2026, 7, 31), &ReportPins::default())
+        .await?;
+    assert!(!restored.rows[1].disposed);
+    assert!(restored
+        .reconciliation
+        .iter()
+        .all(|r| r.difference.is_zero()));
+    let pinned = assets
+        .register_report(&s, company, date(2026, 7, 31), &disposed.pins())
+        .await?;
+    assert!(pinned.rows[1].disposed);
+    assert_eq!(pinned.reconciliation, disposed.reconciliation);
     let docs = ar.list_documents(&s, company, &Default::default()).await?;
     let invoice = docs[0].id;
     let payment=ar.record_payment(&s,company,&json!({"series_id":config["payment_series"],"customer_id":config["customer_id"],"payment_date":"2026-07-15","amount":"1000","deposit_account_id":config["bank"],"allocations":[{"document_id":invoice,"amount":"1000"}]})).await?;
@@ -639,7 +693,7 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         )
         .await?
         .get(0);
-    assert_eq!(entries, 6);
+    assert_eq!(entries, 8);
     for table in [
         "finance_receivables_opening_batches",
         "finance_payables_opening_batches",

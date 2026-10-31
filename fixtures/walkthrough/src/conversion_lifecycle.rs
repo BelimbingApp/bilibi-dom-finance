@@ -496,7 +496,7 @@ pub async fn prove(
     let original_old = assets
         .register_report(&approver, company, day, &asset_before.pins())
         .await?;
-    assert_eq!(original_old.rows.len(), 1);
+    assert_eq!(original_old.rows.len(), 2);
     assert_eq!(original_old.rows[0].asset.id, asset);
     assert_eq!(
         ledger
