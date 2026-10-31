@@ -20,7 +20,7 @@ The linked note language follows [IRBM's cancellation API](https://sdk.myinvois.
 
 | Page | Browser evidence |
 | --- | --- |
-| `ledger/book` | Switched to Acme Trading, whose book was unopened; the open-book form named the company and explained the fixed currency and approval policy. |
+| `ledger/books/{company_id}` | Switched to Acme Trading, whose book was unopened; the open-book form named the company and explained the fixed currency and approval policy. |
 | `ledger/fiscal-years` | Closed then locked January in the disposable company; the lock confirmation said the period can never be reopened. |
 | `receivables/receipts/1` and `receivables/invoices/1` | Reversed a posted receipt; the invoice showed its balance owing again and the receipt as reversed. The reversal dialog explained the consequence and earliest date. |
 | `receivables/invoices/1`, bad-debt journal | Proposed a write-off, approved it as a different reviewer, then reversed it. The dialogs kept the collection-evidence reminder and stated that no tax refund or filing was recorded. |
