@@ -1,0 +1,512 @@
+//! Source-backed credits and the independent settlement boundary on a composed,
+//! disposable database. Exercise the owners' answers, not implementation text.
+use super::*;
+use bilibi_finance_ledger::{NewEntry, NewLine, PostOptions};
+use bilibi_finance_payables::{AgingQuery, BalancePins as PayablePins};
+use bilibi_finance_receivables::BalancePins as ReceivablePins;
+pub(super) const SOURCE:&str="source_id,account_code,debit,credit\ncash,1000,1000,\nreceivables,1100,70,\nreceivables-credit,1110,,30\npayables,2000,,70\npayables-credit,2010,30,\ncapital,3000,,1000\n";
+pub(super) const CREDIT_ONLY_SOURCE: &str =
+    "source_id,account_code,debit,credit\ncustomer-credit,1100,,30\nsupplier-credit,2000,30,\n";
+fn tax(value: Value) -> String {
+    format!("\"{}\"", value.to_string().replace('"', "\"\""))
+}
+fn csv(payable: bool, only: bool) -> String {
+    let header = if payable { AP } else { AR }.lines().next().unwrap();
+    let normal = if payable { "bill" } else { "invoice" };
+    let credit = if payable {
+        "supplier_credit"
+    } else {
+        "customer_credit"
+    };
+    let party = if payable {
+        "company_010,Conversion vendor"
+    } else {
+        "company_010"
+    };
+    let (primary, historical, zero) = if payable {
+        ("2000", "2010", "2020")
+    } else {
+        ("1100", "1110", "1120")
+    };
+    let mut out = format!("{header}\n");
+    let mut row = |source: &str,
+                   reference: &str,
+                   due: &str,
+                   gross: &str,
+                   residual: &str,
+                   control: &str,
+                   kind: &str,
+                   source_kind: &str,
+                   facts: Value| {
+        out.push_str(&format!("{source},{party},{reference},2026-05-01,{due},{gross},{residual},{control},company,{kind},{source_kind},source-system,MYR,{}\n",tax(facts)));
+    };
+    if !only {
+        row(
+            "invoice",
+            "ORIGINAL-INVOICE",
+            "2026-06-01",
+            "106",
+            "100",
+            primary,
+            normal,
+            normal,
+            json!({"status":"supplied","net":"100","tax_total":"6","lines":[{"code":"source-tax","rate":"6","taxable_amount":"100","tax_amount":"6"}]}),
+        );
+    }
+    row(
+        "credit",
+        "ORIGINAL-CREDIT",
+        "",
+        "53",
+        "30",
+        primary,
+        credit,
+        "credit_note",
+        json!({"status":"supplied","net":"50","tax_total":"3","lines":[{"code":"source-tax","rate":"6","taxable_amount":"50","tax_amount":"3"}]}),
+    );
+    if !only {
+        row(
+            "historical-credit",
+            "HISTORICAL-CREDIT",
+            "",
+            "30",
+            "30",
+            historical,
+            credit,
+            if payable { "payment" } else { "receipt" },
+            json!({"status":"unknown"}),
+        );
+        row(
+            "zero-invoice",
+            "ZERO-INVOICE",
+            "2026-05-15",
+            "20",
+            "20",
+            zero,
+            normal,
+            normal,
+            json!({"status":"unknown"}),
+        );
+        row(
+            "zero-credit",
+            "ZERO-CREDIT",
+            "",
+            "20",
+            "20",
+            zero,
+            credit,
+            "credit_note",
+            json!({"status":"supplied","net":"20","tax_total":"0"}),
+        );
+    }
+    out
+}
+async fn tied(
+    ar: &Receivables,
+    ap: &Payables,
+    s: &bilibi_tenancy::Scope,
+    company: i64,
+    day: jiff::civil::Date,
+) -> Outcome<()> {
+    let a = ar
+        .tie_out_control_accounts(s, company, day, &ReceivablePins::default())
+        .await?;
+    let b = ap
+        .tie_out_control_accounts(s, company, day, &PayablePins::default())
+        .await?;
+    assert!(a.tied_out, "receivables: {}", serde_json::to_string(&a)?);
+    assert!(b.tied_out, "payables: {}", serde_json::to_string(&b)?);
+    Ok(())
+}
+pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
+    let company = 6;
+    let config = setup(db, services, company).await?;
+    let reviewer = sign_in(db, services, 1, 4).await?;
+    let manager = sign_in(db, services, 1, 1).await?;
+    let ledger = services.get::<Ledger>(bilibi_finance_ledger::SERVICE)?;
+    let ar = services.get::<Receivables>(bilibi_finance_receivables::SERVICE)?;
+    let ap = services.get::<Payables>(bilibi_finance_payables::SERVICE)?;
+    let chart = ledger.list_accounts(&reviewer, company).await?;
+    let account = |code: &str| chart.iter().find(|a| a.code == code).unwrap().id;
+    let before = ledger
+        .trial_balance(&reviewer, company, date(2026, 7, 1), None)
+        .await?;
+    let ar_csv = csv(false, false);
+    let ap_csv = csv(true, false);
+    let ar_input = json!({"source_reference":"CREDIT-AR","currency_code":"MYR","series_id":config["invoice_series"],"csv":ar_csv,"opening_account_classifications":config["opening_account_classifications"]});
+    let ap_input = json!({"source_reference":"CREDIT-AP","currency_code":"MYR","csv":ap_csv,"opening_account_classifications":config["opening_account_classifications"]});
+    for input in [&ar_input, &ap_input] {
+        for change in [
+            "precision",
+            "currency",
+            "duplicate",
+            "mapping",
+            "mismatch",
+            "omitted",
+        ] {
+            let mut wrong = input.clone();
+            if change == "omitted" {
+                wrong["opening_account_classifications"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove(&account("1110").to_string());
+            } else {
+                let source = wrong["csv"].as_str().unwrap();
+                wrong["csv"] = json!(match change {
+                    "precision" => source.replace(",106,100,", ",106,100.001,"),
+                    "currency" => source.replace(",MYR,", ",USD,"),
+                    "duplicate" => format!("{}{}\n", source, source.lines().nth(1).unwrap()),
+                    "mapping" => source
+                        .replace(",1120,", ",1000,")
+                        .replace(",2020,", ",1000,"),
+                    _ => source.replace(",106,100,", ",106,99,"),
+                });
+            }
+            if input == &ar_input {
+                assert!(
+                    ar.import_opening_invoices(&reviewer, company, &wrong)
+                        .await
+                        .is_err(),
+                    "AR {change}"
+                );
+            } else {
+                assert!(
+                    ap.import_opening_bills(&reviewer, company, &wrong)
+                        .await
+                        .is_err(),
+                    "AP {change}"
+                );
+            }
+        }
+    }
+    // Preserve each staging preparer, require independent complete-register review.
+    let mut stage_ar = ar_input.clone();
+    stage_ar["part"] = json!(1);
+    stage_ar["part_count"] = json!(1);
+    let mut stage_ap = ap_input.clone();
+    stage_ap["part"] = json!(1);
+    stage_ap["part_count"] = json!(1);
+    ar.stage_opening_import(&manager, company, &stage_ar)
+        .await?;
+    ap.stage_opening_import(&manager, company, &stage_ap)
+        .await?;
+    let mut staged_ar = ar_input.clone();
+    staged_ar["csv"] = json!("");
+    staged_ar["staged"] = json!(true);
+    let mut staged_ap = ap_input.clone();
+    staged_ap["csv"] = json!("");
+    staged_ap["staged"] = json!(true);
+    assert!(ar
+        .import_opening_invoices(&manager, company, &staged_ar)
+        .await
+        .is_err());
+    assert!(ap
+        .import_opening_bills(&manager, company, &staged_ap)
+        .await
+        .is_err());
+    let a = ar
+        .import_opening_invoices(&reviewer, company, &staged_ar)
+        .await?;
+    let b = ap
+        .import_opening_bills(&reviewer, company, &staged_ap)
+        .await?;
+    assert_eq!(
+        ar.import_opening_invoices(&reviewer, company, &staged_ar)
+            .await?["id"],
+        a["id"]
+    );
+    assert_eq!(
+        ap.import_opening_bills(&reviewer, company, &staged_ap)
+            .await?["id"],
+        b["id"]
+    );
+    let mut changed = ar_input.clone();
+    changed["csv"] = json!(ar_csv.replace("source-system", "changed-system"));
+    assert!(ar
+        .import_opening_invoices(&reviewer, company, &changed)
+        .await
+        .is_err());
+    assert_eq!(
+        before,
+        ledger
+            .trial_balance(&reviewer, company, date(2026, 7, 1), None)
+            .await?
+    );
+    tied(&ar, &ap, &reviewer, company, date(2026, 7, 1)).await?;
+    let invoices = ar
+        .list_documents(&reviewer, company, &Default::default())
+        .await?;
+    let bills = ap
+        .list_documents(&reviewer, company, &Default::default())
+        .await?;
+    let ar_id = |source: &str| {
+        invoices
+            .iter()
+            .find(|d| d.opening.as_ref().is_some_and(|s| s["source_id"] == source))
+            .unwrap()
+            .id
+    };
+    let ap_id = |source: &str| {
+        bills
+            .iter()
+            .find(|d| d.opening.as_ref().is_some_and(|s| s["source_id"] == source))
+            .unwrap()
+            .id
+    };
+    assert_eq!(
+        invoices
+            .iter()
+            .find(|d| d.id == ar_id("credit"))
+            .unwrap()
+            .kind,
+        "opening_credit"
+    );
+    let old_ar = ar
+        .aged_receivables(&reviewer, company, date(2026, 7, 31), &Default::default())
+        .await?;
+    let old_ap = ap
+        .aged_payables(&reviewer, company, date(2026, 7, 31), &Default::default())
+        .await?;
+    assert_eq!(old_ar.gross_debits.to_string(), "120.0000");
+    assert_eq!(old_ar.customers[0].credits.len(), 3);
+    assert_eq!(old_ap.parties[0].credits.len(), 3);
+    assert!(ar
+        .aged_receivables(&reviewer, company, date(2026, 6, 30), &Default::default())
+        .await?
+        .customers
+        .is_empty());
+    assert!(ap
+        .aged_payables(&reviewer, company, date(2026, 6, 30), &Default::default())
+        .await?
+        .parties
+        .is_empty());
+    let apply_ar = json!({"credit_document_id":ar_id("credit"),"target_document_id":ar_id("invoice"),"effective_date":"2026-07-10","amount":"20","reference":"same-control"});
+    let apply_ap = json!({"credit_document_id":ap_id("credit"),"target_document_id":ap_id("invoice"),"effective_date":"2026-07-10","amount":"20","reference":"same-control"});
+    let ae = ar.apply_credit(&manager, company, &apply_ar).await?;
+    let be = ap.apply_credit(&manager, company, &apply_ap).await?;
+    assert!(ae["entry_id"].is_null() && be["entry_id"].is_null());
+    assert_eq!(
+        before,
+        ledger
+            .trial_balance(&reviewer, company, date(2026, 7, 31), None)
+            .await?
+    );
+    let current_ar = ar
+        .aged_receivables(&reviewer, company, date(2026, 7, 31), &Default::default())
+        .await?;
+    let current_ap = ap
+        .aged_payables(&reviewer, company, date(2026, 7, 31), &Default::default())
+        .await?;
+    assert_eq!(old_ar.through_entry_number, current_ar.through_entry_number);
+    assert_eq!(
+        old_ar.through_opening_batch_id,
+        current_ar.through_opening_batch_id
+    );
+    assert!(old_ar.through_settlement_number < current_ar.through_settlement_number);
+    assert_eq!(old_ap.through_entry_number, current_ap.through_entry_number);
+    let replay_ar = ar
+        .aged_receivables(
+            &reviewer,
+            company,
+            date(2026, 7, 31),
+            &AgingOptions {
+                through_entry_number: Some(old_ar.through_entry_number),
+                through_opening_batch_id: Some(old_ar.through_opening_batch_id),
+                through_settlement_number: Some(old_ar.through_settlement_number),
+                ..Default::default()
+            },
+        )
+        .await?;
+    let replay_ap = ap
+        .aged_payables(
+            &reviewer,
+            company,
+            date(2026, 7, 31),
+            &AgingQuery {
+                through_entry_number: Some(old_ap.through_entry_number),
+                through_opening_batch_id: Some(old_ap.through_opening_batch_id),
+                through_settlement_number: Some(old_ap.through_settlement_number),
+                ..Default::default()
+            },
+        )
+        .await?;
+    assert_eq!(
+        serde_json::to_value(&old_ar)?,
+        serde_json::to_value(&replay_ar)?
+    );
+    assert_eq!(
+        serde_json::to_value(&old_ap)?,
+        serde_json::to_value(&replay_ap)?
+    );
+    tied(&ar, &ap, &reviewer, company, date(2026, 7, 31)).await?;
+    let mut too_much = apply_ar.clone();
+    too_much["reference"] = json!("too-much");
+    too_much["amount"] = json!("11");
+    assert!(ar.apply_credit(&manager, company, &too_much).await.is_err());
+    let mut too_much = apply_ap.clone();
+    too_much["reference"] = json!("too-much");
+    too_much["amount"] = json!("11");
+    assert!(ap.apply_credit(&manager, company, &too_much).await.is_err());
+    let reverse_ar =
+        json!({"settlement_id":ae["id"],"effective_date":"2026-07-15","reference":"reverse-same"});
+    let reverse_ap =
+        json!({"settlement_id":be["id"],"effective_date":"2026-07-15","reference":"reverse-same"});
+    ar.reverse_settlement(&manager, company, &reverse_ar)
+        .await?;
+    ap.reverse_settlement(&manager, company, &reverse_ap)
+        .await?;
+    let mut twice = reverse_ar.clone();
+    twice["reference"] = json!("twice");
+    assert!(ar
+        .reverse_settlement(&manager, company, &twice)
+        .await
+        .is_err());
+    tied(&ar, &ap, &reviewer, company, date(2026, 7, 31)).await?;
+    // Saved inactive controls remain settleable. The transfer is owned.
+    ledger
+        .update_account(
+            &reviewer,
+            company,
+            account("1110"),
+            &bilibi_finance_ledger::AccountChange {
+                active: Some(false),
+                ..Default::default()
+            },
+        )
+        .await?;
+    ledger
+        .update_account(
+            &reviewer,
+            company,
+            account("2010"),
+            &bilibi_finance_ledger::AccountChange {
+                active: Some(false),
+                ..Default::default()
+            },
+        )
+        .await?;
+    let cross_ar = json!({"credit_document_id":ar_id("historical-credit"),"target_document_id":ar_id("invoice"),"effective_date":"2026-07-20","amount":"30","reference":"cross-control"});
+    let cross_ap = json!({"credit_document_id":ap_id("historical-credit"),"target_document_id":ap_id("invoice"),"effective_date":"2026-07-20","amount":"30","reference":"cross-control"});
+    let ax = ar.apply_credit(&manager, company, &cross_ar).await?;
+    let bx = ap.apply_credit(&manager, company, &cross_ap).await?;
+    for (event, debit, credit) in [
+        (&ax, account("1110"), account("1100")),
+        (&bx, account("2000"), account("2010")),
+    ] {
+        let entry = ledger
+            .get_entry(&reviewer, company, event["entry_id"].as_i64().unwrap())
+            .await?;
+        assert_eq!(
+            entry.owner.as_ref().unwrap().module,
+            if event == &ax {
+                "finance/receivables"
+            } else {
+                "finance/payables"
+            }
+        );
+        assert!(entry
+            .lines
+            .iter()
+            .any(|l| l.account_id == debit && l.debit.amount().to_string() == "30.0000"));
+        assert!(entry
+            .lines
+            .iter()
+            .any(|l| l.account_id == credit && l.credit.amount().to_string() == "30.0000"));
+    }
+    tied(&ar, &ap, &reviewer, company, date(2026, 7, 31)).await?;
+    let refund_ar = json!({"credit_document_id":ar_id("credit"),"effective_date":"2026-07-21","amount":"10","cash_account_id":config["bank"],"reference":"refund"});
+    let refund_ap = json!({"credit_document_id":ap_id("credit"),"effective_date":"2026-07-21","amount":"10","cash_account_id":config["bank"],"reference":"refund"});
+    let af = ar.refund_credit(&manager, company, &refund_ar).await?;
+    let bf = ap.refund_credit(&manager, company, &refund_ap).await?;
+    assert!(af["entry_id"].is_number() && bf["entry_id"].is_number());
+    tied(&ar, &ap, &reviewer, company, date(2026, 7, 31)).await?;
+    for (receivable, event, reference) in [
+        (true, &af, "reverse-refund"),
+        (false, &bf, "reverse-refund"),
+        (true, &ax, "reverse-transfer"),
+        (false, &bx, "reverse-transfer"),
+    ] {
+        let input = json!({"settlement_id":event["id"],"effective_date":"2026-07-25","reference":reference});
+        if receivable {
+            ar.reverse_settlement(&manager, company, &input).await?;
+        } else {
+            ap.reverse_settlement(&manager, company, &input).await?;
+        }
+        tied(&ar, &ap, &reviewer, company, date(2026, 7, 31)).await?;
+    }
+    // A split posting/settlement tuple is refused, rather than a false tie-out.
+    assert!(ar
+        .aged_receivables(
+            &reviewer,
+            company,
+            date(2026, 7, 31),
+            &AgingOptions {
+                through_entry_number: Some(before.through_entry_number),
+                ..Default::default()
+            }
+        )
+        .await
+        .is_err());
+    assert!(ap
+        .aged_payables(
+            &reviewer,
+            company,
+            date(2026, 7, 31),
+            &AgingQuery {
+                through_entry_number: Some(before.through_entry_number),
+                ..Default::default()
+            }
+        )
+        .await
+        .is_err());
+    // An unrelated owner remains a visible difference on its own control.
+    let amount = Money::parse("1", before.minor_units)?;
+    ledger
+        .post_entry(
+            &manager,
+            company,
+            &NewEntry {
+                entry_date: date(2026, 7, 30),
+                description: "Unrelated control adjustment".into(),
+                reference: None,
+                lines: vec![
+                    NewLine::debit(account("1100"), amount),
+                    NewLine::credit(account("3000"), amount),
+                ],
+            },
+            &PostOptions::default(),
+        )
+        .await?;
+    let difference = ar
+        .tie_out_control_accounts(&reviewer, company, date(2026, 7, 31), &Default::default())
+        .await?;
+    assert!(!difference.tied_out);
+    assert!(difference
+        .accounts
+        .iter()
+        .any(|a| a.account_id == account("1100") && a.difference.to_string() == "-1.0000"));
+    // Earlier source and the complete pin tuple still replay after later entries.
+    assert_eq!(
+        serde_json::to_value(&old_ar)?,
+        serde_json::to_value(
+            ar.aged_receivables(
+                &reviewer,
+                company,
+                date(2026, 7, 31),
+                &AgingOptions {
+                    through_entry_number: old_ar.pins().through_entry_number,
+                    through_opening_batch_id: old_ar.pins().through_opening_batch_id,
+                    through_settlement_number: old_ar.pins().through_settlement_number,
+                    ..Default::default()
+                }
+            )
+            .await?
+        )?
+    );
+    let only = setup(db, services, 7).await?;
+    ar.import_opening_invoices(&reviewer,7,&json!({"source_reference":"CREDIT-ONLY","currency_code":"MYR","series_id":only["invoice_series"],"csv":csv(false,true),"opening_account_classifications":only["opening_account_classifications"]})).await?;
+    ap.import_opening_bills(&reviewer,7,&json!({"source_reference":"CREDIT-ONLY","currency_code":"MYR","csv":csv(true,true),"opening_account_classifications":only["opening_account_classifications"]})).await?;
+    tied(&ar, &ap, &reviewer, 7, date(2026, 7, 31)).await?;
+    println!("PASS: mixed, credit-only, partly settled, contra-sign and zero-net controls; source tax evidence; staged independent import; entryless application/reversal replay; saved inactive cross-control transfers, refunds and owned reversals; complete pins and per-control differences");
+    Ok(())
+}

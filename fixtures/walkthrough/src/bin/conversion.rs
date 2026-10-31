@@ -1,5 +1,7 @@
 //! Disposable opening-state conversion: browser first on Company 001, MCP on
 //! clean Company 002, then facade controls on Company 003. No product seeds.
+#[path = "../conversion_credits.rs"]
+mod conversion_credits;
 #[path = "../conversion_lifecycle.rs"]
 mod conversion_lifecycle;
 #[path = "../conversion_report.rs"]
@@ -79,7 +81,7 @@ async fn setup(db: &Db, services: &Services, company: i64) -> Outcome<Value> {
     }
     let admin = in_company(db, services, 4, company).await?;
     let manager = in_company(db, services, 1, company).await?;
-    let multiple_controls = company == 4;
+    let multiple_controls = matches!(company, 4 | 6);
     let l = services.get::<Ledger>(bilibi_finance_ledger::SERVICE)?;
     let ar = services.get::<Receivables>(bilibi_finance_receivables::SERVICE)?;
     let ap = services.get::<Payables>(bilibi_finance_payables::SERVICE)?;
@@ -124,6 +126,15 @@ async fn setup(db: &Db, services: &Services, company: i64) -> Outcome<Value> {
                 l.create_account(&admin, company, &NewAccount::new(code, name, kind))
                     .await?;
             }
+        }
+    }
+    if company == 6 {
+        for (code, name, kind) in [
+            ("1120", "Zero receivables control", AccountType::Asset),
+            ("2020", "Zero payables control", AccountType::Liability),
+        ] {
+            l.create_account(&admin, company, &NewAccount::new(code, name, kind))
+                .await?;
         }
     }
     if l.list_fiscal_years(&admin, company).await?.is_empty() {
@@ -249,7 +260,11 @@ async fn setup(db: &Db, services: &Services, company: i64) -> Outcome<Value> {
                     conversion_date: date(2026, 7, 1),
                     currency_code: "MYR".into(),
                     source_reference: format!("CONVERSION-{company}"),
-                    csv: if multiple_controls {
+                    csv: if company == 6 {
+                        conversion_credits::SOURCE
+                    } else if company == 7 {
+                        conversion_credits::CREDIT_ONLY_SOURCE
+                    } else if multiple_controls {
                         MULTI_SOURCE
                     } else {
                         SOURCE
@@ -288,6 +303,10 @@ async fn setup(db: &Db, services: &Services, company: i64) -> Outcome<Value> {
     if multiple_controls {
         classifications.insert(account("1110").to_string(), json!("receivables_control"));
         classifications.insert(account("2010").to_string(), json!("payables_control"));
+    }
+    if company == 6 {
+        classifications.insert(account("1120").to_string(), json!("receivables_control"));
+        classifications.insert(account("2020").to_string(), json!("payables_control"));
     }
     Ok(
         json!({"company_id":company,"vendor_id":vendor.id,"vendor_key":format!("vendor:{}", vendor.id),"customer_id":customer.id,"invoice_series":invoice.id,"payment_series":payment.id,"bank":account("1000"),"bank_account_id":bank_account.id,"ar":if multiple_controls { MULTI_AR } else { AR },"ap":if multiple_controls { MULTI_AP } else { AP },"expense":account("5000"),"assets":asset_csv,"revision":revision,"opening_account_classifications":classifications,"historical_ar":if multiple_controls { json!(account("1110")) } else { Value::Null },"historical_ap":if multiple_controls { json!(account("2010")) } else { Value::Null }}),
@@ -811,7 +830,7 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
             &AgingOptions {
                 through_entry_number: Some(before_ar.through_entry_number),
                 through_opening_batch_id: Some(before_ar.through_opening_batch_id),
-                    through_settlement_number: Some(before_ar.through_settlement_number),
+                through_settlement_number: Some(before_ar.through_settlement_number),
                 ..Default::default()
             },
         )
@@ -828,7 +847,7 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
             &bilibi_finance_payables::AgingQuery {
                 through_entry_number: Some(before_ap.through_entry_number),
                 through_opening_batch_id: Some(before_ap.through_opening_batch_id),
-                    through_settlement_number: Some(before_ap.through_settlement_number),
+                through_settlement_number: Some(before_ap.through_settlement_number),
                 ..Default::default()
             },
         )
@@ -1480,6 +1499,10 @@ async fn main() -> Outcome<()> {
             .await?;
         return Ok(());
     }
+    if std::env::args().any(|s| s == "credits") {
+        conversion_credits::prove(&db, &app.services).await?;
+        return Ok(());
+    }
     if std::env::args().any(|s| s == "opening-list-scale") {
         prove_opening_invoice_page_scale(&db, &app.services).await?;
         return Ok(());
@@ -1522,6 +1545,7 @@ async fn main() -> Outcome<()> {
         prove(&db, &app.services).await?;
         if !std::env::args().any(|arg| arg == "assets-evidence") {
             prove_historical_controls(&db, &app.services).await?;
+            conversion_credits::prove(&db, &app.services).await?;
         }
     }
     Ok(())
