@@ -3,7 +3,7 @@ use crate::*;
 use bilibi_finance_ledger::{MinorUnits, TotalsQuery};
 use std::collections::BTreeMap;
 
-/// Boundaries needed to reproduce ledger postings and entryless opening records.
+/// All three boundaries are required to replay entryless imports and applications.
 #[derive(Clone, Debug, Default)]
 pub struct BalancePins {
     pub through_entry_number: Option<i64>,

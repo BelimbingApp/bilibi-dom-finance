@@ -1,7 +1,8 @@
-//! Company payables documents, mirroring Bilimbi.Finance.Payables.
+//! Company payables documents, mirroring Bilimbi.Finance.Payables, plus
+//! source-backed opening supplier credits and their immutable settlements.
 //! Records are immutable after creation; approval and posting advance their
-//! status, and corrections are debit notes. A bill naming order lines is
-//! matched against Payables' own copy of the order source, kept from domain
+//! status, and ordinary corrections are debit notes. A bill naming order lines
+//! is matched against Payables' own copy of the order source, kept from domain
 //! events (`orders`). SQL and validation remain private.
 mod agent_operations;
 mod contributions;

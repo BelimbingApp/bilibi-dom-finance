@@ -1,6 +1,6 @@
 # Receivables
 
-Company-scoped invoice and credit-note drafts, issuance, fully allocated receipts, corrections and reproducible reports, ported from `Bilimbi.Finance.Receivables` at `4abfaf829321f8540581d833752a086b21b45ba9`. Resolve `Receivables` at `finance/receivables.receivables`. Schema, SQL and validation are private; consumers use this facade.
+Company-scoped invoice and credit-note drafts, issuance, fully allocated receipts, opening customer credits and their settlements, corrections and reproducible reports, ported from `Bilimbi.Finance.Receivables` at `4abfaf829321f8540581d833752a086b21b45ba9`. Resolve `Receivables` at `finance/receivables.receivables`. Schema, SQL and validation are private; consumers use this facade.
 
 ## NR1 surface
 
@@ -78,14 +78,14 @@ Menu: Finance → Receivables, for people with `finance.receivables.view`. Contr
 | --- | --- | --- |
 | Customers | `/finance/receivables/customers` | Search by Core code or name and filter availability. Add customers uses one multi-select for Companies and People, or creates either kind. Each selected party displays its fixed Core code; terms apply to all selected rows. Each row calls `customer.create`, retaining a refused row and its message. Already linked parties are disabled and link to the existing customer. |
 | Customer | `/finance/receivables/customers/{id}` | Core code, identity, status, permitted contacts and billing address; Finance terms and availability edited in place; the current customer relationship; invoices, credit notes and receipts. |
-| Invoices | `/finance/receivables/invoices` | Invoices and credit notes by type, status (draft, issued, unpaid, discarded) and customer; New invoice and New credit note dialogs (`draft.create`). |
-| Invoice | `/finance/receivables/invoices/{id}` | Dates and description edited in place and lines in a dialog while a draft (`draft.update`); Issue and Discard after a confirmation (`document.issue`, `draft.discard`); party, lines, tax, totals, posting status, receipts and credits applied, source documents. |
+| Invoices | `/finance/receivables/invoices` | Invoices, credit notes and opening customer credits by type, source, status and customer; New invoice and New credit note dialogs (`draft.create`). |
+| Invoice | `/finance/receivables/invoices/{id}` | Dates and description edited in place and lines in a dialog while a draft (`draft.update`); Issue and Discard after a confirmation (`document.issue`, `draft.discard`); party, lines, tax, totals, posting status, receipts, credit settlements and source documents. An opening customer credit offers Apply credit, Refund credit and settlement reversal through their reviewed contracts. |
 | Receipts | `/finance/receivables/receipts` | Record receipt dialog: the customer's open invoices with an amount each, applied in full, deposited to an active asset account other than the receivable account (`payment.record`). |
 | Receipt | `/finance/receivables/receipts/{id}` | Facts, the invoices it settles, source documents, Reverse receipt dialog (`payment.reverse`). |
-| Aging | `/finance/receivables/aging` | Who owes what by days late as of a date (one date, so not the shared period filter), read at one posting number (`aging.get`). |
+| Aging | `/finance/receivables/aging` | Who owes what by days late and which opening credits remain unapplied as of a date (one date, so not the shared period filter), read at one complete accounting tuple (`aging.get`). |
 | Settings | `/finance/receivables/settings` | For the company named under the title: the default accounts chosen in place (`setup.configure`; before the setup exists the first choice waits on the page until the second, then both are saved in one call; changing an existing receivable account asks for confirmation first and applies to new invoices only, and an asset account that recorded receipts were paid into is not offered, and `setup.configure` refuses it as a new receivable account), their change history folded under History, the numbering series and tax codes with name, status and tax account edited in their rows (`series.update`, `tax_code.update`) and Add dialogs for new ones (`series.create`, `tax_code.create`), and what is still missing before the first invoice (default accounts, an active series for invoices, credit notes and receipts; tax codes are optional). |
 
-`finance.receivables.aging.get` is the one contract these pages added: the aged figures had a facade method (`aged_receivables`) and no operation. It takes `as_of` and optional `bucket_days`, needs receivables view and ledger view, and returns the report with the posting number it was read at.
+`finance.receivables.aging.get` takes `as_of`, optional `bucket_days` and either all three accounting pins or none. It needs receivables view and ledger view, and returns the report with the entry, opening-batch and settlement boundaries it used.
 
 ## Source documents and evidence
 
@@ -112,7 +112,7 @@ The NR2 section proves issue-time snapshots, numbering races, revoked grants, is
 
 ## Reviewed agent operations (H2)
 
-Discover `finance.receivables.*` through the shared `/api/v1` or `/mcp` edge and read the contributed `finance.receivables` guide ([guide.md](guide.md)). All inputs name `company_id`; identity and tenant come from the credential. The nineteen safe writes are `setup.configure`, `series.create/update`, `tax_code.create/update`, `customer.create/update`, `draft.create/update/discard`, `document.issue`, `payment.record`, `payment.reverse`, `write_off.submit/approve/reject/reverse`, `opening.stage` and `opening.import`. The fourteen reads are `setup.get/changes`, `series.list`, `tax_code.list`, `customer.get/list`, `document.get/list/page`, `payment.get/list`, `aging.get`, `write_off.accounts` and `opening.context`.
+Discover `finance.receivables.*` through the shared `/api/v1` or `/mcp` edge; its generated operation descriptions are the authoritative inventory and input schemas. Read the contributed `finance.receivables` guide ([guide.md](guide.md)) for the workflows. All inputs name `company_id`; identity and tenant come from the credential.
 
 Writes reuse the same private facade preparation and transaction-taking methods as pooled callers. Preview validates on the handed `OperationClient`, without allocating IDs or touching business/audit/queue rows. Ledger's posting/reversal previews own accounting validation. Execution joins the plan's `MutationTransaction`; no nested commit or pooled side read escapes its rollback. The owner reauthorizes and locks the writable company at preview and execution. Required capabilities remain the facade's existing ones, including reversal without setup/ledger view and issuance without source view. Committed results carry `record` and `path`, the record's page or the settings page.
 
@@ -184,9 +184,9 @@ Income-tax treatment is separate. Under [LHDN Public Ruling 4/2019](https://www.
 
 Not implemented: collection/dispute case management, impairment measurement, an SST refund application/approval register or automatic repayment calculation, tax filing, income-tax computations, or a combined multi-company book. Malaysian SST and income-tax treatment needs accountant confirmation for each company's facts; the dated practitioner investigation is in [issue #60](https://github.com/BelimbingApp/bilibi-dom-finance/issues/60), and remaining questions are tracked in [issue #96](https://github.com/BelimbingApp/bilibi-dom-finance/issues/96).
 
-## Opening invoices at accounting system conversion
+## Opening customer register at accounting system conversion
 
-Import a complete opening invoice register after the source trial balance has been approved, before issuing ordinary invoices. The conversion date is the first day Bilibi owns processing; source invoice dates must precede it. Configure the receivables control account, create the customers and a dedicated invoice numbering series, then open **Receivables → Invoices → Opening invoices** (`/finance/receivables/invoices`). The current company comes from the session choice.
+Import the complete customer opening register after the source trial balance has been approved, before issuing ordinary invoices. The register may contain unpaid invoices, unapplied customer credits or both. The conversion date is the first day Bilibi owns processing; source item dates must precede it. Configure the receivables control account, create the customers and a dedicated invoice numbering series, then open **Receivables → Invoices → Opening invoices** (`/finance/receivables/invoices`). The current company comes from the session choice.
 
 Paste UTF-8 CSV with this exact header:
 
@@ -204,7 +204,7 @@ Record receipts and reverse them through the normal receipt operations. Opening 
 
 A direct import accepts 1–500 invoices and unapplied credits with positive residuals, at most 128 KiB. Retry with the same source reference, series, opening account classifications and byte-identical CSV to read the retained batch, including after settlement. Changed retries are refused. Preview and cancel are reversible; committed corrections use independently approved staged replacements. Foreign-currency translation is refused. Every row must use the book currency; keep translated source balances outside this import until their accounting treatment has been reviewed.
 
-Evidence datasets `opening_batch` and `opening_item` retain the exact source export and each imported invoice's source facts; `opening_stage` and `opening_decision` retain staged batches and each reconciliation or replacement decision. The accountant remains responsible for source completeness, mapping, cut-off, source-period tax, YTD/comparative reporting and reconciliation sign-off.
+Evidence datasets `opening_batch` and `opening_item` retain the exact source export and each imported item's source facts; `opening_stage` and `opening_decision` retain staged batches and each reconciliation or replacement decision. The accountant remains responsible for source completeness, mapping, cut-off, source-period tax, YTD/comparative reporting and reconciliation sign-off.
 
 Aging and control-account reports return `through_entry_number`, `through_opening_batch_id` and `through_settlement_number`. Retain all three with the as-of date; `report.pins()` supplies `BalancePins` for a tie-out. `AgingOptions` accepts all three. Zero excludes that stream. A tuple that splits a settlement from its source item, original event or paired ledger entry is refused. Pool-owning report reads use one repeatable-read snapshot.
 
@@ -234,6 +234,6 @@ For browser/MCP parity, serve the disposable `conversion` fixture, provision cre
 
 The focused customer-composition proof runs with `cargo run -p bilibi-finance-walkthrough-fixture --bin receivables-companies` on a fresh disposable database. It exercises the real customer and issue operation handlers, Core duplicate review, a late audit failure that rolls back company/link/relationship, current-relationship refusals, dated billing selection and immutable snapshots. Set `CUSTOMERS_BROWSER=1`, `APP_ORIGIN` and `BIND_ADDR` to keep that same app running for the customer and invoice browser proof.
 
-Opening invoices share the Invoices list and the same invoice pages. **Source** and **Status** are columns, and the **Source** filter selects all, ordinary or opening records. The list reads `finance.receivables.document.page`, which applies source, type, status, customer, search, sort, count and page offset in SQL and returns only the displayed row fields. The cursor-based `document.list` also accepts source. Choose **Opening invoices** on the list to review and approve a complete or staged register with the existing opening contracts. The review remains a batch dialog; there is no separate opening menu item or route.
+Opening invoices and customer credits share the Invoices list and the same record pages. **Source** and **Status** are columns, and the **Source** filter selects all, ordinary or opening records. The list reads `finance.receivables.document.page`, which applies source, type, status, customer, search, sort, count and page offset in SQL and returns only the displayed row fields. The cursor-based `document.list` also accepts source. Choose **Opening invoices** on the list to review and approve a complete or staged register with the existing opening contracts. The review remains a batch dialog; there is no separate opening menu item or route.
 
 Readers can open the opening dialog to inspect retained source batches. The import form still requires the module's existing opening-write permission, and approval checks run in the shared contract.

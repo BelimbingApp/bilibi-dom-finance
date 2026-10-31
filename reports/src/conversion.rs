@@ -16,6 +16,7 @@ use std::io::{self, Write};
 use tokio_postgres::{GenericClient, Transaction};
 
 /// Accounting boundaries for both subledgers in a conversion snapshot.
+/// Supply every field to replay a snapshot, or leave every field unset.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct ConversionPins {
     pub through_entry_number: Option<i64>,

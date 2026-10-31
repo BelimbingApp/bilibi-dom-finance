@@ -245,7 +245,7 @@ An accounting practitioner has not yet reviewed the comparative layout, source-p
 
 Use **Conversion reports** under Bookkeeping to issue a permanent reconciliation of the current company's opening records. The reporting date is one as-of date, not a date-range filter.
 
-For example, issue the conversion report after importing the customer, supplier and asset opening registers. It keeps the source balances beside the target trial balance, the entry, register and settlement boundaries, all opening source CSVs and correction decisions, receivables and payables detail and control tie-outs, and the asset register's cost and accumulation reconciliation. Each source dataset has its last ID and SHA-256 digest. The report retains bank statement and reconciliation evidence, bank bridges and changes since their finalisation, and the recorded tax and payroll schedules. Other-owner control-account postings stay visible: recognition of opening detail never disguises an unrelated posting.
+For example, issue the conversion report after importing the customer, supplier and asset opening registers. It keeps the source balances beside the target trial balance, the entry, register and settlement boundaries, all opening source CSVs and correction decisions, receivables and payables detail and control tie-outs, and the asset register's cost and accumulation reconciliation. Each source dataset has its last ID and SHA-256 digest. The report retains bank statement and reconciliation evidence, bank bridges and changes since their finalisation, and the recorded tax and payroll schedules. Other-owner control-account postings stay visible: recognition of opening detail never disguises an unrelated posting. To replay a snapshot, pass the complete five-field `pins` object returned by the report; omit `pins` for a current snapshot. Partial pin tuples are refused.
 
 Enter the reviewer and workpaper references, your review conclusion, and whether bank, tax and payroll schedules apply. An applicable schedule needs a reference; “Not applicable” needs a reason. Unassessed schedules remain unresolved. Review the report's sections, then continue to confirmation and issue it. Issuance freezes the figures, labels, sources and exclusions; later backdated postings, chart changes or opening-register corrections cannot change that copy. A fresh report captures the later state. A changed source invalidates a pending issuance review.
 
@@ -263,10 +263,10 @@ All source-view grants are required to preview, issue or read a conversion copy,
 
 | Operation | Input beyond `company_id` | Result |
 | --- | --- | --- |
-| `finance.reports.conversion.preview` | `as_of` | Current reconciliation and retained source evidence |
+| `finance.reports.conversion.preview` | `as_of`; optional complete `pins` object | Current or pinned reconciliation and retained source evidence |
 | `finance.reports.conversion.list` | optional `after` issued ID | Up to 100 issued reports and next cursor |
 | `finance.reports.conversion.get` | `report_id` | Frozen report and sign-off events |
-| `finance.reports.conversion.issue` | `as_of`, `reviewer_reference`, `note`; optional `bank_status`, `tax_status`, `payroll_status` and corresponding `_reference` fields | Reviewed immutable issued report |
+| `finance.reports.conversion.issue` | `as_of`, `reviewer_reference`, `note`; optional complete `pins` object, `bank_status`, `tax_status`, `payroll_status` and corresponding `_reference` fields | Reviewed immutable issued report |
 | `finance.reports.conversion.sign` | `report_id`, `reviewer_reference`, `note` | Reviewed immutable accountant attestation |
 
 Schedule status is `not_assessed` (default), `applicable` or `not_applicable`. Issue requires `finance.reports.issue`; sign requires `finance.reports.sign-off`; every operation also requires all source views. HTTP API, MCP and the page use these same contracts. The page offers the complete retained evidence in sections, 100 records at a time, including source CSV and review references.
@@ -274,6 +274,3 @@ Schedule status is `not_assessed` (default), `applicable` or `not_applicable`. I
 Run the conversion walkthrough on a fresh disposable database with `cargo run -p bilibi-finance-walkthrough-fixture --bin conversion`. Its report proof surrounds the existing register-correction lifecycle and checks stale plans, retained source rows beyond one evidence page, permission revocation, backdated control postings, duty separation, immutable issuance and qualified sign-off.
 
 For a small browser fixture, append `-- report-browser` to that command. It keeps Company 003's opening records and an unsigned report, then stops before the bulk corrections. Start the Platform launcher against that database to review, issue and sign through the page.
-
-
-Conversion snapshots carry the Receivables and Payables settlement boundaries alongside their entry and opening-batch boundaries. `ConversionPins` and the conversion preview/issue contracts' `pins` input accept the complete accounting tuple returned in the report. Aging details and control tie-outs receive the same tuple on the report's database snapshot. Issued evidence freezes those boundaries with the source facts and decisions; later entryless applications cannot change its amounts.
