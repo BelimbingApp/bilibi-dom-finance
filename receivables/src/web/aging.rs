@@ -21,6 +21,9 @@ struct Report {
     as_of: String,
     through_entry_number: i64,
     through_opening_batch_id: i64,
+    through_settlement_number: i64,
+    gross_debits: Decimal,
+    gross_credits: Decimal,
     currency_code: String,
     minor_units: u32,
     buckets: Vec<Bucket>,
@@ -39,6 +42,8 @@ struct Customer {
     code: String,
     name: String,
     documents: Vec<Invoice>,
+    credits: Vec<Invoice>,
+    credit_total: Decimal,
     bucket_totals: Vec<Decimal>,
     total: Decimal,
 }
@@ -48,6 +53,7 @@ struct Invoice {
     document_reference: Option<String>,
     party_name: String,
     due_date: String,
+    issue_date: String,
     outstanding: Decimal,
     days_overdue: i64,
     bucket: usize,
@@ -71,6 +77,7 @@ pub(super) struct Aging {
     flash: Flash,
     customers: ListColumns,
     invoices: ListColumns,
+    credits: ListColumns,
 }
 
 impl Aging {
@@ -89,7 +96,8 @@ impl Aging {
             ("b2", "31–60 days late"),
             ("b3", "61–90 days late"),
             ("b4", "Over 90 days late"),
-            ("total", "Total owed"),
+            ("credits", "Unapplied credits"),
+            ("total", "Net owed"),
         ]);
         Ok(Self {
             pages,
@@ -101,7 +109,17 @@ impl Aging {
             customers: f::columns(
                 "receivables-aging-customers-table",
                 &columns,
-                &["b0", "b1", "b2", "b3", "b4", "total"],
+                &["b0", "b1", "b2", "b3", "b4", "credits", "total"],
+            )?,
+            credits: f::columns(
+                "receivables-aging-credits-table",
+                &[
+                    ("invoice", "Credit"),
+                    ("customer", "Customer"),
+                    ("due", "Source date"),
+                    ("outstanding", "Unapplied"),
+                ],
+                &["outstanding"],
             )?,
             invoices: f::columns(
                 "receivables-aging-invoices-table",
@@ -157,6 +175,8 @@ impl Aging {
                 .load(&r.customers, |c| c.customer_id.to_string());
             let all: Vec<&Invoice> = r.customers.iter().flat_map(|c| &c.documents).collect();
             self.invoices.load(&all, |d| d.document_id.to_string());
+            let credits: Vec<&Invoice> = r.customers.iter().flat_map(|c| &c.credits).collect();
+            self.credits.load(&credits, |d| d.document_id.to_string());
         }
         Ok(())
     }
@@ -216,6 +236,18 @@ impl Aging {
             items: vec![
                 f::fact("Owed as of", &r.as_of),
                 f::fact(
+                    "Gross debit balances",
+                    &self.figures.decimal(r.gross_debits),
+                ),
+                f::fact(
+                    "Unapplied credit balances",
+                    &self.figures.decimal(r.gross_credits),
+                ),
+                f::fact(
+                    "Read through settlement",
+                    &format!("#{}", r.through_settlement_number),
+                ),
+                f::fact(
                     "Total owed",
                     &format!("{} {}", self.figures.decimal(r.total), r.currency_code),
                 ),
@@ -253,7 +285,13 @@ impl Aging {
                     })?,
                 );
             }
-            rows.push(row.slot("total", f::tabular(&self.figures.decimal(c.total))?));
+            rows.push(
+                row.slot(
+                    "credits",
+                    f::tabular(&self.figures.decimal(c.credit_total))?,
+                )
+                .slot("total", f::tabular(&self.figures.decimal(c.total))?),
+            );
         }
         let labels: Vec<String> = r.buckets.iter().map(bucket_label).collect();
         let amounts: Vec<String> = r
@@ -353,6 +391,42 @@ impl Aging {
             )?,
             ..Card::default()
         })?);
+        let mut credit_rows = Vec::new();
+        for c in &r.customers {
+            for credit in &c.credits {
+                credit_rows.push(
+                    FlexRow::new(credit.document_id.to_string())
+                        .slot(
+                            "invoice",
+                            f::link(
+                                &format!("{INVOICES}/{}", credit.document_id),
+                                credit
+                                    .document_reference
+                                    .as_deref()
+                                    .unwrap_or("Opening credit"),
+                            )?,
+                        )
+                        .cell("customer", Cell::text(&c.name))
+                        .cell("due", Cell::text(&credit.issue_date))
+                        .slot(
+                            "outstanding",
+                            f::tabular(&self.figures.decimal(credit.outstanding))?,
+                        ),
+                );
+            }
+        }
+        body.push(&render(SectionHeading{title:"Unapplied credits",description:"Credits age from their original source dates and are shown separately from unpaid invoices.",class:"mt-4",..SectionHeading::default()})?);
+        body.push(&render(Card {
+            id: "receivables-aging-credits",
+            body: f::table(
+                &self.credits,
+                "credits_grid",
+                "Unapplied credits",
+                credit_rows,
+                "No unapplied opening credits on this date.",
+            )?,
+            ..Card::default()
+        })?);
         f::frame(
             "receivables-aging",
             PageVariant::List,
@@ -385,6 +459,9 @@ impl LiveState<Scope, Error> for Aging {
                     "clear-flash" => self.flash.dismiss(v),
                     "customers_grid" => {
                         self.customers.handle(&params::string_values(v));
+                    }
+                    "credits_grid" => {
+                        self.credits.handle(&params::string_values(v));
                     }
                     "invoices_grid" => {
                         self.invoices.handle(&params::string_values(v));

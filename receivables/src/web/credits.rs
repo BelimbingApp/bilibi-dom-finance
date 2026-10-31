@@ -268,7 +268,8 @@ impl Credits {
                     if d.action == "reverse" && key == "amount" {
                         continue;
                     }
-                    let mut field = Field::new(format!("credit[{key}]"), label)
+                    let mut field = Field::named(format!("credit[{key}]"))
+                        .label(label)
                         .id(format!("credit-{key}"))
                         .value(d.values.get(key).cloned().unwrap_or_default())
                         .errors(d.fields.get(key).cloned().unwrap_or_default());
@@ -288,7 +289,8 @@ impl Credits {
                 if d.action != "reverse" {
                     if d.action == "apply" {
                         form_body.push(&render(
-                            Field::new("credit[search]", "Find invoice or bill")
+                            Field::named("credit[search]")
+                                .label("Find invoice or bill")
                                 .id("credit-search")
                                 .value(d.values.get("search").cloned().unwrap_or_default()),
                         )?);

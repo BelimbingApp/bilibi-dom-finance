@@ -398,6 +398,22 @@ impl Document {
             ));
         }
         if let Some(opening) = &d.opening {
+            items.push(f::fact(
+                "Source item kind",
+                opening["item_kind"].as_str().unwrap_or(""),
+            ));
+            items.push(f::fact(
+                "Source kind",
+                opening["source_kind"].as_str().unwrap_or(""),
+            ));
+            items.push(f::fact(
+                "Source system",
+                opening["source_system"].as_str().unwrap_or(""),
+            ));
+            items.push(f::fact(
+                "Source tax facts",
+                &opening["source_tax_facts"].to_string(),
+            ));
             if let Some(batch) = opening["replaced_by_batch_id"].as_i64() {
                 items.push(f::fact(
                     "Opening register",
@@ -428,7 +444,7 @@ impl Document {
             }
             items.push(f::fact(
                 "Opening amounts",
-                "Residual only; source-period tax detail was not migrated.",
+                "Residual only. Supplied source tax facts are retained as evidence and create no current tax lines.",
             ));
         }
         let document = render(Facts {

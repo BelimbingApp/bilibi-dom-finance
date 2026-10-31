@@ -360,10 +360,6 @@ pub(crate) struct Figures {
 }
 
 impl Figures {
-    pub(super) fn units(&self) -> Option<MinorUnits> {
-        self.units
-    }
-
     pub(super) fn book(currency: &str, minor_units: u32) -> Self {
         Self {
             currency: currency.into(),

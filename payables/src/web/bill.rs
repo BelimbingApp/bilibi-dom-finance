@@ -93,15 +93,10 @@ impl Bill {
         self.document = match company(scope) {
             Some(c) => self
                 .pages
-                .contracts
-                .read(
-                    scope,
-                    "finance.payables.document.get",
-                    &json!({"company_id":c,"document_id":self.id}),
-                )
+                .payables
+                .get_document(scope, c, self.id)
                 .await
-                .ok()
-                .and_then(|v| serde_json::from_value(v["result"].clone()).ok()),
+                .ok(),
             None => None,
         };
         (self.units, self.accounts) = self.pages.account_context(scope).await?;
@@ -249,6 +244,22 @@ impl Bill {
             });
         }
         if let Some(opening) = &d.opening {
+            items.push(f::fact(
+                "Source item kind",
+                opening["item_kind"].as_str().unwrap_or(""),
+            ));
+            items.push(f::fact(
+                "Source kind",
+                opening["source_kind"].as_str().unwrap_or(""),
+            ));
+            items.push(f::fact(
+                "Source system",
+                opening["source_system"].as_str().unwrap_or(""),
+            ));
+            items.push(f::fact(
+                "Source tax facts",
+                &opening["source_tax_facts"].to_string(),
+            ));
             if let Some(batch) = opening["replaced_by_batch_id"].as_i64() {
                 items.push(f::fact(
                     "Opening register",
@@ -275,7 +286,7 @@ impl Bill {
             }
             items.push(f::fact(
                 "Opening amounts",
-                "Residual only; source-period tax detail was not migrated.",
+                "Residual only. Supplied source tax facts are retained as evidence and create no current tax lines.",
             ));
         }
         let facts = render(Facts {
