@@ -96,6 +96,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             assert_eq!(source.document_id, bridge_id);
             assert_eq!(source.document_date, date(2026, 7, 1));
             assert_eq!(source.source, OPENING_BRIDGE_SOURCE);
+            let before_conversion = NewFile {
+                file_name: "before-conversion.csv".into(),
+                content_type: Some("text/csv".into()),
+                content: b"Date,Details,Ref,Amount,Balance\n2026-06-30,Too early,PAY-1,-500,9700\n"
+                    .to_vec(),
+            };
+            let refusal = bank
+                .import_statement(&reviewer, 2, account.id, &before_conversion)
+                .await
+                .expect_err("a statement before conversion must be refused");
+            assert!(format!("{refusal:?}").contains(
+                "statement lines must be on or after the opening conversion date 2026-07-01"
+            ));
             let file = NewFile { file_name:"clearing.csv".into(), content_type:Some("text/csv".into()), content:b"Date,Details,Ref,Amount,Balance\n2026-07-01,Payment cleared,PAY-1,-500,9700\n2026-07-03,Deposit cleared,DEP-1,300,10000\n".to_vec() };
             let imported = bank
                 .import_statement(&reviewer, 2, account.id, &file)
@@ -106,7 +119,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .import_statement(&reviewer, 2, account.id, &file)
                 .await
                 .is_err());
-            println!("Opening report balances with two source items; source statement retained; conversion-day statement imported and duplicate refused");
+            println!("Opening report balances with two source items; source statement retained; pre-conversion statement refused, conversion-day statement imported and duplicate refused");
         }
         Some("report") => {
             let input = request(date(2026, 7, 3), "10000");

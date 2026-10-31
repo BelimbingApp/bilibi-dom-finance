@@ -52,8 +52,9 @@ pub(crate) struct Prepared {
 
 /// Reads `file` as a statement of the bank account, before the transaction
 /// that records it: refuses, whole, a file already imported, a line already
-/// imported, a file whose rows do not read through the mapping and a running
-/// balance that does not follow from the amounts.
+/// imported, a file whose rows do not read through the mapping, a line before
+/// an opening bridge's conversion date, and a running balance that does not
+/// follow from the amounts.
 pub(crate) async fn prepare(
     client: &impl GenericClient,
     tenant: i64,
@@ -95,8 +96,8 @@ pub(crate) async fn prepare(
     })
 }
 
-/// The duplicate checks again, under the company lock: another import may
-/// have landed since [`prepare`].
+/// The duplicate and opening-cutoff checks again, under the company lock:
+/// another import or bridge may have landed since [`prepare`].
 pub(crate) async fn check_fresh(
     client: &impl GenericClient,
     tenant: i64,

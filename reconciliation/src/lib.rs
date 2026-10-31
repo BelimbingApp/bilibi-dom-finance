@@ -1,9 +1,10 @@
 //! Bank reconciliation, module `finance/reconciliation` (Bilimbi
 //! `Bilimbi.Finance.Reconciliation`): a company's bank accounts, each mapped
 //! to one ledger account and carrying the import mapping its bank's CSV export
-//! is read through, and the bank statements imported for them; the matches
-//! between statement lines and the ledger's postings on that account; the
-//! reconciliations of an account as of a statement end date; and the bank
+//! is read through, and the bank statements imported for them; the opening
+//! bridge between an approved opening entry, the source statement and its
+//! outstanding items; the matches between statement lines and the book side;
+//! the reconciliations of an account as of a statement end date; and the bank
 //! charges and interest posted from statement lines.
 //!
 //! Every function takes the sealed [`Scope`] it was handed and an explicit
@@ -39,13 +40,14 @@
 //! them on its own as well.
 //!
 //! A match groups statement lines of a bank account with ledger entries on
-//! its ledger account whose sides agree, and is undone only by an appended
-//! `unmatched` event with a reason; PostgreSQL refuses a line or an entry in
-//! two standing matches. A reconciliation reads its figures at pinned entry,
-//! statement and match-event numbers, is finalised once its difference is
-//! zero by someone other than whoever opened it (or as the ledger's approval
-//! exception while the company does not separate duties), and keeps the
-//! matches it counted for good.
+//! its ledger account, or with one outstanding opening item, whose sides
+//! agree. It is undone only by an appended `unmatched` event with a reason;
+//! PostgreSQL refuses a line, entry or opening item in two standing matches.
+//! A reconciliation reads its figures at pinned entry, statement, match-event
+//! and opening-bridge boundaries, is finalised once its difference is zero by
+//! someone other than whoever opened it (or as the ledger's approval exception
+//! while the company does not separate duties), and keeps the matches it
+//! counted for good.
 //!
 //! Results are plain records; the schema, SQL and validation stay private.
 mod bank_accounts;
@@ -532,7 +534,8 @@ pub struct MatchEvent {
 }
 
 /// A match: its statement lines, its entries as they were matched (by entry
-/// number), and its events. The database numbers it per company.
+/// number), any opening items, and its events. The database numbers it per
+/// company.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Match {
     pub id: i64,
@@ -550,7 +553,7 @@ pub struct Match {
     pub events: Vec<MatchEvent>,
 }
 
-/// The numbers a reconciliation's figures are read at, each the latest when
+/// The boundaries a reconciliation's figures are read at, each the latest when
 /// `None` (0 or more): how a finalised reconciliation's figures reproduce.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Pins {
@@ -603,8 +606,8 @@ impl ItemKind {
     }
 }
 
-/// One item of a reconciliation: the statement line, the entry or the match
-/// (`timing`) it is about, dated, described and signed as the difference
+/// One item of a reconciliation: the statement line, entry, opening item or
+/// match (`timing`) it is about, dated, described and signed as the difference
 /// counts it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ReconciliationItem {
@@ -622,7 +625,8 @@ pub struct ReconciliationItem {
 
 /// A reconciliation's figures: the book balance through the end date, the
 /// difference (zero once explained), the book's currency, the entry,
-/// statement and match-event numbers they were read at, and the items.
+/// statement, match-event and opening-bridge boundaries they were read at,
+/// and the items.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Figures {
     pub book_balance: Money,

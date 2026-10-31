@@ -15,7 +15,7 @@ use tokio_postgres::GenericClient;
 /// The source id stored with each statement's attachment.
 pub const STATEMENT_SOURCE: &str = "finance/reconciliation/statement";
 /// The source id stored with each opening bridge's attachments.
-pub const OPENING_BRIDGE_SOURCE: &str = "finance/reconciliation/opening-bridge";
+pub const OPENING_BRIDGE_SOURCE: &str = "finance/reconciliation/opening_bridge";
 
 struct StatementSource;
 

@@ -1,10 +1,10 @@
 //! Statement lines against ledger entries on the bank account's ledger
 //! account (Bilimbi `Reconciliation.Matching`, `Match`, `MatchLine`,
-//! `MatchEntry` and `MatchEvent`): what is unmatched on each side, suggested
-//! matches, and the matches themselves with the events that make and unmake
-//! them. The facade authorizes every call and holds the company lock for
-//! writes; the ledger is read only through its facade, on the connection the
-//! caller hands in.
+//! `MatchEntry` and `MatchEvent`) or against opening items: what is unmatched
+//! on each side, suggested ordinary matches, and the matches themselves with
+//! the events that make and unmake them. The facade authorizes every call and
+//! holds the company lock for writes; the ledger is read only through its
+//! facade, on the connection the caller hands in.
 use crate::{
     statements::stored, BankAccount, FieldError, LedgerItem, Match, MatchEvent, MatchStatus,
     OpeningItem, ReconciliationError, Result, StatementLine, StatementLineItem,
@@ -35,8 +35,8 @@ const STANDING: &str = "SELECT m.id FROM finance_reconciliation_matches m \
                          AND ($4::bigint IS NULL OR u.event_number <= $4))";
 
 /// Where a reading of the two sides stops: entry dates and statement-line
-/// dates through `to`, and the entry, statement and match-event numbers it
-/// counts through (each `None` for now).
+/// dates through `to`, and the entry, statement, match-event and opening-bridge
+/// boundaries it counts through (each `None` for now).
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Bounds {
     pub to: Option<Date>,
@@ -46,7 +46,8 @@ pub(crate) struct Bounds {
     pub through_opening_id: Option<i64>,
 }
 
-/// What stands unmatched on each side.
+/// What stands unmatched on the statement and book sides, including opening
+/// items that stand in for the opening entry.
 pub(crate) struct Sides {
     pub lines: Vec<StatementLineItem>,
     pub entries: Vec<LedgerItem>,
@@ -719,7 +720,8 @@ async fn event(
 const MATCH_COLUMNS: &str =
     "id,bank_account_id,match_number,note,matched_by_user_id,matched_by_impersonator_id";
 
-/// One match of the company with its lines, entries and events, or `None`.
+/// One match of the company with its lines, entries, opening items and events,
+/// or `None`.
 pub(crate) async fn find(
     client: &impl GenericClient,
     tenant: i64,
@@ -803,8 +805,8 @@ pub(crate) async fn standing_for_line(
     }
 }
 
-/// The matches of `rows` with their statement lines, entries by number and
-/// events by number, in the rows' order.
+/// The matches of `rows` with their statement lines, entries and opening items
+/// by number, and events by number, in the rows' order.
 async fn hydrate(
     client: &impl GenericClient,
     tenant: i64,

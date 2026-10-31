@@ -29,11 +29,11 @@ const TEXT_LIMIT: usize = 500;
 /// book balance is the ledger account's debits less credits through
 /// `end_date`, summed by PostgreSQL through the ledger. The items that
 /// explain the difference are the statement lines through `end_date` with no
-/// standing match, the entries through `end_date` with none, and each
-/// standing match whose two sides through `end_date` differ (`timing`).
-/// `difference` is the statement balance less the book balance, less the
-/// unmatched statement lines, plus the unmatched entries, plus the timing
-/// items; zero means the two balances are explained.
+/// standing match, the entries and opening items through `end_date` with none,
+/// and each standing match whose two sides through `end_date` differ
+/// (`timing`). `difference` is the statement balance less the book balance,
+/// less the unmatched statement lines, plus the unmatched entries and opening
+/// items, plus the timing items; zero means the two balances are explained.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn compute(
     ledger: &Ledger,
