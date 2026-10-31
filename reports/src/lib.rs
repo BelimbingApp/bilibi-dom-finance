@@ -36,6 +36,7 @@ mod layout;
 mod pack_owner;
 mod setup;
 mod setup_page;
+mod source_period;
 mod statement;
 mod web;
 
@@ -87,7 +88,10 @@ inventory::submit! {
             "finance/reconciliation", "finance/einvoice", "finance/payroll",
             "finance/sst", "finance/fixed_assets",
         ],
-        migrations: &[("finance-reports-001-issued", include_str!("../migrations/001-issued.sql"))],
+        migrations: &[
+            ("finance-reports-001-issued", include_str!("../migrations/001-issued.sql")),
+            ("finance-reports-002-source-period", include_str!("../migrations/002-source-period.sql")),
+        ],
         services: &[Service { id: SERVICE, factory: |services| { let reports = Arc::new(Reports {
             db: services.get::<Db>("base/database.pool")?.as_ref().clone(),
             mutations: services.get("base/database.mutations")?,
