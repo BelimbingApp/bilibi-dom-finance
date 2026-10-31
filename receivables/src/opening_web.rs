@@ -420,10 +420,12 @@ impl Opening {
                     .as_object()
                     .cloned()
                     .or_else(|| {
-                        context["stages"]
+                        context["stage_sources"]
                             .as_array()
-                            .and_then(|stages| stages.last())
-                            .and_then(|stage| stage["opening_account_classifications"].as_object())
+                            .and_then(|sources| sources.last())
+                            .and_then(|source| {
+                                source["opening_account_classifications"].as_object()
+                            })
                             .cloned()
                     })
                     .or_else(|| {
