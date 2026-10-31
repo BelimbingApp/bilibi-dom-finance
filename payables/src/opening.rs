@@ -535,7 +535,7 @@ impl Payables {
                 return Err(invalid("csv", format!("opening bills on {} total {} but the approved opening balance is {} (difference {})", account.code, signed.display(book.minor_units), expected.display(book.minor_units), (signed - expected).display(book.minor_units))));
             }
             balances.entry(id).or_insert(Money::ZERO);
-            reconciliation.push(json!({"gross_debits":credits.get(&id).copied().unwrap_or(Money::ZERO),"gross_credits":debits.get(&id).copied().unwrap_or(Money::ZERO),"account_id":id,"account_code":account.code,"register_balance":signed,"opening_balance":expected,"difference":Money::ZERO}));
+            reconciliation.push(json!({"gross_debits":credits.get(&id).copied().unwrap_or(Money::ZERO),"gross_credits":debits.get(&id).copied().unwrap_or(Money::ZERO),"account_id":id,"account_code":account.code,"register_balance":balance,"opening_balance":Money::ZERO-expected,"ledger_opening_balance":expected,"balance_basis":"credit_positive","difference":Money::ZERO}));
         }
         let source_ids: Vec<&str> = rows
             .iter()

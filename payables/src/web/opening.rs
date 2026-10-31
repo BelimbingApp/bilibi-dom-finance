@@ -686,7 +686,7 @@ impl Opening {
                     rows,
                 );
                 balances.event = "balance_grid";
-                balances.caption = "Opening reconciliation; balances are debit-positive";
+                balances.caption = "Opening reconciliation; balances are credit-positive";
                 balances.zoom = self.balance_columns.zoom;
                 balances.suggestions = self.balance_columns.flex_suggestions();
                 balances.add_query = &self.balance_columns.add_query;
