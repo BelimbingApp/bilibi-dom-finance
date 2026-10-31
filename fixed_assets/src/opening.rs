@@ -264,7 +264,7 @@ impl FixedAssets {
         if !evidence.is_empty() {
             return Err(invalid(
                 "source_evidence",
-                "every evidence key must identify an asset in this source register",
+                "each evidence record must name an asset in this source register",
             ));
         }
         let evidence =

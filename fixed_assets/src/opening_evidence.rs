@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Evidence {
+    source_id: String,
     #[serde(default)]
     history: Vec<History>,
     #[serde(default)]
@@ -95,8 +96,8 @@ pub(super) fn read(
         return Ok(BTreeMap::new());
     }
     let map = raw
-        .as_object()
-        .ok_or_else(|| fail("must be an object keyed by source asset ID"))?;
+        .as_array()
+        .ok_or_else(|| fail("must be an array of source asset evidence records"))?;
     let max = if input["staged"] == true {
         32 * 1024 * 1024
     } else {
@@ -110,42 +111,47 @@ pub(super) fn read(
             "source evidence is too large; stage smaller source batches",
         ));
     }
-    map.iter()
-        .map(|(source, value)| {
-            let evidence: Evidence = serde_json::from_value(value.clone())
-                .map_err(|e| fail(format!("source {source}: {e}")))?;
-            if evidence.history.len()
-                + evidence.source_period_expense.len()
-                + evidence.tax_capital_allowances.len()
-                > 200
-            {
-                return Err(fail(format!(
-                    "source {source}: keep at most 200 history and schedule rows"
-                )));
+    let mut result = BTreeMap::new();
+    for value in map {
+        let source = value["source_id"].as_str().unwrap_or("");
+        let evidence: Evidence = serde_json::from_value(value.clone())
+            .map_err(|e| fail(format!("source {source}: {e}")))?;
+        if evidence.history.len()
+            + evidence.source_period_expense.len()
+            + evidence.tax_capital_allowances.len()
+            > 200
+        {
+            return Err(fail(format!(
+                "source {source}: keep at most 200 history and schedule rows"
+            )));
+        }
+        for row in &evidence.history {
+            date(&row.effective_date, cutoff)?;
+            reference(&row.reference)?;
+            text(&row.note, "source_evidence", 2000)?;
+            if let Some(v) = &row.amount {
+                amount(v, units)?;
             }
-            for row in &evidence.history {
-                date(&row.effective_date, cutoff)?;
-                reference(&row.reference)?;
-                text(&row.note, "source_evidence", 2000)?;
-                if let Some(v) = &row.amount {
-                    amount(v, units)?;
-                }
-                if let Some(v) = &row.residual_value {
-                    amount(v, units)?;
-                }
-                if row
-                    .remaining_life_months
-                    .is_some_and(|n| !(0..=1200).contains(&n))
-                {
-                    return Err(fail("source remaining life must be 0 to 1200 months"));
-                }
-                if let Some(v) = &row.method {
-                    text(v, "source_evidence", 100)?;
-                }
-                if let Some(v) = &row.annual_rate {
-                let rate: Decimal = v.parse().map_err(|_|fail("source annual rate must be a decimal percentage"))?;
+            if let Some(v) = &row.residual_value {
+                amount(v, units)?;
+            }
+            if row
+                .remaining_life_months
+                .is_some_and(|n| !(0..=1200).contains(&n))
+            {
+                return Err(fail("source remaining life must be 0 to 1200 months"));
+            }
+            if let Some(v) = &row.method {
+                text(v, "source_evidence", 100)?;
+            }
+            if let Some(v) = &row.annual_rate {
+                let rate: Decimal = v
+                    .parse()
+                    .map_err(|_| fail("source annual rate must be a decimal percentage"))?;
                 if rate < Decimal::ZERO || rate > Decimal::from(100) || rate.round_dp(4) != rate {
-                    return Err(fail("source annual rate must be 0 to 100 with at most four decimal places"));
+                    return Err(fail(
+                        "source annual rate must be 0 to 100 with at most four decimal places",
+                    ));
                 }
             }
             match row.kind {
@@ -168,19 +174,23 @@ pub(super) fn read(
                     }
                     _ => {}
                 }
-            }
-            for row in &evidence.source_period_expense {
-                period(&row.from, &row.through, cutoff)?;
-                amount(&row.amount, units)?;
-                reference(&row.reference)?;
-            }
-            for row in &evidence.tax_capital_allowances {
-                period(&row.from, &row.through, cutoff)?;
-                amount(&row.qualifying_expenditure, units)?;
-                amount(&row.allowances, units)?;
-                reference(&row.reference)?;
-            }
-            Ok((source.clone(), json!(evidence)))
-        })
-        .collect()
+        }
+        for row in &evidence.source_period_expense {
+            period(&row.from, &row.through, cutoff)?;
+            amount(&row.amount, units)?;
+            reference(&row.reference)?;
+        }
+        for row in &evidence.tax_capital_allowances {
+            period(&row.from, &row.through, cutoff)?;
+            amount(&row.qualifying_expenditure, units)?;
+            amount(&row.allowances, units)?;
+            reference(&row.reference)?;
+        }
+        if result.insert(source.to_owned(), json!(evidence)).is_some() {
+            return Err(fail(
+                "source asset IDs must occur only once in the evidence",
+            ));
+        }
+    }
+    Ok(result)
 }

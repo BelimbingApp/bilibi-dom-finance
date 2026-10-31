@@ -62,7 +62,7 @@ impl FixedAssets {
         if evidence.keys().any(|id| !source_ids.contains(id.as_str())) {
             return Err(invalid(
                 "source_evidence",
-                "every evidence key must identify an asset in this source batch",
+                "each evidence record must name an asset in this source batch",
             ));
         }
         if input["currency_code"] != book.currency_code {
@@ -190,28 +190,21 @@ impl FixedAssets {
             ));
         }
         if input["source_evidence"]
-            .as_object()
+            .as_array()
             .is_some_and(|m| !m.is_empty())
-            || (!input["source_evidence"].is_null() && !input["source_evidence"].is_object())
+            || (!input["source_evidence"].is_null() && !input["source_evidence"].is_array())
         {
             return Err(invalid(
                 "source_evidence",
                 "leave empty when reconciling retained source batches",
             ));
         }
-        let mut evidence = serde_json::Map::new();
+        let mut evidence = Vec::new();
         let mut combined = String::new();
         for (index, stage) in stages.iter().enumerate() {
             let payload: Value = stage.get(1);
-            if let Some(items) = payload["source_evidence"].as_object() {
-                for (id, facts) in items {
-                    if evidence.insert(id.clone(), facts.clone()).is_some() {
-                        return Err(invalid(
-                            "source_evidence",
-                            "an asset's evidence must occur in only one source batch",
-                        ));
-                    }
-                }
+            if let Some(items) = payload["source_evidence"].as_array() {
+                evidence.extend(items.iter().cloned());
             }
             let rows =
                 crate::opening_csv::parse(payload["csv"].as_str().unwrap_or("").as_bytes(), ",")

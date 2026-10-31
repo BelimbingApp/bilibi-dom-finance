@@ -321,7 +321,7 @@ impl Opening {
                         "Source history and tax schedules (JSON)",
                         InputKind::Textarea,
                         false,
-                        "Optional evidence keyed by source asset ID: history, source_period_expense and tax_capital_allowances. See the opening guide. These facts create no postings and do not change the prospective estimate.",
+                        "Optional evidence array; each record names source_id: history, source_period_expense and tax_capital_allowances. See the opening guide. These facts create no postings and do not change the prospective estimate.",
                     ),
                     (
                         "override_reason",
@@ -665,14 +665,15 @@ impl Opening {
                     }
                     let source = input["source_evidence"].as_str().unwrap_or("").trim();
                     input["source_evidence"] = if source.is_empty() {
-                        json!({})
+                        json!([])
                     } else {
                         match serde_json::from_str::<Value>(source) {
                             Ok(value) => value,
                             Err(_) => {
                                 self.fields.insert(
                                     "source_evidence".into(),
-                                    vec!["must be valid JSON keyed by source asset ID".into()],
+                                    vec!["must be a valid JSON array; each record names source_id"
+                                        .into()],
                                 );
                                 return Ok(());
                             }

@@ -125,19 +125,24 @@ for key in keys:
 require(invoke(channel, "guide", {"key": prefix + "lifecycle"}), "missing lifecycle guide")
 accounts = {a["code"]: a["id"] for a in read(channel, "finance.ledger.account.list", company, "approver")["records"]}
 category = dict(name="MCP prospective equipment", cost_account_id=accounts["1200"], accumulated_account_id=accounts["1290"], expense_account_id=accounts["6100"], gain_account_id=accounts["4100"], loss_account_id=accounts["6000"], method="straight_line", life_months=120, reason="Approved prospective defaults")
-refused(channel, prefix + "category.save", company, "accumulated_account_id", who="approver", **(category | {"accumulated_account_id": accounts["1200"]}))
-revision = write(channel, prefix + "category.save", company, **category)
-revised = {k: v for k, v in category.items() if k != "name"} | {"category_id": revision["category_id"], "life_months": 144, "reason": "New defaults leave saved assets frozen"}
-write(channel, prefix + "category.save", company, **revised)
+existing = next((c for c in read(channel, prefix + "category.list", company, "approver")["records"] if c["name"] == category["name"]), None)
+if existing is None:
+    refused(channel, prefix + "category.save", company, "accumulated_account_id", who="approver", **(category | {"accumulated_account_id": accounts["1200"]}))
+    revision = write(channel, prefix + "category.save", company, **category)
+    revised = {k: v for k, v in category.items() if k != "name"} | {"category_id": revision["category_id"], "life_months": 144, "reason": "New defaults leave saved assets frozen"}
+    write(channel, prefix + "category.save", company, **revised)
+else:
+    revision = existing["revisions"][0]
+    revised = {k: v for k, v in category.items() if k != "name"} | {"category_id": revision["category_id"], "life_months": 144, "reason": "New defaults leave saved assets frozen"}
 context = read(channel, prefix + "opening.context", company, "approver")
 csv = ",".join(context["header"]) + f"\nasset-111,Prospective MCP equipment,{revision['id']},2025-01-01,2025-01-01,11000,800,96,0\nasset-112,Fully depreciated MCP equipment,{revision['id']},2024-01-01,2024-01-01,1000,1000,0,0\n"
-evidence = {"asset-111": {
+evidence = [{"source_id": "asset-111",
     "history": [{"kind": "residual_value_change", "effective_date": "2026-06-30", "residual_value": "0.00", "reference": "MCP source review", "note": "Source residual estimate revised"}],
     "source_period_expense": [{"from": "2026-01-01", "through": "2026-06-30", "amount": "600.00", "reference": "MCP YTD bridge"}],
     "tax_capital_allowances": [{"from": "2025-01-01", "through": "2025-12-31", "qualifying_expenditure": "12000.00", "allowances": "2400.00", "reference": "MCP tax evidence"}]
-}}
+}]
 opening = dict(source_reference="MCP-ASSET-111", currency_code="MYR", csv=csv, source_evidence=evidence)
-refused(channel, prefix + "opening.import", company, "source_evidence", who="approver", **(opening | {"source_evidence": {"unknown": {}}}))
+refused(channel, prefix + "opening.import", company, "source_evidence", who="approver", **(opening | {"source_evidence": [{"source_id": "unknown"}]}))
 review = plan(channel, [operation(prefix + "opening.import", company, **opening)], "approver")
 require(review.get("valid") is True, "opening evidence review")
 facts = review["results"][0]["preview"]["result"]["changes"]
@@ -146,7 +151,7 @@ require("mid-month" in facts["month_convention"], "cut-off convention missing")
 require("results" in commit(channel, [operation(prefix + "opening.import", company, **opening)], review, "approver"), "opening evidence commit")
 write(channel, prefix + "opening.import", company, **opening)
 changed = json.loads(json.dumps(evidence))
-changed["asset-111"]["history"][0]["note"] = "Different source evidence"
+changed[0]["history"][0]["note"] = "Different source evidence"
 refused(channel, prefix + "opening.import", company, "source_reference", who="approver", **(opening | {"source_evidence": changed}))
 
 def report(**pins):
@@ -164,7 +169,7 @@ tied(initial)
 zero = initial["rows"][1]["asset"]
 require(initial["rows"][1]["schedule"] == [] and Decimal(initial["rows"][1]["carrying_value"]) == 0, "zero-life opening schedule")
 retained = read(channel, prefix + "asset.get", company, "approver", asset_id=asset["id"])["record"]["opening"]["source_evidence"]
-require(retained["history"][0]["note"] == evidence["asset-111"]["history"][0]["note"], "source history not retained")
+require(retained["history"][0]["note"] == evidence[0]["history"][0]["note"], "source history not retained")
 require(Decimal(retained["source_period_expense"][0]["amount"]) == 600 and Decimal(retained["tax_capital_allowances"][0]["allowances"]) == 2400, "source YTD and tax evidence not separate")
 # The source aggregate is not an ordinary acquisition debit.
 refused(channel, prefix + "asset.acquire", company, "opening", who="approver", source="entry", source_id=asset["entry_id"], line_number=1, category_revision_id=revision["id"], description="Refused aggregate", in_service_date="2026-07-01")

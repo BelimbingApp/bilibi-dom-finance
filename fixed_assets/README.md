@@ -186,24 +186,55 @@ The import review groups source cost, accumulated depreciation and carrying valu
 
 ### Source history and tax evidence
 
-Use the optional `source_evidence` object on the same opening import or staging action. Each key is a `source_id` in that CSV batch. The opening dialog accepts the same object as JSON. Review shows the evidence beside the register; the asset page and the `opening_item` auditor dataset retain it after approval. A changed evidence object requires a new source reference. Corrections retain the original evidence and use the existing independently approved replacement path.
+Use the optional `source_evidence` array on the same opening import or staging action. Each record names a `source_id` in that CSV batch. The opening dialog accepts the same array as JSON. Review shows the evidence beside the register; the asset page and the `opening_item` auditor dataset retain it after approval. A changed evidence array requires a new source reference. Corrections retain the original evidence and use the existing independently approved replacement path.
 
 ```json
-{
-  "asset-3": {
+[
+  {
+    "source_id": "asset-3",
     "history": [
-      {"kind":"impairment","effective_date":"2025-12-31","amount":"200.00","reference":"Prior assessment","note":"Source assessment, already reflected in the source balances."},
-      {"kind":"residual_value_change","effective_date":"2026-06-30","residual_value":"100.00","reference":"Estimate review","note":"Source residual estimate revised."},
-      {"kind":"estimate_change","effective_date":"2026-06-30","remaining_life_months":96,"method":"Source straight line","reference":"Estimate review","note":"Prospective estimate at cut-off."}
+      {
+        "kind": "impairment",
+        "effective_date": "2025-12-31",
+        "amount": "200.00",
+        "reference": "Prior assessment",
+        "note": "Source assessment, already reflected in the source balances."
+      },
+      {
+        "kind": "residual_value_change",
+        "effective_date": "2026-06-30",
+        "residual_value": "100.00",
+        "reference": "Estimate review",
+        "note": "Source residual estimate revised."
+      },
+      {
+        "kind": "estimate_change",
+        "effective_date": "2026-06-30",
+        "remaining_life_months": 96,
+        "method": "Source straight line",
+        "reference": "Estimate review",
+        "note": "Prospective estimate at cut-off."
+      }
     ],
     "source_period_expense": [
-      {"from":"2026-01-01","through":"2026-06-30","amount":"600.00","reference":"Source YTD depreciation schedule"}
+      {
+        "from": "2026-01-01",
+        "through": "2026-06-30",
+        "amount": "600.00",
+        "reference": "Source YTD depreciation schedule"
+      }
     ],
     "tax_capital_allowances": [
-      {"from":"2025-01-01","through":"2025-12-31","qualifying_expenditure":"12000.00","allowances":"2400.00","reference":"Source tax computation"}
+      {
+        "from": "2025-01-01",
+        "through": "2025-12-31",
+        "qualifying_expenditure": "12000.00",
+        "allowances": "2400.00",
+        "reference": "Source tax computation"
+      }
     ]
   }
-}
+]
 ```
 
 History kinds are `impairment`, `impairment_reversal`, `disposal`, `residual_value_change` and `estimate_change`. Every row needs a source date, reference and note. Impairment and disposal rows need the source-reported `amount` and a note identifying its basis; a residual change needs `residual_value`; an estimate change needs the source `method`, `annual_rate` (0–100%, up to four decimals), or `remaining_life_months`. Amounts are nonnegative and use book precision. Source method names are retained text, not a choice of future depreciation method. All source dates and period ends must precede conversion. Periods include both endpoints. Keep at most 200 history and schedule rows per asset, and 64 KiB of evidence per direct import or staged batch. Each batch carries only its own assets' evidence; final staged reconciliation leaves this field empty.

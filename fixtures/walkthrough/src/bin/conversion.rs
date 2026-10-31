@@ -469,7 +469,7 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         .create_category(&s, company, "Fully depreciated source class", &defaults)
         .await?;
     let mut asset_input = json!({"source_reference":"ASSET-SOURCE","currency_code":"MYR","csv":config["assets"].as_str().unwrap().replace(",12000,1800,96,0", ",11000,800,96,0") + &format!("asset-4,Fully depreciated,{revision},2024-06-01,2024-07-01,1000,1000,0,0\n", revision=zero_class.id)});
-    asset_input["source_evidence"] = json!({"asset-3":{
+    asset_input["source_evidence"] = json!([{"source_id":"asset-3",
         "history":[
             {"kind":"impairment","effective_date":"2025-12-31","amount":"200.00","reference":"Source impairment","note":"Historical source assessment"},
             {"kind":"impairment_reversal","effective_date":"2026-01-31","amount":"200.00","reference":"Source reversal","note":"Source assessment reversed before cut-off"},
@@ -479,15 +479,15 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         ],
         "source_period_expense":[{"from":"2026-01-01","through":"2026-06-30","amount":"600.00","reference":"Source YTD bridge"}],
         "tax_capital_allowances":[{"from":"2025-01-01","through":"2025-12-31","qualifying_expenditure":"12000.00","allowances":"2400.00","reference":"Source tax computation"}]
-    }});
+    }]);
     for bad_evidence in [
-        json!({"unknown":{}}),
-        json!({"asset-3":{"unknown":true}}),
-        json!({"asset-3":{"history":[{"kind":"impairment","effective_date":"2026-07-01","amount":"1.00","reference":"Future","note":"Refused"}]}}),
-        json!({"asset-3":{"history":[{"kind":"impairment","effective_date":"2026-06-30","amount":"1.001","reference":"Precision","note":"Refused"}]}}),
-        json!({"asset-3":{"history":[{"kind":"residual_value_change","effective_date":"2026-06-30","reference":"Missing estimate","note":"Refused"}]}}),
-        json!({"asset-3":{"source_period_expense":[{"from":"2026-06-30","through":"2026-01-01","amount":"1","reference":"Backwards period"}]}}),
-        json!({"asset-3":{"tax_capital_allowances":[{"from":"2025-01-01","through":"2025-12-31","qualifying_expenditure":"1","allowances":"-1","reference":"Negative tax allowance"}]}}),
+        json!([{"source_id":"unknown"}]),
+        json!([{"source_id":"asset-3","unknown":true}]),
+        json!([{"source_id":"asset-3","history":[{"kind":"impairment","effective_date":"2026-07-01","amount":"1.00","reference":"Future","note":"Refused"}]}]),
+        json!([{"source_id":"asset-3","history":[{"kind":"impairment","effective_date":"2026-06-30","amount":"1.001","reference":"Precision","note":"Refused"}]}]),
+        json!([{"source_id":"asset-3","history":[{"kind":"residual_value_change","effective_date":"2026-06-30","reference":"Missing estimate","note":"Refused"}]}]),
+        json!([{"source_id":"asset-3","source_period_expense":[{"from":"2026-06-30","through":"2026-01-01","amount":"1","reference":"Backwards period"}]}]),
+        json!([{"source_id":"asset-3","tax_capital_allowances":[{"from":"2025-01-01","through":"2025-12-31","qualifying_expenditure":"1","allowances":"-1","reference":"Negative tax allowance"}]}]),
     ] {
         let mut wrong = asset_input.clone();
         wrong["source_evidence"] = bad_evidence;
@@ -725,7 +725,7 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         staged["part_count"] = json!(2);
         staged["csv"] = json!(format!("{}\n{line}\n", lines[0]));
         if part == 1 {
-            staged["source_evidence"] = json!({});
+            staged["source_evidence"] = json!([]);
         }
         assets
             .stage_opening_import(&manager, company, &staged)
@@ -735,8 +735,7 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
             .await?;
         let mut changed = staged.clone();
         if part == 0 {
-            changed["source_evidence"]["asset-3"]["history"][0]["note"] =
-                json!("Changed source bytes");
+            changed["source_evidence"][0]["history"][0]["note"] = json!("Changed source bytes");
             assert!(assets
                 .stage_opening_import(&manager, company, &changed)
                 .await
@@ -793,8 +792,7 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
     let mut retry_input = asset_input.clone();
     retry_input["csv"] = asset_batch["source_csv"].clone();
     let mut changed = retry_input.clone();
-    changed["source_evidence"]["asset-3"]["history"][0]["note"] =
-        json!("Different retained evidence");
+    changed["source_evidence"][0]["history"][0]["note"] = json!("Different retained evidence");
     assert!(assets
         .import_opening_register(&s, company, &changed)
         .await
@@ -1417,6 +1415,22 @@ async fn main() -> Outcome<()> {
         .set_direct(&admin, 1, "admin.company.tenant-wide.manage", Some(true))
         .await?;
     if std::env::args().any(|s| s == "launcher-asset-credentials") {
+        let operator = sign_in(&db, &app.services, 1, 6).await?;
+        let assigned = db
+            .get()
+            .await?
+            .query_opt(
+                "SELECT id FROM user_desks WHERE tenant_id=1 AND company_id=1 AND person_id=3",
+                &[],
+            )
+            .await?
+            .is_some();
+        if !assigned {
+            app.services
+                .get::<bilibi_core::user::UserService>("core/user.accounts")?
+                .set_desk(&operator, 1, 3, true)
+                .await?;
+        }
         bilibi_finance_walkthrough_fixture::assets_lifecycle::credentials(&db, &app.services)
             .await?;
         return Ok(());

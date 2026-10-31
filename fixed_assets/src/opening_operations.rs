@@ -64,12 +64,42 @@ fn context_schema() -> Value {
 fn base_schema() -> Value {
     json!({"type":"object","required":["company_id","source_reference","currency_code","csv"],"properties":{"company_id":{"type":"integer","minimum":1},"source_reference":{"type":"string","maxLength":100},"currency_code":{"type":"string","maxLength":3},"csv":{"type":"string","maxLength":131072,"description":"UTF-8 CSV; obtain the exact required header from opening.context. Import the complete opening register, at most 500 rows."},"override_reason":{"type":"string","maxLength":500}}})
 }
+fn evidence_schema() -> Value {
+    let history = json!({"type":"object","required":["kind","effective_date","reference","note"],"properties":{
+        "kind":{"type":"string","enum":["impairment","impairment_reversal","disposal","residual_value_change","estimate_change"]},
+        "effective_date":{"type":"string","format":"date"},
+        "reference":{"type":"string","minLength":1,"maxLength":500},
+        "note":{"type":"string","minLength":1,"maxLength":2000},
+        "amount":{"type":"string","nullable":true},
+        "residual_value":{"type":"string","nullable":true},
+        "remaining_life_months":{"type":"integer","minimum":0,"maximum":1200,"nullable":true},
+        "method":{"type":"string","maxLength":100,"nullable":true},
+        "annual_rate":{"type":"string","nullable":true}
+    }});
+    let expense = json!({"type":"object","required":["from","through","amount","reference"],"properties":{
+        "from":{"type":"string","format":"date"},"through":{"type":"string","format":"date"},
+        "amount":{"type":"string"},"reference":{"type":"string","minLength":1,"maxLength":500}
+    }});
+    let tax = json!({"type":"object","required":["from","through","qualifying_expenditure","allowances","reference"],"properties":{
+        "from":{"type":"string","format":"date"},"through":{"type":"string","format":"date"},
+        "qualifying_expenditure":{"type":"string"},"allowances":{"type":"string"},
+        "reference":{"type":"string","minLength":1,"maxLength":500}
+    }});
+    json!({"type":"array","maxItems":500,"description":"Optional source-only history and schedules, one record per source_id in this CSV batch. These facts never post or change prospective estimates.","items":{
+        "type":"object","required":["source_id"],"properties":{
+            "source_id":{"type":"string","minLength":1,"maxLength":200},
+            "history":{"type":"array","maxItems":200,"items":history},
+            "source_period_expense":{"type":"array","maxItems":200,"items":expense},
+            "tax_capital_allowances":{"type":"array","maxItems":200,"items":tax}
+        }
+    }})
+}
 fn schema() -> Value {
     let mut value = base_schema();
     let properties = value["properties"]
         .as_object_mut()
         .expect("schema properties");
-    properties.insert("source_evidence".into(), json!({"type":"object","description":"Optional source-only history and schedules keyed by source asset ID. See the opening guide for history, source_period_expense and tax_capital_allowances shapes. These facts never post or change prospective estimates."}));
+    properties.insert("source_evidence".into(), evidence_schema());
     properties.insert(
         "part".into(),
         json!({"type":"integer","minimum":1,"maximum":200}),
