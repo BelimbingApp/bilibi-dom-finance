@@ -1533,7 +1533,7 @@ async fn main() -> Outcome<()> {
         return Ok(());
     }
     if std::env::args().any(|s| s == "prepare-credits-launcher") {
-        db.get().await?.execute("UPDATE companies SET name='Opening credit proof counterparty' WHERE tenant_id=1 AND id=10 AND name='Company 010'",&[]).await?;
+        db.get().await?.execute("UPDATE companies SET name=CASE id WHEN 10 THEN 'Opening credit proof counterparty' ELSE 'Other opening credit counterparty' END WHERE tenant_id=1 AND id IN(10,11) AND name='Company '||lpad(id::text,3,'0')",&[]).await?;
         let mut sources = Vec::new();
         for company in [8, 9] {
             sources.push(setup(&db, &app.services, company).await?);

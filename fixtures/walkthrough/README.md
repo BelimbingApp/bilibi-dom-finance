@@ -64,3 +64,14 @@ reports](../../reports/README.md#conversion-reports). Use `-- report-browser` to
 stop after preparing the unsigned browser report and before the bulk correction
 proof. Each binary refuses ordinary production setup; these are accounting
 walkthroughs, not production seeds or a historical transaction migration tool.
+
+
+### Opening customer and supplier credits
+
+Run the composed `conversion credits` command on a fresh disposable database for the focused proof, or run `conversion` for the existing conversion scenarios and the credit proof together. The credit proof imports mixed, credit-only, partially settled, contra-sign and zero-net registers, exercises inactive saved controls and independent staged approval, and checks source tax facts and exact export evidence. It applies and reverses same-control credits without entries, transfers across controls, refunds and reverses owned entries, and replays all three report boundaries after later actions and a register correction. It also checks ordinary receipt/payment capacity, concurrent spending, posting rollback, closed periods and visible unrelated-owner differences.
+
+For browser and MCP parity, use the normal Platform launcher on that disposable database. Set `BILIBI_DEV_HOST` to your own task's HTTPS localhost name in the Platform `.env`; run `conversion prepare-credits-launcher` with `BILIBI_OPENING_PROOF_CONFIG` naming a private output file, then `./bilibi start`. Sign in as the launcher's `ai@agent.my` administrator with the development password. Run `conversion launcher-credentials` with `BILIBI_AGENT_PROOF=disposable`, `BILIBI_CREDITS_PROOF=disposable` and `BILIBI_AGENT_CREDENTIALS` naming a new private file. This assigns that person's desks in Company 008 (browser) and Company 009 (MCP) and creates a disposable MCP grant.
+
+Use Company 008's existing Invoices and Bills lists to import the `ar` and `ap` CSVs from the configuration file. Classify each non-zero opening account and explicitly select the zero controls; review every source row, tax fact and reconciliation. On the existing credit records, exercise application, refund and reversal, reviewing the same party, controls, dates and posting decision as the MCP operations. A permitted same-person approval exception must have an explicit reason; it remains audited.
+
+Run `conversion-credit-operations.py` with the same configuration and private credentials, `BILIBI_AGENT_PROOF=disposable` and `BILIBI_AGENT_URL=https://<your-task>.localhost`. It uses Company 009 to exercise both mixed imports, exact/changed retries, field refusals, stale and competing reviewed plans, dated record drill-downs, three-pin replay, transfers, refunds and owned reversals. It prints no credentials or plan codes. Keep proof captures outside the repository. Run the mounted Platform `scripts/domain-ci.sh` on a separate empty disposable database.
