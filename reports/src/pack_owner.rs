@@ -26,7 +26,7 @@ pub(crate) async fn authorize_sources(
     company: OrganisationId,
 ) -> Result<(), Error> {
     for capability in SOURCE_VIEWS {
-        Directory.target(client, scope, company, capability).await?;
+        bilibi_company::authorize_work_target(client, scope, company.get(), capability).await?;
     }
     Ok(())
 }
@@ -51,7 +51,7 @@ impl Coverage {
         scope: &Scope,
         company: OrganisationId,
     ) -> Result<Self, Error> {
-        Directory.target(client, scope, company, VIEW).await?;
+        bilibi_company::authorize_work_target(client, scope, company.get(), VIEW).await?;
         match authorize_sources(client, scope, company).await {
             Ok(()) => Ok(Self::All),
             Err(Error::Forbidden) => Ok(Self::Ledger),
@@ -66,10 +66,11 @@ impl Coverage {
         company: OrganisationId,
     ) -> Result<(), Error> {
         match self {
-            Self::Ledger => Directory
-                .target(client, scope, company, VIEW)
-                .await
-                .map(|_| ()),
+            Self::Ledger => {
+                bilibi_company::authorize_work_target(client, scope, company.get(), VIEW)
+                    .await
+                    .map(|_| ())
+            }
             Self::All => authorize_sources(client, scope, company).await,
         }
     }
@@ -97,14 +98,17 @@ impl Owner for ArtifactOwner {
                 return Err(Error::Forbidden);
             }
             let exporting = matches!(operation, Operation::Create | Operation::Read);
+            bilibi_company::authorize_work_target(
+                client,
+                scope,
+                company.get(),
+                if exporting { EXPORT } else { ISSUE },
+            )
+            .await?;
             let target = Directory
-                .target(
-                    client,
-                    scope,
-                    company,
-                    if exporting { EXPORT } else { ISSUE },
-                )
-                .await?;
+                .lookup(client, scope, company)
+                .await?
+                .ok_or(Error::NotFound)?;
             if target.archived {
                 return Err(Error::Forbidden);
             }

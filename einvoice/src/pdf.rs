@@ -15,10 +15,9 @@ use crate::documents::{self, DocumentView, NewEvent};
 use crate::{authorize, Authority, Einvoice, EinvoiceError, PartySnapshot, Result, VIEW};
 use bilibi_artifacts::pdf::{self as serializer, Block, Metadata};
 use bilibi_artifacts::{Operation, Owner, PdfOwner, Reference, RenderFuture};
-use bilibi_company::Directory;
 use bilibi_database::Error;
 use bilibi_party_ids::OrganisationId;
-use bilibi_tenancy::{OrganisationDirectory, ProofClient, ProofFuture, Scope};
+use bilibi_tenancy::{ProofClient, ProofFuture, Scope};
 use qrcode::render::svg;
 use qrcode::QrCode;
 use rust_decimal::Decimal;
@@ -108,8 +107,7 @@ impl Owner for ArtifactOwner {
             if !allowed {
                 return Err(Error::Forbidden);
             }
-            Directory
-                .target(client, scope, company, VIEW)
+            bilibi_company::authorize_work_target(client, scope, company.get(), VIEW)
                 .await
                 .map(|_| ())
         })
