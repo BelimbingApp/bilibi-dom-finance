@@ -47,7 +47,12 @@ pub(super) fn csv(payable: bool, only: bool) -> String {
         } else {
             party
         };
-        out.push_str(&format!("{source},{party},{reference},2026-05-01,{due},{gross},{residual},{control},company,{kind},{source_kind},source-system,MYR,{}\n",tax(facts)));
+        let document_date = if source == "credit" {
+            "2026-01-01"
+        } else {
+            "2026-05-01"
+        };
+        out.push_str(&format!("{source},{party},{reference},{document_date},{due},{gross},{residual},{control},company,{kind},{source_kind},source-system,MYR,{}\n",tax(facts)));
     };
     if !only {
         row(
@@ -65,7 +70,7 @@ pub(super) fn csv(payable: bool, only: bool) -> String {
     row(
         "credit",
         "ORIGINAL-CREDIT",
-        "",
+        "2026-02-01",
         "53",
         "30",
         primary,
@@ -442,6 +447,24 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
     assert_eq!(old_ar.gross_debits.to_string(), "120.0000");
     assert_eq!(old_ar.customers[0].credits.len(), 3);
     assert_eq!(old_ap.parties[0].credits.len(), 3);
+    let ar_credit = old_ar
+        .customers
+        .iter()
+        .flat_map(|customer| &customer.credits)
+        .find(|credit| credit.document_id == ar_id("credit"))
+        .unwrap();
+    assert_eq!(ar_credit.issue_date, "2026-01-01");
+    assert_eq!(ar_credit.due_date, "2026-02-01");
+    assert_eq!(ar_credit.days_overdue, 211);
+    let ap_credit = old_ap
+        .parties
+        .iter()
+        .flat_map(|party| &party.credits)
+        .find(|credit| credit.id == ap_id("credit"))
+        .unwrap();
+    assert_eq!(ap_credit.document_date, date(2026, 1, 1));
+    assert_eq!(ap_credit.due_date, date(2026, 2, 1));
+    assert_eq!(ap_credit.days_overdue, 211);
     assert!(ar
         .aged_receivables(&reviewer, company, date(2026, 6, 30), &Default::default())
         .await?

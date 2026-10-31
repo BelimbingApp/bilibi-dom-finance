@@ -249,7 +249,14 @@ impl Payables {
         let mut exceptions = Vec::new();
         for r in rows {
             let due: Date = r.get::<_, String>(6).parse().map_err(|_| Error::Invalid)?;
-            let days = due
+            let document_date: Date = r.get::<_, String>(5).parse().map_err(|_| Error::Invalid)?;
+            let kind: String = r.get(11);
+            let aging_date = if kind == "opening_credit" {
+                document_date
+            } else {
+                due
+            };
+            let days = aging_date
                 .until(as_of)
                 .map_err(|_| Error::Invalid)?
                 .get_days()
@@ -265,13 +272,13 @@ impl Payables {
             let d = AgedDocument {
                 id: r.get(0),
                 document_number: r.get(1),
-                kind: r.get(11),
+                kind,
                 control_account_id: r.get(12),
                 party_key: r.get(2),
                 party_name: r.get(3),
                 party_code: r.get(10),
                 party_document_number: r.get(4),
-                document_date: r.get::<_, String>(5).parse().map_err(|_| Error::Invalid)?,
+                document_date,
                 due_date: due,
                 currency_code: r.get(7),
                 total: store::money(r.get(8))?,
