@@ -816,6 +816,65 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
     else {
         panic!("payables document read must be a read operation");
     };
+    let backdated_ar = ar
+        .create_draft(
+            &manager,
+            company,
+            &json!({
+                "kind":"invoice",
+                "series_id":config["invoice_series"],
+                "customer_id":config["customer_id"],
+                "issue_date":"2026-07-05",
+                "description":"Later backdated membership proof",
+                "lines":[{"description":"Later backdated membership proof","quantity":"1","unit_price":"1"}],
+            }),
+        )
+        .await?;
+    let backdated_ar = ar
+        .issue_document(&manager, company, backdated_ar.id)
+        .await?;
+    assert!(ar_read
+        .call(
+            &**client,
+            &reviewer,
+            &json!({"company_id":company,"document_id":backdated_ar.id,"as_of":"2026-07-31","through_entry_number":old_ar.through_entry_number,"through_opening_batch_id":old_ar.through_opening_batch_id,"through_settlement_number":old_ar.through_settlement_number}),
+        )
+        .await
+        .is_err());
+    let backdated_ap = ap
+        .create_bill(
+            &manager,
+            company,
+            &NewDocument {
+                vendor_id: config["vendor_id"].as_i64(),
+                party_document_number: Some("LATER-BACKDATED".into()),
+                document_date: date(2026, 7, 5),
+                due_date: Some(date(2026, 7, 15)),
+                description: Some("Later backdated membership proof".into()),
+                lines: vec![DocumentLineInput {
+                    description: "Later backdated membership proof".into(),
+                    account_id: config["expense"].as_i64().expect("expense account"),
+                    amount: Money::parse("1", before.minor_units)?,
+                    tax_code_id: None,
+                    external_order_line_id: None,
+                    order_line_id: None,
+                    quantity: None,
+                }],
+                tax_lines: None,
+            },
+        )
+        .await?;
+    ap.approve_document(&reviewer, company, backdated_ap.id)
+        .await?;
+    let backdated_ap = ap.post_document(&manager, company, backdated_ap.id).await?;
+    assert!(ap_read
+        .call(
+            &**client,
+            &reviewer,
+            &json!({"company_id":company,"document_id":backdated_ap.id,"as_of":"2026-07-31","through_entry_number":old_ap.through_entry_number,"through_opening_batch_id":old_ap.through_opening_batch_id,"through_settlement_number":old_ap.through_settlement_number}),
+        )
+        .await
+        .is_err());
     let ap_record = ap_read
         .call(
             &**client,
@@ -1159,6 +1218,58 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
     let replaced_ap = ap
         .import_opening_bills(&reviewer, company, &replacement_ap)
         .await?;
+    let replacement_ar_document = ar
+        .list_documents(&reviewer, company, &Default::default())
+        .await?
+        .into_iter()
+        .find(|document| {
+            document.opening.as_ref().is_some_and(|opening| {
+                opening["batch_id"] == replaced_ar["id"] && opening["source_id"] == "invoice"
+            })
+        })
+        .expect("replacement customer opening document");
+    let replacement_ap_document = ap
+        .list_documents(&reviewer, company, &Default::default())
+        .await?
+        .into_iter()
+        .find(|document| {
+            document.opening.as_ref().is_some_and(|opening| {
+                opening["batch_id"] == replaced_ap["id"] && opening["source_id"] == "invoice"
+            })
+        })
+        .expect("replacement supplier opening document");
+    assert!(ar_read
+        .call(
+            &**client,
+            &reviewer,
+            &json!({"company_id":company,"document_id":replacement_ar_document.id,"as_of":"2026-07-31","through_entry_number":old_ar.through_entry_number,"through_opening_batch_id":old_ar.through_opening_batch_id,"through_settlement_number":old_ar.through_settlement_number}),
+        )
+        .await
+        .is_err());
+    assert!(ap_read
+        .call(
+            &**client,
+            &reviewer,
+            &json!({"company_id":company,"document_id":replacement_ap_document.id,"as_of":"2026-07-31","through_entry_number":old_ap.through_entry_number,"through_opening_batch_id":old_ap.through_opening_batch_id,"through_settlement_number":old_ap.through_settlement_number}),
+        )
+        .await
+        .is_err());
+    assert!(ar_read
+        .call(
+            &**client,
+            &reviewer,
+            &json!({"company_id":company,"document_id":ar_id("invoice"),"as_of":"2026-07-31","through_entry_number":old_ar.through_entry_number,"through_opening_batch_id":old_ar.through_opening_batch_id,"through_settlement_number":old_ar.through_settlement_number}),
+        )
+        .await
+        .is_ok());
+    assert!(ap_read
+        .call(
+            &**client,
+            &reviewer,
+            &json!({"company_id":company,"document_id":ap_id("invoice"),"as_of":"2026-07-31","through_entry_number":old_ap.through_entry_number,"through_opening_batch_id":old_ap.through_opening_batch_id,"through_settlement_number":old_ap.through_settlement_number}),
+        )
+        .await
+        .is_ok());
     assert!(ar
         .aged_receivables(&reviewer, company, date(2026, 7, 12), &Default::default(),)
         .await
