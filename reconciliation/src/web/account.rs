@@ -51,6 +51,7 @@ pub(super) struct Account {
     draft: HashMap<String, String>,
     flash: Option<(StatusKind, String)>,
     workspace: bool,
+    opening: super::opening::Opening,
 }
 #[derive(Template)]
 #[template(path = "account.html")]
@@ -61,6 +62,7 @@ struct View<'a> {
     refusal: Html,
     mapping: String,
     matching: Html,
+    opening: Html,
     statement_count: Option<usize>,
     reconciliation_count: Option<usize>,
     upload: Option<Html>,
@@ -131,6 +133,7 @@ impl Account {
             draft: HashMap::new(),
             flash: None,
             workspace,
+            opening: super::opening::Opening::new(id)?,
         })
     }
     async fn data(
@@ -208,6 +211,7 @@ impl Account {
         Ok((statements, reconciliations, files))
     }
     async fn body(&mut self, scope: &Scope) -> Result<String> {
+        self.opening.clear_bridge();
         let account = told(
             self.pages
                 .reconciliation
@@ -221,6 +225,7 @@ impl Account {
             refusal: Html::EMPTY,
             mapping: String::new(),
             matching: Html::EMPTY,
+            opening: Html::EMPTY,
             statement_count: None,
             reconciliation_count: None,
             upload: None,
@@ -429,11 +434,30 @@ impl Account {
                 String::new()
             }
         );
+        view.opening = self.opening.body(&self.pages, scope).await?;
         view.account = Some(account);
         view.render().map_err(|_| Error::Internal)
     }
-    async fn event(&mut self, scope: &Scope, value: &serde_json::Value) -> Result<Option<String>> {
+    async fn event(
+        &mut self,
+        scope: &Scope,
+        credential: &str,
+        value: &serde_json::Value,
+    ) -> Result<Option<String>> {
         match event_type(value)? {
+            event @ ("open_bank_opening"
+            | "cancel_bank_opening"
+            | "preview_opening"
+            | "import_opening"
+            | "opening_grid") => {
+                if let Some(message) = self
+                    .opening
+                    .event(&self.pages, scope, credential, event, value)
+                    .await?
+                {
+                    self.flash = Some((StatusKind::Success, message));
+                }
+            }
             "clear-flash" => clear_flash(&mut self.flash, value),
             "statements_grid" => {
                 self.statements.handle(&params::string_values(value));
@@ -544,7 +568,7 @@ impl LiveState<Scope, Error> for Account {
                     self.list = ListState::parse(v, SPEC.clone()).map_err(|_| Error::Invalid)?;
                     None
                 }
-                LiveInput::Event(v) => self.event(request.scope, v).await?,
+                LiveInput::Event(v) => self.event(request.scope, request.credential, v).await?,
             };
             let flash = redirect.as_ref().and(self.flash.clone());
             Ok(LiveBody {
@@ -555,6 +579,22 @@ impl LiveState<Scope, Error> for Account {
                 ..Default::default()
             })
         })
+    }
+    fn panels(&self) -> Vec<PanelSpec> {
+        let Some(bridge) = self.opening.bridge() else {
+            return vec![];
+        };
+        vec![PanelSpec {
+            id: "reconciliation-opening-attachments".into(),
+            embed: bilibi_finance_attachments::PANEL_EMBED.into(),
+            path: [
+                ("panel".into(), "reconciliation-opening-attachments".into()),
+                ("source".into(), crate::OPENING_BRIDGE_SOURCE.into()),
+                ("document".into(), bridge.to_string()),
+            ]
+            .into(),
+            query: HashMap::new(),
+        }]
     }
 }
 

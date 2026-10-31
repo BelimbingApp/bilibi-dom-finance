@@ -4,7 +4,9 @@
 mod conversion_lifecycle;
 use bilibi_authz::{RoleDefinition, VocabularyContribution, VOCABULARY};
 use bilibi_database::{pool, Db};
-use bilibi_finance_fixed_assets::{Assumptions, FixedAssets, Method, ReportPins, RevisionInput};
+use bilibi_finance_fixed_assets::{
+    Assumptions, DisposalInput, EventInput, FixedAssets, Method, ReportPins, RevisionInput,
+};
 use bilibi_finance_ledger::{
     AccountType, Ledger, Money, NewAccount, NewBook, NewFiscalYear, OpeningBalances, Reversal,
 };
@@ -21,6 +23,7 @@ bilibi_walkthrough_fixture::walkthrough_vocabulary!();
 bilibi_walkthrough_fixture::walkthrough_module_roles!();
 bilibi_finance_walkthrough_fixture::walkthrough_ledger_roles!();
 bilibi_finance_walkthrough_fixture::walkthrough_payables_roles!();
+bilibi_finance_walkthrough_fixture::walkthrough_reconciliation_roles!();
 macro_rules! roles {($key:literal,$module:literal,$caps:path)=>{inventory::submit!{Contribution::new(VOCABULARY,$key,Provenance{module:$module,source:file!(),line:line!()},&VocabularyContribution{domains:&[],verbs:&[],capabilities:&[],system_principals:&[],roles:&[RoleDefinition{code:"manager",name:"manager",description:"Disposable conversion fixture",grant_all:false,capabilities:&$caps}]})}};}
 roles!(
     "walkthrough.conversion.receivables",
@@ -204,11 +207,22 @@ async fn setup(db: &Db, services: &Services, company: i64) -> Outcome<Value> {
             .await?;
         l.approve_journal(&admin, company, j.id).await?;
     }
+    let reconciliation = services.get::<bilibi_finance_reconciliation::Reconciliation>(
+        bilibi_finance_reconciliation::SERVICE,
+    )?;
+    let bank_account = match reconciliation.list_bank_accounts(&admin, company).await?.into_iter().find(|a| a.ledger_account_id == account("1000")) {
+        Some(a) => a,
+        None => reconciliation.create_bank_account(&admin, company, &bilibi_finance_reconciliation::NewBankAccount {
+            name: "Conversion bank".into(), ledger_account_id: account("1000"),
+            import_mapping: json!({"date":"Date","description":"Details","reference":"Ref","amount":"Amount","balance":"Balance"}),
+            charges_account_id: None, interest_account_id: None, match_window_days: None, active: None, reason: None,
+        }).await?,
+    };
     let asset_csv = format!(
         "source_id,description,category_revision_id,acquisition_date,in_service_date,cost,accumulated_depreciation,remaining_life_months,residual_value\nasset-3,Source register asset,{revision},2024-06-01,2024-07-01,12000,1800,96,0\n"
     );
     Ok(
-        json!({"company_id":company,"vendor_id":vendor.id,"vendor_key":format!("vendor:{}", vendor.id),"customer_id":customer.id,"invoice_series":invoice.id,"payment_series":payment.id,"bank":account("1000"),"ar":AR,"ap":AP,"expense":account("5000"),"assets":asset_csv,"revision":revision}),
+        json!({"company_id":company,"vendor_id":vendor.id,"vendor_key":format!("vendor:{}", vendor.id),"customer_id":customer.id,"invoice_series":invoice.id,"payment_series":payment.id,"bank":account("1000"),"bank_account_id":bank_account.id,"ar":AR,"ap":AP,"expense":account("5000"),"assets":asset_csv,"revision":revision}),
     )
 }
 async fn prove(db: &Db, services: &Services) -> Outcome<()> {
@@ -256,8 +270,7 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         .await?;
     let ar_input = json!({"source_reference":"AR-SOURCE","currency_code":"MYR","series_id":config["invoice_series"],"csv":AR});
     let ap_input = json!({"source_reference":"AP-SOURCE","currency_code":"MYR","csv":AP});
-    let asset_input =
-        json!({"source_reference":"ASSET-SOURCE","currency_code":"MYR","csv":config["assets"]});
+    let asset_input = json!({"source_reference":"ASSET-SOURCE","currency_code":"MYR","csv":config["assets"].as_str().unwrap().replace(",12000,1800,96,0", ",11000,800,96,0") + &format!("asset-4,Fully depreciated,{revision},2024-06-01,2024-07-01,1000,1000,0,0\n", revision=config["revision"])});
     for input in [&ar_input, &ap_input, &asset_input] {
         assert!(input["csv"].as_str().is_some());
     }
@@ -274,10 +287,10 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         .await
         .is_err());
     let mut wrong_asset = asset_input.clone();
-    wrong_asset["csv"] = json!(config["assets"]
+    wrong_asset["csv"] = json!(asset_input["csv"]
         .as_str()
         .unwrap()
-        .replace(",1800,96", ",1801,96"));
+        .replace(",1000,1000,0,0", ",1000,999,0,0"));
     assert!(assets
         .import_opening_register(&s, company, &wrong_asset)
         .await
@@ -459,7 +472,12 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         .all(|r| r.difference.is_zero()));
     assert_eq!(
         register.rows[0].accumulated.shown(trial.minor_units),
-        "1800.00"
+        "800.00"
+    );
+    assert!(register.rows[1].schedule.is_empty());
+    assert_eq!(
+        register.rows[1].accumulated.shown(trial.minor_units),
+        "1000.00"
     );
     assert_eq!(
         register.rows[0].schedule[0].amount.shown(trial.minor_units),
@@ -476,8 +494,56 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         .all(|r| r.difference.is_zero()));
     assert_eq!(
         register.rows[0].accumulated.shown(trial.minor_units),
-        "1906.25"
+        "906.25"
     );
+    let fully_depreciated = register.rows[1].asset.id;
+    assets
+        .dispose(
+            &s,
+            company,
+            fully_depreciated,
+            &DisposalInput {
+                event: EventInput {
+                    effective_date: date(2026, 7, 31),
+                    reason: "Retire fully depreciated asset".into(),
+                },
+                proceeds: Money::ZERO,
+                settlement_account_id: None,
+            },
+        )
+        .await?;
+    let disposed = assets
+        .register_report(&s, company, date(2026, 7, 31), &ReportPins::default())
+        .await?;
+    assert!(disposed.rows[1].disposed);
+    assert!(disposed
+        .reconciliation
+        .iter()
+        .all(|r| r.difference.is_zero()));
+    assets
+        .reverse_disposal(
+            &s,
+            company,
+            fully_depreciated,
+            &EventInput {
+                effective_date: date(2026, 7, 31),
+                reason: "Correct retirement".into(),
+            },
+        )
+        .await?;
+    let restored = assets
+        .register_report(&s, company, date(2026, 7, 31), &ReportPins::default())
+        .await?;
+    assert!(!restored.rows[1].disposed);
+    assert!(restored
+        .reconciliation
+        .iter()
+        .all(|r| r.difference.is_zero()));
+    let pinned = assets
+        .register_report(&s, company, date(2026, 7, 31), &disposed.pins())
+        .await?;
+    assert!(pinned.rows[1].disposed);
+    assert_eq!(pinned.reconciliation, disposed.reconciliation);
     let docs = ar.list_documents(&s, company, &Default::default()).await?;
     let invoice = docs[0].id;
     let payment=ar.record_payment(&s,company,&json!({"series_id":config["payment_series"],"customer_id":config["customer_id"],"payment_date":"2026-07-15","amount":"1000","deposit_account_id":config["bank"],"allocations":[{"document_id":invoice,"amount":"1000"}]})).await?;
@@ -639,7 +705,7 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         )
         .await?
         .get(0);
-    assert_eq!(entries, 6);
+    assert_eq!(entries, 8);
     for table in [
         "finance_receivables_opening_batches",
         "finance_payables_opening_batches",

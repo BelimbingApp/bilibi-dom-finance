@@ -5,10 +5,11 @@ A company's bank accounts, each mapped one-to-one to a ledger account; the
 bank statements imported for them, immutable once imported; the matches
 between statement lines and the ledger's postings on that account; the
 reconciliations of an account as of a statement end date; and the bank charges
-and interest posted from statement lines. This version is the whole schema
-(eleven tables, fourteen trigger functions) with the whole facade and all four
-of Bilimbi's pages: bank accounts and an account's statements (`NC3`), and
-matching and one reconciliation (`NC4`).
+and interest posted from statement lines. This version carries Bilimbi's
+schema, facade and four pages: bank accounts and an account's statements
+(`NC3`), and matching and one reconciliation (`NC4`). It also owns the
+reviewed conversion bank bridge operations and their additions to the account
+and matching pages.
 
 Depends on `finance/ledger` (the chart a bank account maps and the book a
 statement's amounts are held to) and `finance/attachments` (the bank's own
@@ -30,12 +31,12 @@ records; the schema is private.
 | `list_bank_account_changes` | `finance.reconciliation.view` | The change log: field, values before and after, actor, reason, time |
 | `import_statement` | `finance.reconciliation.statements.import` | Imports a CSV file's bytes as a numbered statement with its lines |
 | `list_statements`, `get_statement` | `finance.reconciliation.view` | Statements (without lines), and one with its lines in line order |
-| `evidence_page` | `finance.reconciliation.view` | One ID-ordered page (`limit` 1 to 500, `after`) of a dataset for the auditor's pack, one per table: `bank_account`, `bank_account_change`, `statement`, `statement_line`, `match`, `match_line`, `match_entry`, `match_event`, `reconciliation_record`, `reconciliation_event`, `reconciliation_item`. Dates, times and amounts are text |
+| `evidence_page` | `finance.reconciliation.view` | One ID-ordered page (`limit` 1 to 500, `after`) of a dataset for the auditor's pack, one per table: `opening_bridge`, `opening_item`, `match_opening_item`, `bank_account`, `bank_account_change`, `statement`, `statement_line`, `match`, `match_line`, `match_entry`, `match_event`, `reconciliation_record`, `reconciliation_event`, `reconciliation_item`. Dates, times and amounts are text |
 | `mapping_choices` | none | The delimiters, date formats, amount signs and decimal separators a mapping is built from |
-| `unmatched_items` | `finance.reconciliation.view` | What stands unmatched on each side, with suggestions; `to` bounds both sides |
+| `unmatched_items` | `finance.reconciliation.view` | What stands unmatched on each side, including current opening items; `to` bounds both sides and ordinary statement-to-entry suggestions remain separate |
 | `record_match` | `finance.reconciliation.matches.manage` | Matches `statement_line_ids` with `entry_ids`, one or many on each side, with an optional `note` (Bilimbi `match`) |
 | `unmatch` | `finance.reconciliation.matches.manage` | Unmatches a standing match with a needed reason |
-| `get_match`, `list_matches` | `finance.reconciliation.view` | A match with its status, lines, entries and events; a bank account's matches, oldest first |
+| `get_match`, `list_matches` | `finance.reconciliation.view` | A match with its status, lines, entries, opening items and events; a bank account's matches, oldest first |
 | `list_statement_lines` | `finance.reconciliation.view` | A bank account's lines by date, each with its statement number; `to` bounds the date |
 | `preview_reconciliation` | `finance.reconciliation.view` | The figures as of an end date against a statement balance, optionally at pinned `through_*` numbers |
 | `open_reconciliation` | `finance.reconciliation.reconciliations.manage` | Opens one: `end_date`, `statement_balance` |
@@ -150,7 +151,9 @@ faulty row and why (`InvalidLines`); a file holds at most 10,000 lines, 5 MiB
 and valid UTF-8, and the reader (an RFC 4180 reader: one delimiter, quoted
 fields with doubled quotes, fields spanning lines, CRLF, LF or CR line ends, a
 byte-order mark) refuses a stray or unterminated quote naming the row.
-Statements and lines are never changed or deleted.
+Statements and lines are never changed or deleted. Once an opening bridge is
+recorded for the account, an import containing any statement line before its
+conversion date is refused whole; a conversion-day line is allowed.
 
 `StatementSource` describes a statement to `finance/attachments` ("Bank
 statement", `Statement <number>`, dated its end date, always final), so
@@ -173,6 +176,10 @@ none, and at most 500 characters. A repeated id counts once. The match keeps
 each entry's number, date, description, reference and amount as matched, so a
 match and a finalised reconciliation read without the ledger.
 
+Outstanding opening items use the separate reviewed match and unmatch
+operations described under [Opening bank bridge](#opening-bank-bridge).
+`record_match` remains the ordinary statement-to-entry path.
+
 A match stands from its `matched` event until its `unmatched` event, which
 `unmatch` appends with a needed reason (trimmed, at most 500 characters):
 its lines and entries are free again and a new match is a new record. A match
@@ -180,7 +187,8 @@ that no longer stands is `MatchNotStanding`, and one a finalised
 reconciliation counted is kept for good (`MatchFinalised`).
 
 `unmatched_items` returns the unmatched lines (by date, statement and line,
-each with its statement number), the unmatched entries (by date and id) and
+each with its statement number), the unmatched entries (by date and id), the
+current unmatched opening items, and ordinary statement-to-entry
 `suggestions`: for each line in that order, the unmatched entry of the same
 amount dated within the account's match window, preferring one whose reference
 or description contains the line's reference (or whose reference the line's
@@ -191,17 +199,19 @@ the nearest date, then the lowest entry number; each entry is suggested once.
 
 A reconciliation is a bank account's figures as of a statement end date
 against the balance the statement shows that day. Its `figures` are read at
-three numbers, the last entry, statement and match event they count (each the
-latest unless pinned): the book balance (the ledger account's debits less
-credits through the end date, summed by PostgreSQL through
+four pins, the last entry, statement, match event and opening bridge they count
+(each the latest unless pinned): the book balance (the ledger account's debits
+less credits through the end date, summed by PostgreSQL through
 `account_totals_on`), and the items that explain the difference: each
 statement line through the end date with no standing match (`statement_line`),
 each entry through the end date with none (`entry`, described
 `Entry <number>: <description>`), and each standing match whose two sides
 through the end date differ (`timing`, `Match <number>: cleared after the
-statement date`, signed ledger side less statement side). The `difference` is
-the statement balance less the book balance, less the `statement_line` items,
-plus the `entry` and `timing` items; zero means the two balances are
+statement date`, signed book side less statement side). A current outstanding
+opening item is an `opening_item`; the opening journal entry itself is omitted
+because those items represent its clearing side. The `difference` is the
+statement balance less the book balance, less the `statement_line` items, plus
+the `entry`, `opening_item` and `timing` items; zero means the two balances are
 explained. `preview_reconciliation` reads them without opening anything
 (a missing end date, a balance that is not money of the book or a negative pin
 is `InvalidOption`), and at a finalised reconciliation's pinned numbers it
@@ -218,7 +228,7 @@ whoever impersonated them or was impersonated by them, is `SamePerson` while
 the company separates duties, and is recorded as a same-person approval
 exception while it does not. It then reads the figures on that write, refuses
 a difference other than zero (`Difference(amount)`), and records the
-`finalised` event with the book balance, the difference and the three numbers,
+`finalised` event with the book balance, the difference and the four pins,
 and the items as they stood, numbered from 1. `abandon_reconciliation` records
 `abandoned` with a needed reason. A finalised or abandoned reconciliation never
 changes (`ReconciliationFinalised`, `ReconciliationAbandoned`), and
@@ -260,8 +270,10 @@ The migration `finance-reconciliation-001-reconciliation` creates
 `_match_events`, `_reconciliations`, `_reconciliation_events` and
 `_reconciliation_items`. Rows of one company reference each other through
 composite `(id, company_id)` foreign keys; ledger account and entry ids are
-plain columns. PostgreSQL enforces the rules the facade checks, so no other
-writer can break them:
+plain columns. `finance-reconciliation-002-opening-bridge` adds immutable
+opening bridges and items, opening-item match links, and the opening pins on
+finalised reconciliations. PostgreSQL enforces the rules the facade checks, so
+no other writer can break them:
 
 - a bank account keeps its company and ledger account and is never deleted;
   one bank account per ledger account and per name;
@@ -275,11 +287,16 @@ writer can break them:
   count or dates disagree (it does the work once for the statement and once
   for the line numbered last, not once per line, so a 10,000 line statement
   commits in about a second);
-- a match's lines and entries are inserted only in its own transaction; a line
-  or entry in another standing match is refused; a deferred trigger refuses a
-  commit in which the two sides differ, either is empty, or the `matched` event
-  is missing; an `unmatched` event needs a reason and a standing match that no
-  finalised reconciliation counted;
+- an opening bridge must reconcile its statement balance, opening ledger
+  balance and items and retain the approved opening entry; statement lines
+  before its conversion date are refused, and a replacement names the current
+  bridge and is refused after finalisation or while the account has a standing
+  match;
+- a match's lines, entries and optional opening item are inserted only in its
+  own transaction; a line, entry or opening item in another standing match is
+  refused; a deferred trigger refuses a commit in which the two sides differ,
+  either side is empty, or the `matched` event is missing; an `unmatched` event
+  needs a reason and a standing match that no finalised reconciliation counted;
 - one open reconciliation per bank account, each ending after the last
   finalised one; a `finalised` event carries its figures and numbers and a zero
   difference; an `abandoned` one its reason; items are inserted only in the
@@ -293,7 +310,7 @@ for those).
 
 `/finance/reconciliation` contributes the **Bank reconciliation** menu item and shows the company's accounts in a FlexTable. Its add/change form keeps the ledger mapping fixed after creation, selects active accounts of the appropriate type, and edits the bank's CSV mapping. Edit and activation events recheck `finance.reconciliation.bank-accounts.manage`; the facade checks it again in `Ledger::write`. Reads of the chart inside that write use `Ledger::list_accounts_on` on the handed transaction.
 
-`/finance/reconciliation/accounts/{id}` shows statements newest first, their bank files through the authorized Attachments download route, and reconciliations newest first. The live upload accepts one CSV/text file up to 5 MiB and consumes its bytes once in the import event. A successful import reports the dates, line count and skipped zero rows. The next reconciliation form suggests the latest statement's end date and closing balance while preserving an entered draft. Withheld controls name the missing permission; facade refusals preserve the live page and form, and are reported in the page's message only, as Bilimbi's open form carries no field errors. As on every page here, a message stays until the browser dismisses it (`clear-flash`). An upload refused in the browser reads the Platform's `UploadError` sentence ("The file is larger than this page accepts.", "That kind of file is not accepted.") rather than Bilimbi's "The file is larger than the import allows." and "Choose a CSV file.", because `UploadSpec` takes no per-page wording.
+`/finance/reconciliation/accounts/{id}` shows statements newest first, their bank files through the authorized Attachments download route, and reconciliations newest first. After the opening journal is approved, the same page reviews and records the conversion bank bridge through `finance.reconciliation.opening.import`; its retained bank statement is attached through the shared Source documents panel. The live upload accepts one CSV/text file up to 5 MiB and consumes its bytes once in the import event. A successful import reports the dates, line count and skipped zero rows. The next reconciliation form suggests the latest statement's end date and closing balance while preserving an entered draft. Withheld controls name the missing permission; facade refusals preserve the live page and form, and are reported in the page's message only, as Bilimbi's open form carries no field errors. As on every page here, a message stays until the browser dismisses it (`clear-flash`). An upload refused in the browser reads the Platform's `UploadError` sentence ("The file is larger than this page accepts.", "That kind of file is not accepted.") rather than Bilimbi's "The file is larger than the import allows." and "Choose a CSV file.", because `UploadSpec` takes no per-page wording.
 
 The account page lists and opens reconciliations through the facade's `list_reconciliations` and `open_reconciliation` (see Reconciliations), which return `BankReconciliation` records with their typed `ReconciliationStatus`. Its matching link and the successful opening land on the NC4 pages below.
 
@@ -314,7 +331,7 @@ It proves the facade's import/skipped rows, duplicate-file refusal, original dow
 
 ## Matching and reconciliation pages (NC4)
 
-`/finance/reconciliation/accounts/{id}/matching` (Bilimbi `MatchingLive`) shows the account's statement lines with no standing match beside the ledger entries on its account with none (`unmatched_items`), each line's suggested entry with **Accept**, and the standing matches newest first with **Unmatch**. Ticking lines and entries updates the selected counts and totals; **Match selected** sends the ticked ids and the note to `record_match`, and Accept matches a suggestion the page last read, never an id of the browser's choosing. Unmatch opens a dialog for the match the page shows and sends the reason to `unmatch`. Every one of these events asks `finance.reconciliation.matches.manage` again, and the facade asks once more. A bank account out of reach redirects to `/finance/reconciliation` with the refusal, as Bilimbi does.
+`/finance/reconciliation/accounts/{id}/matching` (Bilimbi `MatchingLive`) shows the account's statement lines with no standing match beside the ledger entries and opening items on its account with none (`unmatched_items`), each ordinary line's suggested entry with **Accept**, and the standing matches newest first with **Unmatch**. An opening item is matched in its reviewed dialog through `finance.reconciliation.opening.match`; its unmatch uses `finance.reconciliation.opening.unmatch`. Ticking ordinary lines and entries updates the selected counts and totals; **Match selected** sends the ticked ids and the note to `record_match`, and Accept matches a suggestion the page last read, never an id of the browser's choosing. Unmatch opens a dialog for the match the page shows and sends the reason to the appropriate contract or facade. Every one of these events asks `finance.reconciliation.matches.manage` again, and the contract or facade asks once more. A bank account out of reach redirects to `/finance/reconciliation` with the refusal, as Bilimbi does.
 
 The checkboxes sit in FlexTable rows and join the match form through `form="matching-form"`: a FlexTable carries forms of its own (the column add box), which cannot nest inside another form, and `live.js` reads a control's `form` owner, so the selection still raises the form's change event. They are Bilimbi's bare checkboxes, not `forms.html`'s, which posts `true` with a hidden `false` companion rather than an id.
 
@@ -336,3 +353,15 @@ Sign in as `manager@example.test` (every control), `staff@example.test` (finalis
 Cash reports may read `Reconciliation::cash_account_ids` with `finance.ledger.view`. It returns only the mapped ledger identifiers, including inactive bank accounts; bank names, import mappings and statements still require `finance.reconciliation.view`.
 
 Base Artifacts declares 2557 retention days (7 years) as the default of **Document retention days** (`artifacts.retention_days`), and `seed-production` saves only **Storage folder** (`artifacts.storage_root`), the server's private `data/artifacts` folder. The first import creates that default folder with 0700 permissions, so a fresh installation needs no storage settings edits. A folder an administrator chose is never created: if it is missing, the import is refused with a message naming the folder and the Storage folder setting. An import blocked by a cleared policy names both settings. Both refusals link to Global settings (`/system/settings`), and the Attachments pages and source-document panels word and link them the same way. Administrators can change both settings in Global settings.
+
+## Opening bank bridge
+
+After the opening balances journal is approved, record the bank statement balance at the conversion date and the outstanding items already included in that journal on the bank account page. The reviewed `finance.reconciliation.opening.import` operation is the same door for the page and MCP. Its CSV has `source_id,item_date,description,amount`: payments are negative and deposits positive, source IDs are unique, dates are no later than conversion, amounts are nonzero at the book's precision, and the file is at most 500 rows and 128 KiB. The source reference, statement identification, original CSV, item facts and review are retained as evidence. The bridge requires `statement balance - opening bank ledger + outstanding items = 0` and does not post another ledger entry. An exact source-reference retry returns the existing bridge; changed evidence under that reference is refused.
+
+Match an opening item to an equal statement line dated on or after conversion on the matching page or with `finance.reconciliation.opening.match`. The source item replaces the opening journal entry on the unmatched book side, so clearing does not post it again. Unmatching uses the ordinary reason and finalised-reconciliation safeguards. To correct the source before a reconciliation is finalised, unmatch the account and record a replacement bridge naming the current bridge and a reason; both versions remain evidence. Finalised reconciliations retain their opening-bridge, statement, match-event and ledger pins.
+
+The default is a single full-amount match per source item; split clearings and changes after a finalised reconciliation are refused. An accountant should confirm whether partial clearings or post-finalisation corrections are needed before relying on those cases. Each current bridge mounts the shared Source documents panel for `finance/reconciliation/opening_bridge`; attach the source bank statement there, where the company's normal document retention applies. A correction keeps attachments on the bridge version they support and exposes a new panel for the replacement.
+
+The disposable proof uses the conversion fixture and `bank-bridge-operations.py`. It checks both signs, mismatch, exact retry, correction, conversion-day and later clearing, retained source-statement bytes, duplicate refusal, no extra ledger entry and independent finalisation. Its reviewer is a fixture user, so accountant review of a real conversion remains outstanding as part of #107.
+
+On a fresh disposable database, start the `conversion` fixture with `serve` and provision OAuth credentials as described in `fixtures/walkthrough/README.md`. Build `bank-bridge`, set `BANK_BRIDGE_PROOF_BIN` to its absolute path, and run `fixtures/walkthrough/bank-bridge-operations.py` with the same environment. The script uses Company 002 and runs only from an empty bridge so every claimed check executes.

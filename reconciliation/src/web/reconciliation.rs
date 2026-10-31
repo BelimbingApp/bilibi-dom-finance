@@ -127,6 +127,7 @@ fn kind_label(kind: ItemKind) -> &'static str {
         ItemKind::StatementLine => "On the statement, not in the books",
         ItemKind::Entry => "In the books, not on the statement",
         ItemKind::Timing => "Matched, cleared after the statement date",
+        ItemKind::OpeningItem => "Opening item not yet cleared",
     }
 }
 

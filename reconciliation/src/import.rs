@@ -52,8 +52,9 @@ pub(crate) struct Prepared {
 
 /// Reads `file` as a statement of the bank account, before the transaction
 /// that records it: refuses, whole, a file already imported, a line already
-/// imported, a file whose rows do not read through the mapping and a running
-/// balance that does not follow from the amounts.
+/// imported, a file whose rows do not read through the mapping, a line before
+/// an opening bridge's conversion date, and a running balance that does not
+/// follow from the amounts.
 pub(crate) async fn prepare(
     client: &(impl GenericClient + Sync),
     tenant: i64,
@@ -71,6 +72,7 @@ pub(crate) async fn prepare(
     let (lines, skipped) = read(&file.content, &account.import_mapping, units)?;
     let lines = fingerprinted(ordered(lines, &account.import_mapping)?);
     fresh_lines(client, tenant, company_id, account.id, &lines).await?;
+    check_cutover(client, tenant, company_id, account.id, &lines).await?;
     let dates = lines.iter().map(|line| line.date);
     Ok(Prepared {
         file: NewFile {
@@ -94,8 +96,8 @@ pub(crate) async fn prepare(
     })
 }
 
-/// The duplicate checks again, under the company lock: another import may
-/// have landed since [`prepare`].
+/// The duplicate and opening-cutoff checks again, under the company lock:
+/// another import or bridge may have landed since [`prepare`].
 pub(crate) async fn check_fresh(
     client: &(impl GenericClient + Sync),
     tenant: i64,
@@ -104,7 +106,24 @@ pub(crate) async fn check_fresh(
     prepared: &Prepared,
 ) -> Result<(), ReconciliationError> {
     fresh_file(client, tenant, company_id, &prepared.sha256).await?;
-    fresh_lines(client, tenant, company_id, bank_account_id, &prepared.lines).await
+    fresh_lines(client, tenant, company_id, bank_account_id, &prepared.lines).await?;
+    check_cutover(client, tenant, company_id, bank_account_id, &prepared.lines).await
+}
+
+async fn check_cutover(
+    client: &impl GenericClient,
+    tenant: i64,
+    company_id: i64,
+    account: i64,
+    lines: &[Line],
+) -> Result<(), ReconciliationError> {
+    if let Some(row) = client.query_opt("SELECT to_char(conversion_date,'YYYY-MM-DD') FROM finance_reconciliation_opening_bridges WHERE tenant_id=$1 AND company_id=$2 AND bank_account_id=$3 ORDER BY id DESC LIMIT 1", &[&tenant,&company_id,&account]).await.map_err(bilibi_database::Error::from)? {
+        let date: Date = row.get::<_,String>(0).parse().map_err(|_| bilibi_database::Error::Internal)?;
+        if lines.iter().any(|line| line.date < date) {
+            return Err(ReconciliationError::Invalid(vec![crate::FieldError::new("file", format!("statement lines must be on or after the opening conversion date {date}"))]));
+        }
+    }
+    Ok(())
 }
 
 fn hash(content: &[u8]) -> String {

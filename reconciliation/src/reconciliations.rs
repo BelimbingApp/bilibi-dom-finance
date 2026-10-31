@@ -29,11 +29,11 @@ const TEXT_LIMIT: usize = 500;
 /// book balance is the ledger account's debits less credits through
 /// `end_date`, summed by PostgreSQL through the ledger. The items that
 /// explain the difference are the statement lines through `end_date` with no
-/// standing match, the entries through `end_date` with none, and each
-/// standing match whose two sides through `end_date` differ (`timing`).
-/// `difference` is the statement balance less the book balance, less the
-/// unmatched statement lines, plus the unmatched entries, plus the timing
-/// items; zero means the two balances are explained.
+/// standing match, the entries and opening items through `end_date` with none,
+/// and each standing match whose two sides through `end_date` differ
+/// (`timing`). `difference` is the statement balance less the book balance,
+/// less the unmatched statement lines, plus the unmatched entries and opening
+/// items, plus the timing items; zero means the two balances are explained.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn compute(
     ledger: &Ledger,
@@ -53,6 +53,10 @@ pub(crate) async fn compute(
     let through_event = match pins.through_match_event_number {
         Some(number) => number,
         None => matching::last_event_number(client, tenant, company_id).await?,
+    };
+    let through_opening = match pins.through_opening_id {
+        Some(id) => id,
+        None => matching::last_opening_id(client, tenant, company_id).await?,
     };
     let totals = ledger
         .account_totals_on(
@@ -78,6 +82,7 @@ pub(crate) async fn compute(
             through_entry_number: Some(through_entry),
             through_statement_number: Some(through_statement),
             through_match_event_number: Some(through_event),
+            through_opening_id: Some(through_opening),
         },
     )
     .await?;
@@ -94,6 +99,7 @@ pub(crate) async fn compute(
             statement_line_id: Some(item.line.id),
             entry_id: None,
             match_id: None,
+            opening_item_id: None,
             item_date: item.line.line_date,
             description: item.line.description.clone(),
             reference: item.line.reference.clone(),
@@ -105,9 +111,21 @@ pub(crate) async fn compute(
         statement_line_id: None,
         entry_id: Some(item.entry_id),
         match_id: None,
+        opening_item_id: None,
         item_date: item.entry_date,
         description: cut(format!("Entry {}: {}", item.entry_number, item.description)),
         reference: item.reference.clone(),
+        amount: item.amount,
+    }));
+    items.extend(sides.opening_items.iter().map(|item| ReconciliationItem {
+        kind: ItemKind::OpeningItem,
+        statement_line_id: None,
+        entry_id: None,
+        match_id: None,
+        opening_item_id: Some(item.id),
+        item_date: item.item_date,
+        description: cut(item.description.clone()),
+        reference: Some(item.source_id.chars().take(100).collect()),
         amount: item.amount,
     }));
     items.extend(
@@ -130,6 +148,7 @@ pub(crate) async fn compute(
     };
     let difference = statement_balance - book_balance - sum(ItemKind::StatementLine)
         + sum(ItemKind::Entry)
+        + sum(ItemKind::OpeningItem)
         + sum(ItemKind::Timing);
     Ok(ReconciliationPreview {
         bank_account_id: account.id,
@@ -143,6 +162,7 @@ pub(crate) async fn compute(
             through_entry_number: through_entry,
             through_statement_number: through_statement,
             through_match_event_number: through_event,
+            through_opening_id: through_opening,
             items,
         },
     })
@@ -201,7 +221,13 @@ async fn timing(
             .filter(|entry| entry.entry_date <= end_date)
             .map(|entry| entry.amount)
             .sum();
-        let amount = ledger_side - statement_side;
+        let opening_side: Money = found
+            .opening_items
+            .iter()
+            .filter(|item| item.conversion_date <= end_date)
+            .map(|item| item.amount)
+            .sum();
+        let amount = ledger_side + opening_side - statement_side;
         if amount.is_zero() {
             continue;
         }
@@ -209,6 +235,7 @@ async fn timing(
             .entries
             .iter()
             .map(|entry| entry.entry_date)
+            .chain(found.opening_items.iter().map(|item| item.conversion_date))
             .chain(line_sides.iter().map(|(day, _)| *day))
             .filter(|day| *day <= end_date)
             .max()
@@ -218,6 +245,7 @@ async fn timing(
             statement_line_id: None,
             entry_id: None,
             match_id: Some(found.id),
+            opening_item_id: None,
             item_date,
             description: format!(
                 "Match {}: cleared after the statement date",
@@ -398,13 +426,13 @@ pub(crate) async fn record_finalised(
                     let number: i32 = number;
                     let row = sql
                         .query_one(
-                            "INSERT INTO finance_reconciliation_reconciliation_items(tenant_id,company_id,reconciliation_id,item_number,kind,statement_line_id,entry_id,match_id,item_date,description,reference,amount) \
-                             VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::text::date,$10,$11,$12) RETURNING id",
+                            "INSERT INTO finance_reconciliation_reconciliation_items(tenant_id,company_id,reconciliation_id,item_number,kind,statement_line_id,entry_id,match_id,item_date,description,reference,amount,opening_item_id) \
+                             VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::text::date,$10,$11,$12,$13) RETURNING id",
                             &[
                                 &tenant, &company_id, &reconciliation_id, &number, &item.kind.as_str(),
                                 &item.statement_line_id, &item.entry_id, &item.match_id,
                                 &item.item_date.to_string(), &item.description, &item.reference,
-                                &item.amount.amount(),
+                                &item.amount.amount(), &item.opening_item_id,
                             ],
                         )
                         .await?;
@@ -416,7 +444,7 @@ pub(crate) async fn record_finalised(
                             "company_id": company_id, "reconciliation_id": reconciliation_id,
                             "item_number": number, "kind": item.kind.as_str(),
                             "statement_line_id": item.statement_line_id, "entry_id": item.entry_id,
-                            "match_id": item.match_id, "item_date": item.item_date.to_string(),
+                            "match_id": item.match_id, "opening_item_id": item.opening_item_id, "item_date": item.item_date.to_string(),
                             "description": item.description, "reference": item.reference,
                             "amount": item.amount.to_string(),
                         }),
@@ -479,13 +507,14 @@ async fn event(
     let through_entry = figures.map(|f| f.through_entry_number);
     let through_statement = figures.map(|f| f.through_statement_number);
     let through_event = figures.map(|f| f.through_match_event_number);
+    let through_opening = figures.map(|f| f.through_opening_id);
     let row = sql
         .query_one(
-            "INSERT INTO finance_reconciliation_reconciliation_events(tenant_id,company_id,event_number,reconciliation_id,action,reason,book_balance,difference,through_entry_number,through_statement_number,through_match_event_number,recorded_by_user_id,recorded_by_impersonator_id,recorded_at) \
-             VALUES($1,$2,NULL,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NULL) RETURNING id,event_number",
+            "INSERT INTO finance_reconciliation_reconciliation_events(tenant_id,company_id,event_number,reconciliation_id,action,reason,book_balance,difference,through_entry_number,through_statement_number,through_match_event_number,recorded_by_user_id,recorded_by_impersonator_id,recorded_at,through_opening_id) \
+             VALUES($1,$2,NULL,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NULL,$13) RETURNING id,event_number",
             &[
                 &tenant, &company_id, &reconciliation_id, &action, &reason, &book_balance, &difference,
-                &through_entry, &through_statement, &through_event, &actor, &impersonator,
+                &through_entry, &through_statement, &through_event, &actor, &impersonator, &through_opening,
             ],
         )
         .await?;
@@ -499,7 +528,7 @@ async fn event(
             "book_balance": book_balance.map(|v| v.to_string()),
             "difference": difference.map(|v| v.to_string()),
             "through_entry_number": through_entry, "through_statement_number": through_statement,
-            "through_match_event_number": through_event,
+            "through_match_event_number": through_event, "through_opening_id": through_opening,
             "recorded_by_user_id": actor, "recorded_by_impersonator_id": impersonator,
         }),
     })
@@ -556,7 +585,7 @@ pub(crate) async fn items(
 ) -> Result<Vec<ReconciliationItem>> {
     client
         .query(
-            "SELECT kind,statement_line_id,entry_id,match_id,to_char(item_date,'YYYY-MM-DD'),description,reference,amount \
+            "SELECT kind,statement_line_id,entry_id,match_id,to_char(item_date,'YYYY-MM-DD'),description,reference,amount,opening_item_id \
              FROM finance_reconciliation_reconciliation_items \
              WHERE tenant_id = $1 AND company_id = $2 AND reconciliation_id = $3 ORDER BY item_number",
             &[&tenant, &company_id, &reconciliation_id],
@@ -570,6 +599,7 @@ pub(crate) async fn items(
                 statement_line_id: row.get(1),
                 entry_id: row.get(2),
                 match_id: row.get(3),
+                opening_item_id: row.get(8),
                 item_date: date(row, 4)?,
                 description: row.get(5),
                 reference: row.get(6),
@@ -591,7 +621,7 @@ async fn hydrate(
         .query(
             &format!("SELECT reconciliation_id,event_number,action,reason,book_balance,difference,\
                       through_entry_number,through_statement_number,through_match_event_number,\
-                      recorded_by_user_id,recorded_by_impersonator_id,to_char(recorded_at,{ISO}) \
+                      recorded_by_user_id,recorded_by_impersonator_id,to_char(recorded_at,{ISO}),through_opening_id \
                       FROM finance_reconciliation_reconciliation_events \
                       WHERE tenant_id = $1 AND company_id = $2 AND reconciliation_id = ANY($3) ORDER BY event_number"),
             &[&tenant, &company_id, &ids],
@@ -608,6 +638,7 @@ async fn hydrate(
             through_entry_number: row.get(6),
             through_statement_number: row.get(7),
             through_match_event_number: row.get(8),
+            through_opening_id: row.get(12),
             recorded_by_user_id: row.get(9),
             recorded_by_impersonator_id: row.get(10),
             recorded_at: timestamp(&row, 11)?,

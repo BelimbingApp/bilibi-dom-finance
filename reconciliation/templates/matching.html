@@ -15,6 +15,7 @@
 {% call ui::section_heading(id="unmatched-lines-heading", title="Unmatched statement lines", count=line_count, class="p-5 pb-0") %}{% endcall %}
 {{ lines|safe }}
 {% endcall %}
+{{ opening_match|safe }}
 {% call ui::card(id="unmatched-entries", inner_class="p-0", role="region", labelledby="unmatched-entries-heading") %}
 {% call ui::section_heading(id="unmatched-entries-heading", title="Unmatched ledger entries", count=entry_count, class="p-5 pb-0") %}{% endcall %}
 {{ entries|safe }}
