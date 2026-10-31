@@ -729,7 +729,12 @@ pub(crate) async fn pin(
     if through.is_some_and(|id| id < 0) {
         return Err(ReceivableError::InvalidOption);
     }
-    match through {Some(id)=>Ok(id),None=>Ok(c.query_opt("SELECT COALESCE(max(id),0) FROM finance_receivables_opening_batches WHERE tenant_id=$1 AND company_id=$2",&[&s.tenant(),&company]).await?.ok_or(Error::Internal)?.get(0))}
+    let maximum:i64=c.query_opt("SELECT COALESCE(max(id),0) FROM finance_receivables_opening_batches WHERE tenant_id=$1 AND company_id=$2",&[&s.tenant(),&company]).await?.ok_or(Error::Internal)?.get(0);
+    let pin = through.unwrap_or(maximum);
+    if pin > maximum {
+        return Err(ReceivableError::InvalidOption);
+    }
+    Ok(pin)
 }
 
 // Source facts are evidence, never tax lines or a tax calculation on a residual.

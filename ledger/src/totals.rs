@@ -99,7 +99,7 @@ async fn sums(
         .query(
             &format!(
                 "WITH pin AS (SELECT COALESCE($3::bigint, (SELECT max(entry_number) \
-                   FROM finance_ledger_entries WHERE tenant_id=$1 AND company_id=$2), 0) AS through), \
+                   FROM finance_ledger_entries WHERE tenant_id=$1 AND company_id=$2), 0) AS through, COALESCE((SELECT max(entry_number) FROM finance_ledger_entries WHERE tenant_id=$1 AND company_id=$2),0) AS maximum), \
                  totals AS (SELECT l.account_id, {owner} AS owner_module, \
                    sum(l.debit) AS debits, sum(l.credit) AS credits \
                    FROM finance_ledger_entry_lines l JOIN finance_ledger_entries e ON e.id = l.entry_id \
@@ -108,7 +108,7 @@ async fn sums(
                    AND ($5::text IS NULL OR e.entry_date <= $5::text::date) \
                    AND (NOT $6 OR ({not_closing})) \
                    GROUP BY 1, 2) \
-                 SELECT pin.through, a.id, a.code, a.name, a.account_type, a.parent_id, a.is_group, a.active, \
+                 SELECT pin.through, pin.maximum, a.id, a.code, a.name, a.account_type, a.parent_id, a.is_group, a.active, \
                    a.retained_earnings, t.owner_module, t.debits, t.credits \
                  FROM pin LEFT JOIN (totals t JOIN finance_ledger_accounts a ON a.id = t.account_id) ON true \
                  ORDER BY a.code, {order}",
@@ -125,6 +125,12 @@ async fn sums(
         )
         .await?;
     let through = rows.first().map_or(0, |row| row.get("through"));
+    if rows
+        .first()
+        .is_some_and(|row| through > row.get::<_, i64>("maximum"))
+    {
+        return Err(LedgerError::InvalidOption);
+    }
     let rows = rows
         .into_iter()
         .filter(|row| row.get::<_, Option<i64>>("id").is_some())
