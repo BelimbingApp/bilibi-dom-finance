@@ -1179,6 +1179,49 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         "Conversion facade proof: exact source balances, partial residuals, all three mismatch refusals, corrected preview, identical retries, independent approval, pre-cutoff exclusion, aged dates, control tie-outs, source accumulation differing from historical projection, prospective 106.25 depreciation, receipt, supplier payment and their reversals, guarded opening reversal, audit evidence and retained rows passed."
     );
     drop(c);
+    if std::env::args().any(|arg| arg == "assets-evidence") {
+        assets
+            .reverse_run(
+                &s,
+                company,
+                run.id,
+                &EventInput {
+                    effective_date: date(2026, 7, 31),
+                    reason: "Correct the opening asset run".into(),
+                },
+            )
+            .await?;
+        let corrected = assets
+            .register_report(&s, company, date(2026, 7, 31), &Default::default())
+            .await?;
+        assert_eq!(
+            corrected.rows[0].accumulated.shown(trial.minor_units),
+            "800.00"
+        );
+        assert!(corrected
+            .reconciliation
+            .iter()
+            .all(|row| row.difference.is_zero()));
+        let reproduced = assets
+            .register_report(&s, company, date(2026, 7, 31), &register.pins())
+            .await?;
+        assert_eq!(
+            serde_json::to_value(&reproduced)?,
+            serde_json::to_value(&register)?
+        );
+        let next = assets.depreciate(&s, company, date(2026, 8, 1)).await?;
+        assert_eq!(next.total.shown(trial.minor_units), "212.50");
+        let report = assets
+            .register_report(&s, company, date(2026, 8, 31), &Default::default())
+            .await?;
+        assert!(report
+            .reconciliation
+            .iter()
+            .all(|row| row.difference.is_zero()));
+        assert!(report.rows[1].schedule.is_empty());
+        println!("PASS opening asset evidence: typed staged approval, source history/YTD/tax separation, shared-account class totals, zero-life import, future runs, disposal/reversal, run reversal/catch-up and reproduced report pins");
+        return Ok(());
+    }
     let report = conversion_report::before(db, services).await?;
     if std::env::args().any(|s| s == "report-browser") {
         println!("Conversion report browser fixture ready on Company 003; bulk correction proof was not run.");
@@ -1475,7 +1518,9 @@ async fn main() -> Outcome<()> {
         .await?;
     } else {
         prove(&db, &app.services).await?;
-        prove_historical_controls(&db, &app.services).await?;
+        if !std::env::args().any(|arg| arg == "assets-evidence") {
+            prove_historical_controls(&db, &app.services).await?;
+        }
     }
     Ok(())
 }
