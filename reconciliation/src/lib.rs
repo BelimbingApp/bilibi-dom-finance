@@ -53,6 +53,8 @@ mod evidence;
 mod import;
 mod mapping;
 mod matching;
+mod opening;
+mod opening_operations;
 mod posting;
 mod reconciliations;
 mod source;
@@ -91,20 +93,28 @@ inventory::submit! {
     Module {
         id: MODULE, layer: Layer::Domains,
         dependencies: &[
-            "base/authz", "base/database", "base/datetime", "base/locale", "base/menu", "base/tenancy", "base/ui", "core/company", "finance/attachments", "finance/ledger",
+            "base/agent_api", "base/authz", "base/database", "base/datetime", "base/locale", "base/menu", "base/party_ids", "base/tenancy", "base/ui", "core/company", "finance/attachments", "finance/ledger",
         ],
-        migrations: &[("finance-reconciliation-001-reconciliation", include_str!("../migrations/001-reconciliation.sql"))],
-        services: &[Service { id: SERVICE, factory: |services| Ok(Arc::new(Reconciliation {
-            db: services.get::<Db>("base/database.pool")?.as_ref().clone(),
-            ledger: services.get(bilibi_finance_ledger::SERVICE)?,
-            attachments: services.get(bilibi_finance_attachments::SERVICE)?,
-        })) }, Service { id: web::PAGES, factory: |services| Ok(Arc::new(PageService::<Scope, Error>(Arc::new(web::Pages {
+        migrations: &[("finance-reconciliation-001-reconciliation", include_str!("../migrations/001-reconciliation.sql")),
+            ("finance-reconciliation-002-opening-bridge", include_str!("../migrations/002-opening-bridge.sql"))],
+        services: &[Service { id: SERVICE, factory: |services| {
+            let reconciliation = Arc::new(Reconciliation {
+                db: services.get::<Db>("base/database.pool")?.as_ref().clone(),
+                ledger: services.get(bilibi_finance_ledger::SERVICE)?,
+                attachments: services.get(bilibi_finance_attachments::SERVICE)?,
+                parties: services.get("base/tenancy.parties")?,
+            });
+            opening_operations::bind(reconciliation.clone())?;
+            Ok(reconciliation)
+        } }, Service { id: web::PAGES, factory: |services| Ok(Arc::new(PageService::<Scope, Error>(Arc::new(web::Pages {
             db: services.get::<Db>("base/database.pool")?.as_ref().clone(),
             reconciliation: services.get(SERVICE)?,
             ledger: services.get(bilibi_finance_ledger::SERVICE)?,
             attachments: services.get(bilibi_finance_attachments::SERVICE)?,
             display: services.get("base/datetime.display")?,
             locales: services.get("base/locale.locales")?,
+            contracts: services.get(bilibi_agent_api::page::SERVICE)?,
+            plans: services.get("base/agent_api.plans")?,
         })))) }],
     }
 }
@@ -458,6 +468,20 @@ pub struct LedgerItem {
     pub amount: Money,
 }
 
+/// One outstanding source item already included in the opening ledger entry.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct OpeningItem {
+    pub id: i64,
+    pub bridge_id: i64,
+    pub source_id: String,
+    #[serde(serialize_with = "as_text")]
+    pub item_date: Date,
+    #[serde(serialize_with = "as_text")]
+    pub conversion_date: Date,
+    pub description: String,
+    pub amount: Money,
+}
+
 /// What stands unmatched on a bank account, from
 /// [`Reconciliation::unmatched_items`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -466,6 +490,8 @@ pub struct Unmatched {
     pub lines: Vec<StatementLineItem>,
     /// Entries on the ledger account with no standing match, by date and id.
     pub entries: Vec<LedgerItem>,
+    /// Source items included in the opening balance but not yet cleared.
+    pub opening_items: Vec<OpeningItem>,
     /// A statement line's id to the entry suggested for it: the same amount
     /// within the account's match window, by reference and then the nearest
     /// date, each entry suggested once.
@@ -518,6 +544,7 @@ pub struct Match {
     pub status: MatchStatus,
     pub statement_line_ids: Vec<i64>,
     pub entries: Vec<LedgerItem>,
+    pub opening_items: Vec<OpeningItem>,
     pub events: Vec<MatchEvent>,
 }
 
@@ -528,6 +555,7 @@ pub struct Pins {
     pub through_entry_number: Option<i64>,
     pub through_statement_number: Option<i64>,
     pub through_match_event_number: Option<i64>,
+    pub through_opening_id: Option<i64>,
 }
 
 /// What opens (or previews) a reconciliation: the statement's `end_date` and
@@ -549,6 +577,8 @@ pub enum ItemKind {
     Entry,
     /// Matched, but cleared after the end date on one side.
     Timing,
+    /// An outstanding source item already included in the opening entry.
+    OpeningItem,
 }
 impl ItemKind {
     pub fn as_str(self) -> &'static str {
@@ -556,12 +586,18 @@ impl ItemKind {
             Self::StatementLine => "statement_line",
             Self::Entry => "entry",
             Self::Timing => "timing",
+            Self::OpeningItem => "opening_item",
         }
     }
     pub fn parse(value: &str) -> Option<Self> {
-        [Self::StatementLine, Self::Entry, Self::Timing]
-            .into_iter()
-            .find(|kind| kind.as_str() == value)
+        [
+            Self::StatementLine,
+            Self::Entry,
+            Self::Timing,
+            Self::OpeningItem,
+        ]
+        .into_iter()
+        .find(|kind| kind.as_str() == value)
     }
 }
 
@@ -574,6 +610,7 @@ pub struct ReconciliationItem {
     pub statement_line_id: Option<i64>,
     pub entry_id: Option<i64>,
     pub match_id: Option<i64>,
+    pub opening_item_id: Option<i64>,
     #[serde(serialize_with = "as_text")]
     pub item_date: Date,
     pub description: String,
@@ -593,6 +630,7 @@ pub struct Figures {
     pub through_entry_number: i64,
     pub through_statement_number: i64,
     pub through_match_event_number: i64,
+    pub through_opening_id: i64,
     pub items: Vec<ReconciliationItem>,
 }
 
@@ -638,6 +676,7 @@ pub struct ReconciliationEvent {
     pub through_entry_number: Option<i64>,
     pub through_statement_number: Option<i64>,
     pub through_match_event_number: Option<i64>,
+    pub through_opening_id: Option<i64>,
     pub recorded_by_user_id: i64,
     pub recorded_by_impersonator_id: Option<i64>,
     #[serde(serialize_with = "as_text")]
@@ -716,6 +755,7 @@ pub struct Reconciliation {
     db: Db,
     ledger: Arc<Ledger>,
     attachments: Arc<Attachments>,
+    parties: Arc<bilibi_tenancy::PartyProofs>,
 }
 
 impl Reconciliation {
@@ -1086,6 +1126,7 @@ impl Reconciliation {
         Ok(Unmatched {
             lines: sides.lines,
             entries: sides.entries,
+            opening_items: sides.opening_items,
             suggestions,
         })
     }
@@ -1280,6 +1321,7 @@ impl Reconciliation {
             pins.through_entry_number,
             pins.through_statement_number,
             pins.through_match_event_number,
+            pins.through_opening_id,
         ]
         .into_iter()
         .flatten()
@@ -1562,6 +1604,7 @@ impl Reconciliation {
                     through_match_event_number: event
                         .through_match_event_number
                         .ok_or(Error::Internal)?,
+                    through_opening_id: event.through_opening_id.ok_or(Error::Internal)?,
                     items: reconciliations::items(&**client, tenant, company_id, found.id).await?,
                 })
             }

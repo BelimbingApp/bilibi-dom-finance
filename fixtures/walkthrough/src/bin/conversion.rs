@@ -21,6 +21,7 @@ bilibi_walkthrough_fixture::walkthrough_vocabulary!();
 bilibi_walkthrough_fixture::walkthrough_module_roles!();
 bilibi_finance_walkthrough_fixture::walkthrough_ledger_roles!();
 bilibi_finance_walkthrough_fixture::walkthrough_payables_roles!();
+bilibi_finance_walkthrough_fixture::walkthrough_reconciliation_roles!();
 macro_rules! roles {($key:literal,$module:literal,$caps:path)=>{inventory::submit!{Contribution::new(VOCABULARY,$key,Provenance{module:$module,source:file!(),line:line!()},&VocabularyContribution{domains:&[],verbs:&[],capabilities:&[],system_principals:&[],roles:&[RoleDefinition{code:"manager",name:"manager",description:"Disposable conversion fixture",grant_all:false,capabilities:&$caps}]})}};}
 roles!(
     "walkthrough.conversion.receivables",
@@ -204,11 +205,22 @@ async fn setup(db: &Db, services: &Services, company: i64) -> Outcome<Value> {
             .await?;
         l.approve_journal(&admin, company, j.id).await?;
     }
+    let reconciliation = services.get::<bilibi_finance_reconciliation::Reconciliation>(
+        bilibi_finance_reconciliation::SERVICE,
+    )?;
+    let bank_account = match reconciliation.list_bank_accounts(&admin, company).await?.into_iter().find(|a| a.ledger_account_id == account("1000")) {
+        Some(a) => a,
+        None => reconciliation.create_bank_account(&admin, company, &bilibi_finance_reconciliation::NewBankAccount {
+            name: "Conversion bank".into(), ledger_account_id: account("1000"),
+            import_mapping: json!({"date":"Date","description":"Details","reference":"Ref","amount":"Amount","balance":"Balance"}),
+            charges_account_id: None, interest_account_id: None, match_window_days: None, active: None, reason: None,
+        }).await?,
+    };
     let asset_csv = format!(
         "source_id,description,category_revision_id,acquisition_date,in_service_date,cost,accumulated_depreciation,remaining_life_months,residual_value\nasset-3,Source register asset,{revision},2024-06-01,2024-07-01,12000,1800,96,0\n"
     );
     Ok(
-        json!({"company_id":company,"vendor_id":vendor.id,"vendor_key":format!("vendor:{}", vendor.id),"customer_id":customer.id,"invoice_series":invoice.id,"payment_series":payment.id,"bank":account("1000"),"ar":AR,"ap":AP,"expense":account("5000"),"assets":asset_csv,"revision":revision}),
+        json!({"company_id":company,"vendor_id":vendor.id,"vendor_key":format!("vendor:{}", vendor.id),"customer_id":customer.id,"invoice_series":invoice.id,"payment_series":payment.id,"bank":account("1000"),"bank_account_id":bank_account.id,"ar":AR,"ap":AP,"expense":account("5000"),"assets":asset_csv,"revision":revision}),
     )
 }
 async fn prove(db: &Db, services: &Services) -> Outcome<()> {

@@ -7,7 +7,7 @@
 //! caller hands in.
 use crate::{
     statements::stored, BankAccount, FieldError, LedgerItem, Match, MatchEvent, MatchStatus,
-    ReconciliationError, Result, StatementLine, StatementLineItem,
+    OpeningItem, ReconciliationError, Result, StatementLine, StatementLineItem,
 };
 use bilibi_database::{Change, Error, MutationTransaction};
 use bilibi_finance_ledger::{Entry, EntryQuery, Ledger, LedgerError, Money};
@@ -43,12 +43,74 @@ pub(crate) struct Bounds {
     pub through_entry_number: Option<i64>,
     pub through_statement_number: Option<i64>,
     pub through_match_event_number: Option<i64>,
+    pub through_opening_id: Option<i64>,
 }
 
 /// What stands unmatched on each side.
 pub(crate) struct Sides {
     pub lines: Vec<StatementLineItem>,
     pub entries: Vec<LedgerItem>,
+    pub opening_items: Vec<OpeningItem>,
+}
+
+/// The bridge as it stood at this pin. An older bridge remains available
+/// after a correction so previously pinned reports can be reproduced.
+async fn bridge(
+    client: &impl GenericClient,
+    tenant: i64,
+    company: i64,
+    account: i64,
+    pin: Option<i64>,
+    entry_pin: Option<i64>,
+) -> Result<Option<(i64, i64, Date)>> {
+    let row = client.query_opt("SELECT id,opening_entry_id,to_char(conversion_date,'YYYY-MM-DD') FROM finance_reconciliation_opening_bridges WHERE tenant_id=$1 AND company_id=$2 AND bank_account_id=$3 AND ($4::bigint IS NULL OR id<=$4) AND ($5::bigint IS NULL OR opening_entry_number<=$5) ORDER BY id DESC LIMIT 1", &[&tenant,&company,&account,&pin,&entry_pin]).await.map_err(Error::from)?;
+    row.map(|r| Ok((r.get(0), r.get(1), date(&r, 2)?)))
+        .transpose()
+}
+
+pub(crate) async fn last_opening_id(
+    client: &impl GenericClient,
+    tenant: i64,
+    company: i64,
+) -> Result<i64> {
+    Ok(client.query_one("SELECT COALESCE(max(id),0)::bigint FROM finance_reconciliation_opening_bridges WHERE tenant_id=$1 AND company_id=$2", &[&tenant,&company]).await.map_err(Error::from)?.get(0))
+}
+
+fn opening_item(row: &Row, offset: usize) -> Result<OpeningItem> {
+    Ok(OpeningItem {
+        id: row.get(offset),
+        bridge_id: row.get(offset + 1),
+        source_id: row.get(offset + 2),
+        item_date: date(row, offset + 3)?,
+        description: row.get(offset + 4),
+        amount: stored(row.get(offset + 5))?,
+        conversion_date: date(row, offset + 6)?,
+    })
+}
+
+async fn opening_items(
+    client: &impl GenericClient,
+    tenant: i64,
+    company: i64,
+    account: i64,
+    bounds: Bounds,
+) -> Result<Vec<OpeningItem>> {
+    let Some((bridge, _, conversion)) = bridge(
+        client,
+        tenant,
+        company,
+        account,
+        bounds.through_opening_id,
+        bounds.through_entry_number,
+    )
+    .await?
+    else {
+        return Ok(vec![]);
+    };
+    if bounds.to.is_some_and(|end| end < conversion) {
+        return Ok(vec![]);
+    }
+    client.query("SELECT i.id,i.bridge_id,i.source_id,to_char(i.item_date,'YYYY-MM-DD'),i.description,i.amount,to_char(b.conversion_date,'YYYY-MM-DD') FROM finance_reconciliation_opening_items i JOIN finance_reconciliation_opening_bridges b ON b.id=i.bridge_id WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.bridge_id=$3 AND NOT EXISTS (SELECT 1 FROM finance_reconciliation_match_opening_items x JOIN finance_reconciliation_match_events e ON e.match_id=x.match_id AND e.action='matched' WHERE x.opening_item_id=i.id AND ($4::bigint IS NULL OR e.event_number<=$4) AND NOT EXISTS (SELECT 1 FROM finance_reconciliation_match_events u WHERE u.match_id=x.match_id AND u.action='unmatched' AND ($4::bigint IS NULL OR u.event_number<=$4))) ORDER BY i.item_date,i.id", &[&tenant,&company,&bridge,&bounds.through_match_event_number]).await.map_err(Error::from)?.iter().map(|r| opening_item(r,0)).collect()
 }
 
 // Ledger side
@@ -281,11 +343,28 @@ pub(crate) async fn unmatched(
         .into_iter()
         .filter(|item| !lines_taken.contains(&item.line.id))
         .collect();
+    let opening_entry = bridge(
+        client,
+        tenant,
+        company_id,
+        account.id,
+        bounds.through_opening_id,
+        bounds.through_entry_number,
+    )
+    .await?
+    .map(|(_, entry, _)| entry);
     let entries = items
         .into_iter()
-        .filter(|item| !entries_taken.contains(&item.entry_id))
+        .filter(|item| {
+            !entries_taken.contains(&item.entry_id) && Some(item.entry_id) != opening_entry
+        })
         .collect();
-    Ok(Sides { lines, entries })
+    let opening_items = opening_items(client, tenant, company_id, account.id, bounds).await?;
+    Ok(Sides {
+        lines,
+        entries,
+        opening_items,
+    })
 }
 
 // Suggestions
@@ -387,6 +466,12 @@ pub(crate) async fn prepare(
             Some(line) if line.bank_account_id == account.id => lines.push(line),
             _ => return Err(ReconciliationError::StatementLineNotFound),
         }
+    }
+    let opening_entry = bridge(client, tenant, company_id, account.id, None, None)
+        .await?
+        .map(|(_, entry, _)| entry);
+    if entry_ids.iter().any(|id| Some(*id) == opening_entry) {
+        return Err(ReconciliationError::Invalid(vec![FieldError::new("entry_ids", "the opening entry is represented by the outstanding opening items, not a matchable entry")]));
     }
     let mut items = Vec::with_capacity(entry_ids.len());
     for id in &entry_ids {
@@ -759,6 +844,10 @@ async fn hydrate(
             amount: stored(row.get(6))?,
         });
     }
+    let mut opening: HashMap<i64, Vec<OpeningItem>> = HashMap::new();
+    for row in client.query("SELECT x.match_id,i.id,i.bridge_id,i.source_id,to_char(i.item_date,'YYYY-MM-DD'),i.description,i.amount,to_char(b.conversion_date,'YYYY-MM-DD') FROM finance_reconciliation_match_opening_items x JOIN finance_reconciliation_opening_items i ON i.id=x.opening_item_id JOIN finance_reconciliation_opening_bridges b ON b.id=i.bridge_id WHERE x.tenant_id=$1 AND x.company_id=$2 AND x.match_id=ANY($3) ORDER BY i.id", &[&tenant,&company_id,&ids]).await.map_err(Error::from)? {
+        opening.entry(row.get(0)).or_default().push(opening_item(&row, 1)?);
+    }
     let mut events: HashMap<i64, Vec<MatchEvent>> = HashMap::new();
     for row in client
         .query(
@@ -799,6 +888,7 @@ async fn hydrate(
                 status,
                 statement_line_ids: lines.remove(&id).unwrap_or_default(),
                 entries: entries.remove(&id).unwrap_or_default(),
+                opening_items: opening.remove(&id).unwrap_or_default(),
                 events,
             })
         })
