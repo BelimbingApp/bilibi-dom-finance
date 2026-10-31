@@ -430,7 +430,14 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         .await?;
     let ar_input = json!({"source_reference":"AR-SOURCE","currency_code":"MYR","series_id":config["invoice_series"],"csv":AR,"opening_account_classifications":config["opening_account_classifications"]});
     let ap_input = json!({"source_reference":"AP-SOURCE","currency_code":"MYR","csv":AP,"opening_account_classifications":config["opening_account_classifications"]});
-    let mut asset_input = json!({"source_reference":"ASSET-SOURCE","currency_code":"MYR","csv":config["assets"].as_str().unwrap().replace(",12000,1800,96,0", ",11000,800,96,0") + &format!("asset-4,Fully depreciated,{revision},2024-06-01,2024-07-01,1000,1000,0,0\n", revision=config["revision"])});
+    let defaults = assets.list_categories(&s, company).await?[0]
+        .revision
+        .defaults
+        .clone();
+    let zero_class = assets
+        .create_category(&s, company, "Fully depreciated source class", &defaults)
+        .await?;
+    let mut asset_input = json!({"source_reference":"ASSET-SOURCE","currency_code":"MYR","csv":config["assets"].as_str().unwrap().replace(",12000,1800,96,0", ",11000,800,96,0") + &format!("asset-4,Fully depreciated,{revision},2024-06-01,2024-07-01,1000,1000,0,0\n", revision=zero_class.id)});
     asset_input["source_evidence"] = json!({"asset-3":{
         "history":[
             {"kind":"impairment","effective_date":"2025-12-31","amount":"200.00","reference":"Source impairment","note":"Historical source assessment"},
@@ -733,9 +740,9 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         .await?
         .envelope("finance.fixed_assets.opening.import");
     let facts = &review["result"]["changes"];
-    assert_eq!(facts["class_totals"].as_array().unwrap().len(), 1);
-    assert_eq!(facts["class_totals"][0]["cost"], "12000");
-    assert_eq!(facts["class_totals"][0]["accumulated_depreciation"], "1800");
+    assert_eq!(facts["class_totals"].as_array().unwrap().len(), 2);
+    assert_eq!(facts["class_totals"][0]["cost"], "11000");
+    assert_eq!(facts["class_totals"][0]["accumulated_depreciation"], "800");
     assert!(facts["month_convention"]
         .as_str()
         .unwrap()

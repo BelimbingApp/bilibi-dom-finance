@@ -126,7 +126,7 @@ impl FixedAssets {
             .filter_map(|row| row.get(2).and_then(|id| id.trim().parse().ok()))
             .collect();
         let revisions: BTreeMap<i64, Value> = c
-            .query("SELECT id,to_jsonb(r) FROM finance_fixed_assets_category_revisions r WHERE tenant_id=$1 AND company_id=$2 AND id=ANY($3)", &[&s.tenant(), &company, &wanted])
+            .query("SELECT r.id,to_jsonb(r)||jsonb_build_object('category_name',g.name) FROM finance_fixed_assets_category_revisions r JOIN finance_fixed_assets_categories g ON g.tenant_id=r.tenant_id AND g.company_id=r.company_id AND g.id=r.category_id WHERE r.tenant_id=$1 AND r.company_id=$2 AND r.id=ANY($3)", &[&s.tenant(), &company, &wanted])
             .await?
             .iter()
             .map(|r| (r.get(0), r.get(1)))
@@ -271,7 +271,7 @@ impl FixedAssets {
             crate::opening_evidence::read(input, context.entry.entry_date, book.minor_units)?;
         // Class totals explain the source register; only account totals reconcile
         // to the ledger because an account may be shared by several classes.
-        let class_totals: Vec<Value> = classes.into_iter().map(|((category, cost_account, accumulated_account), (cost, accumulated))| json!({"category_id":category,"cost_account_id":cost_account,"accumulated_account_id":accumulated_account,"cost":cost,"accumulated_depreciation":accumulated,"carrying_value":cost-accumulated})).collect();
+        let class_totals: Vec<Value> = classes.into_iter().map(|((category, cost_account, accumulated_account), (cost, accumulated))| json!({"category_id":category,"category_name":revisions.values().find(|r|r["category_id"]==category).map(|r|r["category_name"].clone()),"cost_account_id":cost_account,"cost_account":chart.iter().find(|a|a.id==cost_account).map(|a|format!("{} · {}",a.name,a.code)),"accumulated_account_id":accumulated_account,"accumulated_account":chart.iter().find(|a|a.id==accumulated_account).map(|a|format!("{} · {}",a.name,a.code)),"cost":cost,"accumulated_depreciation":accumulated,"carrying_value":cost-accumulated})).collect();
         let mut reconciliation = vec![];
         for (&account, &balance) in &balances {
             let expected = context

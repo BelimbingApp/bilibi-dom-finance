@@ -74,9 +74,9 @@ impl Opening {
             class_columns: ListColumns::mount(
                 "conversion-classes",
                 vec![
-                    BuiltinColumn::new("class", "Category ID"),
-                    BuiltinColumn::new("cost_account", "Cost account ID"),
-                    BuiltinColumn::new("accumulated_account", "Accumulation account ID"),
+                    BuiltinColumn::new("class", "Category"),
+                    BuiltinColumn::new("cost_account", "Cost account"),
+                    BuiltinColumn::new("accumulated_account", "Accumulation account"),
                     BuiltinColumn::new("cost", "Source cost").right(),
                     BuiltinColumn::new("accumulated", "Source accumulation").right(),
                     BuiltinColumn::new("carrying", "Carrying value").right(),
@@ -480,14 +480,17 @@ impl Opening {
                             row["cost_account_id"],
                             row["accumulated_account_id"]
                         ))
-                        .cell("class", Cell::text(row["category_id"].to_string()))
+                        .cell(
+                            "class",
+                            Cell::text(row["category_name"].as_str().unwrap_or("")),
+                        )
                         .cell(
                             "cost_account",
-                            Cell::text(row["cost_account_id"].to_string()),
+                            Cell::text(row["cost_account"].as_str().unwrap_or("")),
                         )
                         .cell(
                             "accumulated_account",
-                            Cell::text(row["accumulated_account_id"].to_string()),
+                            Cell::text(row["accumulated_account"].as_str().unwrap_or("")),
                         )
                         .cell("cost", Cell::text(money(&row["cost"])))
                         .cell(
