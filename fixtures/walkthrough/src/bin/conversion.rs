@@ -370,6 +370,39 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         .await?;
     let b = ap.import_opening_bills(&s, company, &ap_input).await?;
     assert_eq!(b, ap.import_opening_bills(&s, company, &ap_input).await?);
+    // The residuals are opening balances, not source-period transactions.
+    assert!(ar
+        .tax_totals(&s, company, &Default::default())
+        .await?
+        .is_empty());
+    assert!(ap
+        .tax_totals(&s, company, &Default::default())
+        .await?
+        .is_empty());
+    assert!(ar
+        .received_tax_totals(
+            &s,
+            company,
+            &bilibi_finance_receivables::ReceivedTaxOptions::new(
+                date(2026, 1, 1),
+                date(2027, 12, 31)
+            )
+        )
+        .await?
+        .is_empty());
+    assert!(ar
+        .list_payments(&s, company, &Default::default())
+        .await?
+        .is_empty());
+    assert!(ap
+        .list_payments(&s, company, &Default::default())
+        .await?
+        .is_empty());
+    let sst = services.get::<bilibi_finance_sst::Sst>(bilibi_finance_sst::SERVICE)?;
+    assert!(sst
+        .list_returns(&s, company, None, None, None)
+        .await?
+        .is_empty());
     let asset_batch = assets
         .import_opening_register(&s, company, &asset_input)
         .await?;
@@ -493,6 +526,18 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
     let docs = ar.list_documents(&s, company, &Default::default()).await?;
     let invoice = docs[0].id;
     let payment=ar.record_payment(&s,company,&json!({"series_id":config["payment_series"],"customer_id":config["customer_id"],"payment_date":"2026-07-15","amount":"1000","deposit_account_id":config["bank"],"allocations":[{"document_id":invoice,"amount":"1000"}]})).await?;
+    // A later receipt of an opening residual also creates no source tax share.
+    assert!(ar
+        .received_tax_totals(
+            &s,
+            company,
+            &bilibi_finance_receivables::ReceivedTaxOptions::new(
+                date(2026, 1, 1),
+                date(2027, 12, 31)
+            )
+        )
+        .await?
+        .is_empty());
     assert_eq!(
         ar.get_document(&s, company, invoice)
             .await?
