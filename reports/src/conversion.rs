@@ -483,18 +483,30 @@ impl Reports {
             user_id: opening["user_id"].as_i64().ok_or(Error::Internal)?,
             impersonator_id: opening["impersonator_id"].as_i64(),
         });
-        for module in ["receivables", "payables", "fixed_assets"] {
-            if let Some(rows) =
-                row["content"]["sources"][module]["opening_batch"]["rows"].as_array()
-            {
-                for r in rows {
-                    prepared.push(Preparer {
-                        user_id: r["recorded_by_user_id"].as_i64().ok_or(Error::Internal)?,
-                        impersonator_id: r["recorded_by_impersonator_id"].as_i64(),
-                    });
+        if let Some(sources) = row["content"]["sources"].as_object() {
+            for datasets in sources.values().filter_map(Value::as_object) {
+                for dataset in datasets.values() {
+                    for source in dataset["rows"].as_array().into_iter().flatten() {
+                        for (person, impersonator) in [
+                            ("recorded_by_user_id", "recorded_by_impersonator_id"),
+                            ("prepared_by_user_id", "prepared_by_impersonator_id"),
+                            ("opened_by_user_id", "opened_by_impersonator_id"),
+                            ("actor_user_id", "actor_impersonator_id"),
+                            ("finalised_by_user_id", "finalised_by_impersonator_id"),
+                        ] {
+                            if let Some(user_id) = source[person].as_i64() {
+                                prepared.push(Preparer {
+                                    user_id,
+                                    impersonator_id: source[impersonator].as_i64(),
+                                });
+                            }
+                        }
+                    }
                 }
             }
         }
+        prepared.sort_by_key(|p| (p.user_id, p.impersonator_id));
+        prepared.dedup_by_key(|p| (p.user_id, p.impersonator_id));
         Ok(Approval {
             source: MODULE.into(),
             action: "conversion_signoff".into(),
