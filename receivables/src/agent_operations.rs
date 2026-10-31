@@ -520,9 +520,10 @@ impl ReadHandler for Read {
                         let customer = input["customer_id"].as_i64();
                         let kind = input["kind"].as_str();
                         let status = input["status"].as_str();
+                        let source = input["source"].as_str();
                         let (sql,params): (String,Vec<&(dyn tokio_postgres::types::ToSql+Sync)>) = match self {
                             Self::History => (format!("SELECT to_jsonb(r) FROM {} r WHERE tenant_id=$1 AND company_id=$2 AND id>$3 ORDER BY id LIMIT $4",HISTORY.name),vec![&tenant,&company,&after,&(limit)]),
-                            Self::Documents => (format!("{} AND d.id>$3 AND ($4::bigint IS NULL OR d.customer_id=$4) AND ($5::text IS NULL OR d.kind=$5) AND ($6::text IS NULL OR d.status=$6) ORDER BY d.id LIMIT $7",documents::READ),vec![&tenant,&company,&after,&customer,&kind,&status,&limit]),
+                            Self::Documents => (format!("{} AND d.id>$3 AND ($4::bigint IS NULL OR d.customer_id=$4) AND ($5::text IS NULL OR d.kind=$5) AND ($6::text IS NULL OR d.status=$6) AND ($8::text IS NULL OR EXISTS (SELECT 1 FROM finance_receivables_opening_items i WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=d.id)=($8='opening')) ORDER BY d.id LIMIT $7",documents::READ),vec![&tenant,&company,&after,&customer,&kind,&status,&limit,&source]),
                             _ => (format!("{} AND p.id>$3 AND ($4::bigint IS NULL OR p.customer_id=$4) ORDER BY p.id LIMIT $5",posting::PAYMENT_READ),vec![&tenant,&company,&after,&customer,&limit]),
                         };
                         let records:Vec<Value> = client.query(&sql,&params).await?.iter().map(|r| {
@@ -649,6 +650,7 @@ fn draft_fields() -> Value {
 }
 fn draft_create() -> Value {
     let mut p = draft_fields();
+    p["source"] = choice(&["ordinary", "opening"]);
     p["kind"] = choice(Receivables::document_kinds());
     schema(&["kind", "series_id", "customer_id"], p)
 }
@@ -724,6 +726,7 @@ fn history() -> Value {
 }
 fn documents() -> Value {
     let mut p = page_fields();
+    p["source"] = choice(&["ordinary", "opening"]);
     p["kind"] = choice(Receivables::document_kinds());
     p["status"] = choice(&["draft", "issued", "discarded"]);
     p["customer_id"] = identifier();

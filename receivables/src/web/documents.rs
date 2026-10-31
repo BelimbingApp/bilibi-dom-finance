@@ -1,11 +1,12 @@
 //! The invoices and credit notes list, and its New invoice and New credit
 //! note dialogs. Reads `document.list`, `customer.list` and `series.list`;
 //! saving a draft calls `draft.create`.
+use super::opening::Opening;
 use super::{
     format::{self as f, Errors},
     render, Flash, Pages, Written, INVOICES,
 };
-use crate::{Customer, Document, Series, MANAGE_DOCUMENTS};
+use crate::{Customer, Document, Series, MANAGE_DOCUMENTS, VIEW};
 use bilibi_database::{Error, Result};
 use bilibi_tenancy::Scope;
 use bilibi_ui::{
@@ -42,6 +43,10 @@ static SPEC: LazyLock<Arc<ListSpec>> = LazyLock::new(|| {
                 Filter::one_of(&["", "draft", "issued", "unpaid", "discarded"], ""),
             ),
             ("customer".into(), Filter::string("")),
+            (
+                "source".into(),
+                Filter::one_of(&["", "ordinary", "opening"], ""),
+            ),
         ]
         .into(),
         omit_defaults: true,
@@ -77,6 +82,9 @@ pub(super) struct Documents {
     cut: bool,
     can_add: bool,
     create: Option<Draft>,
+    opening: Option<Opening>,
+    can_open: bool,
+    credit_invoices: Vec<Document>,
     flash: Flash,
     framed: bool,
 }
@@ -93,6 +101,7 @@ impl Documents {
                 .sortable("total")
                 .right(),
             BuiltinColumn::new("outstanding", "Outstanding").right(),
+            BuiltinColumn::new("source", "Source"),
             BuiltinColumn::new("status", "Status"),
         ];
         Ok(Self {
@@ -107,6 +116,9 @@ impl Documents {
             cut: false,
             can_add: false,
             create: None,
+            opening: None,
+            can_open: false,
+            credit_invoices: vec![],
             flash: Flash::default(),
             framed,
         })
@@ -114,16 +126,20 @@ impl Documents {
 
     pub(super) async fn first(&mut self, scope: &Scope) -> Result<String> {
         self.load(scope).await?;
-        self.body()
+        self.body(scope).await
     }
 
     async fn load(&mut self, scope: &Scope) -> Result<()> {
+        let mut input = json!({});
+        if let Some(source) = self.list.filters.get("source").filter(|v| !v.is_empty()) {
+            input["source"] = json!(source);
+        }
         (self.all, self.cut) = self
             .pages
             .read_all(
                 scope,
                 "finance.receivables.document.list",
-                json!({}),
+                input,
                 ("after", "next_after"),
             )
             .await?;
@@ -149,6 +165,7 @@ impl Documents {
             .0;
         self.figures = self.pages.figures(scope).await;
         self.can_add = self.pages.allowed(scope, MANAGE_DOCUMENTS).await?;
+        self.can_open = self.pages.allowed(scope, VIEW).await?;
         Ok(())
     }
 
@@ -217,11 +234,11 @@ impl Documents {
         )
     }
 
-    fn body(&mut self) -> Result<String> {
+    async fn body(&mut self, scope: &Scope) -> Result<String> {
         let framed = self.framed;
         let (shown, total) = self.shown();
         self.columns.load(&shown, |d| d.id.to_string());
-        let actions = if self.can_add {
+        let mut actions = if self.can_add {
             let mut a = render(CreateButton {
                 noun: "Invoice",
                 id: "receivables-invoices-add",
@@ -239,6 +256,15 @@ impl Documents {
         } else {
             Html::EMPTY
         };
+        if self.can_open {
+            actions.push(&render(Button {
+                id: "receivables-opening",
+                button_type: "button",
+                event: "open_opening",
+                body: Html::text("Opening invoices"),
+                ..Button::default()
+            })?);
+        }
         let mut customer_choices = vec![Choice::new("All customers", "")];
         customer_choices.extend(
             self.customers
@@ -266,6 +292,19 @@ impl Documents {
                             ("All types", ""),
                             ("Invoices", "invoice"),
                             ("Credit notes", "credit_note"),
+                        ]
+                        .map(|(l, v)| Choice::new(l, v))
+                        .to_vec(),
+                    ),
+                    ToolbarControl::select(
+                        "receivables-invoices-source",
+                        "source",
+                        "Filter by source",
+                        &self.list.filters["source"],
+                        [
+                            ("All sources", ""),
+                            ("Ordinary", "ordinary"),
+                            ("Opening", "opening"),
                         ]
                         .map(|(l, v)| Choice::new(l, v))
                         .to_vec(),
@@ -324,6 +363,14 @@ impl Documents {
                         "—".into()
                     })?,
                 )
+                .cell(
+                    "source",
+                    Cell::text(if d.opening.is_some() {
+                        "Opening"
+                    } else {
+                        "Ordinary"
+                    }),
+                )
                 .slot("status", f::status_badge(&d.status)?),
             );
         }
@@ -367,9 +414,13 @@ impl Documents {
             ..Header::default()
         })?;
         body.push(&content);
-        let modal = match &self.create {
-            Some(draft) => Some(self.dialog(draft)?),
-            None => None,
+        let modal = if let Some(opening) = &mut self.opening {
+            Some(opening.body(scope).await?)
+        } else {
+            self.create
+                .as_ref()
+                .map(|draft| self.dialog(draft))
+                .transpose()?
         };
         f::frame(
             "receivables-invoices",
@@ -441,7 +492,7 @@ impl Documents {
         body.push(&f::two(who)?);
         if credit {
             let invoices: Vec<Choice> = self
-                .all
+                .credit_invoices
                 .iter()
                 .filter(|d| d.kind == "invoice" && d.status == "issued")
                 .map(|d| {
@@ -548,7 +599,10 @@ impl Documents {
         let mut redirect = None;
         match v["type"].as_str().ok_or(Error::Invalid)? {
             "clear-flash" => self.flash.dismiss(v),
-            "filter" => self.list.apply_filters(&params::form_values(v, "filters")),
+            "filter" => {
+                self.list.apply_filters(&params::form_values(v, "filters"));
+                self.load(scope).await?;
+            }
             "page" => self.list.put_page(v["page"].as_str()),
             "grid" => {
                 if let ColumnsOutcome::Sort(column) = self.columns.handle(&params::string_values(v))
@@ -563,6 +617,19 @@ impl Documents {
                     } else {
                         "credit_note"
                     };
+                    self.opening = None;
+                    if kind == "credit_note" {
+                        self.credit_invoices = self
+                            .pages
+                            .read_all(
+                                scope,
+                                "finance.receivables.document.list",
+                                json!({"kind":"invoice","status":"issued"}),
+                                ("after", "next_after"),
+                            )
+                            .await?
+                            .0;
+                    }
                     let mut values = HashMap::new();
                     let mut open = self.series.iter().filter(|s| s.kind == kind && s.active);
                     if let (Some(only), None) = (open.next(), open.next()) {
@@ -663,7 +730,7 @@ impl Documents {
         }
         let flash = redirect.is_some().then(|| self.flash.0.take()).flatten();
         Ok(LiveBody {
-            html: self.body()?,
+            html: self.body(scope).await?,
             query: self.list.to_params(),
             redirect,
             flash,
@@ -675,16 +742,52 @@ impl Documents {
 impl LiveState<Scope, Error> for Documents {
     fn update<'a>(&'a mut self, r: LiveRequest<'a, Scope>) -> LiveFuture<'a, Error> {
         Box::pin(async move {
+            if let LiveInput::Event(value) = r.input {
+                match value["type"].as_str().unwrap_or("") {
+                    "open_opening" if self.can_open => {
+                        self.create = None;
+                        self.opening = Some(Opening::new(self.pages.clone())?);
+                    }
+                    "close_opening" => self.opening = None,
+                    "preview_opening"
+                    | "import_opening"
+                    | "cancel_opening"
+                    | "stage_grid"
+                    | "balance_grid"
+                    | "classification_grid"
+                    | "opening_grid"
+                    | "clear-flash"
+                        if self.opening.is_some() =>
+                    {
+                        let opening = self.opening.as_mut().expect("opening dialog");
+                        opening.update(&r).await?;
+                        if opening.completed {
+                            self.opening = None;
+                            self.flash.set(StatusKind::Success, "The opening invoices were reconciled. Open an invoice below to read its source evidence.");
+                            self.list.search.clear();
+                            self.list.apply_filters(&HashMap::from([
+                                ("source".into(), "opening".into()),
+                                ("status".into(), "".into()),
+                                ("kind".into(), "".into()),
+                                ("customer".into(), "".into()),
+                            ]));
+                            self.load(r.scope).await?;
+                        }
+                    }
+                    _ => return self.event(r.scope, r.credential, value).await,
+                }
+            }
             match r.input {
                 LiveInput::Refresh => self.load(r.scope).await?,
                 LiveInput::Params(values) => {
                     self.list =
                         ListState::parse(values, SPEC.clone()).map_err(|_| Error::Internal)?;
+                    self.load(r.scope).await?;
                 }
-                LiveInput::Event(v) => return self.event(r.scope, r.credential, v).await,
+                LiveInput::Event(_) => {}
             }
             Ok(LiveBody {
-                html: self.body()?,
+                html: self.body(r.scope).await?,
                 query: self.list.to_params(),
                 ..LiveBody::default()
             })

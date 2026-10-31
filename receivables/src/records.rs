@@ -210,6 +210,7 @@ impl Page {
 }
 #[derive(Clone, Debug, Default)]
 pub struct DocumentQuery {
+    pub source: Option<String>,
     pub page: Page,
     pub kind: Option<String>,
     pub status: Option<String>,

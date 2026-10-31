@@ -186,7 +186,7 @@ Not implemented: collection/dispute case management, impairment measurement, an 
 
 ## Opening invoices at accounting system conversion
 
-Import a complete opening invoice register after the source trial balance has been approved, before issuing ordinary invoices. The conversion date is the first day Bilibi owns processing; source invoice dates must precede it. Configure the receivables control account, create the customers and a dedicated invoice numbering series, then open **Receivables → Opening invoices** (`/finance/receivables/opening`). The current company comes from the session choice.
+Import a complete opening invoice register after the source trial balance has been approved, before issuing ordinary invoices. The conversion date is the first day Bilibi owns processing; source invoice dates must precede it. Configure the receivables control account, create the customers and a dedicated invoice numbering series, then open **Receivables → Invoices → Opening invoices** (`/finance/receivables/invoices`). The current company comes from the session choice.
 
 Paste UTF-8 CSV with this exact header:
 
@@ -215,3 +215,7 @@ Stage a replacement export, then approve the complete reconciliation independent
 For browser/MCP parity, serve the disposable `conversion` fixture, provision credentials with `agent-operations conversion-credentials`, then run `fixtures/walkthrough/conversion-lifecycle-operations.py`. This mode uses the same independent reviewer for both doors; the default contractor fixture retains its Core fact masks. The served fixture also exposes Company 004 for browser previews of the 1100/1110 and 2000/2010 controls. `fixtures/walkthrough/conversion-operations.py` repeats those previews through MCP and proves that omitting 1110 or 2010 names the uncovered account and amount.
 
 The focused customer-composition proof runs with `cargo run -p bilibi-finance-walkthrough-fixture --bin receivables-companies` on a fresh disposable database. It exercises the real customer and issue operation handlers, Core duplicate review, a late audit failure that rolls back company/link/relationship, current-relationship refusals, dated billing selection and immutable snapshots. Set `CUSTOMERS_BROWSER=1`, `APP_ORIGIN` and `BIND_ADDR` to keep that same app running for the customer and invoice browser proof.
+
+Opening invoices share the Invoices list and the same invoice pages. **Source** and **Status** are columns, and the **Source** filter selects all, ordinary or opening records. The source filter also applies to `finance.receivables.document.list` before its cursor limit. Choose **Opening invoices** on the list to review and approve a complete or staged register with the existing opening contracts. The review remains a batch dialog; there is no separate opening menu item or route.
+
+Readers can open the opening dialog to inspect retained source batches. The import form still requires the module's existing opening-write permission, and approval checks run in the shared contract.
