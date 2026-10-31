@@ -546,7 +546,7 @@ pub async fn after(db: &Db, services: &Services, kept: Kept) -> Outcome<()> {
         )
         .await?;
     let entry_only = reports
-        .conversion_report(&s, COMPANY, date(2026, 8, 1))
+        .conversion_report(&s, COMPANY, date(2026, 8, 1), &Default::default())
         .await?;
     let entry_only_bridge = entry_only["bank_bridges"]
         .as_array()
@@ -610,7 +610,7 @@ pub async fn after(db: &Db, services: &Services, kept: Kept) -> Outcome<()> {
             .await?;
     }
     let before_opening_match = reports
-        .conversion_report(&s, COMPANY, date(2026, 8, 1))
+        .conversion_report(&s, COMPANY, date(2026, 8, 1), &Default::default())
         .await?;
     let before_opening_match = before_opening_match["bank_bridges"]
         .as_array()
@@ -651,7 +651,7 @@ pub async fn after(db: &Db, services: &Services, kept: Kept) -> Outcome<()> {
         )
         .await?;
     let current = reports
-        .conversion_report(&s, COMPANY, date(2026, 8, 1))
+        .conversion_report(&s, COMPANY, date(2026, 8, 1), &Default::default())
         .await?;
     assert_ne!(
         current["through_entry_number"],

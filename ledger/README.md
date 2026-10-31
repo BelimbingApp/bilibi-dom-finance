@@ -789,3 +789,8 @@ cargo run -p bilibi-finance-walkthrough-fixture --bin approval-journals -- --ser
 ```
 
 The proof exercises direct, impersonated and live OAuth agent self-approval refusals, an independent approval, replay with one posting, a permitted preparer exception and independent review, recall and atomic correction, a closed period, and a stale real reviewed plan. It leaves a waiting journal and an unreviewed exception for the shared waiting list and Finance page browser proof. No import is provided: Finance is under development with no users or production data. Existing development databases are disposable.
+
+
+### Reviewed zero opening controls
+
+Opening recognition accepts an eligible asset or liability account with a reviewed zero balance even when the approved opening entry has no line for it. This supports offsetting invoice and credit rows. `replace_opening_recognition_on` still reconciles the exact debit-positive balance to the approved entry, retains its owner and permanently protects it against reversal. The database verifies the approved entry, account eligibility and zero or non-zero balance too.

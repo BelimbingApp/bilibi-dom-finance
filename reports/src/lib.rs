@@ -35,6 +35,7 @@ mod configuration;
 mod contributions;
 mod controls;
 mod conversion;
+pub use conversion::ConversionPins;
 mod conversion_operations;
 mod conversion_page;
 mod issued;

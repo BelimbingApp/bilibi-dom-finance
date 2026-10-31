@@ -33,6 +33,18 @@ fn id(input: &Value, key: &str) -> bilibi_agent_api::Result<i64> {
         .filter(|n| *n > 0)
         .ok_or_else(|| invalid(key, "Choose a record."))
 }
+fn pins(input: &Value) -> bilibi_agent_api::Result<crate::ConversionPins> {
+    if input["pins"].is_null() {
+        Ok(Default::default())
+    } else {
+        serde_json::from_value(input["pins"].clone()).map_err(|_| {
+            invalid(
+                "pins",
+                "Use the complete boundaries returned by the report.",
+            )
+        })
+    }
+}
 fn day(input: &Value) -> bilibi_agent_api::Result<Date> {
     input["as_of"]
         .as_str()
@@ -96,7 +108,7 @@ impl ReadHandler for Preview {
     ) -> OperationFuture<'a> {
         Box::pin(async move {
             Ok(owner()?
-                .conversion_report(s, id(input, "company_id")?, day(input)?)
+                .conversion_report(s, id(input, "company_id")?, day(input)?, &pins(input)?)
                 .await
                 .map_err(refusal)?
                 .into())
@@ -167,7 +179,7 @@ async fn issue_review(
     let company = id(input, "company_id")?;
     writable(c, s, company, ISSUE).await?;
     let mut report = owner()?
-        .conversion_on(c, s, company, day(input)?)
+        .conversion_on(c, s, company, day(input)?, &pins(input)?)
         .await
         .map_err(refusal)?;
     report["reviewer_reference"] = json!(text(input, "reviewer_reference", 2000)?);
@@ -315,6 +327,7 @@ fn dated() -> Value {
     let mut s = schema();
     s["required"] = json!(["company_id", "as_of"]);
     s["properties"]["as_of"] = json!({"type":"string","format":"date"});
+    s["properties"]["pins"] = json!({"type":"object","required":["through_entry_number","receivables_opening_batch_id","receivables_settlement_number","payables_opening_batch_id","payables_settlement_number"],"properties":{"through_entry_number":{"type":"integer","minimum":0},"receivables_opening_batch_id":{"type":"integer","minimum":0},"receivables_settlement_number":{"type":"integer","minimum":0},"payables_opening_batch_id":{"type":"integer","minimum":0},"payables_settlement_number":{"type":"integer","minimum":0}}});
     s
 }
 fn record() -> Value {

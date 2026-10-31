@@ -274,3 +274,6 @@ Schedule status is `not_assessed` (default), `applicable` or `not_applicable`. I
 Run the conversion walkthrough on a fresh disposable database with `cargo run -p bilibi-finance-walkthrough-fixture --bin conversion`. Its report proof surrounds the existing register-correction lifecycle and checks stale plans, retained source rows beyond one evidence page, permission revocation, backdated control postings, duty separation, immutable issuance and qualified sign-off.
 
 For a small browser fixture, append `-- report-browser` to that command. It keeps Company 003's opening records and an unsigned report, then stops before the bulk corrections. Start the Platform launcher against that database to review, issue and sign through the page.
+
+
+Conversion snapshots carry the Receivables and Payables settlement boundaries alongside their entry and opening-batch boundaries. `ConversionPins` and the conversion preview/issue contracts' `pins` input accept the complete accounting tuple returned in the report. Aging details and control tie-outs receive the same tuple on the report's database snapshot. Issued evidence freezes those boundaries with the source facts and decisions; later entryless applications cannot change its amounts.
