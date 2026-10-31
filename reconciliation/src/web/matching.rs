@@ -370,7 +370,7 @@ impl Matching {
                 let lines = loaded.lines.clone();
                 if self
                     .opening_match
-                    .event(&self.pages, scope, credential, event, v, &items, &lines)
+                    .event(&self.pages, scope, credential, event, v, (&items, &lines))
                     .await?
                 {
                     self.flash = Some((

@@ -126,7 +126,6 @@ impl OpeningMatch {
             class: "mt-4",
             body: fields,
             actions,
-            ..Form::default()
         })?);
         render(Card {
             id: "opening-match",
@@ -190,9 +189,9 @@ impl OpeningMatch {
         credential: &str,
         event: &str,
         value: &Value,
-        items: &[OpeningItem],
-        lines: &[StatementLineItem],
+        available: (&[OpeningItem], &[StatementLineItem]),
     ) -> Result<bool> {
+        let (items, lines) = available;
         match event {
             "opening_match_change" => {
                 let values = params::form_values(value, "opening_match");
