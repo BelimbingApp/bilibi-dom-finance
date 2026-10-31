@@ -25,12 +25,20 @@ struct Reverse {
     notice: String,
 }
 
+#[derive(Default)]
+struct LateReview {
+    reason: String,
+    refusal: Refusal,
+    notice: String,
+}
+
 pub(super) struct Entry {
     pages: Pages,
     id: i64,
     flash: Flash,
     lines: Option<ListColumns>,
     reverse: Option<Reverse>,
+    late_review: Option<LateReview>,
 }
 
 impl Entry {
@@ -41,6 +49,7 @@ impl Entry {
             flash: Flash::default(),
             lines: None,
             reverse: None,
+            late_review: None,
         }
     }
 
@@ -162,12 +171,14 @@ impl Entry {
             Fact {
                 title: "Source",
                 id: "ledger-entry-source",
-                value: Html::text(
-                    &entry
+                value: Html::text(&if entry.opening {
+                    "Opening".to_owned()
+                } else {
+                    entry
                         .owner
                         .as_ref()
-                        .map_or("Manual".to_owned(), |o| source_label(&o.module)),
-                ),
+                        .map_or("Manual".to_owned(), |o| source_label(&o.module))
+                }),
             },
             Fact {
                 title: "Currency",
@@ -237,20 +248,19 @@ impl Entry {
         columns.load(&entry.lines, |l| l.line_number.to_string());
         let mut rows = Vec::new();
         for line in &entry.lines {
-            let account = chart
-                .iter()
-                .find(|a| a.id == line.account_id)
-                .map_or(format!("Account #{}", line.account_id), |a| {
-                    format!("{} {}", a.code, a.name)
-                });
+            let account = match chart.iter().find(|a| a.id == line.account_id) {
+                Some(account) => super::account_name(account)?,
+                None => Html::text(&format!("Account #{}", line.account_id)),
+            };
             rows.push(
                 FlexRow::new(line.line_number.to_string())
                     .cell("line", Cell::text(line.line_number.to_string()))
                     .slot(
                         "account",
-                        render(super::AccountLink {
-                            id: line.account_id,
-                            label: &account,
+                        render(bilibi_ui::ActionLink {
+                            href: &format!("/finance/ledger/accounts/{}", line.account_id),
+                            body: account,
+                            ..bilibi_ui::ActionLink::default()
                         })?,
                     )
                     .cell(
@@ -300,6 +310,72 @@ impl Entry {
         })?);
 
         let mut actions = Html::EMPTY;
+        if let Some(recording) = &entry.late_recording {
+            let mut body = render(SectionHeading {
+                title: "Late recording",
+                ..SectionHeading::default()
+            })?;
+            body.push(&Html::text(&format!(
+                "Recorded {} days after its transaction date ({}). ",
+                recording.days,
+                if recording.status == "late" {
+                    "late"
+                } else {
+                    "approaching late"
+                }
+            )));
+            if let Some(review) = &recording.review {
+                body.push(&render(Facts {
+                    id: "ledger-entry-review-facts",
+                    items: vec![
+                        Fact {
+                            title: "Reason",
+                            id: "ledger-entry-review-reason",
+                            value: Html::text(&review.reason),
+                        },
+                        Fact {
+                            title: "Reviewed by",
+                            id: "ledger-entry-review-by",
+                            value: Html::text(&who(
+                                review.reviewed_by_user_id,
+                                review.reviewed_by_impersonator_id,
+                            )),
+                        },
+                        Fact {
+                            title: "Reviewed at",
+                            id: "ledger-entry-review-at",
+                            value: instant(
+                                &display,
+                                &review.reviewed_at,
+                                "ledger-entry-review-time",
+                            )?,
+                        },
+                    ],
+                })?);
+            } else {
+                body.push(&Html::text("Pending independent review."));
+                if self
+                    .pages
+                    .allowed(scope, crate::REVIEW_LATE_RECORDINGS)
+                    .await?
+                {
+                    actions.push(&render(Button {
+                        id: "ledger-entry-review",
+                        event: "open_late_review",
+                        button_type: "button",
+                        body: Html::text("Review late recording"),
+                        ..Button::default()
+                    })?);
+                }
+            }
+            content.push(&render(Card {
+                id: "ledger-entry-recording",
+                class: "mt-4",
+                body,
+                ..Card::default()
+            })?);
+        }
+
         let mut reversible = entry.owner.is_none()
             && entry.reverses_entry_id.is_none()
             && entry.reversed_by_entry_id.is_none();
@@ -360,6 +436,52 @@ impl Entry {
                 ..Modal::default()
             })?);
         }
+        if let Some(review) = &self.late_review {
+            let mut body = render(
+                Field::in_form("late_review", "reason")
+                    .id("ledger-entry-review-input")
+                    .label("Why it was recorded late")
+                    .kind(InputKind::Textarea)
+                    .value(&review.reason)
+                    .required()
+                    .attr("maxlength", "500")
+                    .errors(
+                        review
+                            .refusal
+                            .field("reason")
+                            .iter()
+                            .map(|m| error_text("reason", m))
+                            .collect::<Vec<_>>(),
+                    ),
+            )?;
+            let mut messages = review.refusal.alert(&["reason"]);
+            if !review.notice.is_empty() {
+                messages.push(review.notice.clone());
+            }
+            if !messages.is_empty() {
+                body.push(&render(Alert {
+                    id: "ledger-entry-review-refusal",
+                    kind: StatusKind::Error,
+                    body: Html::text(&messages.join(" ")),
+                    ..Alert::default()
+                })?);
+            }
+            let mut actions = render(Button {
+                event: "close_late_review",
+                button_type: "button",
+                body: Html::text("Cancel"),
+                ..Button::default()
+            })?;
+            actions.push(&render(Button {
+                id: "ledger-entry-review-submit",
+                button_type: "submit",
+                variant: ButtonVariant::Primary,
+                body: Html::text("Record review"),
+                working: "Recording…",
+                ..Button::default()
+            })?);
+            page.push(&render(Modal { id: "ledger-entry-review-modal", title: "Review late recording", description: "Your reason, name and review time are permanent. Someone who recorded the entry, or acted as that person, cannot review it.", cancel_event: "close_late_review", body: render(Form { id: "ledger-entry-review-form", event: "record_late_review", class: "mt-4", body, actions: dialog_actions(actions)?, ..Form::default() })?, ..Modal::default() })?);
+        }
         Ok(LiveBody {
             html: shell("ledger-entry-page", PageVariant::Detail, &self.flash, page)?,
             rows: entry.lines.len(),
@@ -373,6 +495,52 @@ impl Entry {
             ..Header::default()
         })?;
         page.push(&body);
+        if let Some(review) = &self.late_review {
+            let mut body = render(
+                Field::in_form("late_review", "reason")
+                    .id("ledger-entry-review-input")
+                    .label("Why it was recorded late")
+                    .kind(InputKind::Textarea)
+                    .value(&review.reason)
+                    .required()
+                    .attr("maxlength", "500")
+                    .errors(
+                        review
+                            .refusal
+                            .field("reason")
+                            .iter()
+                            .map(|m| error_text("reason", m))
+                            .collect::<Vec<_>>(),
+                    ),
+            )?;
+            let mut messages = review.refusal.alert(&["reason"]);
+            if !review.notice.is_empty() {
+                messages.push(review.notice.clone());
+            }
+            if !messages.is_empty() {
+                body.push(&render(Alert {
+                    id: "ledger-entry-review-refusal",
+                    kind: StatusKind::Error,
+                    body: Html::text(&messages.join(" ")),
+                    ..Alert::default()
+                })?);
+            }
+            let mut actions = render(Button {
+                event: "close_late_review",
+                button_type: "button",
+                body: Html::text("Cancel"),
+                ..Button::default()
+            })?;
+            actions.push(&render(Button {
+                id: "ledger-entry-review-submit",
+                button_type: "submit",
+                variant: ButtonVariant::Primary,
+                body: Html::text("Record review"),
+                working: "Recording…",
+                ..Button::default()
+            })?);
+            page.push(&render(Modal { id: "ledger-entry-review-modal", title: "Review late recording", description: "Your reason, name and review time are permanent. Someone who recorded the entry, or acted as that person, cannot review it.", cancel_event: "close_late_review", body: render(Form { id: "ledger-entry-review-form", event: "record_late_review", class: "mt-4", body, actions: dialog_actions(actions)?, ..Form::default() })?, ..Modal::default() })?);
+        }
         Ok(LiveBody {
             html: shell("ledger-entry-page", PageVariant::Detail, &self.flash, page)?,
             ..LiveBody::default()
@@ -545,6 +713,43 @@ impl LiveState<Scope, Error> for Entry {
         Box::pin(async move {
             if let LiveInput::Event(value) = r.input {
                 match event_type(value)? {
+                    "open_late_review" => {
+                        if self
+                            .pages
+                            .allowed(r.scope, crate::REVIEW_LATE_RECORDINGS)
+                            .await?
+                        {
+                            self.late_review = Some(LateReview::default());
+                        }
+                    }
+                    "close_late_review" => self.late_review = None,
+                    "record_late_review" => {
+                        if let Some(review) = &mut self.late_review {
+                            let fields = params::form_values_checked(value, "late_review", 4096)
+                                .map_err(Error::refused)?;
+                            review.reason = fields.get("reason").cloned().unwrap_or_default();
+                            review.refusal = Refusal::default();
+                            review.notice.clear();
+                            match self
+                                .pages
+                                .submit(
+                                    r.scope,
+                                    r.credential,
+                                    "record_late_review",
+                                    "finance.ledger.entry.review_late",
+                                    json!({"entry_id": self.id, "reason": review.reason}),
+                                )
+                                .await?
+                            {
+                                Ok(_) => {
+                                    self.late_review = None;
+                                    self.flash.success("The independent review is recorded.");
+                                }
+                                Err(Failure::Refused(refusal)) => review.refusal = refusal,
+                                Err(failure) => review.notice = failure.text("The review"),
+                            }
+                        }
+                    }
                     "open_reverse" => self.open_reverse(r.scope).await?,
                     "close_reverse" => self.reverse = None,
                     "validate" => {

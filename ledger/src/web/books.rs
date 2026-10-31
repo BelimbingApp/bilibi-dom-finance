@@ -33,7 +33,15 @@ static SPEC: LazyLock<Arc<ListSpec>> = LazyLock::new(|| {
             (
                 "year".into(),
                 Filter::one_of(
-                    &["all", "open", "closed", "none", "no_access", "unavailable"],
+                    &[
+                        "all",
+                        "open",
+                        "closed",
+                        "locked",
+                        "none",
+                        "no_access",
+                        "unavailable",
+                    ],
                     "all",
                 ),
             ),
@@ -64,7 +72,7 @@ enum Book {
 
 /// The state of a company's fiscal calendar, as the books page words it.
 struct Calendar {
-    latest: Option<(String, String, bool)>,
+    latest: Option<(String, String, String)>,
     earliest_open: Option<(String, String)>,
     past_due: bool,
 }
@@ -75,7 +83,11 @@ impl Calendar {
             (
                 y.start_date.clone(),
                 y.end_date.clone(),
-                y.status == "closed",
+                if y.periods.iter().all(|p| p.status == "locked") {
+                    "locked".into()
+                } else {
+                    y.status.clone()
+                },
             )
         });
         let earliest_open = years
@@ -222,20 +234,21 @@ impl Books {
                         year_state = if calendar
                             .latest
                             .as_ref()
-                            .is_some_and(|(_, _, closed)| *closed)
+                            .is_some_and(|(_, _, state)| state == "locked")
+                        {
+                            "locked"
+                        } else if calendar
+                            .latest
+                            .as_ref()
+                            .is_some_and(|(_, _, state)| state == "closed")
                         {
                             "closed"
                         } else {
                             "open"
                         };
                         row = match calendar.latest {
-                            Some((start, end, closed)) => row.cell(
-                                "year",
-                                Cell::text(format!(
-                                    "{start} to {end} ({})",
-                                    if closed { "closed" } else { "open" }
-                                )),
-                            ),
+                            Some((start, end, state)) => row
+                                .cell("year", Cell::text(format!("{start} to {end} ({})", state))),
                             None => row.cell("year", dash()),
                         };
                         row = match calendar.earliest_open {
@@ -278,6 +291,7 @@ impl Books {
                     .cell("open", dash());
             }
             Book::NoAccess => {
+                year_state = "no_access";
                 row = row
                     .slot(
                         "book",
@@ -288,6 +302,7 @@ impl Books {
                     .cell("open", dash());
             }
             Book::Unavailable => {
+                year_state = "unavailable";
                 row = row
                     .slot(
                         "book",
@@ -357,6 +372,7 @@ impl Books {
                         Choice::new("All states", "all"),
                         Choice::new("Open", "open"),
                         Choice::new("Closed", "closed"),
+                        Choice::new("Locked", "locked"),
                         Choice::new("None", "none"),
                         Choice::new("No access", "no_access"),
                         Choice::new("Could not be read", "unavailable"),

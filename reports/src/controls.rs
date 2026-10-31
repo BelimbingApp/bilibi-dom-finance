@@ -7,9 +7,8 @@ use bilibi_datetime::{
     Clock, DisplayContext, DisplayPolicy, Format, Period, PeriodFilter, Precision,
 };
 use bilibi_finance_ledger::{
-    ApprovalExceptionQuery, LateRecordingQuery, LateStatus, LedgerError,
-    MANAGE_CONTROLLED_BOOKKEEPING, MANAGE_DUTY_SEPARATION, REVIEW_EXCEPTIONS,
-    REVIEW_LATE_RECORDINGS,
+    ApprovalExceptionQuery, LedgerError, MANAGE_CONTROLLED_BOOKKEEPING, MANAGE_DUTY_SEPARATION,
+    REVIEW_EXCEPTIONS,
 };
 use bilibi_locale::Locales;
 use bilibi_tenancy::Scope;
@@ -32,6 +31,22 @@ pub(crate) struct Pages {
     pub contracts: Arc<bilibi_agent_api::page::PageContracts>,
     pub display: Arc<DisplayPolicy>,
     pub locales: Arc<Locales>,
+    pub parties: Arc<bilibi_tenancy::PartyProofs>,
+}
+
+impl Pages {
+    async fn company_name(&self, scope: &Scope) -> Result<String> {
+        let Some(company) = scope.current_company() else {
+            return Ok(String::new());
+        };
+        let client = self.reports.db.get().await?;
+        Ok(self
+            .parties
+            .organisation_name(&**client, scope, company)
+            .await?
+            .map(|c| c.name)
+            .unwrap_or_else(|| "Company unavailable".into()))
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -44,6 +59,7 @@ enum Dialog {
 struct State {
     pages: Pages,
     bookkeeping: bool,
+    company_name: String,
     framed: bool,
     list: ListState,
     columns: Vec<ListColumns>,
@@ -72,21 +88,16 @@ impl State {
             omit_defaults: true,
             ..ListSpec::default()
         };
-        spec.filters.insert(
-            "review".into(),
-            Filter::one_of(&["all", "pending", "reviewed"], "all"),
-        );
-        spec.filters.insert("after".into(), Filter::string(""));
-        spec.filters.insert(
-            "area".into(),
-            Filter::one_of(&["journals", "other"], "journals"),
-        );
-        if bookkeeping {
+        if !bookkeeping {
             spec.filters.insert(
-                "status".into(),
-                Filter::one_of(&["all", "approaching", "late"], "all"),
+                "review".into(),
+                Filter::one_of(&["all", "pending", "reviewed"], "all"),
             );
-        } else {
+            spec.filters.insert("after".into(), Filter::string(""));
+            spec.filters.insert(
+                "area".into(),
+                Filter::one_of(&["journals", "other"], "journals"),
+            );
             spec.filters.insert(
                 "period".into(),
                 Filter::one_of(
@@ -106,30 +117,15 @@ impl State {
             }
         }
         let tables: &[(&str, &[(&str, &str)])] = if bookkeeping {
-            &[
-                (
-                    "controlled-bookkeeping-changes",
-                    &[
-                        ("when", "When"),
-                        ("set", "Set to"),
-                        ("reason", "Reason"),
-                        ("by", "By"),
-                    ],
-                ),
-                (
-                    "late-recordings-table",
-                    &[
-                        ("number", "#"),
-                        ("date", "Transaction date"),
-                        ("recorded", "Recorded"),
-                        ("days", "Days"),
-                        ("status", "Status"),
-                        ("description", "Description"),
-                        ("by", "Posted by"),
-                        ("review", "Review"),
-                    ],
-                ),
-            ]
+            &[(
+                "controlled-bookkeeping-changes",
+                &[
+                    ("when", "When"),
+                    ("set", "Set to"),
+                    ("reason", "Reason"),
+                    ("by", "By"),
+                ],
+            )]
         } else {
             &[
                 (
@@ -187,6 +183,7 @@ impl State {
         Ok(Self {
             pages,
             bookkeeping,
+            company_name: String::new(),
             framed,
             list: ListState::parse(query, spec.shared().map_err(|_| Error::Internal)?)
                 .map_err(|_| Error::Invalid)?,
@@ -298,7 +295,7 @@ impl State {
                 _ => "Give a reason of 1 to 500 characters.".into(),
             }
         } else {
-            refusal(&error, self.bookkeeping)
+            refusal(&error)
         };
         if !invalid {
             self.close();
@@ -374,23 +371,11 @@ impl State {
         let capability = match event {
             "turn_on" | "turn_off" if self.bookkeeping => MANAGE_CONTROLLED_BOOKKEEPING,
             "change_separation" if !self.bookkeeping => MANAGE_DUTY_SEPARATION,
-            "review" => {
-                if self.bookkeeping {
-                    REVIEW_LATE_RECORDINGS
-                } else {
-                    REVIEW_EXCEPTIONS
-                }
-            }
+            "review" if !self.bookkeeping => REVIEW_EXCEPTIONS,
             "open_dialog" => match dialog_kind {
                 Some("controlled-off") if self.bookkeeping => MANAGE_CONTROLLED_BOOKKEEPING,
                 Some("separation") if !self.bookkeeping => MANAGE_DUTY_SEPARATION,
-                Some("review") => {
-                    if self.bookkeeping {
-                        REVIEW_LATE_RECORDINGS
-                    } else {
-                        REVIEW_EXCEPTIONS
-                    }
-                }
+                Some("review") if !self.bookkeeping => REVIEW_EXCEPTIONS,
                 _ => return Ok(()),
             },
             _ => return Ok(()),
@@ -415,15 +400,10 @@ impl State {
                         None
                     }
                 },
-                Some("review") => params::positive_id(
-                    payload[if self.bookkeeping {
-                        "entry"
-                    } else {
-                        "exception"
-                    }]
-                    .as_str(),
-                )
-                .map(|id| Dialog::Review { id }),
+                Some("review") if !self.bookkeeping => {
+                    params::positive_id(payload["exception"].as_str())
+                        .map(|id| Dialog::Review { id })
+                }
                 _ => None,
             };
             return Ok(());
@@ -468,15 +448,6 @@ impl State {
                 }),
                 Err(error) => self.refused(error),
             },
-            ("review", Some(Dialog::Review { id })) if self.bookkeeping => match ledger
-                .record_late_recording_review(scope, company, id, &text)
-                .await
-            {
-                Ok(review) => {
-                    self.success(format!("Review of entry {} recorded.", review.entry_id))
-                }
-                Err(error) => self.refused(error),
-            },
             ("review", Some(Dialog::Review { id })) => match ledger
                 .review_approval_exception(scope, company, id, Some(&text))
                 .await
@@ -493,6 +464,7 @@ impl State {
     }
 
     async fn render(&mut self, scope: &Scope) -> Result<String> {
+        self.company_name = self.pages.company_name(scope).await?;
         let title = if self.bookkeeping {
             "Bookkeeping controls"
         } else {
@@ -503,10 +475,15 @@ impl State {
         } else {
             "Same-person approvals and overrides of controls, for someone independent to review."
         };
+        let subtitle = if self.company_name.is_empty() {
+            subtitle.to_owned()
+        } else {
+            format!("{} · {subtitle}", self.company_name)
+        };
         let mut parts = vec![html(Header {
             title: Html::text(title),
             title_actions: bilibi_ui::Html::EMPTY,
-            subtitle,
+            subtitle: &subtitle,
             ..Header::default()
         })?];
         if scope.current_company().is_none() {
@@ -569,7 +546,7 @@ impl State {
                 id: "bookkeeping-refusal",
                 kind: StatusKind::Error,
                 class: "mb-3",
-                body: Html::text(&refusal(error, true)),
+                body: Html::text(&refusal(error)),
             })
         } else if matches!(error, LedgerError::Unauthorized) {
             html(EmptyState::forbidden("view the ledger").id("exceptions-refusal"))
@@ -601,24 +578,7 @@ impl State {
             .list_controlled_bookkeeping_changes(scope, company)
             .await?;
         changes.reverse();
-        let entries = ledger
-            .list_late_recordings(
-                scope,
-                company,
-                &LateRecordingQuery {
-                    status: match self.filter("status") {
-                        "approaching" => Some(LateStatus::Approaching),
-                        "late" => Some(LateStatus::Late),
-                        _ => None,
-                    },
-                    reviewed: self.reviewed(),
-                    limit: Some(100),
-                    after: self.after(),
-                },
-            )
-            .await?;
         let can_manage = self.allowed(scope, MANAGE_CONTROLLED_BOOKKEEPING).await?;
-        let can_review = self.allowed(scope, REVIEW_LATE_RECORDINGS).await?;
         let change = controlled.change.as_ref();
         let mut content = html(Summary {
             status_id: "controlled-bookkeeping-status",
@@ -701,134 +661,12 @@ impl State {
             content,
             false,
         )?];
-        let thresholds = bilibi_finance_ledger::Ledger::late_recording_thresholds();
-        let description = format!(
-            "An entry is listed once it is recorded {} or more days after its transaction date, and is late past {} days. Each late entry needs a reason from an independent reviewer, someone who did not post it. The days are whole days from the transaction date to the day it was recorded.",
-            thresholds.approaching_days, thresholds.late_days
-        );
-        let mut filters = self.tabs(
-            "late-recordings-status",
-            "Lateness",
-            "status",
-            &[
-                ("all", "All"),
-                ("approaching", "Approaching"),
-                ("late", "Late"),
-            ],
-        )?;
-        filters.push(&self.tabs(
-            "late-recordings-review",
-            "Review status",
-            "review",
-            &[
-                ("all", "Any review"),
-                ("pending", "Awaiting review"),
-                ("reviewed", "Reviewed"),
-            ],
-        )?);
-        parts.push(section(
-            "late-recordings",
-            "Entries recorded late",
-            &description,
-            html(FiltersView {
-                id: "late-recordings-filters",
-                class: "mt-3 flex flex-wrap items-center gap-4",
-                content: filters,
-            })?,
-            false,
-        )?);
-        let compact = self.columns[1].mode() == RowMode::Compact;
-        let mut rows = Vec::new();
-        for entry in &entries {
-            let mut row = row(
-                &format!("late-entry-{}", entry.entry_number),
-                &[
-                    ("number", entry.entry_number.to_string()),
-                    ("date", entry.entry_date.to_string()),
-                    ("days", entry.days.to_string()),
-                    (
-                        "by",
-                        actor(
-                            Some(entry.posted_by_user_id),
-                            entry.posted_by_impersonator_id,
-                        ),
-                    ),
-                ],
-            );
-            row = row.slot(
-                "recorded",
-                datetime(
-                    display,
-                    entry.posted_at,
-                    &format!("late-entry-at-{}", entry.entry_number),
-                )?,
-            );
-            row = row.slot(
-                "status",
-                classification(
-                    if entry.status == LateStatus::Late {
-                        BadgeKind::Danger
-                    } else {
-                        BadgeKind::Warning
-                    },
-                    if entry.status == LateStatus::Late {
-                        "Late"
-                    } else {
-                        "Approaching"
-                    },
-                )?,
-            );
-            row = row.slot(
-                "description",
-                html(CellView {
-                    id: "",
-                    main: &entry.description,
-                    detail: entry.reference.as_deref().unwrap_or(""),
-                    compact,
-                })?,
-            );
-            let review = match &entry.review {
-                Some(review) => html(CellView {
-                    id: &format!("late-entry-review-{}", entry.entry_number),
-                    main: &review.reason,
-                    detail: &actor(
-                        Some(review.reviewed_by_user_id),
-                        review.reviewed_by_impersonator_id,
-                    ),
-                    compact,
-                })?,
-                None if can_review => review_button(
-                    &format!("late-entry-review-open-{}", entry.entry_number),
-                    "entry",
-                    entry.entry_id,
-                )?,
-                None => Html::text("Awaiting review"),
-            };
-            rows.push(row.slot("review", review));
-        }
-        parts.push(section(
-            "late-recordings-card",
-            "",
-            "",
-            self.table(
-                1,
-                rows,
-                "Entries recorded late",
-                Some((
-                    "late-recordings-empty",
-                    "No entries recorded late",
-                    "Nothing in the ledger was recorded this long after its transaction date.",
-                )),
-            )?,
-            true,
-        )?);
-        if entries.len() == 100 {
-            parts.push(self.next(
-                "late-recordings-next",
-                entries.last().expect("100 entries").entry_number,
-                "Later entries",
-            )?);
-        }
+        parts.push(html(Button {
+            id: "controls-late-journals",
+            href: "/finance/ledger/journals?review=pending",
+            body: Html::text("Journals awaiting late-recording review"),
+            ..Button::default()
+        })?);
         Ok(parts)
     }
     async fn exception_parts(
@@ -1303,17 +1141,6 @@ impl State {
                     "Reason (optional)",
                     false,
                 ),
-                Dialog::Review { .. } if self.bookkeeping => (
-                    "late-review",
-                    "Record your review",
-                    "Your review is kept with your name and the time; it cannot be changed. You cannot review an entry you posted.",
-                    "review",
-                    "Record review",
-                    "Recording…",
-                    ButtonVariant::Primary,
-                    "Why it was recorded late (1 to 500 characters)",
-                    true,
-                ),
                 Dialog::Review { .. } => (
                     "exception-review",
                     "Record your review",
@@ -1355,7 +1182,7 @@ impl State {
         html(Modal {
             id: &format!("{prefix}-modal"),
             title,
-            description,
+            description: &format!("{} · {description}", self.company_name),
             cancel_event: "close_dialog",
             body: form,
             flash: Some(self.flash_map()),
@@ -1464,8 +1291,6 @@ fn section(id: &str, title: &str, description: &str, content: Html, flat: bool) 
     html(Card {
         id,
         inner_class: match id {
-            "late-recordings" => "p-5 sm:p-6 mt-4",
-            "late-recordings-card" => "p-0 mt-3",
             _ if flat => "p-0",
             _ => "p-5 sm:p-6",
         },
@@ -1518,19 +1343,14 @@ fn action_label(action: &str) -> String {
         }
     }
 }
-fn refusal(error: &LedgerError, bookkeeping: bool) -> String {
+fn refusal(error: &LedgerError) -> String {
     match error {
         LedgerError::Unauthorized => "You do not have permission for that action.",
         LedgerError::CompanyArchived => "The company is archived; nothing can be changed.",
         LedgerError::BookNotOpen => "The ledger's book is not open yet.",
         LedgerError::EntryNotFound => "That entry no longer exists.",
         LedgerError::ExceptionNotFound => "That exception no longer exists.",
-        LedgerError::AlreadyReviewed if bookkeeping => "Someone has already reviewed that entry.",
         LedgerError::AlreadyReviewed => "Someone has already reviewed that exception.",
-        LedgerError::NotLateRecorded => "That entry was not recorded late.",
-        LedgerError::ReviewerNotIndependent if bookkeeping => {
-            "An entry is reviewed by someone who did not post it."
-        }
         LedgerError::ReviewerNotIndependent => {
             "An exception is reviewed by someone who neither approved nor prepared what it records."
         }

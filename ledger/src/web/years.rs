@@ -188,10 +188,11 @@ impl Years {
             pages,
             flash: Flash::default(),
             columns: None,
-            pick: query
-                .get("company")
-                .and_then(|id| id.parse().ok())
-                .map_or(Pick::Auto, Pick::One),
+            pick: match query.get("company").map(String::as_str) {
+                Some("all") => Pick::All,
+                Some(id) => id.parse().map_or(Pick::Auto, Pick::One),
+                None => Pick::Auto,
+            },
             choice: None,
             opening: None,
         })

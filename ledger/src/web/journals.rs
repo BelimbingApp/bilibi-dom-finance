@@ -59,6 +59,17 @@ static SPEC: LazyLock<Arc<ListSpec>> = LazyLock::new(|| {
                     "all",
                 ),
             ),
+            (
+                "recording".into(),
+                Filter::one_of(
+                    &["all", "on_time", "approaching", "late", "unposted"],
+                    "all",
+                ),
+            ),
+            (
+                "review".into(),
+                Filter::one_of(&["all", "pending", "reviewed"], "all"),
+            ),
             ("after".into(), Filter::string("")),
             ("source".into(), Filter::string("")),
             ("account".into(), Filter::string("")),
@@ -537,6 +548,8 @@ impl Journals {
             BuiltinColumn::new("description", "Description"),
             BuiltinColumn::new("source", "Source"),
             BuiltinColumn::new("status", "Status"),
+            BuiltinColumn::new("recording", "Recording"),
+            BuiltinColumn::new("review", "Late review"),
             BuiltinColumn::new("amount", "Amount").right(),
         ];
         let window = Window::parse(query);
@@ -651,8 +664,12 @@ impl Journals {
             page.push(&dialog.view(scope).await?);
         }
         let mut query = self.list.to_params();
-        if self.opening_dialog.is_some() {
-            query.insert("opening".into(), "1".into());
+        if let Some(dialog) = &self.opening_dialog {
+            if let Some(id) = dialog.replaces() {
+                query.insert("correct".into(), id.to_string());
+            } else {
+                query.insert("opening".into(), "1".into());
+            }
         }
         query.extend(self.window.params());
         if let Some(draft) = &self.draft {
@@ -699,6 +716,11 @@ impl Journals {
         }
         if self.filter("status") != "all" {
             input["status"] = json!(self.filter("status"));
+        }
+        for key in ["recording", "review"] {
+            if self.filter(key) != "all" {
+                input[key] = json!(self.filter(key));
+            }
         }
         if !self.filter("source").is_empty() {
             input["source"] = json!(self.filter("source"));
@@ -769,6 +791,30 @@ impl Journals {
                         Choice::new("Reversal", "reversal"),
                         Choice::new("Rejected", "rejected"),
                         Choice::new("Withdrawn", "withdrawn"),
+                    ],
+                ),
+                ToolbarControl::select(
+                    "ledger-journals-recording",
+                    "recording",
+                    "Recording",
+                    &form["recording"],
+                    vec![
+                        Choice::new("All recordings", "all"),
+                        Choice::new("On time", "on_time"),
+                        Choice::new("Approaching late", "approaching"),
+                        Choice::new("Late", "late"),
+                        Choice::new("Unposted", "unposted"),
+                    ],
+                ),
+                ToolbarControl::select(
+                    "ledger-journals-review",
+                    "review",
+                    "Late review",
+                    &form["review"],
+                    vec![
+                        Choice::new("All reviews", "all"),
+                        Choice::new("Pending review", "pending"),
+                        Choice::new("Reviewed", "reviewed"),
                     ],
                 ),
                 ToolbarControl::select(
@@ -918,6 +964,28 @@ impl Journals {
                     }),
                 )
                 .slot("status", render(status)?)
+                .cell(
+                    "recording",
+                    Cell::text(match record.recording.as_str() {
+                        "late" => {
+                            format!("Late · {} days", record.recorded_days.unwrap_or_default())
+                        }
+                        "approaching" => format!(
+                            "Approaching late · {} days",
+                            record.recorded_days.unwrap_or_default()
+                        ),
+                        "on_time" => "On time".into(),
+                        _ => "—".into(),
+                    }),
+                )
+                .cell(
+                    "review",
+                    Cell::text(match record.review.as_str() {
+                        "pending" => "Pending review",
+                        "reviewed" => "Reviewed",
+                        _ => "—",
+                    }),
+                )
                 .slot(
                     "amount",
                     figure(&crate::Money::display_decimal(
@@ -1351,6 +1419,12 @@ pub(super) fn status_badge(status: &str) -> Result<Html> {
 
 #[derive(Deserialize)]
 struct ListRow {
+    #[serde(default)]
+    recorded_days: Option<i32>,
+    #[serde(default)]
+    recording: String,
+    #[serde(default)]
+    review: String,
     id: i64,
     kind: String,
     stamp: String,

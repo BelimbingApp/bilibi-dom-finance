@@ -55,6 +55,10 @@ impl OpeningDialog {
         }
     }
 
+    pub(super) fn replaces(&self) -> Option<i64> {
+        self.replaces
+    }
+
     pub(super) fn take_destination(&mut self) -> Option<String> {
         self.destination.take()
     }

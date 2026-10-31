@@ -8,7 +8,9 @@ use crate::{
     periods::NOT_CLOSING, FieldError, LateRecording, LateRecordingQuery, LateRecordingReview,
     LateStatus, LedgerError,
 };
+use bilibi_agent_api::OperationClient;
 use bilibi_database::{Change, Result};
+use bilibi_tenancy::Scope;
 use serde_json::{json, Value};
 use tokio_postgres::{GenericClient, Row};
 
@@ -32,7 +34,7 @@ pub(crate) struct Recorded {
 }
 
 pub(crate) async fn entry(
-    client: &impl GenericClient,
+    client: &dyn OperationClient,
     tenant: i64,
     company_id: i64,
     entry_id: i64,
@@ -53,6 +55,49 @@ pub(crate) async fn entry(
         posted_by_impersonator_id: row.get(2),
         reviewed: row.get(3),
     }))
+}
+
+/// Shared refusal checks for the facade and reviewed operation.
+pub(crate) async fn prepare(
+    client: &dyn OperationClient,
+    scope: &Scope,
+    company: i64,
+    entry_id: i64,
+    reason: &str,
+) -> std::result::Result<String, LedgerError> {
+    let entry = entry(client, scope.tenant(), company, entry_id)
+        .await?
+        .ok_or(LedgerError::EntryNotFound)?;
+    if entry.days < APPROACHING_DAYS {
+        return Err(LedgerError::NotLateRecorded);
+    }
+    if entry.reviewed {
+        return Err(LedgerError::AlreadyReviewed);
+    }
+    if crate::same_person(
+        crate::people(scope),
+        (entry.posted_by_user_id, entry.posted_by_impersonator_id),
+    ) {
+        return Err(LedgerError::ReviewerNotIndependent);
+    }
+    validate(reason).map_err(LedgerError::Invalid)
+}
+
+/// Facts kept with the entry's one record page and its review preview.
+pub(crate) async fn facts(
+    client: &dyn OperationClient,
+    tenant: i64,
+    company: i64,
+    entry_id: i64,
+) -> Result<Value> {
+    let Some(recorded) = entry(client, tenant, company, entry_id).await? else {
+        return Ok(Value::Null);
+    };
+    if recorded.days < APPROACHING_DAYS {
+        return Ok(Value::Null);
+    }
+    let review = client.query_opt("SELECT id,reason,reviewed_by_user_id,reviewed_by_impersonator_id,to_char(reviewed_at,'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') FROM finance_ledger_late_recording_reviews WHERE tenant_id=$1 AND company_id=$2 AND entry_id=$3", &[&tenant,&company,&entry_id]).await?.map(|r| json!({"id":r.get::<_,i64>(0),"reason":r.get::<_,String>(1),"reviewed_by_user_id":r.get::<_,i64>(2),"reviewed_by_impersonator_id":r.get::<_,Option<i64>>(3),"reviewed_at":r.get::<_,String>(4)}));
+    Ok(json!({"days":recorded.days,"status":status(recorded.days),"review":review}))
 }
 
 /// The listed entries, oldest number first, each with its review or none.

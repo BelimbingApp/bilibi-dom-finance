@@ -371,20 +371,19 @@ impl Journal {
         columns.load(&journal.lines, |l| l.line_number.to_string());
         let mut rows = Vec::new();
         for line in &journal.lines {
-            let account = chart
-                .iter()
-                .find(|a| a.id == line.account_id)
-                .map_or(format!("Account #{}", line.account_id), |a| {
-                    format!("{} {}", a.code, a.name)
-                });
+            let account = match chart.iter().find(|a| a.id == line.account_id) {
+                Some(account) => super::account_name(account)?,
+                None => Html::text(&format!("Account #{}", line.account_id)),
+            };
             rows.push(
                 FlexRow::new(line.line_number.to_string())
                     .cell("line", Cell::text(line.line_number.to_string()))
                     .slot(
                         "account",
-                        render(super::AccountLink {
-                            id: line.account_id,
-                            label: &account,
+                        render(bilibi_ui::ActionLink {
+                            href: &format!("/finance/ledger/accounts/{}", line.account_id),
+                            body: account,
+                            ..bilibi_ui::ActionLink::default()
                         })?,
                     )
                     .cell(

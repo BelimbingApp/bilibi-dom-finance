@@ -116,6 +116,7 @@ H1 makes the facade-only writes reachable through the Platform's shared `/api/v1
 | `journal.withdraw`, `journal.replace` | Only the journal's submitter, while it waits: withdrawal records an optional `reason` and posts nothing; replacement takes the `journal.submit` fields (including `balance`) plus `journal_id`, withdraws it and submits the correction, which needs its own approval |
 | `opening_balances.get` | Latest opening submission with journal number, conversion date, status, posted entry and reversal identifiers; `opening: null` before submission |
 | `opening_balances.submit` | Reviewed CSV mapping to one opening journal; source reference and exact CSV are retained; optional `replaces_journal_id` withdraws the submitter's waiting opening journal and takes its place; approval is separate |
+| `entry.review_late` | Keep one permanent review with a required `reason`; the recorder and impersonation overlap are refused. The preview writes nothing, and the commit joins the shared plan transaction |
 | `entry.reverse` | Mirror a manual entry once, never an owned or closing entry |
 | `fiscal_year.open`, `fiscal_year.close`, `fiscal_year.reopen`, `fiscal_year.lock` | Open monthly periods, close with computed entry, reopen with closing reversal, or atomically lock all remaining closed periods |
 | `period.close`, `period.reopen`, `period.lock` | Existing facade ordering, reason and permanent-lock rules |
@@ -144,17 +145,19 @@ The wire walkthrough exercises all writes over both transports, observes preview
 
 ## Pages
 
+The one-door walkthrough provisions two extra people on the launcher’s disposable `onedoor_finance_ledger` database with `cargo run -p bilibi-finance-walkthrough-fixture --bin one-door`. With its private credentials, run `fixtures/walkthrough/one-door-operations.py setup`, run the fixture again with `-- policies`, then run the Python walkthrough without `setup`. It exercises reviewed book/year creation, opening correction and approval, source/status/late/review filters, independent-review refusals and plan rollback through MCP.
+
 Fiscal years is the only place to open a fiscal year. Filter by company and open, closed or locked state; a locked year has all its periods locked. Bookkeeping controls links to this list. Every year opening uses `finance.ledger.fiscal_year.open`, including its review and confirmation.
 
 Opening balances starts in Journals. Choose **Opening balances**, review the mapped CSV, then submit its single journal for approval. Filter Source to **Opening** and Status to find waiting, rejected, withdrawn or posted opening journals. Corrections start on that journal’s record page and use the same reviewed opening operation.
 
 Company books is the only book list. Each company links to its book at `/finance/ledger/books/{company_id}`, including the reviewed open-book action. Viewing or opening another company’s book does not switch the current company. The list filters by company name, book state, currency and fiscal-year state.
 
-The ledger has pages so a person without an AI agent can do the same daily work. Bilimbi's ledger has none (`web: nil`), so these are this port's own. Reports keeps the older [Bookkeeping controls and Approval exceptions pages](../reports/README.md#bookkeeping-and-approval-exceptions-pages).
+The ledger has pages so a person without an AI agent can do the same daily work. Bilimbi's ledger has none (`web: nil`), so these are this port's own. Reports keeps the older [Bookkeeping controls and Approval exceptions pages](../reports/README.md#bookkeeping-controls-and-approval-exceptions-pages).
 
 | Menu (Finance, under Bookkeeping) | Route | What a person does there |
 | --- | --- | --- |
-| Company books | `/finance/ledger/books` | Lists every company the person may work in with its book (open, not open, no access), currency, latest fiscal year and earliest open period, and links each row to that company's fiscal years. See [Current company](#current-company-and-company-books). |
+| Company books | `/finance/ledger/books` | Lists every company the person may work in with its book (open, not open, no access), currency, latest fiscal year and earliest open period, and links each row to that company’s book detail and fiscal years. See [Current company](#current-company-and-company-books). |
 | Chart of accounts | `/finance/ledger/accounts` | Filters authorized companies' charts (default: current company), identifies each row's company and currency, and shows each account's balance and each group's total. Select one company to add an account in its named dialog. With an empty chart it offers the starter charts: preview, tick the optional sections that apply, then apply, or start empty. |
 | Account groups | `/finance/ledger/account-groups` | Lists the groups with what each holds and its total, adds a group in a dialog. |
 | (account record) | `/finance/ledger/accounts/{id}` | Edits the name and group in place, deactivates or activates the account, marks the retained earnings account, reads today's balance. |
@@ -164,7 +167,7 @@ The ledger has pages so a person without an AI agent can do the same daily work.
 | Fiscal years | `/finance/ledger/fiscal-years` | Lists the years of the current company, or of any company the person may work in through the company filter, each year and period named by its company. Opens a year for a chosen company after a review that shows the dates and the number of periods. Closes, reopens and locks periods and years, naming the company in every confirmation. |
 | Trial balance | `/finance/ledger/trial-balance` | Reads the balances as of a date at a pinned entry number, and follows an account to its entries. The as-of day is one date, not a range, so it keeps its own date control rather than the period filter. |
 
-The old `/finance/ledger/entries` address redirects to Journals.
+Late recordings are columns and filters on Journals. **Recording** distinguishes on-time, approaching-late, late and unposted records. **Late review** finds pending or reviewed late recordings. Open the journal row to read or record its independent review through `finance.ledger.entry.review_late`. The review permanently keeps the reason, reviewer and time. The poster and anyone who overlaps through impersonation are refused.
 
 ### Current company and company books
 

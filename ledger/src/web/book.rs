@@ -126,6 +126,10 @@ impl Book {
             body: Html::text("Company books"),
             ..Button::default()
         })?);
+        page.push(&render(super::Announce {
+            kind: "finance/ledger.book",
+            record_id: &self.company.to_string(),
+        })?);
         page.push(&body);
         Ok(LiveBody {
             html: shell("ledger-book", PageVariant::Detail, &self.flash, page)?,
@@ -267,12 +271,6 @@ impl Book {
                     value: yes_no(required, "Required", "Not required")?,
                 },
             ],
-        })?);
-        controls.push(&render(Button {
-            id: "ledger-book-approval-settings",
-            href: "/finance/reports/approval-exceptions",
-            body: Html::text("Approval settings"),
-            ..Button::default()
         })?);
         let mut html = render(Card {
             id: "ledger-book-card",

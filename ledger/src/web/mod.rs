@@ -91,11 +91,6 @@ route!(
     "group"
 );
 route!(
-    "finance/ledger.entries",
-    "/finance/ledger/entries",
-    "entries"
-);
-route!(
     "finance/ledger.journals",
     "/finance/ledger/journals",
     "journals"
@@ -188,6 +183,7 @@ inventory::submit! { Contribution::new(PAGE_WRITES, PAGES, Provenance { module: 
         ("create_group", "finance.ledger.account_group.create"),
         ("save_group_field", "finance.ledger.account_group.update"),
         ("reverse", "finance.ledger.entry.reverse"),
+        ("record_late_review", "finance.ledger.entry.review_late"),
         ("preview_opening", "finance.ledger.opening_balances.submit"),
         ("submit_opening", "finance.ledger.opening_balances.submit"),
         ("submit_journal", "finance.ledger.journal.submit"),
@@ -1048,24 +1044,18 @@ pub(crate) fn event_type(event: &Value) -> Result<&str> {
 impl Page<Scope, Error> for Pages {
     fn title(&self, operation: &str) -> Option<&'static str> {
         Some(match operation {
-            "opening" => "Opening balances",
             "book" => "Book",
             "books" => "Company books",
             "accounts" => "Chart of accounts",
             "account" => "Account",
             "groups" => "Account groups",
             "group" => "Account group",
-            "entries" => return None,
             "journals" => "Journals",
             "journal" => "Journal",
             "years" => "Fiscal years",
             "trial" => "Trial balance",
             _ => return None,
         })
-    }
-
-    fn redirect(&self, operation: &str) -> Option<&'static str> {
-        (operation == "entries").then_some("/finance/ledger/journals")
     }
 
     fn render<'a>(&'a self, r: PageRequest<'a, Scope>) -> PageFuture<'a, Error> {
@@ -1107,7 +1097,6 @@ impl Pages {
             "account" => Box::new(account::Account::new(pages, id_param(r.path)?, company)),
             "groups" => Box::new(groups::Groups::new(pages, r.query, r.framed, company)?),
             "group" => Box::new(group::Group::new(pages, id_param(r.path)?, company)),
-            "entries" => Box::new(journals::Journals::new(pages, r.query, r.framed)?),
             "journals" => Box::new(journals::Journals::new(pages, r.query, r.framed)?),
             "journal" => {
                 let record = r.path.get("id").ok_or(Error::NotFound)?;

@@ -122,7 +122,7 @@ inventory::submit! { bilibi_module_registry::Contribution::new(bilibi_module_reg
 inventory::submit! { bilibi_module_registry::Contribution::new(bilibi_module_registry::contributions::PAGE_WRITES, "finance/reports.control-pages", bilibi_module_registry::Provenance { module: MODULE, source: file!(), line: line!() }, &bilibi_module_registry::contributions::PageWrites {
     service: "finance/reports.control-pages",
     contracts: &[],
-    pending: bilibi_module_registry::contributions::Pending::Every { reason: "Controlled bookkeeping, duty separation and reviews write through the Ledger facade, not the finance.ledger contracts yet." },
+    pending: bilibi_module_registry::contributions::Pending::Every { reason: "Controlled bookkeeping, duty separation and approval-exception reviews write through the Ledger facade, not the finance.ledger contracts yet." },
 }) }
 
 inventory::submit! { Contribution::new(ROUTES, "finance/reports.sections", provenance!(), &Route {

@@ -134,6 +134,10 @@ pub(crate) struct Entry {
     pub reversed_by_entry_id: Option<i64>,
     #[serde(default)]
     pub request_number: Option<i64>,
+    #[serde(default)]
+    pub late_recording: Option<LateRecording>,
+    #[serde(default)]
+    pub opening: bool,
     pub lines: Vec<Line>,
 }
 
@@ -278,4 +282,18 @@ pub(crate) fn type_label(account_type: &str) -> &'static str {
         "expense" => "Expense",
         _ => "Other",
     }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub(crate) struct LateRecording {
+    pub days: i32,
+    pub status: String,
+    pub review: Option<LateReview>,
+}
+#[derive(Clone, Debug, Deserialize)]
+pub(crate) struct LateReview {
+    pub reason: String,
+    pub reviewed_by_user_id: i64,
+    pub reviewed_by_impersonator_id: Option<i64>,
+    pub reviewed_at: String,
 }
