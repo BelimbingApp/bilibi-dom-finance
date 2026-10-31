@@ -34,6 +34,9 @@ mod auditor_pack;
 mod configuration;
 mod contributions;
 mod controls;
+mod conversion;
+mod conversion_operations;
+mod conversion_page;
 mod issued;
 mod layout;
 mod pack_owner;
@@ -47,7 +50,7 @@ mod web;
 pub use auditor_pack::AuditorPack;
 pub use bilibi_finance_ledger::{PostingEvent, PostingSubscription};
 pub use configuration::SECTIONS;
-pub use contributions::{CAPABILITIES, EXPORT, ISSUE};
+pub use contributions::{CAPABILITIES, EXPORT, ISSUE, SIGN_OFF};
 pub use issued::{EvidencePage, IssuedReport};
 pub use setup::{SetupArea, SetupOverview, SetupState};
 
@@ -95,6 +98,8 @@ inventory::submit! {
         migrations: &[
             ("finance-reports-001-issued", include_str!("../migrations/001-issued.sql")),
             ("finance-reports-002-source-period", include_str!("../migrations/002-source-period.sql")),
+            ("finance-reports-002-conversion-signoffs", include_str!("../migrations/002-conversion-signoffs.sql")),
+            ("finance-reports-003-conversion-signoff-attestation", include_str!("../migrations/003-conversion-signoff-attestation.sql")),
         ],
         services: &[Service { id: SERVICE, factory: |services| { let reports = Arc::new(Reports {
             db: services.get::<Db>("base/database.pool")?.as_ref().clone(),
@@ -140,6 +145,12 @@ inventory::submit! {
             }))))
         } }, Service { id: setup_page::PAGES, factory: |services| {
             Ok(Arc::new(bilibi_ui::page::PageService::<Scope, Error>(Arc::new(setup_page::Pages {
+                db: services.get::<Db>("base/database.pool")?.as_ref().clone(),
+                contracts: services.get(bilibi_agent_api::page::SERVICE)?,
+                parties: services.get("base/tenancy.parties")?,
+            }))))
+        } }, Service { id: conversion_page::SERVICE, factory: |services| {
+            Ok(Arc::new(bilibi_ui::page::PageService::<Scope, Error>(Arc::new(conversion_page::Pages {
                 db: services.get::<Db>("base/database.pool")?.as_ref().clone(),
                 contracts: services.get(bilibi_agent_api::page::SERVICE)?,
                 parties: services.get("base/tenancy.parties")?,
@@ -787,7 +798,8 @@ impl Reports {
     }
 
     /// The stored issued copy (`finance.ledger.view`); it never recomputes a
-    /// figure or a label. `ReportNotFound` for a missing id or another
+    /// figure or a label. Conversion copies also require every source view.
+    /// `ReportNotFound` for a missing id or another
     /// company's.
     pub async fn get_issued_report(
         &self,
@@ -797,15 +809,24 @@ impl Reports {
     ) -> Result<IssuedReport> {
         let client = self.db.get().await.map_err(Error::from)?;
         authorize(&**client, scope, company_id, VIEW).await?;
-        issued::find(&**client, scope.tenant(), company_id, id)
+        let report = issued::find(&**client, scope.tenant(), company_id, id)
             .await?
-            .ok_or(ReportsError::ReportNotFound)
+            .ok_or(ReportsError::ReportNotFound)?;
+        if report.kind == conversion::KIND {
+            self.conversion_access(&**client, scope, company_id, VIEW)
+                .await?;
+        }
+        Ok(report)
     }
 
     /// The datasets [`Reports::evidence_page`] exports, one per table this
     /// module owns.
     pub fn evidence_datasets() -> Vec<&'static str> {
-        vec!["issued", "source_period"]
+        issued::DATASETS
+            .iter()
+            .copied()
+            .chain(["source_period"])
+            .collect()
     }
 
     /// One ID-ordered evidence page of `dataset` with explicit fields, rows
@@ -843,7 +864,29 @@ impl Reports {
             return source_period::evidence_page(client, scope.tenant(), company_id, limit, after)
                 .await;
         }
-        issued::page(client, scope.tenant(), company_id, dataset, limit, after).await
+        issued::page_options(dataset, limit, after, None)?;
+        if dataset == "conversion_signoff" {
+            self.conversion_access(client, scope, company_id, VIEW)
+                .await?;
+            return issued::page(
+                client,
+                scope.tenant(),
+                company_id,
+                dataset,
+                limit,
+                after,
+                None,
+            )
+            .await;
+        }
+        let selected =
+            issued::select_issued_page(client, scope.tenant(), company_id, limit, after, None)
+                .await?;
+        if selected.kinds.iter().any(|kind| kind == conversion::KIND) {
+            self.conversion_access(client, scope, company_id, VIEW)
+                .await?;
+        }
+        issued::selected_issued_page(client, scope.tenant(), company_id, selected).await
     }
 
     // Reading

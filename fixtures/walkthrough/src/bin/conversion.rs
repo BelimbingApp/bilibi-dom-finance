@@ -2,6 +2,8 @@
 //! clean Company 002, then facade controls on Company 003. No product seeds.
 #[path = "../conversion_lifecycle.rs"]
 mod conversion_lifecycle;
+#[path = "../conversion_report.rs"]
+mod conversion_report;
 use bilibi_agent_api::{Handler, Registry};
 use bilibi_authz::{RoleDefinition, VocabularyContribution, VOCABULARY};
 use bilibi_database::{pool, Db};
@@ -976,7 +978,13 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         "Conversion facade proof: exact source balances, partial residuals, all three mismatch refusals, corrected preview, identical retries, independent approval, pre-cutoff exclusion, aged dates, control tie-outs, source accumulation differing from historical projection, prospective 106.25 depreciation, receipt, supplier payment and their reversals, guarded opening reversal, audit evidence and retained rows passed."
     );
     drop(c);
+    let report = conversion_report::before(db, services).await?;
+    if std::env::args().any(|s| s == "report-browser") {
+        println!("Conversion report browser fixture ready on Company 003; bulk correction proof was not run.");
+        return Ok(());
+    }
     conversion_lifecycle::prove(db, services, &config, [a, b, asset_batch], run.id).await?;
+    conversion_report::after(db, services, report).await?;
     prove_opening_invoice_page_scale(db, services).await?;
     let client = db.get().await?;
     let bills = registry
@@ -1156,6 +1164,24 @@ async fn main() -> Outcome<()> {
     // so browser sessions can choose the current company. No business rows use SQL.
     db.get().await?.batch_execute("INSERT INTO persons(id,tenant_id,code,name,kind,email) VALUES(4,1,'person_4','Conversion reviewer','human','admin@example.test') ON CONFLICT DO NOTHING; INSERT INTO person_affiliations(id,tenant_id,person_id,organisation_id,title,work_email) VALUES(3,1,4,1,'Reviewer','admin@example.test') ON CONFLICT DO NOTHING; UPDATE users SET person_id=4,affiliation_id=3,organisation_id=1 WHERE tenant_id=1 AND id=4 AND person_id IS NULL;").await?;
     let admin = sign_in(&db, &app.services, 1, 4).await?;
+    let storage_root = std::env::var("BILIBI_ATTACHMENTS_DEMO_ROOT").unwrap_or_else(|_| {
+        std::env::temp_dir()
+            .join(format!("bilibi-finance-conversion-{}", std::process::id()))
+            .display()
+            .to_string()
+    });
+    std::fs::create_dir_all(&storage_root)?;
+    std::fs::set_permissions(
+        &storage_root,
+        std::os::unix::fs::PermissionsExt::from_mode(0o700),
+    )?;
+    bilibi_finance_walkthrough_fixture::attachments::configure_storage(
+        &db,
+        &app.services,
+        &admin,
+        &storage_root,
+    )
+    .await?;
     let grants = app
         .services
         .get::<bilibi_authz::grants::Grants>("base/authz.grants")?;

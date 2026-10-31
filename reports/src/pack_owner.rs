@@ -20,12 +20,33 @@ pub(crate) const SOURCE_VIEWS: &[&str] = &[
     bilibi_finance_fixed_assets::VIEW,
 ];
 
+pub(crate) const CONVERSION_SOURCE_VIEWS: &[&str] = &[
+    VIEW,
+    bilibi_finance_receivables::VIEW,
+    bilibi_finance_payables::VIEW,
+    bilibi_finance_reconciliation::VIEW,
+    bilibi_finance_payroll::VIEW,
+    bilibi_finance_sst::VIEW,
+    bilibi_finance_fixed_assets::VIEW,
+];
+
 pub(crate) async fn authorize_sources(
     client: &dyn ProofClient,
     scope: &Scope,
     company: OrganisationId,
 ) -> Result<(), Error> {
     for capability in SOURCE_VIEWS {
+        Directory.target(client, scope, company, capability).await?;
+    }
+    Ok(())
+}
+
+pub(crate) async fn authorize_conversion_sources(
+    client: &dyn ProofClient,
+    scope: &Scope,
+    company: OrganisationId,
+) -> Result<(), Error> {
+    for capability in CONVERSION_SOURCE_VIEWS {
         Directory.target(client, scope, company, capability).await?;
     }
     Ok(())

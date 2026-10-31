@@ -46,6 +46,25 @@ pub(crate) async fn latest_date(
         .and_then(|row| row.get(0)))
 }
 
+pub(crate) async fn latest_account_entry_number(
+    client: &(impl GenericClient + Sync),
+    tenant: i64,
+    company: i64,
+    account: i64,
+    through: Date,
+) -> Result<i64> {
+    Ok(client
+        .query_one(
+            "SELECT COALESCE(max(e.entry_number),0)::bigint FROM finance_ledger_entries e \
+             WHERE e.tenant_id=$1 AND e.company_id=$2 AND e.entry_date <= $4::text::date \
+               AND EXISTS (SELECT 1 FROM finance_ledger_entry_lines l \
+                 WHERE l.tenant_id=$1 AND l.company_id=$2 AND l.entry_id=e.id AND l.account_id=$3)",
+            &[&tenant, &company, &account, &through.to_string()],
+        )
+        .await?
+        .get(0))
+}
+
 /// A new entry's values after trimming and checking, ready to insert.
 #[derive(serde::Serialize)]
 pub(crate) struct ValidEntry {
