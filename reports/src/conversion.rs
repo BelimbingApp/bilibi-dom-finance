@@ -9,6 +9,7 @@ use bilibi_party_ids::OrganisationId;
 use bilibi_tenancy::Scope;
 use jiff::civil::Date;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use tokio_postgres::{GenericClient, Transaction};
 
 pub(crate) const KIND: &str = "conversion";
@@ -159,7 +160,7 @@ impl Reports {
         let comparisons: Vec<_> = chart.iter().filter(|a| !a.is_group).map(|a| {
             let source_balance=opening.balances.get(&a.id).copied().unwrap_or(Money::ZERO);
             let target_balance=target.rows.iter().find(|r|r.account.id==a.id).map(|r|r.debit_balance-r.credit_balance).unwrap_or(Money::ZERO);
-            json!({"account_id":a.id,"code":a.code,"name":a.name,"source_balance":source_balance,"target_balance":target_balance,"movement":target_balance-source_balance})
+            json!({"account_id":a.id,"code":a.code,"name":a.name,"source_balance":source_balance,"source_debit_balance":source_balance.max(Money::ZERO),"source_credit_balance":(-source_balance).max(Money::ZERO),"target_balance":target_balance,"movement":target_balance-source_balance})
         }).collect();
         let mut evidence = serde_json::Map::new();
         // Each source owns both authorization and its frozen explicit field lists.
@@ -177,7 +178,7 @@ impl Reports {
                         if page.next.is_none() {break page.fields;}
                         after=page.next;
                     };
-                    datasets.insert(dataset.to_string(),json!({"fields":fields,"rows":rows,"through_id":after}));
+                    datasets.insert(dataset.to_string(),json!({"fields":fields,"rows":rows,"through_id":rows.last().and_then(|r|r["id"].as_i64()).unwrap_or(0),"sha256":format!("{:x}",Sha256::digest(serde_json::to_vec(&rows).map_err(|_|Error::Internal)?))}));
                 }
                 evidence.insert($key.into(),Value::Object(datasets));
             }};
@@ -229,6 +230,82 @@ impl Reports {
             self.sources.payroll,
             bilibi_finance_payroll::Payroll::evidence_datasets()
         );
+        let mut bank_bridges = Vec::new();
+        let bank_accounts = evidence["bank"]["bank_account"]["rows"]
+            .as_array()
+            .ok_or(Error::Internal)?;
+        let bank_records = evidence["bank"]["reconciliation_record"]["rows"]
+            .as_array()
+            .ok_or(Error::Internal)?;
+        for account in bank_accounts {
+            let bank_id = account["id"].as_i64().ok_or(Error::Internal)?;
+            let ledger_id = account["ledger_account_id"]
+                .as_i64()
+                .ok_or(Error::Internal)?;
+            let records = bank_records.iter().filter(|r| {
+                r["bank_account_id"].as_i64() == Some(bank_id)
+                    && r["end_date"]
+                        .as_str()
+                        .is_some_and(|d| d <= as_of.to_string().as_str())
+            });
+            let mut bridge = None;
+            for record in records {
+                let read = self
+                    .sources
+                    .reconciliation
+                    .get_reconciliation_on(
+                        c,
+                        s,
+                        company,
+                        record["id"].as_i64().ok_or(Error::Internal)?,
+                    )
+                    .await
+                    .map_err(source_error)?;
+                if read.status != bilibi_finance_reconciliation::ReconciliationStatus::Abandoned
+                    && bridge.as_ref().is_none_or(
+                        |b: &bilibi_finance_reconciliation::BankReconciliation| {
+                            (b.end_date, b.id) < (read.end_date, read.id)
+                        },
+                    )
+                {
+                    bridge = Some(read);
+                }
+            }
+            let current_balance = target
+                .rows
+                .iter()
+                .find(|r| r.account.id == ledger_id)
+                .map(|r| r.debit_balance - r.credit_balance)
+                .unwrap_or(Money::ZERO);
+            let (end_balance, changed) = if let Some(bridge) = &bridge {
+                let totals = self
+                    .ledger
+                    .account_totals_on(
+                        c,
+                        s,
+                        company,
+                        &TotalsQuery {
+                            to: Some(bridge.end_date),
+                            through_entry_number: Some(through),
+                            ..Default::default()
+                        },
+                    )
+                    .await?;
+                let end = totals
+                    .rows
+                    .iter()
+                    .find(|r| r.account.id == ledger_id)
+                    .map(|r| r.debits - r.credits)
+                    .unwrap_or(Money::ZERO);
+                (
+                    Some(end),
+                    bridge.figures.as_ref().map(|f| end - f.book_balance),
+                )
+            } else {
+                (None, None)
+            };
+            bank_bridges.push(json!({"account":account,"target_balance":current_balance,"bridge_end_balance":end_balance,"change_since_bridge":changed,"bridge":bridge}));
+        }
         let mut differences = Vec::new();
         for row in &ar.accounts {
             if !row.difference.is_zero() {
@@ -245,9 +322,21 @@ impl Reports {
                 differences.push(json!({"area":"fixed_assets","account_id":row.account_id,"kind":row.kind,"difference":row.difference}));
             }
         }
+        for bank in &bank_bridges {
+            let incomplete = bank["bridge"].is_null()
+                || bank["bridge"]["status"] != "finalised"
+                || bank["bridge"]["end_date"].as_str() != Some(as_of.to_string().as_str());
+            let changed = bank["change_since_bridge"]
+                .as_str()
+                .and_then(|v| Money::parse(v, target.minor_units).ok())
+                .is_some_and(|m| m != Money::ZERO);
+            if incomplete || changed {
+                differences.push(json!({"area":"bank","bank_account_id":bank["account"]["id"],"reason":"Review the bridge's status, end date and changes since finalisation; it does not establish a complete tie-out at the report date."}));
+            }
+        }
         let report = json!({"version":1,"company_id":company,"as_of":as_of.to_string(),"conversion_date":opening.entry.entry_date.to_string(),"currency_code":target.currency_code,"minor_units":target.minor_units,"through_entry_number":through,
             "opening":opening,"source_trial_balance":{"rows":comparisons,"basis":"Approved source opening journal only; signed debit less credit balances."},"target_trial_balance":target,"accounts":comparisons,"postings_by_owner":owners,
-            "receivables":{"detail":ar_detail,"control":ar},"payables":{"detail":ap_detail,"control":ap},"assets":assets,"sources":evidence,
+            "receivables":{"detail":ar_detail,"control":ar},"payables":{"detail":ap_detail,"control":ap},"assets":assets,"bank_bridges":bank_bridges,"sources":evidence,
             "unresolved_differences":differences,
             "excluded_history":["Transactions before conversion other than the approved opening journal and retained opening registers.","Previously settled invoice and bill history, historical asset depreciation entries and legacy bank matches are not imported."],
             "schedule_limits":["Bank evidence retains statement and finalised reconciliation bridges. Open bridges require a separate reconciliation; no conversion bank bridge is inferred.","Tax and payroll evidence is retained where recorded. Legacy returns, payroll year-to-date and filing completeness require the accountant's external schedules and reviewer references."],

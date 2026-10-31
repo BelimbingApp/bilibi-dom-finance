@@ -1,0 +1,615 @@
+//! Conversion reports have one home. Every read and reviewed write uses the
+//! same operation as MCP; this page owns no accounting or approval logic.
+use askama::Template;
+use bilibi_agent_api::page::{Call, PageContracts};
+use bilibi_database::{Db, Error, Result};
+use bilibi_tenancy::{PartyProofs, Scope};
+use bilibi_ui::{
+    page::{
+        LiveBody, LiveFuture, LiveInput, LiveRequest, LiveState, MountFuture, Page, PageBody,
+        PageFuture, PageRequest,
+    },
+    params, Alert, BuiltinColumn, Button, ButtonVariant, Card, Cell, Choice, ConfirmDialog, Field,
+    FlexRow, FlexTable, Form, Header, Html, InputKind, ListColumns, PageVariant, StatusKind,
+};
+use serde_json::{json, Value};
+use std::{collections::BTreeMap, sync::Arc};
+pub(crate) const SERVICE: &str = "finance/reports.conversion-pages";
+const PATH: &str = "/finance/reports/conversions";
+const ISSUE: &str = "finance.reports.conversion.issue";
+const SIGN: &str = "finance.reports.conversion.sign";
+#[derive(Clone)]
+pub(crate) struct Pages {
+    pub db: Db,
+    pub contracts: Arc<PageContracts>,
+    pub parties: Arc<PartyProofs>,
+}
+struct Review {
+    code: String,
+    input: Value,
+    contract: &'static str,
+}
+struct State {
+    pages: Pages,
+    id: Option<i64>,
+    company: Option<i64>,
+    values: BTreeMap<String, String>,
+    errors: BTreeMap<String, Vec<String>>,
+    message: String,
+    document: Value,
+    review: Option<Review>,
+    confirm: bool,
+    path: Vec<String>,
+    offset: usize,
+    columns: ListColumns,
+    list_after: i64,
+}
+fn render(t: impl Template) -> Result<Html> {
+    Html::render(&t).map_err(|_| Error::Internal)
+}
+fn label(s: &str) -> String {
+    let text = s.replace('_', " ");
+    let mut chars = text.chars();
+    chars
+        .next()
+        .map(|c| c.to_uppercase().collect::<String>() + chars.as_str())
+        .unwrap_or_default()
+}
+impl State {
+    fn new(pages: Pages, r: &PageRequest<'_, Scope>) -> Self {
+        Self {
+            pages,
+            id: r.params.get("report_id").and_then(|v| v.parse().ok()),
+            company: None,
+            values: BTreeMap::new(),
+            errors: BTreeMap::new(),
+            message: String::new(),
+            document: Value::Null,
+            review: None,
+            confirm: false,
+            path: Vec::new(),
+            offset: 0,
+            columns: ListColumns::mount(
+                "conversion-facts",
+                vec![
+                    BuiltinColumn::new("name", "Item"),
+                    BuiltinColumn::new("value", "Value"),
+                    BuiltinColumn::new("open", "Details"),
+                ],
+            )
+            .expect("conversion columns"),
+            list_after: 0,
+        }
+    }
+    async fn read(&self, s: &Scope, key: &str, input: Value) -> std::result::Result<Value, String> {
+        self.pages
+            .contracts
+            .read(s, key, &input)
+            .await
+            .map(|v| v["result"].clone())
+            .map_err(|e| e.to_string())
+    }
+    fn current(&self) -> &Value {
+        self.path.iter().fold(&self.document, |v, k| match v {
+            Value::Array(rows) => k
+                .parse::<usize>()
+                .ok()
+                .and_then(|i| rows.get(i))
+                .unwrap_or(&Value::Null),
+            _ => &v[k],
+        })
+    }
+    fn entries(&self) -> Vec<(String, Value)> {
+        match self.current() {
+            Value::Object(o) => o.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+            Value::Array(a) => a
+                .iter()
+                .enumerate()
+                .map(|(i, v)| (i.to_string(), v.clone()))
+                .collect(),
+            v => vec![("value".into(), v.clone())],
+        }
+    }
+    fn scalar(&self, key: &str, v: &Value) -> String {
+        let text = match v {
+            Value::Null => "None".into(),
+            Value::Bool(true) => "Yes".into(),
+            Value::Bool(false) => "No".into(),
+            Value::String(s) => s.clone(),
+            _ => v.to_string(),
+        };
+        if [
+            "balance",
+            "debit",
+            "credit",
+            "amount",
+            "total",
+            "difference",
+            "cost",
+            "accumulated",
+            "carrying_value",
+            "movement",
+            "depreciation",
+            "residual_value",
+            "outstanding",
+        ]
+        .iter()
+        .any(|k| key.contains(k))
+        {
+            let units = self
+                .document
+                .pointer("/report/content/minor_units")
+                .or_else(|| self.document.get("minor_units"))
+                .and_then(Value::as_u64)
+                .and_then(|n| u8::try_from(n).ok())
+                .and_then(|n| bilibi_finance_ledger::MinorUnits::new(n).ok());
+            if let Some(units) = units {
+                if let Ok(m) = bilibi_finance_ledger::Money::parse(&text, units) {
+                    return m.display(units);
+                }
+            }
+        }
+        text
+    }
+    fn table(&mut self) -> Result<Html> {
+        let entries = self.entries();
+        let end = (self.offset + 100).min(entries.len());
+        self.offset = self.offset.min(entries.len().saturating_sub(1) / 100 * 100);
+        let selected = &entries[self.offset..end.max(self.offset)];
+        self.columns.load(selected, |r| r.0.clone());
+        let mut rows = Vec::new();
+        for (index, (key, v)) in selected.iter().enumerate() {
+            let mut row = FlexRow::new(key.clone()).cell("name", Cell::text(label(key)));
+            let value = match v {
+                Value::Object(o) => format!("{} fields", o.len()),
+                Value::Array(a) => format!("{} records", a.len()),
+                _ => self.scalar(key, v),
+            };
+            row = row.cell("value", Cell::text(value));
+            if v.is_object() || v.is_array() {
+                row = row.slot(
+                    "open",
+                    render(Button {
+                        event: "inspect",
+                        name: "value",
+                        value: &(self.offset + index).to_string(),
+                        body: Html::text("Open"),
+                        ..Button::default()
+                    })?,
+                );
+            }
+            rows.push(row);
+        }
+        let mut table = FlexTable::new("conversion-facts", self.columns.flex_columns(), rows);
+        table.caption = "Conversion report facts";
+        table.zoom = self.columns.zoom;
+        table.suggestions = self.columns.flex_suggestions();
+        let mut body = render(table)?;
+        body.push(&render(Alert {
+            id: "conversion-count",
+            kind: StatusKind::Info,
+            body: Html::text(&format!(
+                "Records {}–{} of {}. {}",
+                if entries.is_empty() {
+                    0
+                } else {
+                    self.offset + 1
+                },
+                end,
+                entries.len(),
+                self.path
+                    .iter()
+                    .map(|k| label(k))
+                    .collect::<Vec<_>>()
+                    .join(" / ")
+            )),
+            ..Alert::default()
+        })?);
+        for (event, title, show) in [
+            ("up", "Back to previous section", !self.path.is_empty()),
+            ("previous", "Previous records", self.offset > 0),
+            ("next", "Next records", end < entries.len()),
+        ] {
+            if show {
+                body.push(&render(Button {
+                    event,
+                    body: Html::text(title),
+                    ..Button::default()
+                })?);
+            }
+        }
+        Ok(body)
+    }
+    async fn view(&mut self, s: &Scope) -> Result<LiveBody> {
+        let mut body = Html::EMPTY;
+        let company = s.current_company().map(|c| c.get());
+        if self.company != company {
+            self.document = Value::Null;
+            self.review = None;
+            self.path.clear();
+            self.offset = 0;
+            self.company = company;
+        }
+        let name = if let Some(company) = s.current_company() {
+            let c = self.pages.db.get().await?;
+            self.pages
+                .parties
+                .organisation_name(&**c, s, company)
+                .await?
+                .map(|r| r.name)
+                .unwrap_or_else(|| "Company unavailable".into())
+        } else {
+            "No current company".into()
+        };
+        body.push(&render(Header {
+            title: Html::text("Conversion reports"),
+            subtitle: &format!("Current company: {name}"),
+            ..Header::default()
+        })?);
+        if let Some(company) = company {
+            if let Some(id) = self.id {
+                match self
+                    .read(
+                        s,
+                        "finance.reports.conversion.get",
+                        json!({"company_id":company,"report_id":id}),
+                    )
+                    .await
+                {
+                    Ok(v) => {
+                        if self.review.is_none() {
+                            self.document = v;
+                        }
+                    }
+                    Err(e) => {
+                        self.document = Value::Null;
+                        self.review = None;
+                        self.message = e;
+                    }
+                }
+            } else if self.document.is_null() {
+                match self
+                    .read(
+                        s,
+                        "finance.reports.conversion.list",
+                        json!({"company_id":company,"after":self.list_after}),
+                    )
+                    .await
+                {
+                    Ok(v) => self.document = v,
+                    Err(e) => self.message = e,
+                }
+            }
+            if !self.message.is_empty() {
+                body.push(&render(Alert {
+                    id: "conversion-message",
+                    kind: StatusKind::Warning,
+                    body: Html::text(&self.message),
+                    ..Alert::default()
+                })?);
+            }
+            if !self.document.is_null() {
+                body.push(&self.table()?);
+            }
+            if self.id.is_none() {
+                body.push(&render(Button {
+                    event: "issued_list",
+                    body: Html::text("Issued reports"),
+                    ..Button::default()
+                })?);
+                if let Some(next) = self.document["next"].as_i64() {
+                    body.push(&render(Button {
+                        event: "more_reports",
+                        name: "value",
+                        value: &next.to_string(),
+                        body: Html::text("More reports"),
+                        ..Button::default()
+                    })?);
+                }
+                // A stable link opens each issued report at its one record page.
+                for row in self.document["rows"].as_array().into_iter().flatten() {
+                    if let Some(id) = row["id"].as_i64() {
+                        body.push(&render(Button {
+                            href: &format!("{PATH}/{id}"),
+                            body: Html::text(&format!(
+                                "Report {id} · {}",
+                                row["as_of"].as_str().unwrap_or("")
+                            )),
+                            ..Button::default()
+                        })?);
+                    }
+                }
+            } else {
+                body.push(&render(Button {
+                    href: PATH,
+                    body: Html::text("All conversion reports"),
+                    ..Button::default()
+                })?);
+            }
+            let signed = self.document["signoffs"]
+                .as_array()
+                .is_some_and(|s| !s.is_empty());
+            if !signed {
+                let mut fields = Html::EMPTY;
+                for (key, title, kind) in [
+                    ("as_of", "Reporting date", InputKind::Date),
+                    (
+                        "reviewer_reference",
+                        "Reviewer and source references",
+                        InputKind::Text,
+                    ),
+                    (
+                        "note",
+                        "Review conclusion and qualifications",
+                        InputKind::Textarea,
+                    ),
+                ] {
+                    if key == "as_of" && self.id.is_some() {
+                        continue;
+                    }
+                    fields.push(&render(
+                        Field::in_form("conversion", key)
+                            .id(format!("conversion-{key}"))
+                            .label(title)
+                            .kind(kind)
+                            .required()
+                            .value(self.values.get(key).map(String::as_str).unwrap_or(""))
+                            .errors(self.errors.get(key).cloned().unwrap_or_default()),
+                    )?);
+                }
+                if self.id.is_none() {
+                    for area in ["bank", "tax", "payroll"] {
+                        let status = format!("{area}_status");
+                        let reference = format!("{area}_reference");
+                        fields.push(&render(
+                            Field::in_form("conversion", &status)
+                                .label(format!("{} schedule", label(area)))
+                                .kind(InputKind::Select)
+                                .value(
+                                    self.values
+                                        .get(&status)
+                                        .map(String::as_str)
+                                        .unwrap_or("not_assessed"),
+                                )
+                                .options(vec![
+                                    Choice::new("Not assessed", "not_assessed"),
+                                    Choice::new("Applicable", "applicable"),
+                                    Choice::new("Not applicable", "not_applicable"),
+                                ])
+                                .errors(self.errors.get(&status).cloned().unwrap_or_default()),
+                        )?);
+                        fields.push(&render(
+                            Field::in_form("conversion", &reference)
+                                .label(format!("{} schedule reference or reason", label(area)))
+                                .value(
+                                    self.values
+                                        .get(&reference)
+                                        .map(String::as_str)
+                                        .unwrap_or(""),
+                                )
+                                .errors(self.errors.get(&reference).cloned().unwrap_or_default()),
+                        )?);
+                    }
+                }
+                let actions = render(Button {
+                    button_type: "submit",
+                    body: Html::text(if self.id.is_some() {
+                        "Review sign-off"
+                    } else {
+                        "Review and issue"
+                    }),
+                    variant: ButtonVariant::Primary,
+                    ..Button::default()
+                })?;
+                fields.push(&render(Alert {id:"conversion-significance",kind:StatusKind::Info,body:Html::text(if self.id.is_some(){"Sign the exact issued report after reviewing its sources, differences and excluded history. Explain any qualifications in your conclusion."}else{"Issue an immutable copy after reviewing the report. Issuance does not sign it or certify completeness."}),..Alert::default()})?);
+                body.push(&render(Card {
+                    id: "conversion-form-card",
+                    body: render(Form {
+                        id: "conversion-form",
+                        event: if self.id.is_some() {
+                            "review_sign"
+                        } else {
+                            "review_issue"
+                        },
+                        body: fields,
+                        actions,
+                        ..Form::default()
+                    })?,
+                    ..Card::default()
+                })?);
+            }
+            if self.review.is_some() {
+                body.push(&render(Button {
+                    event: "open_review",
+                    body: Html::text("Continue to confirmation"),
+                    variant: ButtonVariant::Primary,
+                    ..Button::default()
+                })?);
+            }
+            if let Some(review) = self.review.as_ref().filter(|_| self.confirm) {
+                body.push(&render(ConfirmDialog {id:"conversion-confirm-modal",consequence:if review.contract==ISSUE{"Issue this conversion report?"}else{"Sign this issued conversion report?"},detail:&format!("Current company: {name}. Review the report's retained sources, differences and limits before confirming. This record cannot be changed."),confirm:if review.contract==ISSUE{"Issue"}else{"Sign"},confirm_event:if review.contract==ISSUE{"issue"}else{"sign"},cancel_event:"cancel_review",..ConfirmDialog::default()})?);
+            }
+        } else {
+            body.push(&render(Alert {
+                id: "conversion-no-company",
+                kind: StatusKind::Info,
+                body: Html::text("Choose a current company in the top bar."),
+                ..Alert::default()
+            })?);
+        }
+        Ok(LiveBody {
+            html: render(bilibi_ui::Page {
+                id: "conversion-page",
+                variant: PageVariant::Detail,
+                body,
+                ..bilibi_ui::Page::default()
+            })?
+            .to_string(),
+            ..LiveBody::default()
+        })
+    }
+}
+impl LiveState<Scope, Error> for State {
+    fn update<'a>(&'a mut self, r: LiveRequest<'a, Scope>) -> LiveFuture<'a, Error> {
+        Box::pin(async move {
+            if let LiveInput::Event(v) = r.input {
+                let event = v["type"].as_str().ok_or(Error::Invalid)?;
+                match event {
+                    "inspect" => {
+                        if let Some((key, _)) = v["value"]
+                            .as_str()
+                            .and_then(|s| s.parse::<usize>().ok())
+                            .and_then(|i| self.entries().get(i).cloned())
+                        {
+                            self.path.push(key);
+                            self.offset = 0;
+                        }
+                    }
+                    "up" => {
+                        self.path.pop();
+                        self.offset = 0;
+                    }
+                    "previous" => self.offset = self.offset.saturating_sub(100),
+                    "next" => self.offset = self.offset.saturating_add(100),
+                    "grid" => {
+                        self.columns.handle(&params::string_values(v));
+                    }
+                    "cancel_review" => self.confirm = false,
+                    "open_review" => self.confirm = true,
+                    "issued_list" => {
+                        self.document = Value::Null;
+                        self.path.clear();
+                        self.offset = 0;
+                        self.list_after = 0;
+                    }
+                    "more_reports" => {
+                        self.list_after = v["value"]
+                            .as_str()
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0);
+                        self.document = Value::Null;
+                        self.path.clear();
+                        self.offset = 0;
+                    }
+                    "review_issue" | "review_sign" => {
+                        self.errors.clear();
+                        self.message.clear();
+                        self.review = None;
+                        self.confirm = false;
+                        for key in [
+                            "as_of",
+                            "reviewer_reference",
+                            "note",
+                            "bank_status",
+                            "bank_reference",
+                            "tax_status",
+                            "tax_reference",
+                            "payroll_status",
+                            "payroll_reference",
+                        ] {
+                            if let Some(text) = v[format!("conversion[{key}]")].as_str() {
+                                self.values.insert(key.into(), text.into());
+                            }
+                        }
+                        let mut input = json!(self.values);
+                        input["company_id"] = json!(r.scope.current_company().map(|c| c.get()));
+                        if let Some(id) = self.id {
+                            input["report_id"] = json!(id);
+                        }
+                        let contract = if event == "review_issue" { ISSUE } else { SIGN };
+                        let call = Call {
+                            scope: r.scope,
+                            credential: r.credential,
+                            service: SERVICE,
+                            event,
+                            contract,
+                        };
+                        match self.pages.contracts.preview(&call, input.clone()).await {
+                            Ok(review) => {
+                                if let Some(code) = review["plan_code"].as_str() {
+                                    self.document = if contract == ISSUE {
+                                        review["results"][0]["preview"]["result"].clone()
+                                    } else {
+                                        review["results"][0]["preview"]["result"]["record"].clone()
+                                    };
+                                    self.path.clear();
+                                    self.offset = 0;
+                                    self.review = Some(Review {
+                                        code: code.into(),
+                                        input,
+                                        contract,
+                                    });
+                                } else {
+                                    let fields = &review["results"][0]["error"]["fields"];
+                                    self.errors =
+                                        serde_json::from_value(fields.clone()).unwrap_or_default();
+                                    self.message=self.errors.get("base").map(|v|v.join(" ")).unwrap_or_else(||"The report could not be reviewed. Check the highlighted fields and your permissions.".into());
+                                }
+                            }
+                            Err(e) => self.message = e.to_string(),
+                        }
+                    }
+                    "issue" | "sign" => {
+                        if let Some(review) = self.review.take() {
+                            let call = Call {
+                                scope: r.scope,
+                                credential: r.credential,
+                                service: SERVICE,
+                                event,
+                                contract: review.contract,
+                            };
+                            match self
+                                .pages
+                                .contracts
+                                .commit(&call, &review.code, review.input)
+                                .await
+                            {
+                                Ok(done) => {
+                                    let result = &done["results"][0]["result"]["result"];
+                                    if review.contract == ISSUE {
+                                        if let Some(id) = result["id"].as_i64() {
+                                            return Ok(LiveBody {
+                                                redirect: Some(format!("{PATH}/{id}")),
+                                                ..LiveBody::default()
+                                            });
+                                        }
+                                    }
+                                    self.message = "Accountant sign-off recorded.".into();
+                                    self.document = Value::Null;
+                                    self.path.clear();
+                                }
+                                Err(e) => self.message = e.to_string(),
+                            }
+                        }
+                    }
+                    "clear-flash" => self.message.clear(),
+                    _ => return Err(Error::Invalid),
+                }
+            }
+            self.view(r.scope).await
+        })
+    }
+}
+impl Page<Scope, Error> for Pages {
+    fn title(&self, _: &str) -> Option<&'static str> {
+        Some("Conversion reports")
+    }
+    fn render<'a>(&'a self, r: PageRequest<'a, Scope>) -> PageFuture<'a, Error> {
+        Box::pin(async move {
+            let mut state = State::new(self.clone(), &r);
+            let body = state.view(r.scope.ok_or(Error::Unauthorized)?).await?;
+            Ok(PageBody {
+                html: body.html,
+                live: true,
+                title: None,
+            })
+        })
+    }
+    fn mount<'a>(&'a self, r: PageRequest<'a, Scope>) -> MountFuture<'a, Scope, Error> {
+        Box::pin(async move {
+            Ok(Some(
+                Box::new(State::new(self.clone(), &r)) as Box<dyn LiveState<Scope, Error>>
+            ))
+        })
+    }
+}

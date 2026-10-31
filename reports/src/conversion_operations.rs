@@ -171,6 +171,31 @@ async fn issue_review(
         .map_err(refusal)?;
     report["reviewer_reference"] = json!(text(input, "reviewer_reference", 2000)?);
     report["review_note"] = json!(text(input, "note", 8000)?);
+    let mut schedules = serde_json::Map::new();
+    for area in ["bank", "tax", "payroll"] {
+        let status_key = format!("{area}_status");
+        let reference_key = format!("{area}_reference");
+        let status = input[&status_key].as_str().unwrap_or("not_assessed");
+        if !["not_assessed", "applicable", "not_applicable"].contains(&status) {
+            return Err(invalid(
+                &status_key,
+                "Choose whether this schedule applies.",
+            ));
+        }
+        let reference = if status == "not_assessed" {
+            String::new()
+        } else {
+            text(input, &reference_key, 2000)?
+        };
+        schedules.insert(
+            area.into(),
+            json!({"status":status,"reference_or_reason":reference}),
+        );
+        if status == "not_assessed" {
+            report["unresolved_differences"].as_array_mut().ok_or(Error::Internal)?.push(json!({"area":area,"reason":"The accountant has not assessed this schedule's applicability or completeness."}));
+        }
+    }
+    report["schedule_reviews"] = Value::Object(schedules);
     Ok(report)
 }
 impl WriteHandler for Issue {
@@ -304,7 +329,14 @@ fn write_schema(mut s: Value) -> Value {
     s
 }
 fn issue_schema() -> Value {
-    write_schema(dated())
+    let mut schema = write_schema(dated());
+    for area in ["bank", "tax", "payroll"] {
+        schema["properties"][format!("{area}_status")] =
+            json!({"type":"string","enum":["not_assessed","applicable","not_applicable"]});
+        schema["properties"][format!("{area}_reference")] =
+            json!({"type":"string","maxLength":2000});
+    }
+    schema
 }
 fn sign_schema() -> Value {
     write_schema(record())

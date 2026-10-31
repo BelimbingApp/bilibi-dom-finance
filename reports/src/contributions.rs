@@ -166,3 +166,20 @@ bilibi_menu::contribute!(
 inventory::submit! { bilibi_module_registry::Contribution::new(bilibi_module_registry::contributions::PAGE_WRITES, crate::setup_page::PAGES, bilibi_module_registry::Provenance { module: MODULE, source: file!(), line: line!() }, &bilibi_module_registry::contributions::PageWrites {
     service: crate::setup_page::PAGES, contracts: &[], pending: bilibi_module_registry::contributions::Pending::None,
 }) }
+
+// One list and record home for every issued conversion report and its sign-off.
+inventory::submit! { Contribution::new(ROUTES,"finance/reports.conversions",provenance!(),&Route {method:Method::Get,path:"/finance/reports/conversions",service:crate::conversion_page::SERVICE,operation:"conversions",access:Access::Capability(crate::VIEW),framed:true}) }
+inventory::submit! { Contribution::new(ROUTES,"finance/reports.conversion",provenance!(),&Route {method:Method::Get,path:"/finance/reports/conversions/{report_id}",service:crate::conversion_page::SERVICE,operation:"conversion",access:Access::Capability(crate::VIEW),framed:true}) }
+bilibi_menu::contribute!(
+    "finance/reports",
+    bilibi_menu::MenuItem::page(
+        "finance.reports.conversions",
+        "Conversion reports",
+        "/finance/reports/conversions"
+    )
+    .icon("gmdi-money-r")
+    .under("finance.group.bookkeeping")
+    .requires(bilibi_menu::Requirement::Capability(crate::VIEW))
+    .order(6)
+);
+inventory::submit! { Contribution::new(bilibi_module_registry::contributions::PAGE_WRITES,"finance/reports.conversion-pages",provenance!(),&bilibi_module_registry::contributions::PageWrites {service:crate::conversion_page::SERVICE,contracts:&[("review_issue","finance.reports.conversion.issue"),("issue","finance.reports.conversion.issue"),("review_sign","finance.reports.conversion.sign"),("sign","finance.reports.conversion.sign")],pending:bilibi_module_registry::contributions::Pending::None}) }

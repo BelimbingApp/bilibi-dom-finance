@@ -36,6 +36,7 @@ mod contributions;
 mod controls;
 mod conversion;
 mod conversion_operations;
+mod conversion_page;
 mod issued;
 mod layout;
 mod pack_owner;
@@ -143,6 +144,12 @@ inventory::submit! {
             }))))
         } }, Service { id: setup_page::PAGES, factory: |services| {
             Ok(Arc::new(bilibi_ui::page::PageService::<Scope, Error>(Arc::new(setup_page::Pages {
+                db: services.get::<Db>("base/database.pool")?.as_ref().clone(),
+                contracts: services.get(bilibi_agent_api::page::SERVICE)?,
+                parties: services.get("base/tenancy.parties")?,
+            }))))
+        } }, Service { id: conversion_page::SERVICE, factory: |services| {
+            Ok(Arc::new(bilibi_ui::page::PageService::<Scope, Error>(Arc::new(conversion_page::Pages {
                 db: services.get::<Db>("base/database.pool")?.as_ref().clone(),
                 contracts: services.get(bilibi_agent_api::page::SERVICE)?,
                 parties: services.get("base/tenancy.parties")?,
@@ -800,9 +807,14 @@ impl Reports {
     ) -> Result<IssuedReport> {
         let client = self.db.get().await.map_err(Error::from)?;
         authorize(&**client, scope, company_id, VIEW).await?;
-        issued::find(&**client, scope.tenant(), company_id, id)
+        let report = issued::find(&**client, scope.tenant(), company_id, id)
             .await?
-            .ok_or(ReportsError::ReportNotFound)
+            .ok_or(ReportsError::ReportNotFound)?;
+        if report.kind == conversion::KIND {
+            self.conversion_access(&**client, scope, company_id, VIEW)
+                .await?;
+        }
+        Ok(report)
     }
 
     /// The datasets [`Reports::evidence_page`] exports, one per table this
@@ -846,7 +858,14 @@ impl Reports {
             return source_period::evidence_page(client, scope.tenant(), company_id, limit, after)
                 .await;
         }
-        issued::page(client, scope.tenant(), company_id, dataset, limit, after).await
+        let page = issued::page(client, scope.tenant(), company_id, dataset, limit, after).await?;
+        if dataset == "conversion_signoff"
+            || page.rows.iter().any(|r| r["kind"] == conversion::KIND)
+        {
+            self.conversion_access(client, scope, company_id, VIEW)
+                .await?;
+        }
+        Ok(page)
     }
 
     // Reading
