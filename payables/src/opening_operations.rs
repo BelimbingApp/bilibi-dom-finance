@@ -298,7 +298,7 @@ fn credit_schema(action: &str) -> Value {
         "cash_account_id":{"type":"integer","minimum":1},
         "effective_date":{"type":"string","format":"date"},
         "amount":{"type":"string","description":"Positive amount in book minor units."},
-        "reference":{"type":"string","minLength":1,"maxLength":100},
+        "reference":{"type":"string","maxLength":100},
         "override_reason":{"type":"string","maxLength":500}
     }})
 }
