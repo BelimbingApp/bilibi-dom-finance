@@ -527,6 +527,7 @@ impl Reports {
         report: &Value,
         reference: String,
         note: String,
+        attestation: String,
     ) -> Result<Value> {
         self.conversion_access(tx.sql(), s, company, SIGN_OFF)
             .await?;
@@ -547,7 +548,7 @@ impl Reports {
         let user = s.user();
         let impersonator = s.impersonator().map(|i| i.user());
         Ok(tx.mutate(move|sql|Box::pin(async move {
-            let row:Value=sql.query_one("INSERT INTO finance_reports_conversion_signoffs(tenant_id,company_id,report_id,reviewer_reference,note,signed_by_user_id,signed_by_impersonator_id) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING to_jsonb(finance_reports_conversion_signoffs)",&[&tenant,&company,&id,&reference,&note,&user,&impersonator]).await?.get(0);
+            let row:Value=sql.query_one("INSERT INTO finance_reports_conversion_signoffs(tenant_id,company_id,report_id,reviewer_reference,note,attestation,signed_by_user_id,signed_by_impersonator_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING to_jsonb(finance_reports_conversion_signoffs)",&[&tenant,&company,&id,&reference,&note,&attestation,&user,&impersonator]).await?.get(0);
             let change=Change {kind:"finance.reports.conversion_signoff".into(),id:row["id"].as_i64().ok_or(Error::Internal)?,old:Value::Null,new:row.clone()};
             Ok((row,vec![change]))
         })).await?)

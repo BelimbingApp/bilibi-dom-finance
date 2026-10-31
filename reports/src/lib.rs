@@ -99,6 +99,7 @@ inventory::submit! {
             ("finance-reports-001-issued", include_str!("../migrations/001-issued.sql")),
             ("finance-reports-002-source-period", include_str!("../migrations/002-source-period.sql")),
             ("finance-reports-002-conversion-signoffs", include_str!("../migrations/002-conversion-signoffs.sql")),
+            ("finance-reports-003-conversion-signoff-attestation", include_str!("../migrations/003-conversion-signoff-attestation.sql")),
         ],
         services: &[Service { id: SERVICE, factory: |services| { let reports = Arc::new(Reports {
             db: services.get::<Db>("base/database.pool")?.as_ref().clone(),

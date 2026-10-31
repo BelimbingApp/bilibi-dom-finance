@@ -749,6 +749,10 @@ pub async fn after(db: &Db, services: &Services, kept: Kept) -> Outcome<()> {
     let scope = sign_in(db, services, 1, 3).await?;
     let preview = plans.preview(&signer, &sign).await?;
     assert_eq!(preview["valid"], true, "{preview}");
+    let attestation = preview["results"][0]["preview"]["result"]["attestation"]
+        .as_str()
+        .ok_or("missing reviewed sign-off attestation")?
+        .to_owned();
     let done = plans
         .commit(
             &scope,
@@ -761,6 +765,10 @@ pub async fn after(db: &Db, services: &Services, kept: Kept) -> Outcome<()> {
         .as_i64()
         .ok_or("missing signoff")?;
     assert_eq!(
+        done["results"][0]["result"]["result"]["attestation"],
+        attestation
+    );
+    assert_eq!(
         plans.preview(&signer, &sign).await?["valid"],
         false,
         "second signoff accepted"
@@ -769,6 +777,7 @@ pub async fn after(db: &Db, services: &Services, kept: Kept) -> Outcome<()> {
         .evidence_page(&scope, COMPANY, "conversion_signoff", Some(1), None)
         .await?;
     assert_eq!(evidence.rows[0]["report_id"], kept.id);
+    assert_eq!(evidence.rows[0]["attestation"], attestation);
     let registry = services.get::<bilibi_agent_api::Registry>("base/agent_api.registry")?;
     let read = registry
         .read(
@@ -780,6 +789,7 @@ pub async fn after(db: &Db, services: &Services, kept: Kept) -> Outcome<()> {
         .await?;
     assert_eq!(read["result"]["report"]["content"], kept.content);
     assert_eq!(read["result"]["signoffs"][0]["signed_by_user_id"], 3);
+    assert_eq!(read["result"]["signoffs"][0]["attestation"], attestation);
     let list = registry
         .read(
             db,

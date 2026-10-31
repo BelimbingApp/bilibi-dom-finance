@@ -268,11 +268,12 @@ pub(crate) async fn page(
             "report_id",
             "reviewer_reference",
             "note",
+            "attestation",
             "signed_by_user_id",
             "signed_by_impersonator_id",
             "signed_at",
         ];
-        let rows = client.query("SELECT id,tenant_id,company_id,report_id,reviewer_reference,note,signed_by_user_id,signed_by_impersonator_id,to_char(signed_at,'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') FROM finance_reports_conversion_signoffs WHERE tenant_id=$1 AND company_id=$2 AND id>$3 ORDER BY id LIMIT $4", &[&tenant,&company_id,&after,&limit]).await.map_err(Error::from)?.iter().map(|r| json!({"id":r.get::<_,i64>(0),"tenant_id":r.get::<_,i64>(1),"company_id":r.get::<_,i64>(2),"report_id":r.get::<_,i64>(3),"reviewer_reference":r.get::<_,String>(4),"note":r.get::<_,String>(5),"signed_by_user_id":r.get::<_,i64>(6),"signed_by_impersonator_id":r.get::<_,Option<i64>>(7),"signed_at":r.get::<_,String>(8)})).collect::<Vec<_>>();
+        let rows = client.query("SELECT id,tenant_id,company_id,report_id,reviewer_reference,note,attestation,signed_by_user_id,signed_by_impersonator_id,to_char(signed_at,'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') FROM finance_reports_conversion_signoffs WHERE tenant_id=$1 AND company_id=$2 AND id>$3 ORDER BY id LIMIT $4", &[&tenant,&company_id,&after,&limit]).await.map_err(Error::from)?.iter().map(|r| json!({"id":r.get::<_,i64>(0),"tenant_id":r.get::<_,i64>(1),"company_id":r.get::<_,i64>(2),"report_id":r.get::<_,i64>(3),"reviewer_reference":r.get::<_,String>(4),"note":r.get::<_,String>(5),"attestation":r.get::<_,String>(6),"signed_by_user_id":r.get::<_,i64>(7),"signed_by_impersonator_id":r.get::<_,Option<i64>>(8),"signed_at":r.get::<_,String>(9)})).collect::<Vec<_>>();
         let next = (rows.len() as i64 == limit)
             .then(|| rows.last().and_then(|r| r["id"].as_i64()))
             .flatten();

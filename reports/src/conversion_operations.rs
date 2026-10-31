@@ -10,6 +10,7 @@ use bilibi_tenancy::Scope;
 use jiff::civil::Date;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
+const SIGN_ATTESTATION: &str = "I have reviewed this exact issued snapshot, its differences, excluded history and schedule limits. My note explains my conclusion and any qualifications. This attestation does not change the figures or resolve differences.";
 fn owner() -> bilibi_agent_api::Result<&'static Reports> {
     Ok(OWNER.get().ok_or(Error::Internal)?)
 }
@@ -257,7 +258,7 @@ async fn sign_review(
         .await
         .map_err(|e| invalid("base", e.to_string()))?;
     Ok(
-        json!({"record":record,"reviewer_reference":text(input,"reviewer_reference",2000)?,"note":text(input,"note",8000)?,"approval":decision,"attestation":"I have reviewed this exact issued snapshot, its differences, excluded history and schedule limits. My note explains my conclusion and any qualifications. This attestation does not change the figures or resolve differences."}),
+        json!({"record":record,"reviewer_reference":text(input,"reviewer_reference",2000)?,"note":text(input,"note",8000)?,"approval":decision,"attestation":SIGN_ATTESTATION}),
     )
 }
 impl WriteHandler for Sign {
@@ -288,8 +289,9 @@ impl WriteHandler for Sign {
             let company = id(input, "company_id")?;
             let reference = text(input, "reviewer_reference", 2000)?;
             let note = text(input, "note", 8000)?;
+            let attestation = v["attestation"].as_str().ok_or(Error::Internal)?.to_owned();
             let row = owner()?
-                .sign_conversion_on(tx, s, company, &v["record"], reference, note)
+                .sign_conversion_on(tx, s, company, &v["record"], reference, note, attestation)
                 .await
                 .map_err(refusal)?;
             Ok(row.into())
