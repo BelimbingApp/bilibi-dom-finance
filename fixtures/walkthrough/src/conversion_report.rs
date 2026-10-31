@@ -63,9 +63,16 @@ pub async fn before(db: &Db, services: &Services) -> Outcome<Kept> {
     };
     let plans = services.get::<Plans>("base/agent_api.plans")?;
     let reports = services.get::<Reports>(bilibi_finance_reports::SERVICE)?;
-    let preview = reports
-        .conversion_report(&s, COMPANY, date(2026, 8, 1))
-        .await?;
+    let registry = services.get::<bilibi_agent_api::Registry>("base/agent_api.registry")?;
+    let preview = registry
+        .read(
+            db,
+            &s,
+            "finance.reports.conversion.preview",
+            &json!({"company_id":COMPANY,"as_of":"2026-08-01"}),
+        )
+        .await?["result"]
+        .clone();
     assert!(preview["postings_by_owner"]["rows"]
         .as_array()
         .is_some_and(|a| !a.is_empty()));
@@ -238,6 +245,26 @@ pub async fn after(db: &Db, services: &Services, kept: Kept) -> Outcome<()> {
         .evidence_page(&scope, COMPANY, "conversion_signoff", Some(1), None)
         .await?;
     assert_eq!(evidence.rows[0]["report_id"], kept.id);
+    let registry = services.get::<bilibi_agent_api::Registry>("base/agent_api.registry")?;
+    let read = registry
+        .read(
+            db,
+            &scope,
+            "finance.reports.conversion.get",
+            &json!({"company_id":COMPANY,"report_id":kept.id}),
+        )
+        .await?;
+    assert_eq!(read["result"]["report"]["content"], kept.content);
+    assert_eq!(read["result"]["signoffs"][0]["signed_by_user_id"], 2);
+    let list = registry
+        .read(
+            db,
+            &scope,
+            "finance.reports.conversion.list",
+            &json!({"company_id":COMPANY}),
+        )
+        .await?;
+    assert_eq!(list["result"]["rows"][0]["signed"], true);
     let c = db.get().await?;
     assert!(c
         .execute(
