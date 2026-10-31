@@ -80,6 +80,12 @@ fn register_schema() -> Value {
         json!({"source":{"type":"string","enum":["ordinary","opening"]},"status":{"type":"string","enum":["in_service","disposed","voided"]},"as_of":{"type":"string","format":"date","description":"Dated register and projected schedule, not a range filter."},"through_entry_number":{"type":"integer","minimum":0},"through_asset_number":{"type":"integer","minimum":0},"through_event_number":{"type":"integer","minimum":0},"through_category_revision_id":{"type":"integer","minimum":0}}),
     )
 }
+fn schedule_schema() -> Value {
+    schema(
+        &["as_of"],
+        json!({"as_of":{"type":"string","format":"date","description":"Dated register and projected schedule, not a range filter."},"through_entry_number":{"type":"integer","minimum":0},"through_asset_number":{"type":"integer","minimum":0},"through_event_number":{"type":"integer","minimum":0},"through_category_revision_id":{"type":"integer","minimum":0}}),
+    )
+}
 fn asset_schema() -> Value {
     schema(
         &["asset_id"],
@@ -167,7 +173,7 @@ impl ReadHandler for Read {
                 Self::Categories => {
                     json!({"records":owner.categories_on(c,s,company).await.map_err(failure)?})
                 }
-                Self::Register | Self::Schedule => {
+                Self::Register => {
                     let mut report = owner
                         .report_on(
                             c,
@@ -200,6 +206,9 @@ impl ReadHandler for Read {
                                 .is_none_or(|wanted| wanted == status)
                     });
                     json!({"report":report})
+                }
+                Self::Schedule => {
+                    json!({"report":owner.report_on(c,s,company,date(input,"as_of").map_err(failure)?,&pins(input).map_err(failure)?).await.map_err(failure)?})
                 }
                 Self::Asset => {
                     json!({"record":owner.asset_on(c,s,company,id(input,"asset_id").map_err(failure)?).await.map_err(failure)?})
@@ -588,7 +597,7 @@ inventory::submit! {Contribution::new(DEFINITIONS,"finance/fixed_assets.lifecycl
     op!("category.list","Asset categories","Read categories and their immutable revision history.",VIEW,target,Handler::Read(&Read::Categories)),
     op!("category.save","Prepare asset category","Create a category or append a complete revision with eligible posting accounts and depreciation defaults. Existing assets retain their original revision.",CONFIGURE,category_schema,Handler::SafeWrite(&Write::Category)),
     op!("register.get","Fixed asset register","Read dated posted accumulation, carrying values, projected schedules and account reconciliation. Filter rows by opening or ordinary source and status. Reconciliation always covers the complete register. Reproduce with the filters, date and all four returned pins.",VIEW,register_schema,Handler::Read(&Read::Register)),
-    op!("schedule.get","Depreciation schedules","Read projected schedules in the dated pinned register. Scheduled amounts are not posted charges.",VIEW,register_schema,Handler::Read(&Read::Schedule)),
+    op!("schedule.get","Depreciation schedules","Read projected schedules in the dated pinned register. Scheduled amounts are not posted charges.",VIEW,schedule_schema,Handler::Read(&Read::Schedule)),
     op!("asset.get","Read asset","Read frozen source assumptions, prospective schedule, posted charges and corrections.",VIEW,asset_schema,Handler::Read(&Read::Asset)),
     op!("asset.acquire","Register acquisition","Recognise one complete posted acquisition debit without reposting or taking ownership. Opening aggregates must use opening.import instead.",ACQUIRE,acquisition_schema,Handler::SafeWrite(&Write::Acquire)),
     op!("run.list","Depreciation runs","Read runs newest month first, including items, exceptions and reversals.",VIEW,target,Handler::Read(&Read::Runs)),

@@ -650,7 +650,6 @@ fn draft_fields() -> Value {
 }
 fn draft_create() -> Value {
     let mut p = draft_fields();
-    p["source"] = choice(&["ordinary", "opening"]);
     p["kind"] = choice(Receivables::document_kinds());
     schema(&["kind", "series_id", "customer_id"], p)
 }

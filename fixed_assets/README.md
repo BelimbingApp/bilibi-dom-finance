@@ -155,7 +155,8 @@ MCP and `/api/v1` expose the same category preparation, acquisitions, depreciati
 | --- | --- | --- |
 | `category.list` | None | Categories, current defaults and immutable revisions |
 | `category.save` | Optional `category_id` to revise; otherwise `name`; complete account IDs, `method`, `life_months`, optional `annual_rate`, `reason` | New immutable revision |
-| `register.get`, `schedule.get` | `as_of`; optional four report pins | Register, projected schedules and account reconciliation |
+| `register.get` | `as_of`; optional `source`, `status` and four report pins | Filtered register rows, projected schedules and whole-register account reconciliation |
+| `schedule.get` | `as_of`; optional four report pins | Register, projected schedules and account reconciliation |
 | `asset.get` | `asset_id` | Frozen assumptions, source facts, schedule, posted charges and events |
 | `asset.acquire` | `source` (`entry` or `bill`), `source_id`, `line_number`, `category_revision_id`, `description`, `in_service_date`; optional residual and assumption overrides | Asset without a new acquisition posting |
 | `run.list` | None | Runs newest month first, with items, exceptions and reversals |
