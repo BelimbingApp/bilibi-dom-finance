@@ -69,6 +69,7 @@ fn schema() -> Value {
     let properties = value["properties"]
         .as_object_mut()
         .expect("schema properties");
+    properties.insert("source_evidence".into(), json!({"type":"object","description":"Optional source-only history and schedules keyed by source asset ID. See the opening guide for history, source_period_expense and tax_capital_allowances shapes. These facts never post or change prospective estimates."}));
     properties.insert(
         "part".into(),
         json!({"type":"integer","minimum":1,"maximum":200}),

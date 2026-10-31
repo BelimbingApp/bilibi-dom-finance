@@ -286,6 +286,13 @@ impl Detail {
                     ..Default::default()
                 })?);
             }
+            if let Some(opening) = &d.opening {
+                assumptions.push(&super::source_evidence::render(
+                    opening["source_id"].as_str().unwrap_or(""),
+                    &opening["source_evidence"],
+                    units,
+                )?);
+            }
             let rows = d
                 .schedule
                 .iter()

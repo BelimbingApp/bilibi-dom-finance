@@ -76,6 +76,8 @@ impl FixedAssets {
         self.lifecycle_preview_lock(c, s, company).await?;
         let context = self.ledger.opening_context_on(c, s, company).await?;
         let book = self.ledger.get_book_on(c, s, company).await?;
+        let mut evidence =
+            crate::opening_evidence::read(input, context.entry.entry_date, book.minor_units)?;
         let reference = input["source_reference"].as_str().unwrap_or("").trim();
         if reference.is_empty() || reference.chars().count() > 100 || reference.contains('\0') {
             return Err(invalid(
@@ -96,7 +98,7 @@ impl FixedAssets {
             let batch:Value=row.get(0);
             if batch["source_reference"]!=reference || batch["source_csv"]!=csv {return Err(invalid("source_reference","the opening register has already been imported; the same source reference and exact CSV are required for a retry"));}
             let retained=c.query_opt("SELECT review FROM finance_fixed_assets_opening_decisions WHERE tenant_id=$1 AND company_id=$2 AND batch_id=$3",&[&s.tenant(),&company,&batch["id"].as_i64().ok_or(Error::Invalid)?]).await?;
-            if let Some(row)=retained {let review:Value=row.get(0);if review["replaces_batch_id"]!=input["replaces_batch_id"] || review["reason"]!=input["reason"] {return Err(invalid("source_reference","already identifies different correction instructions"));}}
+            if let Some(row)=retained {let review:Value=row.get(0);if review["replaces_batch_id"]!=input["replaces_batch_id"] || review["reason"]!=input["reason"] || review["source_evidence"]!=json!(evidence) {return Err(invalid("source_reference","already identifies different correction instructions"));}}
             return Ok(Prepared{review:json!({"state":"reconciled","batch":batch,"already_imported":true,"rows":[],"posts":false}),context,rows:vec![],balances:BTreeMap::new(),existing:Some(batch)});
         }
         let replacement = self.opening_replacement(c, s, company, input).await?;
@@ -219,7 +221,8 @@ impl FixedAssets {
             }
             // An opening register freezes an explicit prospective straight-line estimate.
             // No historical schedule is reconstructed or caught up.
-            let mut facts = json!({"source_id":row[0],"description":row[1],"category_revision_id":revision,"acquisition_date":acquisition.to_string(),"in_service_date":service.to_string(),"cost":cost,"accumulated_depreciation":accumulated,"remaining_life_months":months,"residual_value":residual,"carrying_value":cost-accumulated,"method":"straight_line","opening_date":context.entry.entry_date.to_string(),"category_method":r["method"]});
+            let source_evidence = evidence.remove(row[0]).unwrap_or(Value::Null);
+            let mut facts = json!({"source_id":row[0],"description":row[1],"category_revision_id":revision,"acquisition_date":acquisition.to_string(),"in_service_date":service.to_string(),"cost":cost,"accumulated_depreciation":accumulated,"remaining_life_months":months,"residual_value":residual,"carrying_value":cost-accumulated,"method":"straight_line","opening_date":context.entry.entry_date.to_string(),"category_method":r["method"],"source_evidence":source_evidence});
             for (field, role, balance) in [
                 ("cost_account_id", "cost", cost),
                 (
@@ -258,6 +261,14 @@ impl FixedAssets {
                 .map_err(|e| fail(&e.to_string()))?;
             rows.push(facts);
         }
+        if !evidence.is_empty() {
+            return Err(invalid(
+                "source_evidence",
+                "every evidence key must identify an asset in this source register",
+            ));
+        }
+        let evidence =
+            crate::opening_evidence::read(input, context.entry.entry_date, book.minor_units)?;
         // Class totals explain the source register; only account totals reconcile
         // to the ledger because an account may be shared by several classes.
         let class_totals: Vec<Value> = classes.into_iter().map(|((category, cost_account, accumulated_account), (cost, accumulated))| json!({"category_id":category,"cost_account_id":cost_account,"accumulated_account_id":accumulated_account,"cost":cost,"accumulated_depreciation":accumulated,"carrying_value":cost-accumulated})).collect();
@@ -316,7 +327,7 @@ impl FixedAssets {
             )
             .await?;
         Ok(Prepared {
-            review: json!({"state":"previewed","replaces_batch_id":input["replaces_batch_id"],"reason":input["reason"],"staged":input["staged"]==true,"conversion_date":context.entry.entry_date.to_string(),"entry_id":context.entry.id,"entry_number":context.entry.entry_number,"source_reference":reference,"currency_code":book.currency_code,"minor_units":book.minor_units,"rows":rows,"class_totals":class_totals,"month_convention":CONVENTION,"reconciliation":reconciliation,"posts":false,"approval":approval,"already_imported":false,"depreciation":"Prospective straight-line depreciation of source carrying value less residual value over the remaining useful life. A full first month is recognized at month-end, including a mid-month cut-off."}),
+            review: json!({"state":"previewed","replaces_batch_id":input["replaces_batch_id"],"reason":input["reason"],"staged":input["staged"]==true,"conversion_date":context.entry.entry_date.to_string(),"entry_id":context.entry.id,"entry_number":context.entry.entry_number,"source_reference":reference,"currency_code":book.currency_code,"minor_units":book.minor_units,"rows":rows,"class_totals":class_totals,"source_evidence":evidence,"month_convention":CONVENTION,"reconciliation":reconciliation,"posts":false,"approval":approval,"already_imported":false,"depreciation":"Prospective straight-line depreciation of source carrying value less residual value over the remaining useful life. A full first month is recognized at month-end, including a mid-month cut-off."}),
             context,
             rows,
             balances,

@@ -183,3 +183,35 @@ Readers can open the opening dialog to inspect retained source batches. The impo
 Source balances describe the position immediately before the conversion date. The first prospective charge falls at the end of the conversion calendar month. A mid-month cut-off receives a full month, without daily proration. Review the cut-off before approving the register; importing never records a historical catch-up charge.
 
 The import review groups source cost, accumulated depreciation and carrying value by category and its cost/accumulation account pair. Account reconciliation then combines all classes sharing an account and compares that total with the approved opening trial balance. Class totals explain the source register; they are not separate ledger balances.
+
+### Source history and tax evidence
+
+Use the optional `source_evidence` object on the same opening import or staging action. Each key is a `source_id` in that CSV batch. The opening dialog accepts the same object as JSON. Review shows the evidence beside the register; the asset page and the `opening_item` auditor dataset retain it after approval. A changed evidence object requires a new source reference. Corrections retain the original evidence and use the existing independently approved replacement path.
+
+```json
+{
+  "asset-3": {
+    "history": [
+      {"kind":"impairment","effective_date":"2025-12-31","amount":"200.00","reference":"Prior assessment","note":"Source assessment, already reflected in the source balances."},
+      {"kind":"residual_value_change","effective_date":"2026-06-30","residual_value":"100.00","reference":"Estimate review","note":"Source residual estimate revised."},
+      {"kind":"estimate_change","effective_date":"2026-06-30","remaining_life_months":96,"method":"Source straight line","reference":"Estimate review","note":"Prospective estimate at cut-off."}
+    ],
+    "source_period_expense": [
+      {"from":"2026-01-01","through":"2026-06-30","amount":"600.00","reference":"Source YTD depreciation schedule"}
+    ],
+    "tax_capital_allowances": [
+      {"from":"2025-01-01","through":"2025-12-31","qualifying_expenditure":"12000.00","allowances":"2400.00","reference":"Source tax computation"}
+    ]
+  }
+}
+```
+
+History kinds are `impairment`, `impairment_reversal`, `disposal`, `residual_value_change` and `estimate_change`. Every row needs a source date, reference and note. Impairment and disposal rows need `amount`; a residual change needs `residual_value`; an estimate change needs the source `method` or `remaining_life_months`. Amounts are nonnegative and use book precision. Source method names are retained text, not a choice of future depreciation method. All source dates and period ends must precede conversion. Periods include both endpoints. Keep at most 200 history and schedule rows per asset, and 64 KiB of evidence per direct import or staged batch. Each batch carries only its own assets' evidence; final staged reconciliation leaves this field empty.
+
+**These schedules are source evidence, not postings or a tax calculation.** A partial disposal can describe the source history of an asset still held, but does not dispose of its remaining registered cost. A historical residual change does not change the CSV's current residual estimate. Source-period expense and YTD bridges remain separate from subsequent depreciation activity: they are not added to future runs, do not create a catch-up charge, and do not clear a report reconciliation difference. The approved opening trial balance is the accounting source for those historical figures. Tax capital allowances remain separate from book depreciation and never determine carrying value.
+
+### Practitioner decisions still required for issue 110
+
+The defensible default remains prospective straight line using the explicit remaining life and residual value in the CSV. No additional opening method is enabled by this change: each needs practitioner review of its rate, final-month treatment and cut-off policy. In particular, the ordinary-acquisition reducing-balance implementation has a final-month true-up; it must not silently become an opening default.
+
+Historical impairment and disposal evidence can be retained, but this does not implement a separate impairment contra-account, a post-conversion impairment workflow, or a register of assets fully disposed of before cut-off. The source cost and depreciation columns must describe the remaining asset and reconcile to their approved accounts; never put an impairment balance in depreciation merely to make an import pass. Separate impairment accounting, new prospective methods and later estimate changes remain part of issue 110, pending practitioner decisions. This slice must be described as **Part of #110**.

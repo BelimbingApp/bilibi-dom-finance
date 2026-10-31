@@ -7,6 +7,7 @@ mod categories;
 mod contributions;
 mod opening;
 mod opening_csv;
+mod opening_evidence;
 mod opening_lifecycle;
 mod opening_operations;
 mod operations;

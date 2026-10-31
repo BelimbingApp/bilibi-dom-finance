@@ -54,6 +54,17 @@ impl FixedAssets {
             ));
         }
         let book = self.ledger.get_book_on(c, s, company).await?;
+        let context = self.ledger.opening_context_on(c, s, company).await?;
+        let evidence =
+            crate::opening_evidence::read(input, context.entry.entry_date, book.minor_units)?;
+        let source_ids: std::collections::BTreeSet<_> =
+            rows.iter().skip(1).map(|row| row[0].trim()).collect();
+        if evidence.keys().any(|id| !source_ids.contains(id.as_str())) {
+            return Err(invalid(
+                "source_evidence",
+                "every evidence key must identify an asset in this source batch",
+            ));
+        }
         if input["currency_code"] != book.currency_code {
             return Err(invalid("currency_code", "must match the book's currency"));
         }
@@ -178,9 +189,30 @@ impl FixedAssets {
                 "leave empty when reconciling staged batches",
             ));
         }
+        if input["source_evidence"]
+            .as_object()
+            .is_some_and(|m| !m.is_empty())
+            || (!input["source_evidence"].is_null() && !input["source_evidence"].is_object())
+        {
+            return Err(invalid(
+                "source_evidence",
+                "leave empty when reconciling retained source batches",
+            ));
+        }
+        let mut evidence = serde_json::Map::new();
         let mut combined = String::new();
         for (index, stage) in stages.iter().enumerate() {
             let payload: Value = stage.get(1);
+            if let Some(items) = payload["source_evidence"].as_object() {
+                for (id, facts) in items {
+                    if evidence.insert(id.clone(), facts.clone()).is_some() {
+                        return Err(invalid(
+                            "source_evidence",
+                            "an asset's evidence must occur in only one source batch",
+                        ));
+                    }
+                }
+            }
             let rows =
                 crate::opening_csv::parse(payload["csv"].as_str().unwrap_or("").as_bytes(), ",")
                     .map_err(|_| invalid("csv", "cannot read retained batch"))?;
@@ -196,6 +228,7 @@ impl FixedAssets {
         }
         let mut resolved = first;
         resolved["csv"] = json!(combined);
+        resolved["source_evidence"] = json!(evidence);
         resolved["staged"] = json!(true);
         resolved["override_reason"] = input["override_reason"].clone();
         Ok(resolved)
@@ -286,6 +319,7 @@ fn stage_payload(input: &Value) -> Value {
         object.retain(|key, _| {
             [
                 "source_reference",
+                "source_evidence",
                 "currency_code",
                 "csv",
                 "series_id",
@@ -303,6 +337,7 @@ fn stage_payload(input: &Value) -> Value {
 fn stage_manifest(input: &Value) -> Value {
     let mut value = input.clone();
     if let Some(object) = value.as_object_mut() {
+        object.remove("source_evidence");
         object.remove("csv");
         object.remove("part");
     }

@@ -24,6 +24,7 @@ fn field_label(key: &str) -> &str {
         "replaces_batch_id" => "Register to replace",
         "reason" => "Correction reason",
         "csv" => "Source register CSV",
+        "source_evidence" => "Source history and tax schedules",
         "series_id" => "Opening invoice series",
         "source_reference" => "Source reference",
         "currency_code" => "Book currency",
@@ -314,6 +315,13 @@ impl Opening {
                         "Paste the complete register: 1 to 500 rows, at most 128 KiB.",
                     ),
                     (
+                        "source_evidence",
+                        "Source history and tax schedules (JSON)",
+                        InputKind::Textarea,
+                        false,
+                        "Optional evidence keyed by source asset ID: history, source_period_expense and tax_capital_allowances. See the opening guide. These facts create no postings and do not change the prospective estimate.",
+                    ),
+                    (
                         "override_reason",
                         "Approval exception reason",
                         InputKind::Text,
@@ -550,6 +558,13 @@ impl Opening {
             }
             if review.contract != STAGE {
                 body.push(&render(table)?);
+                for row in facts["rows"].as_array().into_iter().flatten() {
+                    body.push(&super::source_evidence::render(
+                        row["source_id"].as_str().unwrap_or(""),
+                        &row["source_evidence"],
+                        units,
+                    )?);
+                }
             }
             if review.contract != STAGE {
                 body.push(&render(Alert{id:"conversion-review-reconciliation",kind:StatusKind::Info,body:Html::text("The complete register reconciles exactly to the approved opening account balances. This import records opening state and retains source evidence; it creates no new ledger entry."),..Alert::default()})?);
@@ -645,6 +660,21 @@ impl Opening {
                             .expect("form object")
                             .remove("override_reason");
                     }
+                    let source = input["source_evidence"].as_str().unwrap_or("").trim();
+                    input["source_evidence"] = if source.is_empty() {
+                        json!({})
+                    } else {
+                        match serde_json::from_str::<Value>(source) {
+                            Ok(value) => value,
+                            Err(_) => {
+                                self.fields.insert(
+                                    "source_evidence".into(),
+                                    vec!["must be valid JSON keyed by source asset ID".into()],
+                                );
+                                return Ok(());
+                            }
+                        }
+                    };
                     let contract = if self.values["mode"] == "stage" {
                         STAGE
                     } else {
