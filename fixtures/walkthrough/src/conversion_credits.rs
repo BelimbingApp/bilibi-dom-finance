@@ -10,7 +10,7 @@ pub(super) const CREDIT_ONLY_SOURCE: &str =
 fn tax(value: Value) -> String {
     format!("\"{}\"", value.to_string().replace('"', "\"\""))
 }
-fn csv(payable: bool, only: bool) -> String {
+pub(super) fn csv(payable: bool, only: bool) -> String {
     let header = if payable { AP } else { AR }.lines().next().unwrap();
     let normal = if payable { "bill" } else { "invoice" };
     let credit = if payable {

@@ -332,3 +332,52 @@ impl ReadHandler for CreditContext {
 inventory::submit! {Contribution::new(DEFINITIONS,"finance/payables.credit-context",Provenance{module:MODULE,source:file!(),line:line!()},&Definitions{operations:&[
  Operation{key:"finance.payables.credit.context",title:"Read credit settlement choices",summary:"Read eligible same-party targets and cash accounts. Search document references and page with next_after_id.",keywords:&["credit"],capability:VIEW,input:||{let mut schema=credit_schema("apply");schema["required"]=json!(["company_id","credit_document_id"]);schema["properties"]["search"]=json!({"type":"string","maxLength":100});schema["properties"]["after_id"]=json!({"type":"integer","minimum":0});schema},output,handler:Handler::Read(&CreditContext),channels:Channels::Every,step_up:&[]}
 ],guides:&[]})}
+
+struct ControlTieOut;
+impl ReadHandler for ControlTieOut {
+    fn owner(&self) -> &'static str {
+        MODULE
+    }
+    fn call<'a>(
+        &'a self,
+        _c: &'a dyn OperationClient,
+        s: &'a Scope,
+        input: &'a Value,
+    ) -> OperationFuture<'a> {
+        Box::pin(async move {
+            let date = input["as_of"]
+                .as_str()
+                .and_then(|s| s.parse().ok())
+                .ok_or_else(|| failure(invalid("as_of", "must be YYYY-MM-DD")))?;
+            let pins = crate::BalancePins {
+                through_entry_number: input["through_entry_number"].as_i64(),
+                through_opening_batch_id: input["through_opening_batch_id"].as_i64(),
+                through_settlement_number: input["through_settlement_number"].as_i64(),
+            };
+            let report = owner()
+                .map_err(failure)?
+                .tie_out_control_accounts(s, company(input).map_err(failure)?, date, &pins)
+                .await
+                .map_err(failure)?;
+            Ok(serde_json::to_value(report)
+                .map_err(|_| Error::Internal)?
+                .into())
+        })
+    }
+}
+fn tie_out_schema() -> Value {
+    let mut s = target();
+    s["required"] = json!(["company_id", "as_of"]);
+    s["properties"]["as_of"] = json!({"type":"string","format":"date"});
+    for key in [
+        "through_entry_number",
+        "through_opening_batch_id",
+        "through_settlement_number",
+    ] {
+        s["properties"][key] = json!({"type":"integer","minimum":0});
+    }
+    s
+}
+inventory::submit! {Contribution::new(DEFINITIONS,"finance/payables.control-tie-out",Provenance{module:MODULE,source:file!(),line:line!()},&Definitions{operations:&[
+ Operation{key:"finance.payables.control.tie_out",title:"Read control account tie-out",summary:"Read each saved control's signed subledger balance, actual ledger balance and other owners' differences at one complete accounting tuple.",keywords:&["credit","conversion","tie-out"],capability:VIEW,input:tie_out_schema,output,handler:Handler::Read(&ControlTieOut),channels:Channels::Every,step_up:&[]}
+],guides:&[]})}

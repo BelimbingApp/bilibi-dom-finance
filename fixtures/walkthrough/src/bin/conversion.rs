@@ -81,7 +81,8 @@ async fn setup(db: &Db, services: &Services, company: i64) -> Outcome<Value> {
     }
     let admin = in_company(db, services, 4, company).await?;
     let manager = in_company(db, services, 1, company).await?;
-    let multiple_controls = matches!(company, 4 | 6);
+    let credit_controls = matches!(company, 6 | 8 | 9);
+    let multiple_controls = matches!(company, 4 | 6 | 8 | 9);
     let l = services.get::<Ledger>(bilibi_finance_ledger::SERVICE)?;
     let ar = services.get::<Receivables>(bilibi_finance_receivables::SERVICE)?;
     let ap = services.get::<Payables>(bilibi_finance_payables::SERVICE)?;
@@ -128,7 +129,7 @@ async fn setup(db: &Db, services: &Services, company: i64) -> Outcome<Value> {
             }
         }
     }
-    if company == 6 {
+    if credit_controls {
         for (code, name, kind) in [
             ("1120", "Zero receivables control", AccountType::Asset),
             ("2020", "Zero payables control", AccountType::Liability),
@@ -260,7 +261,7 @@ async fn setup(db: &Db, services: &Services, company: i64) -> Outcome<Value> {
                     conversion_date: date(2026, 7, 1),
                     currency_code: "MYR".into(),
                     source_reference: format!("CONVERSION-{company}"),
-                    csv: if company == 6 {
+                    csv: if credit_controls {
                         conversion_credits::SOURCE
                     } else if company == 7 {
                         conversion_credits::CREDIT_ONLY_SOURCE
@@ -304,12 +305,12 @@ async fn setup(db: &Db, services: &Services, company: i64) -> Outcome<Value> {
         classifications.insert(account("1110").to_string(), json!("receivables_control"));
         classifications.insert(account("2010").to_string(), json!("payables_control"));
     }
-    if company == 6 {
+    if credit_controls {
         classifications.insert(account("1120").to_string(), json!("receivables_control"));
         classifications.insert(account("2020").to_string(), json!("payables_control"));
     }
     Ok(
-        json!({"company_id":company,"vendor_id":vendor.id,"vendor_key":format!("vendor:{}", vendor.id),"customer_id":customer.id,"invoice_series":invoice.id,"payment_series":payment.id,"bank":account("1000"),"bank_account_id":bank_account.id,"ar":if multiple_controls { MULTI_AR } else { AR },"ap":if multiple_controls { MULTI_AP } else { AP },"expense":account("5000"),"assets":asset_csv,"revision":revision,"opening_account_classifications":classifications,"historical_ar":if multiple_controls { json!(account("1110")) } else { Value::Null },"historical_ap":if multiple_controls { json!(account("2010")) } else { Value::Null }}),
+        json!({"company_id":company,"vendor_id":vendor.id,"vendor_key":format!("vendor:{}", vendor.id),"customer_id":customer.id,"invoice_series":invoice.id,"payment_series":payment.id,"bank":account("1000"),"bank_account_id":bank_account.id,"ar":if credit_controls { conversion_credits::csv(false,false) } else if multiple_controls { MULTI_AR.into() } else { AR.into() },"ap":if credit_controls { conversion_credits::csv(true,false) } else if multiple_controls { MULTI_AP.into() } else { AP.into() },"expense":account("5000"),"assets":asset_csv,"revision":revision,"opening_account_classifications":classifications,"historical_ar":if multiple_controls { json!(account("1110")) } else { Value::Null },"historical_ap":if multiple_controls { json!(account("2010")) } else { Value::Null }}),
     )
 }
 async fn prove_opening_invoice_page_scale(db: &Db, services: &Services) -> Outcome<()> {
@@ -1507,6 +1508,19 @@ async fn main() -> Outcome<()> {
         prove_opening_invoice_page_scale(&db, &app.services).await?;
         return Ok(());
     }
+    if std::env::args().any(|s| s == "prepare-credits-launcher") {
+        db.get().await?.execute("UPDATE companies SET name='Opening credit proof counterparty' WHERE tenant_id=1 AND id=10 AND name='Company 010'",&[]).await?;
+        let mut sources = Vec::new();
+        for company in [8, 9] {
+            sources.push(setup(&db, &app.services, company).await?);
+        }
+        std::fs::write(
+            std::env::var("BILIBI_OPENING_PROOF_CONFIG")?,
+            serde_json::to_vec_pretty(&sources)?,
+        )?;
+        println!("Credit sources prepared for browser Company 008 and MCP Company 009.");
+        return Ok(());
+    }
     if std::env::args().any(|s| s == "prepare-launcher") {
         // Fixture identity only: the launcher's demo retirement matches the
         // original generated name. Keep the counterparty these records use.
@@ -1576,6 +1590,17 @@ async fn launcher_credentials(db: &Db, services: &Services) -> Outcome<()> {
     let (tenant, user): (i64, i64) = (row.get(0), row.get(1));
     drop(client);
     let scope = sign_in(db, services, tenant, user).await?;
+    if std::env::var("BILIBI_CREDITS_PROOF").as_deref() == Ok("disposable") {
+        let person = scope
+            .actor()
+            .person()
+            .ok_or("launcher administrator has no Person")?
+            .get();
+        let users = services.get::<bilibi_core::user::UserService>("core/user.accounts")?;
+        for company in [8, 9] {
+            users.set_desk(&scope, company, person, true).await?;
+        }
+    }
     let access = services.get::<AgentAccess>("core/agent_access.grants")?;
     let callback = "https://example.test/opening-list-proof/callback";
     let registration=access.register_client(&serde_json::from_value::<ClientRegistration>(json!({"client_name":"Opening list proof","redirect_uris":[callback],"token_endpoint_auth_method":"none"}))?).await?;
