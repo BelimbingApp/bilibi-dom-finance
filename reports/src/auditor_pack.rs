@@ -400,7 +400,7 @@ impl Reports {
         }
         files.finish_sources()?;
         Ok(json!({
-            "generator":"finance/reports/auditor-pack", "generator_version":"9",
+            "generator":"finance/reports/auditor-pack", "generator_version":"10",
             "tenant_id":scope.tenant(), "company_id":company,
             "currency_code":totals.currency_code, "minor_units":totals.minor_units,
             "generated_by_user_id":scope.user(), "generated_by_impersonator_id":scope.impersonator().map(|a|a.user()),
