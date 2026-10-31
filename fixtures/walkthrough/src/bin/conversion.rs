@@ -76,12 +76,21 @@ async fn setup(db: &Db, services: &Services, company: i64) -> Outcome<Value> {
         ("1290", "Accumulated depreciation", AccountType::Asset),
         ("6100", "Depreciation expense", AccountType::Expense),
         ("4100", "Asset disposal gain", AccountType::Income),
-        ("1110", "Historical receivables", AccountType::Asset),
-        ("2010", "Historical payables", AccountType::Liability),
     ] {
         if !chart.iter().any(|a| a.code == code) {
             l.create_account(&admin, company, &NewAccount::new(code, name, kind))
                 .await?;
+        }
+    }
+    if multiple_controls {
+        for (code, name, kind) in [
+            ("1110", "Historical receivables", AccountType::Asset),
+            ("2010", "Historical payables", AccountType::Liability),
+        ] {
+            if !chart.iter().any(|a| a.code == code) {
+                l.create_account(&admin, company, &NewAccount::new(code, name, kind))
+                    .await?;
+            }
         }
     }
     if l.list_fiscal_years(&admin, company).await?.is_empty() {
