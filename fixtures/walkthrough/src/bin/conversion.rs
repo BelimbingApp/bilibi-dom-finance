@@ -260,6 +260,92 @@ async fn setup(db: &Db, services: &Services, company: i64) -> Outcome<Value> {
         json!({"company_id":company,"vendor_id":vendor.id,"vendor_key":format!("vendor:{}", vendor.id),"customer_id":customer.id,"invoice_series":invoice.id,"payment_series":payment.id,"bank":account("1000"),"bank_account_id":bank_account.id,"ar":if multiple_controls { MULTI_AR } else { AR },"ap":if multiple_controls { MULTI_AP } else { AP },"expense":account("5000"),"assets":asset_csv,"revision":revision,"opening_account_classifications":classifications,"historical_ar":if multiple_controls { json!(account("1110")) } else { Value::Null },"historical_ap":if multiple_controls { json!(account("2010")) } else { Value::Null }}),
     )
 }
+async fn prove_opening_invoice_page_scale(db: &Db, services: &Services) -> Outcome<()> {
+    const HEADER: &str = "source_id,customer_code,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind\n";
+    let company = 5;
+    let config = setup(db, services, company).await?;
+    let admin = sign_in(db, services, 1, 4).await?;
+    let manager = sign_in(db, services, 1, 1).await?;
+    let ar = services.get::<Receivables>(bilibi_finance_receivables::SERVICE)?;
+    let registry = services.get::<Registry>("base/agent_api.registry")?;
+    let mut rows = vec![
+        "scale-nonmatching,company_010,OUTSIDE-QUERY,2026-05-15,2026-06-30,0.50,0.50,1100,company"
+            .to_owned(),
+    ];
+    for n in 1..=2100 {
+        let amount = if n == 2100 { "0.50" } else { "1" };
+        rows.push(format!("scale-{n},company_010,SCALE-ROW-{n},2026-05-15,2026-06-30,{amount},{amount},1100,company"));
+    }
+    rows.push(
+        "scale-0,company_010,SCALE-ROW-0,2026-05-15,2026-06-30,900,900,1100,company".to_owned(),
+    );
+    let part_count = rows.len().div_ceil(500);
+    for (index, chunk) in rows.chunks(500).enumerate() {
+        ar.stage_opening_import(
+            &manager,
+            company,
+            &json!({
+                "source_reference":"AR-SCALE",
+                "currency_code":"MYR",
+                "series_id":config["invoice_series"],
+                "csv":format!("{HEADER}{}\n", chunk.join("\n")),
+                "opening_account_classifications":config["opening_account_classifications"],
+                "part":index + 1,
+                "part_count":part_count,
+            }),
+        )
+        .await?;
+    }
+    let reconciliation = json!({
+        "source_reference":"AR-SCALE",
+        "currency_code":"MYR",
+        "series_id":config["invoice_series"],
+        "csv":"",
+        "opening_account_classifications":config["opening_account_classifications"],
+        "staged":true,
+    });
+    assert!(ar
+        .import_opening_invoices(&manager, company, &reconciliation)
+        .await
+        .is_err());
+    ar.import_opening_invoices(&admin, company, &reconciliation)
+        .await?;
+    let ordinary = ar
+        .create_draft(
+            &manager,
+            company,
+            &json!({
+                "kind":"invoice",
+                "series_id":config["invoice_series"],
+                "customer_id":config["customer_id"],
+                "issue_date":"2026-07-02",
+                "description":"SCALE-ROW ordinary invoice",
+                "lines":[{"description":"SCALE-ROW ordinary invoice","quantity":"1","unit_price":"1"}],
+            }),
+        )
+        .await?;
+    ar.issue_document(&manager, company, ordinary.id).await?;
+    let client = db.get().await?;
+    let page = registry
+        .call(
+            &**client,
+            &admin,
+            "finance.receivables.document.page",
+            &json!({"company_id":company,"source":"opening","search":"SCALE-ROW","sort":"total","direction":"asc","page":999,"page_size":25}),
+        )
+        .await?;
+    assert_eq!(page["result"]["total"], 2101);
+    assert_eq!(page["result"]["page"], 85);
+    let documents = page["result"]["documents"]
+        .as_array()
+        .ok_or("opening invoice page rows missing")?;
+    assert_eq!(documents.len(), 1);
+    assert_eq!(documents[0]["description"], "Opening invoice SCALE-ROW-0");
+    assert_eq!(documents[0]["document_reference"], "OPEN-2102");
+    assert_eq!(documents[0]["total"], "900");
+    println!("Opening invoice scale proof: staged reconciliation, SQL source/search filtering, sorting, count and clamping passed.");
+    Ok(())
+}
 async fn prove(db: &Db, services: &Services) -> Outcome<()> {
     let company = 3;
     let config = setup(db, services, company).await?;
@@ -891,31 +977,8 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
     );
     drop(c);
     conversion_lifecycle::prove(db, services, &config, [a, b, asset_batch], run.id).await?;
-    let scale_company = 5;
-    let scale_config = setup(db, services, scale_company).await?;
-    let mut scale_csv = String::from("source_id,customer_code,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind\n");
-    for n in 0..2101 {
-        let amount = if n == 0 { "900" } else { "1" };
-        scale_csv.push_str(&format!("scale-{n},company_010,SCALE-ROW-{n},2026-05-15,2026-06-30,{amount},{amount},1100,company\n"));
-    }
-    ar.import_opening_invoices(
-        &s,
-        scale_company,
-        &json!({"source_reference":"AR-SCALE","currency_code":"MYR","series_id":scale_config["invoice_series"],"csv":scale_csv,"opening_account_classifications":scale_config["opening_account_classifications"]}),
-    )
-    .await?;
+    prove_opening_invoice_page_scale(db, services).await?;
     let client = db.get().await?;
-    let page = registry
-        .call(
-            &**client,
-            &s,
-            "finance.receivables.document.page",
-            &json!({"company_id":scale_company,"source":"opening","search":"SCALE-ROW","sort":"total","direction":"asc","page":999,"page_size":25}),
-        )
-        .await?;
-    assert_eq!(page["result"]["total"], 2101);
-    assert_eq!(page["result"]["page"], 85);
-    assert_eq!(page["result"]["documents"].as_array().unwrap().len(), 1);
     let bills = registry
         .call(
             &**client,
@@ -1099,6 +1162,10 @@ async fn main() -> Outcome<()> {
     grants
         .set_direct(&admin, 1, "admin.company.tenant-wide.manage", Some(true))
         .await?;
+    if std::env::args().any(|s| s == "opening-list-scale") {
+        prove_opening_invoice_page_scale(&db, &app.services).await?;
+        return Ok(());
+    }
     if std::env::args().any(|s| s == "prepare-launcher") {
         // Fixture identity only: the launcher's demo retirement matches the
         // original generated name. Keep the counterparty these records use.

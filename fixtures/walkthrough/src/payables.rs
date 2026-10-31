@@ -557,7 +557,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
     assert!(page
         .documents
         .windows(2)
-        .all(|d| (d[0].document_date, d[0].id) > (d[1].document_date, d[1].id)));
+        .all(|d| (d[0].document_date.as_str(), d[0].id) > (d[1].document_date.as_str(), d[1].id)));
     let first = p
         .list_documents(
             &manager,

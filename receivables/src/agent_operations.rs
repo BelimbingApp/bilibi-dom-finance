@@ -556,7 +556,11 @@ impl ReadHandler for Read {
                         }
                         let where_sql = " FROM finance_receivables_documents d WHERE d.tenant_id=$1 AND d.company_id=$2 AND ($3::text IS NULL OR d.kind=$3) AND ($4::text IS NULL OR ($4='unpaid' AND d.kind='invoice' AND d.status='issued' AND NOT EXISTS(SELECT 1 FROM finance_receivables_opening_items i JOIN finance_receivables_opening_decisions x ON x.replaces_batch_id=i.batch_id AND x.tenant_id=$1 AND x.company_id=$2 WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=d.id) AND finance_receivables_outstanding(d.id)>0) OR ($4<>'unpaid' AND d.status=$4)) AND ($5::bigint IS NULL OR d.customer_id=$5) AND ($6::text IS NULL OR EXISTS (SELECT 1 FROM finance_receivables_opening_items i WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=d.id)=($6='opening')) AND ($7='' OR strpos(lower(COALESCE(d.document_reference,'Draft #' || d.id::text)),lower($7))>0 OR strpos(lower(COALESCE(d.party_code,'')),lower($7))>0 OR strpos(lower(COALESCE(d.party_name,'')),lower($7))>0 OR strpos(lower(COALESCE(d.description,'')),lower($7))>0 OR (d.party_name IS NULL AND d.customer_id=ANY($8::bigint[])))";
                         let params: [&(dyn tokio_postgres::types::ToSql + Sync); 8] = [&tenant, &company, &kind, &status, &customer, &source, &search, &matching_customers];
-                        let total: i64 = client.query_one(&format!("SELECT count(*){where_sql}"), &params).await?.get(0);
+                        let total: i64 = client
+                            .query_opt(&format!("SELECT count(*){where_sql}"), &params)
+                            .await?
+                            .ok_or(Error::Internal)?
+                            .get(0);
                         let page = page.min(((total + page_size - 1) / page_size).max(1));
                         let offset = (page - 1) * page_size;
                         let order = match (sort, direction) {
