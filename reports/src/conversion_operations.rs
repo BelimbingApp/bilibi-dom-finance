@@ -316,8 +316,8 @@ fn write_schema(mut s: Value) -> Value {
         .as_array_mut()
         .unwrap()
         .extend([json!("reviewer_reference"), json!("note")]);
-    s["properties"]["reviewer_reference"] = json!({"type":"string","minLength":1,"maxLength":2000});
-    s["properties"]["note"] = json!({"type":"string","minLength":1,"maxLength":8000});
+    s["properties"]["reviewer_reference"] = json!({"type":"string","maxLength":2000});
+    s["properties"]["note"] = json!({"type":"string","maxLength":8000});
     s
 }
 fn issue_schema() -> Value {
