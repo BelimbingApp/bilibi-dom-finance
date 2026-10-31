@@ -38,6 +38,15 @@ pub(super) fn csv(payable: bool, only: bool) -> String {
                    kind: &str,
                    source_kind: &str,
                    facts: Value| {
+        let party = if source == "zero-invoice" {
+            if payable {
+                "company_011,Other source supplier"
+            } else {
+                "company_011"
+            }
+        } else {
+            party
+        };
         out.push_str(&format!("{source},{party},{reference},2026-05-01,{due},{gross},{residual},{control},company,{kind},{source_kind},source-system,MYR,{}\n",tax(facts)));
     };
     if !only {
@@ -108,6 +117,44 @@ async fn tied(
     company: i64,
     day: jiff::civil::Date,
 ) -> Outcome<()> {
+    let mut duplicate_ar = stage_ar.clone();
+    duplicate_ar["source_reference"] = json!("DUPLICATE-STAGED");
+    duplicate_ar["part_count"] = json!(2);
+    duplicate_ar["csv"] = json!(format!(
+        "{}\n{}\n",
+        ar_csv.lines().next().unwrap(),
+        ar_csv.lines().nth(1).unwrap()
+    ));
+    ar.stage_opening_import(&manager, company, &duplicate_ar)
+        .await?;
+    duplicate_ar["part"] = json!(2);
+    ar.stage_opening_import(&reviewer, company, &duplicate_ar)
+        .await?;
+    duplicate_ar["staged"] = json!(true);
+    duplicate_ar["csv"] = json!("");
+    assert!(ar
+        .import_opening_invoices(&reviewer, company, &duplicate_ar)
+        .await
+        .is_err());
+    let mut duplicate_ap = stage_ap.clone();
+    duplicate_ap["source_reference"] = json!("DUPLICATE-STAGED");
+    duplicate_ap["part_count"] = json!(2);
+    duplicate_ap["csv"] = json!(format!(
+        "{}\n{}\n",
+        ap_csv.lines().next().unwrap(),
+        ap_csv.lines().nth(1).unwrap()
+    ));
+    ap.stage_opening_import(&manager, company, &duplicate_ap)
+        .await?;
+    duplicate_ap["part"] = json!(2);
+    ap.stage_opening_import(&reviewer, company, &duplicate_ap)
+        .await?;
+    duplicate_ap["staged"] = json!(true);
+    duplicate_ap["csv"] = json!("");
+    assert!(ap
+        .import_opening_bills(&reviewer, company, &duplicate_ap)
+        .await
+        .is_err());
     let a = ar
         .tie_out_control_accounts(s, company, day, &ReceivablePins::default())
         .await?;
@@ -280,6 +327,62 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         .await?
         .parties
         .is_empty());
+    for (documents, primary, zero) in [(&invoices, "credit", "zero-credit")] {
+        let source = documents
+            .iter()
+            .find(|d| {
+                d.opening
+                    .as_ref()
+                    .is_some_and(|s| s["source_id"] == primary)
+            })
+            .unwrap()
+            .opening
+            .as_ref()
+            .unwrap();
+        assert_eq!(source["original_total"], "53");
+        assert_eq!(source["source_tax_facts"]["tax_total"], "3");
+        assert_eq!(
+            documents
+                .iter()
+                .find(|d| d.opening.as_ref().is_some_and(|s| s["source_id"] == zero))
+                .unwrap()
+                .opening
+                .as_ref()
+                .unwrap()["source_tax_facts"]["tax_total"],
+            "0"
+        );
+    }
+    assert!(ar
+        .tax_totals(&reviewer, company, &Default::default())
+        .await?
+        .is_empty());
+    assert!(ap
+        .tax_totals(&reviewer, company, &Default::default())
+        .await?
+        .is_empty());
+    assert!(ar
+        .list_issued_documents(&reviewer, company, None, None)
+        .await?
+        .is_empty());
+    assert!(ar
+        .evidence_page(&reviewer, company, "opening_stage", None, None)
+        .await?
+        .rows
+        .iter()
+        .any(|r| r["payload"]["csv"] == ar_csv));
+    assert!(ap
+        .evidence_page(&reviewer, company, "opening_stage", None, None)
+        .await?
+        .rows
+        .iter()
+        .any(|r| r["payload"]["csv"] == ap_csv));
+    assert!(ledger
+        .get_entry(&reviewer, company, before.through_entry_number)
+        .await?
+        .owner
+        .is_none());
+    assert!(ar.apply_credit(&manager,company,&json!({"credit_document_id":ar_id("zero-credit"),"target_document_id":ar_id("zero-invoice"),"effective_date":"2026-07-10","amount":"1","reference":"wrong-party"})).await.is_err());
+    assert!(ap.apply_credit(&manager,company,&json!({"credit_document_id":ap_id("zero-credit"),"target_document_id":ap_id("zero-invoice"),"effective_date":"2026-07-10","amount":"1","reference":"wrong-party"})).await.is_err());
     let apply_ar = json!({"credit_document_id":ar_id("credit"),"target_document_id":ar_id("invoice"),"effective_date":"2026-07-10","amount":"20","reference":"same-control"});
     let apply_ap = json!({"credit_document_id":ap_id("credit"),"target_document_id":ap_id("invoice"),"effective_date":"2026-07-10","amount":"20","reference":"same-control"});
     let ae = ar.apply_credit(&manager, company, &apply_ar).await?;
@@ -449,6 +552,21 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
             ap.reverse_settlement(&manager, company, &input).await?;
         }
         tied(&ar, &ap, &reviewer, company, date(2026, 7, 31)).await?;
+    }
+    let ar_events = ar
+        .evidence_page(&reviewer, company, "settlement", None, None)
+        .await?;
+    let ap_events = ap
+        .evidence_page(&reviewer, company, "settlement", None, None)
+        .await?;
+    for rows in [&ar_events.rows, &ap_events.rows] {
+        assert!(rows
+            .iter()
+            .any(|e| e["kind"] == "reverse" && !e["reverses_settlement_id"].is_null()));
+        assert!(rows
+            .iter()
+            .all(|e| !e["audit_trace_id"].as_str().unwrap_or("").is_empty()
+                && !e["audit_action"].as_str().unwrap_or("").is_empty()));
     }
     // A split posting/settlement tuple is refused, rather than a false tie-out.
     assert!(ar

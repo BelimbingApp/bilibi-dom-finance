@@ -219,6 +219,30 @@ async fn setup(db: &Db, services: &Services, company: i64) -> Outcome<Value> {
         )
         .await?
     };
+    if credit_controls {
+        ar.create_customer(
+            &admin,
+            company,
+            &json!({"record_kind":"company","record_id":11,"payment_terms_days":30}),
+        )
+        .await?;
+        ap.create_vendor(
+            &admin,
+            company,
+            &VendorInput {
+                record_kind: Some("company".into()),
+                record_id: Some(11),
+                new_company: None,
+                new_person: None,
+                payment_terms_days: 30,
+                payable_account_id: None,
+                expense_account_id: None,
+                tax_code_id: None,
+                active: true,
+            },
+        )
+        .await?;
+    }
     let categories = assets.list_categories(&admin, company).await?;
     let revision = if let Some(c) = categories.iter().find(|c| c.name == "Conversion assets") {
         c.revision.id
