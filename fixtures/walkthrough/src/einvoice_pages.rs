@@ -591,7 +591,7 @@ pub async fn run() -> Outcome<()> {
     )
     .await?;
     // The viewer joins the company in disposable fixture data, never product seeds.
-    db.get().await?.batch_execute("INSERT INTO persons(id,tenant_id,code,name,kind,email) VALUES(4,1,'person_4','Lee Viewer','human','lee@example.test') ON CONFLICT DO NOTHING; INSERT INTO person_affiliations(id,tenant_id,person_id,organisation_id,title,work_email) VALUES(3,1,4,1,'Reviewer','viewer@example.test') ON CONFLICT DO NOTHING; UPDATE users SET person_id=4,affiliation_id=3,organisation_id=1 WHERE tenant_id=1 AND id=2 AND person_id IS NULL").await?;
+    db.get().await?.batch_execute("INSERT INTO persons(id,tenant_id,code,name,kind,email) VALUES(4,1,'person_4','Lee Viewer','human','lee@example.test') ON CONFLICT DO NOTHING; INSERT INTO person_affiliations(id,tenant_id,person_id,organisation_id,title,work_email) VALUES(3,1,4,1,'Reviewer','viewer@example.test') ON CONFLICT DO NOTHING; UPDATE users SET person_id=4 WHERE tenant_id=1 AND id=2 AND person_id IS NULL; INSERT INTO user_desks(tenant_id,person_id,company_id) SELECT tenant_id,person_id,1 FROM users WHERE tenant_id=1 AND id=2 AND person_id IS NOT NULL ON CONFLICT DO NOTHING").await?;
     let viewer = sign_in(&db, services, 1, 2).await?;
     let mut read_only = mount(services, &viewer, "reconciliation", month).await?;
     let body = update(&mut read_only, &viewer, LiveInput::Refresh).await?;
