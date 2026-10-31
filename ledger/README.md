@@ -404,7 +404,7 @@ The scope follows the [28 October 2026 practitioner review on issue #57](https:/
 
 ### Source-period schedules at conversion
 
-Keep the source schedules in an access-controlled archive outside Finance. Opening balances and residual imports are not an archive of historical transactions, tax calculations or filings. The same limits apply when using the pages or the MCP operations in [the conversion guide](guide.md). Finance does not yet provide an operation to retain or reconcile these schedules, or to import their statutory history.
+Retain source schedules and their supporting files as evidence. Opening balances and residual imports are not an archive of historical transactions, tax calculations or filings. The same limits apply when using the pages or the MCP operations in [the conversion guide](guide.md). The [source-period schedule operation](../reports/README.md#source-period-schedules) retains bounded summaries; it does not import statutory history or reconcile the schedules.
 
 | Schedule | Retain and reconcile | Operational boundary |
 | --- | --- | --- |

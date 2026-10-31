@@ -358,6 +358,21 @@ impl Reports {
                 Attachments::evidence_datasets().iter().copied()
             );
         }
+        if coverage == Coverage::All {
+            let mut writer = files.csv_writer("reports-source-period.csv")?;
+            let mut after = None;
+            loop {
+                let page = self
+                    .evidence_page_on(tx, scope, company, "source_period", None, after)
+                    .await?;
+                writer.page(&page.fields, &page.rows)?;
+                match page.next {
+                    Some(next) => after = Some(next),
+                    None => break,
+                }
+            }
+            files.finish_csv("reports-source-period.csv", writer);
+        }
         // Reports reads its own issued evidence through the same facade contract.
         let mut issued = files.csv_writer("issued-reports.csv")?;
         let mut after = None;
@@ -381,11 +396,11 @@ impl Reports {
             "captured_at":snapshot.get::<_,String>(1), "timezone":"Etc/UTC", "database_snapshot":snapshot.get::<_,String>(0),
             "through_entry_number":through,
             "coverage": if coverage == Coverage::All { "all-finance" } else { "ledger-and-reports" },
-            "excluded_sources": if coverage == Coverage::All { Vec::<&str>::new() } else { vec!["receivables", "payables", "reconciliation", "einvoice", "payroll", "sst", "fixed_assets", "attachments"] },
+            "excluded_sources": if coverage == Coverage::All { Vec::<&str>::new() } else { vec!["receivables", "payables", "reconciliation", "einvoice", "payroll", "sst", "fixed_assets", "attachments", "reports.source_period"] },
             "coverage_notice": if coverage == Coverage::All {
                 "All Finance source datasets are included."
             } else {
-                "Complete ledger, trial balance and issued reports only. Payroll source records and other subledger/source evidence are excluded. Payroll journal lines remain in the ledger. This is not a complete audit evidence pack."
+                "Complete ledger, trial balance and issued reports only. Source-period records, payroll source records and other subledger/source evidence are excluded. Payroll journal lines remain in the ledger. This is not a complete audit evidence pack."
             },
             "filters":{"evidence": if coverage == Coverage::All { "all Finance company records, including drafts and reversals" } else { "all ledger company records and issued reports, including drafts and reversals" }, "trial_balance_and_aging_as_of":as_of.to_string()},
             "decimal_encoding":"exact decimal strings; CSV numeric cells are unrounded",

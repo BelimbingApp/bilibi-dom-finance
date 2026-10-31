@@ -450,10 +450,13 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
             .await?;
         let preview = import.preview(tx.sql(), &s, &input).await?.envelope(key);
         assert_eq!(
-            preview["result"]["rows"][0]["source_id"],
+            preview["result"]["changes"]["rows"][0]["source_id"],
             rows[0]["source_id"]
         );
-        assert_eq!(preview["result"]["rows"][0]["amount"], rows[0]["amount"]);
+        assert_eq!(
+            preview["result"]["changes"]["rows"][0]["amount"],
+            rows[0]["amount"]
+        );
         import.commit(&mut tx, &s, &input).await?;
         tx.commit().await?;
         let mut retry = db.get().await?;

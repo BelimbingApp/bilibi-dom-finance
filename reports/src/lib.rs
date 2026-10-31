@@ -37,6 +37,7 @@ mod pack_owner;
 mod setup;
 mod setup_page;
 mod source_period;
+mod source_period_web;
 mod statement;
 mod web;
 
@@ -128,6 +129,10 @@ inventory::submit! {
                 contracts: services.get(bilibi_agent_api::page::SERVICE)?,
                 display: services.get("base/datetime.display")?,
                 locales: services.get("base/locale.locales")?,
+            }))))
+        } }, Service { id: source_period_web::PAGES, factory: |services| {
+            Ok(Arc::new(bilibi_ui::page::PageService::<Scope, Error>(Arc::new(source_period_web::Pages {
+                contracts: services.get(bilibi_agent_api::page::SERVICE)?,
             }))))
         } }, Service { id: setup_page::PAGES, factory: |services| {
             Ok(Arc::new(bilibi_ui::page::PageService::<Scope, Error>(Arc::new(setup_page::Pages {
@@ -796,7 +801,7 @@ impl Reports {
     /// The datasets [`Reports::evidence_page`] exports, one per table this
     /// module owns.
     pub fn evidence_datasets() -> Vec<&'static str> {
-        issued::DATASETS.to_vec()
+        vec!["issued", "source_period"]
     }
 
     /// One ID-ordered evidence page of `dataset` with explicit fields, rows
@@ -828,6 +833,12 @@ impl Reports {
         after: Option<i64>,
     ) -> Result<EvidencePage> {
         authorize(client, scope, company_id, VIEW).await?;
+        if dataset == "source_period" {
+            authorize(client, scope, company_id, bilibi_finance_sst::VIEW).await?;
+            authorize(client, scope, company_id, bilibi_finance_payroll::VIEW).await?;
+            return source_period::evidence_page(client, scope.tenant(), company_id, limit, after)
+                .await;
+        }
         issued::page(client, scope.tenant(), company_id, dataset, limit, after).await
     }
 

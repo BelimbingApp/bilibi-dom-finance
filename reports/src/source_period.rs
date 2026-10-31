@@ -20,7 +20,7 @@ fn invalid(field: &str, message: &str) -> bilibi_agent_api::Error {
 }
 fn required<'a>(input: &'a Value, key: &str, max: usize) -> bilibi_agent_api::Result<&'a str> {
     let v = input[key].as_str().unwrap_or("").trim();
-    if v.is_empty() || v.chars().count() > max {
+    if v.is_empty() || v.chars().count() > max || v.contains('\0') {
         return Err(invalid(key, "Enter a value within the allowed length."));
     }
     Ok(v)
@@ -77,6 +77,7 @@ async fn review(
 ) -> bilibi_agent_api::Result<Value> {
     let company = company(input)?;
     let kind = kind(input)?;
+    authorise(client, scope, company, MANAGE).await?;
     authorise(client, scope, company, capability(kind, true)).await?;
     authorise(client, scope, company, VIEW).await?;
     let row = client.query_opt("SELECT status FROM companies WHERE tenant_id=$1 AND id=$2 AND deleted_at IS NULL FOR UPDATE NOWAIT", &[&scope.tenant(), &company]).await?.ok_or(Error::NotFound)?;
@@ -153,7 +154,11 @@ async fn review(
             return Err(invalid(&path, "Enter a schedule row."));
         }
         let source_id = row["source_id"].as_str().unwrap_or("").trim();
-        if source_id.is_empty() || source_id.len() > 100 || !seen.insert(source_id.to_owned()) {
+        if source_id.is_empty()
+            || source_id.len() > 100
+            || source_id.contains('\0')
+            || !seen.insert(source_id.to_owned())
+        {
             return Err(invalid(
                 &format!("{path}.source_id"),
                 "Enter a unique source identifier.",
@@ -188,7 +193,7 @@ async fn review(
         } else {
             if row["reference"]
                 .as_str()
-                .is_none_or(|s| s.trim().is_empty() || s.len() > 100)
+                .is_none_or(|s| s.trim().is_empty() || s.len() > 100 || s.contains('\0'))
             {
                 return Err(invalid(
                     &format!("{path}.reference"),
@@ -204,11 +209,17 @@ async fn review(
         }
         let mut fact = json!({"source_id":source_id,"amount":amount.shown(book.minor_units)});
         if ["comparative", "movement"].contains(&kind) {
+            let account = accounts
+                .iter()
+                .find(|a| Some(a.id) == row["account_id"].as_i64())
+                .ok_or(Error::Internal)?;
             fact["account_id"] = row["account_id"].clone();
+            fact["account_name"] = json!(account.name);
+            fact["account_code"] = json!(account.code);
             fact["side"] = row["side"].clone();
         } else {
             let authority = row["authority"].as_str().unwrap_or("").trim();
-            if authority.is_empty() || authority.len() > 100 {
+            if authority.is_empty() || authority.len() > 100 || authority.contains('\0') {
                 return Err(invalid(
                     &format!("{path}.authority"),
                     "Enter the authority.",
@@ -240,7 +251,7 @@ async fn review(
     }
     if client.query_opt("SELECT id FROM finance_reports_source_periods WHERE tenant_id=$1 AND company_id=$2 AND kind=$3 AND source_reference=$4", &[&scope.tenant(), &company, &kind, &reference]).await?.is_some() { return Err(invalid("source_reference", "This source reference has already been recorded for this kind.")); }
     Ok(
-        json!({"company_id":company,"kind":kind,"source_reference":reference,"source_system":system,"currency_code":book.currency_code,"accounting_timezone":timezone,"conversion_date":opening.entry.entry_date.to_string(),"opening_entry_id":opening.entry.id,"period_start":start.to_string(),"period_end":end.to_string(),"rows":facts,"notice":"Retained source evidence only; this creates no historical transactions or statutory submissions."}),
+        json!({"company_id":company,"kind":kind,"source_reference":reference,"source_system":system,"currency_code":book.currency_code,"minor_units":book.minor_units,"accounting_timezone":timezone,"conversion_date":opening.entry.entry_date.to_string(),"opening_entry_id":opening.entry.id,"period_start":start.to_string(),"period_end":end.to_string(),"rows":facts,"notice":"Retained source evidence only; this creates no historical transactions or statutory submissions."}),
     )
 }
 
@@ -287,7 +298,7 @@ impl WriteHandler for Import {
                 .ok_or(Error::Internal)?;
             let result = review(owner, client, scope, input).await?;
             fence(client, &result, false).await?;
-            Ok(result.into())
+            Ok(json!({"changes":result}).into())
         })
     }
     fn commit<'a>(
@@ -330,12 +341,14 @@ impl ReadHandler for List {
         Box::pin(async move {
             let company = company(input)?;
             let kind = kind(input)?;
+            authorise(client, scope, company, VIEW).await?;
             authorise(client, scope, company, capability(kind, false)).await?;
             let after = input["after"].as_i64().unwrap_or(0);
+            let id = input["id"].as_i64();
             if after < 0 {
                 return Err(invalid("after", "Choose a valid cursor."));
             }
-            let rows = client.query("SELECT id,source_reference,source_system,currency_code,accounting_timezone,conversion_date::text,opening_entry_id,period_start::text,period_end::text,facts,recorded_by_user_id,recorded_by_impersonator_id,to_char(recorded_at,'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') FROM finance_reports_source_periods WHERE tenant_id=$1 AND company_id=$2 AND kind=$3 AND id>$4 ORDER BY id LIMIT 100", &[&scope.tenant(), &company, &kind, &after]).await?;
+            let rows = client.query("SELECT id,source_reference,source_system,currency_code,accounting_timezone,conversion_date::text,opening_entry_id,period_start::text,period_end::text,facts,recorded_by_user_id,recorded_by_impersonator_id,to_char(recorded_at,'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') FROM finance_reports_source_periods WHERE tenant_id=$1 AND company_id=$2 AND kind=$3 AND id>$4 AND ($5::bigint IS NULL OR id=$5) ORDER BY id LIMIT 100", &[&scope.tenant(), &company, &kind, &after, &id]).await?;
             let records: Vec<Value> = rows.iter().map(|r| json!({"id":r.get::<_,i64>(0),"kind":kind,"source_reference":r.get::<_,String>(1),"source_system":r.get::<_,String>(2),"currency_code":r.get::<_,String>(3),"accounting_timezone":r.get::<_,String>(4),"conversion_date":r.get::<_,String>(5),"opening_entry_id":r.get::<_,i64>(6),"period_start":r.get::<_,String>(7),"period_end":r.get::<_,String>(8),"rows":r.get::<_,Value>(9),"recorded_by_user_id":r.get::<_,i64>(10),"recorded_by_impersonator_id":r.get::<_,Option<i64>>(11),"recorded_at":r.get::<_,String>(12)})).collect();
             let next = (records.len() == 100)
                 .then(|| records.last().and_then(|v| v["id"].as_i64()))
@@ -345,10 +358,18 @@ impl ReadHandler for List {
     }
 }
 fn read_schema() -> Value {
-    json!({"type":"object","required":["company_id","kind"],"properties":{"company_id":{"type":"integer","minimum":1},"kind":{"type":"string","enum":["comparative","movement","sst","payroll"]},"after":{"type":"integer","minimum":0}}})
+    json!({"type":"object","required":["company_id","kind"],"properties":{"company_id":{"type":"integer","minimum":1},"kind":{"type":"string","enum":["comparative","movement","sst","payroll"]},"after":{"type":"integer","minimum":0},"id":{"type":"integer","minimum":1}}})
 }
 fn write_schema() -> Value {
     let mut schema = read_schema();
+    schema["properties"]
+        .as_object_mut()
+        .expect("schema object")
+        .remove("after");
+    schema["properties"]
+        .as_object_mut()
+        .expect("schema object")
+        .remove("id");
     schema["required"] = json!([
         "company_id",
         "kind",
@@ -455,3 +476,48 @@ source!(
     "Source payroll remittance",
     bilibi_finance_payroll::VIEW
 );
+
+pub(crate) async fn evidence_page(
+    client: &(impl tokio_postgres::GenericClient + Sync),
+    tenant: i64,
+    company: i64,
+    limit: Option<i64>,
+    after: Option<i64>,
+) -> crate::Result<crate::EvidencePage> {
+    let limit = limit.unwrap_or(500);
+    let after = after.unwrap_or(0);
+    if !(1..=500).contains(&limit) || after < 0 {
+        return Err(crate::ReportsError::InvalidOption);
+    }
+    let row = client.query_one("SELECT COALESCE(json_agg(t ORDER BY t.id),'[]'::json) FROM (SELECT id,tenant_id,company_id,kind,source_reference,source_system,currency_code,accounting_timezone,conversion_date::text AS conversion_date,opening_entry_id,period_start::text AS period_start,period_end::text AS period_end,facts,recorded_by_user_id,recorded_by_impersonator_id,to_char(recorded_at,'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS recorded_at FROM finance_reports_source_periods WHERE tenant_id=$1 AND company_id=$2 AND id>$3 ORDER BY id LIMIT $4) t", &[&tenant, &company, &after, &limit]).await.map_err(Error::from)?;
+    let rows = row
+        .get::<_, Value>(0)
+        .as_array()
+        .cloned()
+        .ok_or(Error::Internal)?;
+    let next = (rows.len() as i64 == limit)
+        .then(|| rows.last().and_then(|r| r["id"].as_i64()))
+        .flatten();
+    Ok(crate::EvidencePage {
+        fields: vec![
+            "id",
+            "tenant_id",
+            "company_id",
+            "kind",
+            "source_reference",
+            "source_system",
+            "currency_code",
+            "accounting_timezone",
+            "conversion_date",
+            "opening_entry_id",
+            "period_start",
+            "period_end",
+            "facts",
+            "recorded_by_user_id",
+            "recorded_by_impersonator_id",
+            "recorded_at",
+        ],
+        rows,
+        next,
+    })
+}
