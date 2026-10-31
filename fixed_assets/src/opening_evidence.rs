@@ -26,6 +26,7 @@ struct History {
     residual_value: Option<String>,
     remaining_life_months: Option<i32>,
     method: Option<String>,
+    annual_rate: Option<String>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -141,7 +142,13 @@ pub(super) fn read(
                 if let Some(v) = &row.method {
                     text(v, "source_evidence", 100)?;
                 }
-                match row.kind {
+                if let Some(v) = &row.annual_rate {
+                let rate: Decimal = v.parse().map_err(|_|fail("source annual rate must be a decimal percentage"))?;
+                if rate < Decimal::ZERO || rate > Decimal::from(100) || rate.round_dp(4) != rate {
+                    return Err(fail("source annual rate must be 0 to 100 with at most four decimal places"));
+                }
+            }
+            match row.kind {
                     Kind::Impairment | Kind::ImpairmentReversal | Kind::Disposal
                         if row.amount.is_none() =>
                     {
@@ -153,10 +160,10 @@ pub(super) fn read(
                         ))
                     }
                     Kind::EstimateChange
-                        if row.remaining_life_months.is_none() && row.method.is_none() =>
+                        if row.remaining_life_months.is_none() && row.method.is_none() && row.annual_rate.is_none() =>
                     {
                         return Err(fail(
-                            "estimate history requires the source method or remaining life",
+                            "estimate history requires the source method, annual rate or remaining life",
                         ))
                     }
                     _ => {}

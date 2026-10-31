@@ -753,7 +753,9 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
     let asset_batch = assets
         .import_opening_register(&s, company, &reconcile)
         .await?;
-    let mut changed = asset_input.clone();
+    let mut retry_input = asset_input.clone();
+    retry_input["csv"] = asset_batch["source_csv"].clone();
+    let mut changed = retry_input.clone();
     changed["source_evidence"]["asset-3"]["history"][0]["note"] =
         json!("Different retained evidence");
     assert!(assets
@@ -763,7 +765,7 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
     assert_eq!(
         asset_batch,
         assets
-            .import_opening_register(&s, company, &asset_input)
+            .import_opening_register(&s, company, &retry_input)
             .await?
     );
     let reproduced_ar = ar

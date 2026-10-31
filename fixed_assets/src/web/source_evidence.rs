@@ -33,6 +33,7 @@ pub(super) fn render(source: &str, evidence: &Value, units: MinorUnits) -> Resul
                 ("residual_value", "Residual value"),
                 ("remaining_life_months", "Remaining months"),
                 ("method", "Source method"),
+                ("annual_rate", "Source annual rate (%)"),
                 ("reference", "Source reference"),
                 ("note", "Note"),
             ],
