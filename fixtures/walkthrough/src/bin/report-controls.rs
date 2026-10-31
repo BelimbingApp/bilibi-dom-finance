@@ -119,7 +119,15 @@ async fn main() -> Outcome<()> {
         )
         .await?;
     users
-        .link_affiliation(&authority, 7, affiliation.id)
+        .link_person(&authority, 7, affiliation.affiliation.person_id)
+        .await?;
+    users
+        .set_desk(
+            &authority,
+            affiliation.affiliation.organisation_id.get(),
+            affiliation.affiliation.person_id.get(),
+            true,
+        )
         .await?;
     let reviewer_scope = sign_in(&db, &services, 1, 7).await?;
     let viewer = sign_in(&db, &services, 1, 7).await?;

@@ -125,7 +125,17 @@ async fn main() -> Outcome<()> {
             },
         )
         .await?;
-    users.link_affiliation(&admin, 7, affiliation.id).await?;
+    users
+        .link_person(&admin, 7, affiliation.affiliation.person_id)
+        .await?;
+    users
+        .set_desk(
+            &admin,
+            affiliation.affiliation.organisation_id.get(),
+            affiliation.affiliation.person_id.get(),
+            true,
+        )
+        .await?;
     let grants = services.get::<Grants>("base/authz.grants")?;
     for cap in [
         bilibi_finance_fixed_assets::VIEW,
