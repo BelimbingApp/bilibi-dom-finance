@@ -219,6 +219,7 @@ impl Receivables {
             None
         };
         let mut target_facts = Value::Null;
+        let mut available_target = Value::Null;
         let credit_control = facts["receivable_account_id"]
             .as_i64()
             .ok_or(Error::Internal)?;
@@ -351,7 +352,7 @@ impl Receivables {
             Value::Null
         };
         let data = json!({"settlement_number":next,"kind":action,"credit_item_id":facts["item_id"],"credit_document_id":credit,"target_document_id":target,"amount":amount,"effective_date":day.to_string(),"cash_account_id":cash,"reference":reference,"reverses_settlement_id":original.as_ref().map(|e|e["id"].clone())});
-        let review = json!({"input":input,"action":action,"credit":facts,"target":target_facts,"available_credit":available,"amount":amount,"effective_date":day.to_string(),"controls":chart.into_iter().filter(|a|controls.contains(&a.id)||Some(a.id)==cash).collect::<Vec<_>>(),"currency_code":book.currency_code,"minor_units":book.minor_units,"posts":!posting.is_null(),"posting":posting,"approval":approval_facts,"original":original,"settlement_number":next});
+        let review = json!({"input":input,"action":action,"credit":facts,"target":target_facts,"available_credit":available,"available_target":available_target,"amount":amount,"effective_date":day.to_string(),"controls":chart.into_iter().filter(|a|controls.contains(&a.id)||Some(a.id)==cash).collect::<Vec<_>>(),"currency_code":book.currency_code,"minor_units":book.minor_units,"posts":!posting.is_null(),"posting":posting,"approval":approval_facts,"original":original,"settlement_number":next});
         Ok(PreparedSettlement {
             review,
             data,

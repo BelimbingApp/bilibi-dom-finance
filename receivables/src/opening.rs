@@ -770,8 +770,16 @@ fn source_tax_facts(
         }
         Ok(money)
     };
-    let tax = facts.get("tax_total").map(&amount).transpose()?;
-    let net = facts.get("net").map(&amount).transpose()?;
+    let tax = facts
+        .get("tax_total")
+        .filter(|v| !v.is_null())
+        .map(&amount)
+        .transpose()?;
+    let net = facts
+        .get("net")
+        .filter(|v| !v.is_null())
+        .map(&amount)
+        .transpose()?;
     if tax.zip(net).is_some_and(|(tax, net)| tax + net != gross) {
         return Err("source net plus tax_total must equal original_total".into());
     }
@@ -786,18 +794,27 @@ fn source_tax_facts(
             if !line.is_object() {
                 return Err("each source tax line must be an object".into());
             }
-            if let Some(value) = line.get("tax_amount") {
+            if let Some(value) = line.get("tax_amount").filter(|v| !v.is_null()) {
                 line_tax = Money::new((line_tax + amount(value)?).amount(), units)
                     .map_err(|e| e.to_string())?;
             } else {
                 complete = false;
             }
             for key in ["taxable_amount", "net", "gross"] {
-                if let Some(value) = line.get(key) {
+                if let Some(value) = line.get(key).filter(|v| !v.is_null()) {
                     amount(value)?;
                 }
             }
-            if let Some(rate) = line.get("rate") {
+            if let (Some(net), Some(tax), Some(gross)) = (
+                line.get("net").filter(|v| !v.is_null()),
+                line.get("tax_amount").filter(|v| !v.is_null()),
+                line.get("gross").filter(|v| !v.is_null()),
+            ) {
+                if amount(net)? + amount(tax)? != amount(gross)? {
+                    return Err("a source line's net plus tax_amount must equal its gross".into());
+                }
+            }
+            if let Some(rate) = line.get("rate").filter(|v| !v.is_null()) {
                 let rate = rate
                     .as_str()
                     .ok_or("source tax rate must be a decimal string")?
