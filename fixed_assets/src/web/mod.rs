@@ -3,6 +3,7 @@ mod detail;
 mod index;
 mod input;
 mod opening;
+mod source_evidence;
 
 use crate::{FixedAssetsError, MODULE};
 use askama::Template;

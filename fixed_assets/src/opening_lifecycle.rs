@@ -13,6 +13,7 @@ impl FixedAssets {
         s: &Scope,
         company: i64,
     ) -> Result<()> {
+        self.lifecycle_preview_lock(c, s, company, ACQUIRE).await?;
         self.opening_authorize(c, s, company, ACQUIRE).await?;
         Ok(())
     }
@@ -54,6 +55,17 @@ impl FixedAssets {
             ));
         }
         let book = self.ledger.get_book_on(c, s, company).await?;
+        let context = self.ledger.opening_context_on(c, s, company).await?;
+        let evidence =
+            crate::opening_evidence::read(input, context.entry.entry_date, book.minor_units)?;
+        let source_ids: std::collections::BTreeSet<_> =
+            rows.iter().skip(1).map(|row| row[0].trim()).collect();
+        if evidence.keys().any(|id| !source_ids.contains(id.as_str())) {
+            return Err(invalid(
+                "source_evidence",
+                "each evidence record must name an asset in this source batch",
+            ));
+        }
         if input["currency_code"] != book.currency_code {
             return Err(invalid("currency_code", "must match the book's currency"));
         }
@@ -80,7 +92,7 @@ impl FixedAssets {
         }
         if !retry && c.query_opt("SELECT id FROM finance_fixed_assets_opening_batches WHERE tenant_id=$1 AND company_id=$2 AND source_reference=$3",&[&s.tenant(),&company,&reference]).await?.is_some() {return Err(invalid("source_reference","has already been reconciled; use a new source reference"));}
         Ok(
-            json!({"state":"previewed","source_reference":reference,"part":part,"part_count":count,"received_parts":stages.iter().map(|r|r.get::<_,i32>(0)).collect::<Vec<_>>(),"rows":rows.len()-1,"already_staged":retry,"posts":false,"settleable":false}),
+            json!({"state":"previewed","source_reference":reference,"part":part,"part_count":count,"received_parts":stages.iter().map(|r|r.get::<_,i32>(0)).collect::<Vec<_>>(),"source_evidence":evidence,"rows":rows.len()-1,"already_staged":retry,"posts":false,"settleable":false}),
         )
     }
     /// Retain one immutable source batch. An identical retry is a no-op.
@@ -178,9 +190,23 @@ impl FixedAssets {
                 "leave empty when reconciling staged batches",
             ));
         }
+        if input["source_evidence"]
+            .as_array()
+            .is_some_and(|m| !m.is_empty())
+            || (!input["source_evidence"].is_null() && !input["source_evidence"].is_array())
+        {
+            return Err(invalid(
+                "source_evidence",
+                "leave empty when reconciling retained source batches",
+            ));
+        }
+        let mut evidence = Vec::new();
         let mut combined = String::new();
         for (index, stage) in stages.iter().enumerate() {
             let payload: Value = stage.get(1);
+            if let Some(items) = payload["source_evidence"].as_array() {
+                evidence.extend(items.iter().cloned());
+            }
             let rows =
                 crate::opening_csv::parse(payload["csv"].as_str().unwrap_or("").as_bytes(), ",")
                     .map_err(|_| invalid("csv", "cannot read retained batch"))?;
@@ -196,6 +222,7 @@ impl FixedAssets {
         }
         let mut resolved = first;
         resolved["csv"] = json!(combined);
+        resolved["source_evidence"] = json!(evidence);
         resolved["staged"] = json!(true);
         resolved["override_reason"] = input["override_reason"].clone();
         Ok(resolved)
@@ -286,6 +313,7 @@ fn stage_payload(input: &Value) -> Value {
         object.retain(|key, _| {
             [
                 "source_reference",
+                "source_evidence",
                 "currency_code",
                 "csv",
                 "series_id",
@@ -303,6 +331,7 @@ fn stage_payload(input: &Value) -> Value {
 fn stage_manifest(input: &Value) -> Value {
     let mut value = input.clone();
     if let Some(object) = value.as_object_mut() {
+        object.remove("source_evidence");
         object.remove("csv");
         object.remove("part");
     }

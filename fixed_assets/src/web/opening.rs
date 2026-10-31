@@ -24,6 +24,7 @@ fn field_label(key: &str) -> &str {
         "replaces_batch_id" => "Register to replace",
         "reason" => "Correction reason",
         "csv" => "Source register CSV",
+        "source_evidence" => "Source history and tax schedules",
         "series_id" => "Opening invoice series",
         "source_reference" => "Source reference",
         "currency_code" => "Book currency",
@@ -59,16 +60,31 @@ pub(super) struct Opening {
     columns: ListColumns,
     balance_columns: ListColumns,
     stage_columns: ListColumns,
+    class_columns: ListColumns,
+    evidence: super::source_evidence::EvidenceView,
 }
 impl Opening {
     pub(super) fn new(pages: Pages) -> Result<Self> {
         Ok(Self {
             completed: false,
+            evidence: Default::default(),
             pages,
             values: json!({}),
             fields: BTreeMap::new(),
             message: None,
             review: None,
+            class_columns: ListColumns::mount(
+                "conversion-classes",
+                vec![
+                    BuiltinColumn::new("class", "Category"),
+                    BuiltinColumn::new("cost_account", "Cost account"),
+                    BuiltinColumn::new("accumulated_account", "Accumulation account"),
+                    BuiltinColumn::new("cost", "Source cost").right(),
+                    BuiltinColumn::new("accumulated", "Source accumulation").right(),
+                    BuiltinColumn::new("carrying", "Carrying value").right(),
+                ],
+            )
+            .map_err(|_| Error::Internal)?,
             stage_columns: ListColumns::mount(
                 "conversion-stages",
                 vec![
@@ -109,11 +125,18 @@ impl Opening {
     }
     fn errors(&self, key: &str) -> Vec<String> {
         self.fields
-            .get(key)
-            .cloned()
-            .unwrap_or_default()
-            .into_iter()
-            .map(|e| bilibi_ui::error_sentence(field_label(key), &e))
+            .iter()
+            .filter(|(path, _)| path.as_str() == key || path.starts_with(&format!("{key}.")))
+            .flat_map(|(path, messages)| {
+                messages.iter().map(move |message| {
+                    let detail = if path == key {
+                        message.clone()
+                    } else {
+                        format!("{path}: {message}")
+                    };
+                    bilibi_ui::error_sentence(field_label(key), &detail)
+                })
+            })
             .collect()
     }
     fn fail(&mut self, error: ContractError) {
@@ -251,17 +274,18 @@ impl Opening {
                 let mut fields = render(Alert {
                     id: "conversion-boundary",
                     kind: StatusKind::Info,
-                    body: Html::text(
-                        "Retain source cost and accumulated depreciation. Depreciate carrying value less residual value prospectively over the remaining useful life using straight-line depreciation, with a full first month at month-end. Historical depreciation is not posted again.",
-                    ),
+                    body: Html::text(crate::opening::CONVENTION),
                     ..Alert::default()
                 })?;
                 let mut summary = ErrorSummary::new("conversion-errors");
                 for (key, messages) in &self.fields {
                     for message in messages {
                         summary.push(
-                            format!("conversion-{key}"),
-                            bilibi_ui::error_sentence(field_label(key), message),
+                            format!("conversion-{}", key.split('.').next().unwrap_or(key)),
+                            bilibi_ui::error_sentence(
+                                field_label(key.split('.').next().unwrap_or(key)),
+                                message,
+                            ),
                         );
                     }
                 }
@@ -301,6 +325,13 @@ impl Opening {
                         InputKind::Textarea,
                         false,
                         "Paste the complete register: 1 to 500 rows, at most 128 KiB.",
+                    ),
+                    (
+                        "source_evidence",
+                        "Source history and tax schedules (JSON)",
+                        InputKind::Textarea,
+                        false,
+                        "Optional evidence array; each record names source_id: history, source_period_expense and tax_capital_allowances. See the opening guide. These facts create no postings and do not change the prospective estimate.",
                     ),
                     (
                         "override_reason",
@@ -451,6 +482,48 @@ impl Opening {
             if !facts["replaces_batch_id"].is_null() {
                 body.push(&render(Alert{id:"conversion-correction-review",kind:StatusKind::Warning,body:Html::text(&format!("Replace register {} as of the conversion date {}. Reason: {}. Prior records and approvals remain available at their original report boundaries.",facts["replaces_batch_id"],facts["conversion_date"].as_str().unwrap_or(""),facts["reason"].as_str().unwrap_or(""))),..Alert::default()})?);
             }
+            if let Some(classes) = facts["class_totals"].as_array() {
+                let rows = classes
+                    .iter()
+                    .map(|row| {
+                        FlexRow::new(format!(
+                            "{}-{}-{}",
+                            row["category_id"],
+                            row["cost_account_id"],
+                            row["accumulated_account_id"]
+                        ))
+                        .cell(
+                            "class",
+                            Cell::text(row["category_name"].as_str().unwrap_or("")),
+                        )
+                        .cell(
+                            "cost_account",
+                            Cell::text(row["cost_account"].as_str().unwrap_or("")),
+                        )
+                        .cell(
+                            "accumulated_account",
+                            Cell::text(row["accumulated_account"].as_str().unwrap_or("")),
+                        )
+                        .cell("cost", Cell::text(money(&row["cost"])))
+                        .cell(
+                            "accumulated",
+                            Cell::text(money(&row["accumulated_depreciation"])),
+                        )
+                        .cell("carrying", Cell::text(money(&row["carrying_value"])))
+                    })
+                    .collect();
+                let mut table = FlexTable::new(
+                    "conversion-classes",
+                    self.class_columns.flex_columns(),
+                    rows,
+                );
+                table.caption = "Source totals by class and account pair";
+                table.event = "class_grid";
+                table.zoom = self.class_columns.zoom;
+                table.suggestions = self.class_columns.flex_suggestions();
+                table.add_query = &self.class_columns.add_query;
+                body.push(&render(table)?);
+            }
             if let Some(reconciliation) = facts["reconciliation"].as_array() {
                 let rows = reconciliation
                     .iter()
@@ -501,10 +574,22 @@ impl Opening {
             if review.contract != STAGE {
                 body.push(&render(table)?);
             }
+            if let Some(evidence) = facts["source_evidence"].as_object() {
+                for (source, facts) in evidence {
+                    body.push(&self.evidence.render(source, facts, units)?);
+                }
+            }
             if review.contract != STAGE {
                 body.push(&render(Alert{id:"conversion-review-reconciliation",kind:StatusKind::Info,body:Html::text("The complete register reconciles exactly to the approved opening account balances. This import records opening state and retains source evidence; it creates no new ledger entry."),..Alert::default()})?);
             } else {
                 body.push(&render(Alert{id:"conversion-stage-review",body:Html::text(&format!("Previewed source batch {} of {}, containing {} rows. Committing this batch retains source evidence. It does not create opening records or approve reconciliation.",facts["part"],facts["part_count"],facts["rows"])),..Alert::default()})?);
+            }
+            if let Some(convention) = facts["month_convention"].as_str() {
+                body.push(&render(Alert {
+                    id: "conversion-month-convention",
+                    body: Html::text(convention),
+                    ..Alert::default()
+                })?);
             }
             if let Some(policy) = facts["depreciation"].as_str() {
                 body.push(&render(Alert {
@@ -588,6 +673,22 @@ impl Opening {
                             .expect("form object")
                             .remove("override_reason");
                     }
+                    let source = input["source_evidence"].as_str().unwrap_or("").trim();
+                    input["source_evidence"] = if source.is_empty() {
+                        json!([])
+                    } else {
+                        match serde_json::from_str::<Value>(source) {
+                            Ok(value) => value,
+                            Err(_) => {
+                                self.fields.insert(
+                                    "source_evidence".into(),
+                                    vec!["must be a valid JSON array; each record names source_id"
+                                        .into()],
+                                );
+                                return Ok(());
+                            }
+                        }
+                    };
                     let contract = if self.values["mode"] == "stage" {
                         STAGE
                     } else {
@@ -676,6 +777,12 @@ impl Opening {
                     }
                 }
                 "cancel_opening" => self.review = None,
+                event if event.starts_with("source_evidence_grid:") => {
+                    self.evidence.handle(event, &params::string_values(value));
+                }
+                "class_grid" => {
+                    self.class_columns.handle(&params::string_values(value));
+                }
                 "stage_grid" => {
                     self.stage_columns.handle(&params::string_values(value));
                 }

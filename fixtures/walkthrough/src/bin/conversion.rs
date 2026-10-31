@@ -45,9 +45,40 @@ const AP: &str = "source_id,vendor_code,vendor_name,document_reference,document_
 const MULTI_SOURCE: &str = "source_id,account_code,debit,credit\nbank,1000,10000,\nreceivables,1100,2500,\nhistorical-receivables,1110,500,\nasset-cost,1200,12000,\nytd-cost,5000,2000,\npayables,2000,,1200\nhistorical-payables,2010,,300\naccumulation,1290,,1800\ncapital,3000,,18200\nytd-sales,4000,,5500\n";
 const MULTI_AR: &str = "source_id,customer_code,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind\ninvoice-17,company_010,OLD-INV-17,2026-05-15,2026-06-30,5000,2500,1100,company\ninvoice-18,company_010,OLD-INV-18,2026-04-15,2026-05-31,1000,500,1110,company\n";
 const MULTI_AP: &str = "source_id,vendor_code,vendor_name,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind\nbill-29,company_010,Conversion vendor,OLD-BILL-29,2026-05-01,2026-06-15,2500,1200,2000,company\nbill-30,company_010,Conversion vendor,OLD-BILL-30,2026-04-01,2026-05-15,900,300,2010,company\n";
+async fn in_company(
+    db: &Db,
+    services: &Services,
+    user: i64,
+    company: i64,
+) -> Outcome<bilibi_tenancy::Scope> {
+    let authentication =
+        services.get::<bilibi_tenancy::Authentication>("base/tenancy.authentication")?;
+    let c = db.get().await?;
+    Ok(authentication
+        .authenticate_session(&**c, 1, user, None, Some(company), String::new())
+        .await?)
+}
 async fn setup(db: &Db, services: &Services, company: i64) -> Outcome<Value> {
     let admin = sign_in(db, services, 1, 4).await?;
-    let manager = sign_in(db, services, 1, 1).await?;
+    // Workplace reach is explicit on the pinned Platform. Capability grants
+    // alone do not let a fixture preparer or reviewer work in another company.
+    let users = services.get::<bilibi_core::user::UserService>("core/user.accounts")?;
+    for person in [1, 4, 5, 6] {
+        let assigned = db
+            .get()
+            .await?
+            .query_opt(
+                "SELECT id FROM user_desks WHERE tenant_id=1 AND company_id=$1 AND person_id=$2",
+                &[&company, &person],
+            )
+            .await?
+            .is_some();
+        if !assigned {
+            users.set_desk(&admin, company, person, true).await?;
+        }
+    }
+    let admin = in_company(db, services, 4, company).await?;
+    let manager = in_company(db, services, 1, company).await?;
     let multiple_controls = company == 4;
     let l = services.get::<Ledger>(bilibi_finance_ledger::SERVICE)?;
     let ar = services.get::<Receivables>(bilibi_finance_receivables::SERVICE)?;
@@ -266,8 +297,8 @@ async fn prove_opening_invoice_page_scale(db: &Db, services: &Services) -> Outco
     const HEADER: &str = "source_id,customer_code,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind\n";
     let company = 5;
     let config = setup(db, services, company).await?;
-    let admin = sign_in(db, services, 1, 4).await?;
-    let manager = sign_in(db, services, 1, 1).await?;
+    let admin = in_company(db, services, 4, company).await?;
+    let manager = in_company(db, services, 1, company).await?;
     let ar = services.get::<Receivables>(bilibi_finance_receivables::SERVICE)?;
     let registry = services.get::<Registry>("base/agent_api.registry")?;
     let mut rows = vec![
@@ -388,8 +419,8 @@ async fn prove_opening_invoice_page_scale(db: &Db, services: &Services) -> Outco
 async fn prove(db: &Db, services: &Services) -> Outcome<()> {
     let company = 3;
     let config = setup(db, services, company).await?;
-    let s = sign_in(db, services, 1, 4).await?;
-    let manager = sign_in(db, services, 1, 1).await?;
+    let s = in_company(db, services, 4, company).await?;
+    let manager = in_company(db, services, 1, company).await?;
     let viewer = sign_in(db, services, 1, 2).await?;
     let l = services.get::<Ledger>(bilibi_finance_ledger::SERVICE)?;
     let ar = services.get::<Receivables>(bilibi_finance_receivables::SERVICE)?;
@@ -430,7 +461,45 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         .await?;
     let ar_input = json!({"source_reference":"AR-SOURCE","currency_code":"MYR","series_id":config["invoice_series"],"csv":AR,"opening_account_classifications":config["opening_account_classifications"]});
     let ap_input = json!({"source_reference":"AP-SOURCE","currency_code":"MYR","csv":AP,"opening_account_classifications":config["opening_account_classifications"]});
-    let asset_input = json!({"source_reference":"ASSET-SOURCE","currency_code":"MYR","csv":config["assets"].as_str().unwrap().replace(",12000,1800,96,0", ",11000,800,96,0") + &format!("asset-4,Fully depreciated,{revision},2024-06-01,2024-07-01,1000,1000,0,0\n", revision=config["revision"])});
+    let defaults = assets.list_categories(&s, company).await?[0]
+        .revision
+        .defaults
+        .clone();
+    let zero_class = assets
+        .create_category(&s, company, "Fully depreciated source class", &defaults)
+        .await?;
+    let mut asset_input = json!({"source_reference":"ASSET-SOURCE","currency_code":"MYR","csv":config["assets"].as_str().unwrap().replace(",12000,1800,96,0", ",11000,800,96,0") + &format!("asset-4,Fully depreciated,{revision},2024-06-01,2024-07-01,1000,1000,0,0\n", revision=zero_class.id)});
+    asset_input["source_evidence"] = json!([{"source_id":"asset-3",
+        "history":[
+            {"kind":"impairment","effective_date":"2025-12-31","amount":"200.00","reference":"Source impairment","note":"Historical source assessment"},
+            {"kind":"impairment_reversal","effective_date":"2026-01-31","amount":"200.00","reference":"Source reversal","note":"Source assessment reversed before cut-off"},
+            {"kind":"disposal","effective_date":"2026-02-28","amount":"1000.00","reference":"Source partial disposal","note":"CSV cost is the remaining source asset"},
+            {"kind":"residual_value_change","effective_date":"2026-06-30","residual_value":"0.00","reference":"Source estimate","note":"Residual reassessed before cut-off"},
+            {"kind":"estimate_change","effective_date":"2026-06-30","remaining_life_months":96,"method":"Source method","reference":"Source estimate","note":"CSV freezes the current prospective estimate"}
+        ],
+        "source_period_expense":[{"from":"2026-01-01","through":"2026-06-30","amount":"600.00","reference":"Source YTD bridge"}],
+        "tax_capital_allowances":[{"from":"2025-01-01","through":"2025-12-31","qualifying_expenditure":"12000.00","allowances":"2400.00","reference":"Source tax computation"}]
+    }]);
+    for bad_evidence in [
+        json!([{"source_id":"unknown"}]),
+        json!([{"source_id":"asset-3","unknown":true}]),
+        json!([{"source_id":"asset-3","history":[{"kind":"impairment","effective_date":"2026-07-01","amount":"1.00","reference":"Future","note":"Refused"}]}]),
+        json!([{"source_id":"asset-3","history":[{"kind":"impairment","effective_date":"2026-06-30","amount":"1.001","reference":"Precision","note":"Refused"}]}]),
+        json!([{"source_id":"asset-3","history":[{"kind":"residual_value_change","effective_date":"2026-06-30","reference":"Missing estimate","note":"Refused"}]}]),
+        json!([{"source_id":"asset-3","source_period_expense":[{"from":"2026-06-30","through":"2026-01-01","amount":"1","reference":"Backwards period"}]}]),
+        json!([{"source_id":"asset-3","tax_capital_allowances":[{"from":"2025-01-01","through":"2025-12-31","qualifying_expenditure":"1","allowances":"-1","reference":"Negative tax allowance"}]}]),
+    ] {
+        let mut wrong = asset_input.clone();
+        wrong["source_evidence"] = bad_evidence;
+        let refusal = assets
+            .import_opening_register(&s, company, &wrong)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(refusal, bilibi_finance_fixed_assets::FixedAssetsError::Invalid(ref fields) if fields[0].field == "source_evidence"),
+            "{refusal:?}"
+        );
+    }
     for input in [&ar_input, &ap_input, &asset_input] {
         assert!(input["csv"].as_str().is_some());
     }
@@ -648,13 +717,90 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         .list_returns(&s, company, None, None, None)
         .await?
         .is_empty());
-    let asset_batch = assets
-        .import_opening_register(&s, company, &asset_input)
+    // Independent staged approval carries each asset's evidence with its CSV.
+    let lines: Vec<_> = asset_input["csv"].as_str().unwrap().lines().collect();
+    for (part, line) in lines.iter().skip(1).enumerate() {
+        let mut staged = asset_input.clone();
+        staged["part"] = json!(part + 1);
+        staged["part_count"] = json!(2);
+        staged["csv"] = json!(format!("{}\n{line}\n", lines[0]));
+        if part == 1 {
+            staged["source_evidence"] = json!([]);
+        }
+        assets
+            .stage_opening_import(&manager, company, &staged)
+            .await?;
+        assets
+            .stage_opening_import(&manager, company, &staged)
+            .await?;
+        let mut changed = staged.clone();
+        if part == 0 {
+            changed["source_evidence"][0]["history"][0]["note"] = json!("Changed source bytes");
+            assert!(assets
+                .stage_opening_import(&manager, company, &changed)
+                .await
+                .is_err());
+        }
+    }
+    let reconcile = json!({"company_id":company,"source_reference":"ASSET-SOURCE","currency_code":"MYR","csv":"","staged":true});
+    assert!(assets
+        .import_opening_register(&manager, company, &reconcile)
+        .await
+        .is_err());
+    let Handler::SafeWrite(asset_import) = registry.operations
+        ["finance.fixed_assets.opening.import"]
+        .definition
+        .handler
+    else {
+        panic!("opening import must be reviewed");
+    };
+    let mut raw = db.get().await?;
+    let mut tx = l
+        .write(
+            &mut raw,
+            &s,
+            company,
+            &[bilibi_finance_fixed_assets::ACQUIRE],
+            "walkthrough.opening-evidence",
+        )
         .await?;
+    let review = asset_import
+        .preview(tx.sql(), &s, &reconcile)
+        .await?
+        .envelope("finance.fixed_assets.opening.import");
+    let facts = &review["result"]["changes"];
+    assert_eq!(facts["class_totals"].as_array().unwrap().len(), 2);
+    assert_eq!(facts["class_totals"][0]["cost"], "11000");
+    assert_eq!(facts["class_totals"][0]["accumulated_depreciation"], "800");
+    assert!(facts["month_convention"]
+        .as_str()
+        .unwrap()
+        .contains("mid-month"));
+    assert_eq!(
+        facts["rows"][0]["source_evidence"]["history"]
+            .as_array()
+            .unwrap()
+            .len(),
+        5
+    );
+    asset_import.commit(&mut tx, &s, &reconcile).await?;
+    tx.commit().await?;
+    drop(raw);
+    let asset_batch = assets
+        .import_opening_register(&s, company, &reconcile)
+        .await?;
+    let mut retry_input = asset_input.clone();
+    retry_input["csv"] = asset_batch["source_csv"].clone();
+    let mut changed = retry_input.clone();
+    changed["source_evidence"][0]["history"][0]["note"] = json!("Different retained evidence");
+    assert!(assets
+        .import_opening_register(&s, company, &changed)
+        .await
+        .is_err());
     assert_eq!(
         asset_batch,
         assets
-            .import_opening_register(&s, company, &asset_input)
+            .import_opening_register(&s, company, &retry_input)
             .await?
     );
     let reproduced_ar = ar
@@ -750,6 +896,24 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
     assert_eq!(
         register.rows[0].accumulated.shown(trial.minor_units),
         "800.00"
+    );
+    let retained = assets
+        .get_asset(&s, company, register.rows[0].asset.id)
+        .await?;
+    let evidence = &retained.opening.as_ref().unwrap()["source_evidence"];
+    assert_eq!(evidence["history"].as_array().unwrap().len(), 5);
+    assert_eq!(evidence["source_period_expense"][0]["amount"], "600.00");
+    assert_eq!(
+        evidence["tax_capital_allowances"][0]["allowances"],
+        "2400.00"
+    );
+    assert_eq!(
+        assets
+            .evidence_page(&s, company, "opening_item", Some(500), None)
+            .await?
+            .rows
+            .len(),
+        2
     );
     assert!(register.rows[1].schedule.is_empty());
     assert_eq!(
@@ -1015,6 +1179,49 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         "Conversion facade proof: exact source balances, partial residuals, all three mismatch refusals, corrected preview, identical retries, independent approval, pre-cutoff exclusion, aged dates, control tie-outs, source accumulation differing from historical projection, prospective 106.25 depreciation, receipt, supplier payment and their reversals, guarded opening reversal, audit evidence and retained rows passed."
     );
     drop(c);
+    if std::env::args().any(|arg| arg == "assets-evidence") {
+        assets
+            .reverse_run(
+                &s,
+                company,
+                run.id,
+                &EventInput {
+                    effective_date: date(2026, 7, 31),
+                    reason: "Correct the opening asset run".into(),
+                },
+            )
+            .await?;
+        let corrected = assets
+            .register_report(&s, company, date(2026, 7, 31), &Default::default())
+            .await?;
+        assert_eq!(
+            corrected.rows[0].accumulated.shown(trial.minor_units),
+            "800.00"
+        );
+        assert!(corrected
+            .reconciliation
+            .iter()
+            .all(|row| row.difference.is_zero()));
+        let reproduced = assets
+            .register_report(&s, company, date(2026, 7, 31), &register.pins())
+            .await?;
+        assert_eq!(
+            serde_json::to_value(&reproduced)?,
+            serde_json::to_value(&register)?
+        );
+        let next = assets.depreciate(&s, company, date(2026, 8, 1)).await?;
+        assert_eq!(next.total.shown(trial.minor_units), "212.50");
+        let report = assets
+            .register_report(&s, company, date(2026, 8, 31), &Default::default())
+            .await?;
+        assert!(report
+            .reconciliation
+            .iter()
+            .all(|row| row.difference.is_zero()));
+        assert!(report.rows[1].schedule.is_empty());
+        println!("PASS opening asset evidence: typed staged approval, source history/YTD/tax separation, shared-account class totals, zero-life import, future runs, disposal/reversal, run reversal/catch-up and reproduced report pins");
+        return Ok(());
+    }
     let report = conversion_report::before(db, services).await?;
     if std::env::args().any(|s| s == "report-browser") {
         println!("Conversion report browser fixture ready on Company 003; bulk correction proof was not run.");
@@ -1043,8 +1250,8 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
 async fn prove_historical_controls(db: &Db, services: &Services) -> Outcome<()> {
     let company = 4;
     let config = setup(db, services, company).await?;
-    let reviewer = sign_in(db, services, 1, 4).await?;
-    let manager = sign_in(db, services, 1, 1).await?;
+    let reviewer = in_company(db, services, 4, company).await?;
+    let manager = in_company(db, services, 1, company).await?;
     let ledger = services.get::<Ledger>(bilibi_finance_ledger::SERVICE)?;
     let ar = services.get::<Receivables>(bilibi_finance_receivables::SERVICE)?;
     let ap = services.get::<Payables>(bilibi_finance_payables::SERVICE)?;
@@ -1196,10 +1403,35 @@ async fn main() -> Outcome<()> {
         launcher_credentials(&db, &app.services).await?;
         return Ok(());
     }
+    if std::env::args().any(|s| s == "launcher-asset-credentials") {
+        if std::env::var("BILIBI_AGENT_PROOF").as_deref() != Ok("disposable") {
+            return Err("disposable proof required".into());
+        }
+        let c = db.get().await?;
+        let proof: bool = c.query_one("SELECT current_database()='fin_issue_110_rest_ui' AND EXISTS(SELECT 1 FROM users WHERE id=6 AND email='ai@agent.my') AND EXISTS(SELECT 1 FROM finance_ledger_entries WHERE company_id=2)",&[]).await?.get(0);
+        if !proof {
+            return Err(
+                "prepare this task's disposable conversion database before restoring identities"
+                    .into(),
+            );
+        }
+        // Fixture identities only: the normal launcher retires the old demo users.
+        c.batch_execute("INSERT INTO persons(id,tenant_id,code,name,kind,email) VALUES(1,1,'ada_manager','Ada Manager','human','manager@example.test') ON CONFLICT DO NOTHING;
+        INSERT INTO person_affiliations(id,tenant_id,person_id,organisation_id,title) VALUES(1,1,1,1,'Manager') ON CONFLICT DO NOTHING;
+        INSERT INTO users(id,tenant_id,name,email,password_hash,person_id) SELECT 1,1,'Ada Manager','manager@example.test',password_hash,1 FROM users WHERE id=6 AND email='ai@agent.my' ON CONFLICT DO NOTHING;
+        INSERT INTO user_desks(tenant_id,person_id,company_id) VALUES(1,1,1) ON CONFLICT DO NOTHING;").await?;
+    }
     install(&db, &app.services).await?;
     // Identity-only fixture repair: the reviewer has a real Person affiliation,
     // so browser sessions can choose the current company. No business rows use SQL.
     db.get().await?.batch_execute("INSERT INTO persons(id,tenant_id,code,name,kind,email) VALUES(4,1,'person_4','Conversion reviewer','human','admin@example.test') ON CONFLICT DO NOTHING; INSERT INTO person_affiliations(id,tenant_id,person_id,organisation_id,title,work_email) VALUES(3,1,4,1,'Reviewer','admin@example.test') ON CONFLICT DO NOTHING; UPDATE users SET person_id=4 WHERE tenant_id=1 AND id=4 AND person_id IS NULL; INSERT INTO user_desks(tenant_id,person_id,company_id) SELECT tenant_id,person_id,1 FROM users WHERE tenant_id=1 AND id=4 AND person_id IS NOT NULL ON CONFLICT DO NOTHING;").await?;
+    db.get().await?.batch_execute("INSERT INTO persons(id,tenant_id,code,name,kind,email) VALUES(5,1,'conversion_viewer','Conversion statement preparer','human','viewer@example.test'),(6,1,'conversion_staff','Conversion independent signer','human','staff@example.test') ON CONFLICT DO NOTHING;
+    INSERT INTO person_affiliations(id,tenant_id,person_id,organisation_id,title) VALUES(4,1,5,1,'Statement preparer'),(5,1,6,1,'Independent signer') ON CONFLICT DO NOTHING;
+    UPDATE users SET person_id=5 WHERE tenant_id=1 AND id=2 AND person_id IS NULL;
+    UPDATE users SET person_id=6 WHERE tenant_id=1 AND id=3 AND person_id IS NULL;
+    INSERT INTO user_desks(tenant_id,person_id,company_id) VALUES(1,5,1),(1,6,1) ON CONFLICT DO NOTHING;
+    SELECT setval(pg_get_serial_sequence('persons','id'),GREATEST((SELECT max(id) FROM persons),1));
+    SELECT setval(pg_get_serial_sequence('person_affiliations','id'),GREATEST((SELECT max(id) FROM person_affiliations),1));").await?;
     let admin = sign_in(&db, &app.services, 1, 4).await?;
     let storage_root = std::env::var("BILIBI_ATTACHMENTS_DEMO_ROOT").unwrap_or_else(|_| {
         std::env::temp_dir()
@@ -1225,6 +1457,27 @@ async fn main() -> Outcome<()> {
     grants
         .set_direct(&admin, 1, "admin.company.tenant-wide.manage", Some(true))
         .await?;
+    if std::env::args().any(|s| s == "launcher-asset-credentials") {
+        let operator = sign_in(&db, &app.services, 1, 6).await?;
+        let assigned = db
+            .get()
+            .await?
+            .query_opt(
+                "SELECT id FROM user_desks WHERE tenant_id=1 AND company_id=1 AND person_id=3",
+                &[],
+            )
+            .await?
+            .is_some();
+        if !assigned {
+            app.services
+                .get::<bilibi_core::user::UserService>("core/user.accounts")?
+                .set_desk(&operator, 1, 3, true)
+                .await?;
+        }
+        bilibi_finance_walkthrough_fixture::assets_lifecycle::credentials(&db, &app.services)
+            .await?;
+        return Ok(());
+    }
     if std::env::args().any(|s| s == "opening-list-scale") {
         prove_opening_invoice_page_scale(&db, &app.services).await?;
         return Ok(());
@@ -1265,7 +1518,9 @@ async fn main() -> Outcome<()> {
         .await?;
     } else {
         prove(&db, &app.services).await?;
-        prove_historical_controls(&db, &app.services).await?;
+        if !std::env::args().any(|arg| arg == "assets-evidence") {
+            prove_historical_controls(&db, &app.services).await?;
+        }
     }
     Ok(())
 }

@@ -862,8 +862,17 @@ impl LiveState<Scope, Error> for Index {
                         self.opening = Some(super::opening::Opening::new(self.pages.clone())?)
                     }
                     "close_opening" => self.opening = None,
+                    event
+                        if event.starts_with("source_evidence_grid:") && self.opening.is_some() =>
+                    {
+                        self.opening
+                            .as_mut()
+                            .expect("opening dialog")
+                            .update(&r)
+                            .await?;
+                    }
                     "preview_opening" | "import_opening" | "cancel_opening" | "stage_grid"
-                    | "balance_grid" | "opening_grid" | "clear-flash"
+                    | "balance_grid" | "class_grid" | "opening_grid" | "clear-flash"
                         if self.opening.is_some() =>
                     {
                         let opening = self.opening.as_mut().expect("opening dialog");

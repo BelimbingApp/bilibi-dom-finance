@@ -5,6 +5,7 @@ use bilibi_agent_api::OperationClient;
 use bilibi_finance_ledger::{EntryOwner, OpeningContext};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
+pub(super) const CONVENTION: &str = "Source balances are frozen immediately before the conversion date. Future depreciation starts in the conversion calendar month, including a mid-month cut-off; a full first month is recognized at month-end. No daily proration or historical catch-up charge is inferred.";
 pub(super) const HEADER: &[&str] = &[
     "source_id",
     "description",
@@ -61,7 +62,7 @@ impl FixedAssets {
         let total: i64 = c.query_opt("SELECT count(*) FROM finance_fixed_assets_opening_items WHERE tenant_id=$1 AND company_id=$2", &[&s.tenant(), &company]).await?.ok_or(Error::Internal)?.get(0);
         let categories:Vec<Value>=c.query("SELECT to_jsonb(r) || jsonb_build_object('category_name',g.name) FROM finance_fixed_assets_category_revisions r JOIN finance_fixed_assets_categories g ON g.id=r.category_id AND g.tenant_id=r.tenant_id AND g.company_id=r.company_id WHERE r.tenant_id=$1 AND r.company_id=$2 ORDER BY r.id",&[&s.tenant(),&company]).await?.iter().map(|r|r.get(0)).collect();
         Ok(
-            json!({"opening":self.ledger.opening_context_on(c,s,company).await?,"book":self.ledger.get_book_on(c,s,company).await?,"batch":c.query_opt("SELECT to_jsonb(b) || jsonb_build_object('state','reconciled') FROM finance_fixed_assets_opening_batches b WHERE tenant_id=$1 AND company_id=$2 ORDER BY id DESC LIMIT 1",&[&s.tenant(),&company]).await?.map(|r|r.get::<_,Value>(0)),"category_revisions":categories,"stages":c.query("SELECT to_jsonb(s)-'payload'||jsonb_build_object('part_count',payload->'part_count','csv_bytes',octet_length(payload->>'csv')) FROM finance_fixed_assets_opening_stages s WHERE tenant_id=$1 AND company_id=$2 ORDER BY id",&[&s.tenant(),&company]).await?.iter().map(|r|r.get::<_,Value>(0)).collect::<Vec<_>>(),"decisions":c.query("SELECT to_jsonb(d) FROM finance_fixed_assets_opening_decisions d WHERE tenant_id=$1 AND company_id=$2 ORDER BY id",&[&s.tenant(),&company]).await?.iter().map(|r|r.get::<_,Value>(0)).collect::<Vec<_>>(),"header":HEADER,"items":items,"item_count":total,"items_next":next}),
+            json!({"opening":self.ledger.opening_context_on(c,s,company).await?,"book":self.ledger.get_book_on(c,s,company).await?,"batch":c.query_opt("SELECT to_jsonb(b) || jsonb_build_object('state','reconciled') FROM finance_fixed_assets_opening_batches b WHERE tenant_id=$1 AND company_id=$2 ORDER BY id DESC LIMIT 1",&[&s.tenant(),&company]).await?.map(|r|r.get::<_,Value>(0)),"category_revisions":categories,"stages":c.query("SELECT to_jsonb(s)-'payload'||jsonb_build_object('part_count',payload->'part_count','csv_bytes',octet_length(payload->>'csv')) FROM finance_fixed_assets_opening_stages s WHERE tenant_id=$1 AND company_id=$2 ORDER BY id",&[&s.tenant(),&company]).await?.iter().map(|r|r.get::<_,Value>(0)).collect::<Vec<_>>(),"decisions":c.query("SELECT to_jsonb(d) FROM finance_fixed_assets_opening_decisions d WHERE tenant_id=$1 AND company_id=$2 ORDER BY id",&[&s.tenant(),&company]).await?.iter().map(|r|r.get::<_,Value>(0)).collect::<Vec<_>>(),"month_convention":CONVENTION,"header":HEADER,"items":items,"item_count":total,"items_next":next}),
         )
     }
     pub(super) async fn prepare_opening(
@@ -71,10 +72,12 @@ impl FixedAssets {
         company: i64,
         input: &Value,
     ) -> Result<Prepared> {
+        self.lifecycle_preview_lock(c, s, company, ACQUIRE).await?;
         self.opening_authorize(c, s, company, ACQUIRE).await?;
-        self.lifecycle_preview_lock(c, s, company).await?;
         let context = self.ledger.opening_context_on(c, s, company).await?;
         let book = self.ledger.get_book_on(c, s, company).await?;
+        let mut evidence =
+            crate::opening_evidence::read(input, context.entry.entry_date, book.minor_units)?;
         let reference = input["source_reference"].as_str().unwrap_or("").trim();
         if reference.is_empty() || reference.chars().count() > 100 || reference.contains('\0') {
             return Err(invalid(
@@ -95,7 +98,7 @@ impl FixedAssets {
             let batch:Value=row.get(0);
             if batch["source_reference"]!=reference || batch["source_csv"]!=csv {return Err(invalid("source_reference","the opening register has already been imported; the same source reference and exact CSV are required for a retry"));}
             let retained=c.query_opt("SELECT review FROM finance_fixed_assets_opening_decisions WHERE tenant_id=$1 AND company_id=$2 AND batch_id=$3",&[&s.tenant(),&company,&batch["id"].as_i64().ok_or(Error::Invalid)?]).await?;
-            if let Some(row)=retained {let review:Value=row.get(0);if review["replaces_batch_id"]!=input["replaces_batch_id"] || review["reason"]!=input["reason"] {return Err(invalid("source_reference","already identifies different correction instructions"));}}
+            if let Some(row)=retained {let review:Value=row.get(0);if review["replaces_batch_id"]!=input["replaces_batch_id"] || review["reason"]!=input["reason"] || review["source_evidence"]!=json!(evidence) {return Err(invalid("source_reference","already identifies different correction instructions"));}}
             return Ok(Prepared{review:json!({"state":"reconciled","batch":batch,"already_imported":true,"rows":[],"posts":false}),context,rows:vec![],balances:BTreeMap::new(),existing:Some(batch)});
         }
         let replacement = self.opening_replacement(c, s, company, input).await?;
@@ -123,7 +126,7 @@ impl FixedAssets {
             .filter_map(|row| row.get(2).and_then(|id| id.trim().parse().ok()))
             .collect();
         let revisions: BTreeMap<i64, Value> = c
-            .query("SELECT id,to_jsonb(r) FROM finance_fixed_assets_category_revisions r WHERE tenant_id=$1 AND company_id=$2 AND id=ANY($3)", &[&s.tenant(), &company, &wanted])
+            .query("SELECT r.id,to_jsonb(r)||jsonb_build_object('category_name',g.name) FROM finance_fixed_assets_category_revisions r JOIN finance_fixed_assets_categories g ON g.tenant_id=r.tenant_id AND g.company_id=r.company_id AND g.id=r.category_id WHERE r.tenant_id=$1 AND r.company_id=$2 AND r.id=ANY($3)", &[&s.tenant(), &company, &wanted])
             .await?
             .iter()
             .map(|r| (r.get(0), r.get(1)))
@@ -132,6 +135,7 @@ impl FixedAssets {
         let mut rows = vec![];
         let mut balances = BTreeMap::new();
         let mut roles = BTreeMap::new();
+        let mut classes = BTreeMap::<(i64, i64, i64), (Money, Money)>::new();
         for (index, row) in parsed.into_iter().enumerate().skip(1) {
             let fail = |text: &str| invalid("csv", format!("row {}: {text}", index + 1));
             if row.len() != HEADER.len() {
@@ -217,7 +221,8 @@ impl FixedAssets {
             }
             // An opening register freezes an explicit prospective straight-line estimate.
             // No historical schedule is reconstructed or caught up.
-            let mut facts = json!({"source_id":row[0],"description":row[1],"category_revision_id":revision,"acquisition_date":acquisition.to_string(),"in_service_date":service.to_string(),"cost":cost,"accumulated_depreciation":accumulated,"remaining_life_months":months,"residual_value":residual,"carrying_value":cost-accumulated,"method":"straight_line","opening_date":context.entry.entry_date.to_string(),"category_method":r["method"]});
+            let source_evidence = evidence.remove(row[0]).unwrap_or(Value::Null);
+            let mut facts = json!({"source_id":row[0],"description":row[1],"category_revision_id":revision,"acquisition_date":acquisition.to_string(),"in_service_date":service.to_string(),"cost":cost,"accumulated_depreciation":accumulated,"remaining_life_months":months,"residual_value":residual,"carrying_value":cost-accumulated,"method":"straight_line","opening_date":context.entry.entry_date.to_string(),"category_method":r["method"],"source_evidence":source_evidence});
             for (field, role, balance) in [
                 ("cost_account_id", "cost", cost),
                 (
@@ -242,8 +247,31 @@ impl FixedAssets {
                 facts[field] = json!(id);
                 facts[format!("{field}_code")] = json!(a.code);
             }
+            let key = (
+                r["category_id"].as_i64().ok_or(Error::Invalid)?,
+                facts["cost_account_id"].as_i64().ok_or(Error::Invalid)?,
+                facts["accumulated_account_id"]
+                    .as_i64()
+                    .ok_or(Error::Invalid)?,
+            );
+            let totals = classes.entry(key).or_insert((Money::ZERO, Money::ZERO));
+            totals.0 = Money::new((totals.0 + cost).amount(), book.minor_units)
+                .map_err(|e| fail(&e.to_string()))?;
+            totals.1 = Money::new((totals.1 + accumulated).amount(), book.minor_units)
+                .map_err(|e| fail(&e.to_string()))?;
             rows.push(facts);
         }
+        if !evidence.is_empty() {
+            return Err(invalid(
+                "source_evidence",
+                "each evidence record must name an asset in this source register",
+            ));
+        }
+        let evidence =
+            crate::opening_evidence::read(input, context.entry.entry_date, book.minor_units)?;
+        // Class totals explain the source register; only account totals reconcile
+        // to the ledger because an account may be shared by several classes.
+        let class_totals: Vec<Value> = classes.into_iter().map(|((category, cost_account, accumulated_account), (cost, accumulated))| json!({"category_id":category,"category_name":revisions.values().find(|r|r["category_id"]==category).map(|r|r["category_name"].clone()),"cost_account_id":cost_account,"cost_account":chart.iter().find(|a|a.id==cost_account).map(|a|format!("{} · {}",a.name,a.code)),"accumulated_account_id":accumulated_account,"accumulated_account":chart.iter().find(|a|a.id==accumulated_account).map(|a|format!("{} · {}",a.name,a.code)),"cost":cost,"accumulated_depreciation":accumulated,"carrying_value":cost-accumulated})).collect();
         let mut reconciliation = vec![];
         for (&account, &balance) in &balances {
             let expected = context
@@ -299,7 +327,7 @@ impl FixedAssets {
             )
             .await?;
         Ok(Prepared {
-            review: json!({"state":"previewed","replaces_batch_id":input["replaces_batch_id"],"reason":input["reason"],"staged":input["staged"]==true,"conversion_date":context.entry.entry_date.to_string(),"entry_id":context.entry.id,"entry_number":context.entry.entry_number,"source_reference":reference,"currency_code":book.currency_code,"minor_units":book.minor_units,"rows":rows,"reconciliation":reconciliation,"posts":false,"approval":approval,"already_imported":false,"depreciation":"Prospective straight-line depreciation of source carrying value less residual value over the remaining useful life. A full first month is recognized at month-end, including a mid-month cut-off."}),
+            review: json!({"state":"previewed","replaces_batch_id":input["replaces_batch_id"],"reason":input["reason"],"staged":input["staged"]==true,"conversion_date":context.entry.entry_date.to_string(),"entry_id":context.entry.id,"entry_number":context.entry.entry_number,"source_reference":reference,"currency_code":book.currency_code,"minor_units":book.minor_units,"rows":rows,"class_totals":class_totals,"source_evidence":evidence,"month_convention":CONVENTION,"reconciliation":reconciliation,"posts":false,"approval":approval,"already_imported":false,"depreciation":"Prospective straight-line depreciation of source carrying value less residual value over the remaining useful life. A full first month is recognized at month-end, including a mid-month cut-off."}),
             context,
             rows,
             balances,

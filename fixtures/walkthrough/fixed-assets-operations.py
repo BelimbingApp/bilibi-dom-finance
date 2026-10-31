@@ -12,6 +12,12 @@ import time
 import urllib.error
 import urllib.request
 import urllib.parse
+import socket
+
+_dns_lookup = socket.getaddrinfo
+def _local_lookup(host, port, *args, **kwargs):
+    return _dns_lookup("127.0.0.1" if isinstance(host, str) and host.endswith(".localhost") else host, port, *args, **kwargs)
+socket.getaddrinfo = _local_lookup
 
 if os.environ.get("BILIBI_AGENT_PROOF") != "disposable":
     raise SystemExit("BILIBI_AGENT_PROOF=disposable is required")
@@ -119,13 +125,36 @@ for key in keys:
 require(invoke(channel, "guide", {"key": prefix + "lifecycle"}), "missing lifecycle guide")
 accounts = {a["code"]: a["id"] for a in read(channel, "finance.ledger.account.list", company, "approver")["records"]}
 category = dict(name="MCP prospective equipment", cost_account_id=accounts["1200"], accumulated_account_id=accounts["1290"], expense_account_id=accounts["6100"], gain_account_id=accounts["4100"], loss_account_id=accounts["6000"], method="straight_line", life_months=120, reason="Approved prospective defaults")
-refused(channel, prefix + "category.save", company, "accumulated_account_id", who="approver", **(category | {"accumulated_account_id": accounts["1200"]}))
-revision = write(channel, prefix + "category.save", company, **category)
-revised = {k: v for k, v in category.items() if k != "name"} | {"category_id": revision["category_id"], "life_months": 144, "reason": "New defaults leave saved assets frozen"}
-write(channel, prefix + "category.save", company, **revised)
+existing = next((c for c in read(channel, prefix + "category.list", company, "approver")["records"] if c["name"] == category["name"]), None)
+if existing is None:
+    refused(channel, prefix + "category.save", company, "accumulated_account_id", who="approver", **(category | {"accumulated_account_id": accounts["1200"]}))
+    revision = write(channel, prefix + "category.save", company, **category)
+    revised = {k: v for k, v in category.items() if k != "name"} | {"category_id": revision["category_id"], "life_months": 144, "reason": "New defaults leave saved assets frozen"}
+    write(channel, prefix + "category.save", company, **revised)
+else:
+    revision = existing["revisions"][0]
+    revised = {k: v for k, v in category.items() if k != "name"} | {"category_id": revision["category_id"], "life_months": 144, "reason": "New defaults leave saved assets frozen"}
 context = read(channel, prefix + "opening.context", company, "approver")
-csv = ",".join(context["header"]) + f"\nasset-111,Prospective MCP equipment,{revision['id']},2025-01-01,2025-01-01,12000,1800,96,0\n"
-write(channel, prefix + "opening.import", company, source_reference="MCP-ASSET-111", currency_code="MYR", csv=csv)
+csv = ",".join(context["header"]) + f"\nasset-111,Prospective MCP equipment,{revision['id']},2025-01-01,2025-01-01,11000,800,96,0\nasset-112,Fully depreciated MCP equipment,{revision['id']},2024-01-01,2024-01-01,1000,1000,0,0\n"
+evidence = [{"source_id": "asset-111",
+    "history": [{"kind": "residual_value_change", "effective_date": "2026-06-30", "residual_value": "0.00", "reference": "MCP source review", "note": "Source residual estimate revised"}],
+    "source_period_expense": [{"from": "2026-01-01", "through": "2026-06-30", "amount": "600.00", "reference": "MCP YTD bridge"}],
+    "tax_capital_allowances": [{"from": "2025-01-01", "through": "2025-12-31", "qualifying_expenditure": "12000.00", "allowances": "2400.00", "reference": "MCP tax evidence"}]
+}]
+opening = dict(source_reference="MCP-ASSET-111", currency_code="MYR", csv=csv, source_evidence=evidence)
+refused(channel, prefix + "opening.import", company, "source_evidence", who="approver", **(opening | {"source_evidence": [{"source_id": "unknown"}]}))
+review = plan(channel, [operation(prefix + "opening.import", company, **opening)], "approver")
+require(review.get("valid") is True, "opening evidence review")
+facts = review["results"][0]["preview"]["result"]["changes"]
+if facts.get("already_imported"):
+    facts = next(d["review"] for d in context["decisions"] if d["review"].get("source_reference") == "MCP-ASSET-111")
+require(len(facts["class_totals"]) == 1 and Decimal(facts["class_totals"][0]["cost"]) == 12000, "class/account totals")
+require("mid-month" in facts["month_convention"], "cut-off convention missing")
+require("results" in commit(channel, [operation(prefix + "opening.import", company, **opening)], review, "approver"), "opening evidence commit")
+write(channel, prefix + "opening.import", company, **opening)
+changed = json.loads(json.dumps(evidence))
+changed[0]["history"][0]["note"] = "Different source evidence"
+refused(channel, prefix + "opening.import", company, "source_reference", who="approver", **(opening | {"source_evidence": changed}))
 
 def report(**pins):
     return read(channel, prefix + "register.get", company, "approver", as_of="2026-07-31", **pins)["report"]
@@ -136,9 +165,15 @@ def tied(report):
 initial = report()
 asset = initial["rows"][0]["asset"]
 require(asset["category_revision_id"] == revision["id"] and asset["assumptions"]["life_months"] == 96, "opening assumptions not frozen")
-require(Decimal(initial["rows"][0]["accumulated"]) == 1800 and Decimal(initial["rows"][0]["carrying_value"]) == 10200, "opening source balances")
+require(Decimal(initial["rows"][0]["accumulated"]) == 800 and Decimal(initial["rows"][0]["carrying_value"]) == 10200, "opening source balances")
 require(Decimal(initial["rows"][0]["schedule"][0]["amount"]) == Decimal("106.25"), "prospective monthly estimate")
 tied(initial)
+zero = initial["rows"][1]["asset"]
+require(initial["rows"][1]["schedule"] == [] and Decimal(initial["rows"][1]["carrying_value"]) == 0, "zero-life opening schedule")
+retained = read(channel, prefix + "asset.get", company, "approver", asset_id=asset["id"])["record"]["opening"]["source_evidence"]
+require(retained["history"][0]["note"] == evidence[0]["history"][0]["note"], "source history not retained")
+require(Decimal(retained["source_period_expense"][0]["amount"]) == 600 and Decimal(retained["tax_capital_allowances"][0]["allowances"]) == 2400, "source YTD and tax evidence not separate")
+print("PASS MCP opening: zero-life schedule, source history/YTD/tax separation, class/account review, immutable retry and exact reconciliation")
 # The source aggregate is not an ordinary acquisition debit.
 refused(channel, prefix + "asset.acquire", company, "opening", who="approver", source="entry", source_id=asset["entry_id"], line_number=1, category_revision_id=revision["id"], description="Refused aggregate", in_service_date="2026-07-01")
 # Another transaction holding the company row is a retryable refusal, never an infrastructure failure or a write.
@@ -150,20 +185,33 @@ command, environment = psql("BEGIN; SELECT 1 FROM companies WHERE tenant_id=1 AN
 holder = subprocess.Popen(command, env=environment, stdout=subprocess.DEVNULL)
 try:
     for _ in range(100):
-        if sql("SELECT count(*) FROM pg_stat_activity WHERE state='active' AND query LIKE '%pg_sleep(60)%' AND pid<>pg_backend_pid()") == "1":
+        if sql("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND state='active' AND query LIKE '%pg_sleep(60)%' AND pid<>pg_backend_pid()") == "1":
             break
         time.sleep(0.1)
     else:
         raise RuntimeError("company row holder did not start")
     for key, args in [(prefix + "run.post", dict(period="2026-07-01")), (prefix + "category.save", category | {"name": "Locked category"}), (prefix + "opening.import", dict(source_reference="LOCKED", currency_code="MYR", csv=csv))]:
-        body = plan(channel, [operation(key, company, **args)], "approver")
-        require(body.get("valid") is False and "plan_code" not in body and "record_changed" in json.dumps(body) and "error" not in body, f"{key}: lock contention must be a nonfatal retryable refusal: {body}")
+        started = time.monotonic()
+        status, envelope = request("/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "plan", "arguments": {"operations": [operation(key, company, **args)]}}}, "approver", "mcp")
+        require(time.monotonic() - started < 2, f"{key}: lock contention was not bounded")
+        if status == 422:
+            # Shared bearer/workplace proof can refuse before the owner preview.
+            require(envelope == {"error": "rejected", "reason": "record_changed"}, f"{key}: expected typed retryable proof refusal")
+        else:
+            require(status == 200 and "result" in envelope, f"{key}: unexpected contention transport")
+            result = envelope["result"]
+            body = result["structuredContent"]
+            if result.get("isError") is True:
+                require(body == {"error": "rejected", "reason": "record_changed"}, f"{key}: expected typed retryable plan refusal")
+            else:
+                require(body.get("valid") is False and "plan_code" not in body and "record_changed" in json.dumps(body) and "error" not in body, f"{key}: lock contention must be a nonfatal retryable record_changed refusal")
 finally:
     holder.kill()
     holder.wait()
-    sql("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE query LIKE '%pg_sleep(60)%' AND pid<>pg_backend_pid()")
+    sql("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=current_database() AND query LIKE '%pg_sleep(60)%' AND pid<>pg_backend_pid()")
 require(counts() == before, "lock contention wrote business or audit rows")
 require(plan(channel, [operation(prefix + "run.post", company, period="2026-07-01")], "approver").get("valid") is True, "preview did not recover after the lock was released")
+print("PASS MCP contention: authorized write previews refuse a busy company and recover after its lock is released")
 # Preview-all-before-execute must refuse the dependent second run and roll back the first.
 ops = [operation(prefix + "run.post", company, period="2026-07-01")] * 2
 review = plan(channel, ops, "approver")
@@ -182,7 +230,7 @@ require(Decimal(run["total"]) == Decimal("106.25"), "monthly opening continuatio
 require(write(channel, prefix + "run.post", company, period="2026-07-01")["id"] == run["id"], "run retry created another record")
 posted = report()
 tied(posted)
-require(Decimal(posted["rows"][0]["accumulated"]) == Decimal("1906.25"), "posted accumulation")
+require(Decimal(posted["rows"][0]["accumulated"]) == Decimal("906.25"), "posted accumulation")
 pins = {k: posted[k] for k in ["through_entry_number", "through_asset_number", "through_event_number", "through_category_revision_id"]}
 require(read(channel, prefix + "schedule.get", company, "approver", as_of="2026-07-31", **pins)["report"] == posted, "schedule/register mismatch")
 detail = read(channel, prefix + "asset.get", company, "approver", asset_id=asset["id"])["record"]
@@ -231,8 +279,17 @@ tied(current)
 require(next(r for r in current["rows"] if r["asset"]["id"] == registered["id"])["voided"], "void missing from register")
 require(read(channel, "finance.ledger.entry.get", company, "approver", entry_id=entry_id)["owner"] is None, "registration stole source ownership")
 require(report(**pins) == posted, "ordinary acquisition changed reproduced register")
+# Zero-life opening assets use the same disposal/reversal contracts and pins.
+write(channel, prefix + "asset.dispose", company, asset_id=zero["id"], effective_date="2026-09-30", proceeds="0", reason="Retire fully depreciated MCP asset")
+zero_report = read(channel, prefix + "register.get", company, "approver", as_of="2026-09-30")["report"]
+tied(zero_report)
+zero_pins = {k: zero_report[k] for k in pins}
+require(next(r for r in zero_report["rows"] if r["asset"]["id"] == zero["id"])["disposed"], "zero-life disposal missing")
+write(channel, prefix + "disposal.reverse", company, asset_id=zero["id"], effective_date="2026-09-30", reason="Correct zero-life retirement")
+require(read(channel, prefix + "register.get", company, "approver", as_of="2026-09-30", **zero_pins)["report"] == zero_report, "zero-life disposal pins changed after reversal")
+tied(read(channel, prefix + "register.get", company, "approver", as_of="2026-09-30")["report"])
 # Exact ownership and row-audit assertions observe the wire writes, never make them.
-require(sql("SELECT count(*) FROM finance_ledger_entries WHERE company_id=2 AND owner_module='finance/fixed_assets'") == "7", "owned posting count")
+require(sql("SELECT count(*) FROM finance_ledger_entries WHERE company_id=2 AND owner_module='finance/fixed_assets'") == "9", "owned posting count")
 for table, kind in [("categories", "category"), ("category_revisions", "category_revision"), ("assets", "asset"), ("runs", "run"), ("run_items", "run_item"), ("run_exceptions", "run_exception"), ("events", "event"), ("opening_batches", "opening_batch"), ("opening_items", "opening_item")]:
     require(sql(f"SELECT count(*) FROM finance_fixed_assets_{table} r WHERE r.tenant_id=1 AND r.company_id=2 AND (SELECT count(*) FROM base_audit_mutations a WHERE a.auditable_type='finance.fixed-assets.{kind}' AND a.auditable_id=r.id::text AND a.tenant_id=r.tenant_id AND a.new_values->>'company_id'=r.company_id::text)<>1") == "0", f"missing or duplicate row audit: {table}")
 print("Fixed Assets real MCP proof passed: discovery, category preparation/revision, opening import, prospective monthly charge, dependent-plan rollback, precision/access refusals, sale/loss and reversal, run correction/catch-up, ordinary acquisition/void, source ownership, row audits and four-pin reproduced reconciliation.")

@@ -137,9 +137,9 @@ For example, cost 12,000, accumulated depreciation 1,800, zero residual and 96 r
 
 UI and MCP use `finance.fixed_assets.opening.context` and reviewed `finance.fixed_assets.opening.stage` and `opening.import`. Input is `company_id`, `source_reference`, `currency_code`, `csv`, and optional `override_reason`; staged batches and corrections add the fields in the [opening guide](opening-guide.md). The facade is `FixedAssets::import_opening_register`; agent commits join the plan's transaction. Normal acquisitions still freeze one whole source debit line. An opening asset has no acquisition line (`Asset::entry_line_number` is `None`); its aggregate opening entry is not an individual acquisition debit. Read opening source facts on `AssetDetail::opening` and through the `opening_batch`/`opening_item` evidence datasets.
 
-The existing register report includes opening cost and accumulation from conversion onward, then subsequent depreciation, disposals and corrections at its normal four report pins. Depreciation-expense reconciliation counts subsequent charges separately from source accumulated depreciation. Retained source-period expense/YTD and comparative detail is not reconstructed by this import and must be reviewed with the source reporting bridge. The asset page shows source IDs, source reference, carrying value and the prospective basis.
+The existing register report includes opening cost and accumulation from conversion onward, then subsequent depreciation, disposals and corrections at its normal four report pins. Depreciation-expense reconciliation counts subsequent charges separately from source accumulated depreciation. The import can retain source-period expense and YTD schedules as evidence, but it does not reconstruct them as ledger activity. Review comparative detail with the source reporting bridge. The asset page shows source IDs, source reference, carrying value and the prospective basis.
 
-A direct import accepts 1–500 assets, at most 128 KiB. Identical source-reference/CSV retries return the retained batch; changed retries are refused. Committed corrections use independently approved staged replacements. Non-straight-line prospective methods, impairment/disposal history, residual-value changes, capital allowances and source-period depreciation detail remain follow-up work. An accountant must decide the supported methods and the treatment and evidence required for those histories before implementation. The accountant approves source figures and future estimates; conversion does not replace the source archive.
+A direct import accepts 1–500 assets, at most 128 KiB. Identical source-reference/CSV retries return the retained batch; changed retries are refused. Committed corrections use independently approved staged replacements. Source impairment, disposal and estimate history, tax capital-allowance evidence and source-period expense detail can be retained separately, as described below. Additional prospective methods and post-conversion impairment or estimate-change workflows remain follow-up work pending practitioner decisions. The accountant approves source figures and future estimates; conversion does not replace the source archive.
 
 ## Opening register corrections
 
@@ -176,3 +176,82 @@ Opening assets share the Fixed assets list and asset pages. **Source** and **Sta
 The shared browser, MCP and focused list-proof commands are in the [conversion walkthrough](../fixtures/walkthrough/README.md#accounting-system-conversion).
 
 Readers can open the opening dialog to inspect retained source batches. The import form still requires the module's existing opening-write permission, and approval checks run in the shared contract.
+
+
+### Opening reconciliation and cut-off
+
+Source balances describe the position immediately before the conversion date. The first prospective charge falls at the end of the conversion calendar month. A mid-month cut-off receives a full month, without daily proration. Review the cut-off before approving the register; importing never records a historical catch-up charge.
+
+The import review groups source cost, accumulated depreciation and carrying value by category and its cost/accumulation account pair. Account reconciliation then combines all classes sharing an account and compares that total with the approved opening trial balance. Class totals explain the source register; they are not separate ledger balances.
+
+### Source history and tax evidence
+
+Use the optional `source_evidence` array on the same opening import or staging action. Each record names a `source_id` in that CSV batch. The opening dialog accepts the same array as JSON. Review shows the evidence beside the register; the asset page and the `opening_item` auditor dataset retain it after approval. A changed evidence array requires a new source reference. Corrections retain the original evidence and use the existing independently approved replacement path.
+
+```json
+[
+  {
+    "source_id": "asset-3",
+    "history": [
+      {
+        "kind": "impairment",
+        "effective_date": "2025-12-31",
+        "amount": "200.00",
+        "reference": "Prior assessment",
+        "note": "Source assessment, already reflected in the source balances."
+      },
+      {
+        "kind": "residual_value_change",
+        "effective_date": "2026-06-30",
+        "residual_value": "100.00",
+        "reference": "Estimate review",
+        "note": "Source residual estimate revised."
+      },
+      {
+        "kind": "estimate_change",
+        "effective_date": "2026-06-30",
+        "remaining_life_months": 96,
+        "method": "Source straight line",
+        "reference": "Estimate review",
+        "note": "Prospective estimate at cut-off."
+      }
+    ],
+    "source_period_expense": [
+      {
+        "from": "2026-01-01",
+        "through": "2026-06-30",
+        "amount": "600.00",
+        "reference": "Source YTD depreciation schedule"
+      }
+    ],
+    "tax_capital_allowances": [
+      {
+        "from": "2025-01-01",
+        "through": "2025-12-31",
+        "qualifying_expenditure": "12000.00",
+        "allowances": "2400.00",
+        "reference": "Source tax computation"
+      }
+    ]
+  }
+]
+```
+
+History kinds are `impairment`, `impairment_reversal`, `disposal`, `residual_value_change` and `estimate_change`. Every history row needs a source date, reference and note. Impairment, impairment-reversal and disposal rows need the source-reported `amount`; a residual change needs `residual_value`; an estimate change needs the source `method`, `annual_rate` (0–100%, up to four decimals), or `remaining_life_months`. Amounts are nonnegative and use book precision. Source method names are retained text, not a choice of future depreciation method. All source dates and period ends must precede conversion. Periods include both endpoints. Keep at most 200 history and schedule rows per asset, and 64 KiB of evidence per direct import or staged batch. Each batch carries only its own assets' evidence; final staged reconciliation leaves this field empty.
+
+**These schedules are source evidence, not postings or a tax calculation.** A partial disposal can describe the source history of an asset still held, but does not dispose of its remaining registered cost. A historical residual change does not change the CSV's current residual estimate. Source-period expense and YTD bridges remain separate from subsequent depreciation activity: they are not added to future runs, do not create a catch-up charge, and do not clear a report reconciliation difference. The approved opening trial balance is the accounting source for those historical figures. Tax capital allowances remain separate from book depreciation and never determine carrying value.
+
+### Practitioner decisions still required for issue 110
+
+The defensible default remains prospective straight line using the explicit remaining life and residual value in the CSV. No additional opening method is enabled by this change: each needs practitioner review of its rate, final-month treatment and cut-off policy. In particular, the ordinary-acquisition reducing-balance implementation has a final-month true-up; it must not silently become an opening default.
+
+Historical impairment and disposal evidence can be retained, but this does not implement a separate impairment contra-account, a post-conversion impairment workflow, or a register of assets fully disposed of before cut-off. The source cost and depreciation columns must describe the remaining asset and reconcile to their approved accounts; never put an impairment balance in depreciation merely to make an import pass. Separate impairment accounting, new prospective methods and later estimate changes remain part of issue 110, pending practitioner decisions. This slice must be described as **Part of #110**.
+
+
+### Running the source-evidence proof
+
+On a fresh disposable composed database, run `cargo run -p bilibi-finance-walkthrough-fixture --bin conversion -- assets-evidence`. This focused mode checks source-history, source-period and tax evidence without posting it; two asset classes sharing opening accounts; independent staged approval and changed-evidence refusals; zero-life assets; future depreciation, disposal and reversal; run reversal and catch-up; and reproduced report pins. The complete conversion mode still includes the separate receivable/payable correction and conversion-report scenarios.
+
+For browser and MCP proof, prepare the launcher database with `--bin conversion -- prepare-launcher`, then start the Platform through `./bilibi start` at its own HTTPS address. In the disposable `fin_issue_110_rest_ui` database, `--bin conversion -- launcher-asset-credentials` restores the proof identities after launcher seeding, assigns the administrator's desk through Core User, and saves private OAuth credentials at `BILIBI_AGENT_CREDENTIALS`. It requires `BILIBI_AGENT_PROOF=disposable`. Use Company 001 for the opening dialog and Company 002 for `fixtures/walkthrough/fixed-assets-operations.py`; both import the same economic figures, including a zero-life asset.
+
+Write previews check their capability and assigned company list before trying the company lock, then reauthorize through Core on that lock. A busy company returns the shared retryable `record_changed` refusal instead of waiting on a key-share lock. The MCP proof exercises that refusal and then resumes the same operations after the writer releases its lock.
