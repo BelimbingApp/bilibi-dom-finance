@@ -534,15 +534,17 @@ impl Payables {
         let units = self.ledger.get_book_on(&tx, s, company).await?.minor_units;
         let amount =
             Money::new(amount, units).map_err(|e| invalid("document_id", e.to_string()))?;
+        let events:Vec<Value>=tx.query("SELECT to_jsonb(e) FROM finance_payables_settlements e WHERE e.tenant_id=$1 AND e.company_id=$2 AND (e.credit_document_id=$3 OR e.target_document_id=$3) AND e.effective_date<=$4::text::date AND e.settlement_number<=$5 AND (e.entry_number IS NULL OR e.entry_number<=$6) ORDER BY e.settlement_number",&[&s.tenant(),&company,&document,&day.to_string(),&settlement,&entry]).await.map_err(Error::from)?.iter().map(|r|r.get(0)).collect();
         tx.commit().await.map_err(Error::from)?;
         Ok(
-            json!({"outstanding":amount,"balance_pins":{"as_of":day.to_string(),"through_entry_number":entry,"through_opening_batch_id":batch,"through_settlement_number":settlement}}),
+            json!({"settlements":events,"outstanding":amount,"balance_pins":{"as_of":day.to_string(),"through_entry_number":entry,"through_opening_batch_id":batch,"through_settlement_number":settlement}}),
         )
     }
 }
 
 /// Keep the record's amount and displayed settlement history on the same tuple.
 pub(super) fn replay_record(record: &mut Value, balance: &Value) {
+    record["settlements"] = balance["settlements"].clone();
     record["outstanding"] = balance["outstanding"].clone();
     record["balance_pins"] = balance["balance_pins"].clone();
     if let Some(events) = record["settlements"].as_array_mut() {
