@@ -191,6 +191,7 @@ impl Reports {
             ],
             &summary_rows(&trial["rows"], as_of, through),
         )?;
+        let mut balance_pins = Value::Null;
         if coverage == Coverage::All {
             let ar = self
                 .sources
@@ -222,6 +223,7 @@ impl Reports {
                 )
                 .await
                 .map_err(source_error)?;
+            balance_pins = json!({"as_of":as_of.to_string(),"through_entry_number":through,"receivables_opening_batch_id":ar.through_opening_batch_id,"receivables_settlement_number":ar.through_settlement_number,"payables_opening_batch_id":ap.through_opening_batch_id,"payables_settlement_number":ap.through_settlement_number});
             let ar = json(&ar)?;
             let ap = json(&ap)?;
             let ar_rows = aging_rows(&ar, true);
@@ -233,6 +235,11 @@ impl Reports {
                 &[
                     "as_of",
                     "through_entry_number",
+                    "through_opening_batch_id",
+                    "through_settlement_number",
+                    "kind",
+                    "balance_side",
+                    "control_account_id",
                     "customer_id",
                     "customer_code",
                     "customer_name",
@@ -253,6 +260,11 @@ impl Reports {
                 &[
                     "as_of",
                     "through_entry_number",
+                    "through_opening_batch_id",
+                    "through_settlement_number",
+                    "kind",
+                    "balance_side",
+                    "control_account_id",
                     "id",
                     "document_number",
                     "party_key",
@@ -406,12 +418,12 @@ impl Reports {
         }
         files.finish_sources()?;
         Ok(json!({
-            "generator":"finance/reports/auditor-pack", "generator_version":"10",
+            "generator":"finance/reports/auditor-pack", "generator_version":"11",
             "tenant_id":scope.tenant(), "company_id":company,
             "currency_code":totals.currency_code, "minor_units":totals.minor_units,
             "generated_by_user_id":scope.user(), "generated_by_impersonator_id":scope.impersonator().map(|a|a.user()),
             "captured_at":snapshot.get::<_,String>(1), "timezone":"Etc/UTC", "database_snapshot":snapshot.get::<_,String>(0),
-            "through_entry_number":through,
+            "through_entry_number":through, "balance_pins":balance_pins,
             "coverage": if coverage == Coverage::All { "all-finance" } else { "ledger-and-reports" },
             "excluded_sources": if coverage == Coverage::All { Vec::<&str>::new() } else { vec!["receivables", "payables", "reconciliation", "einvoice", "payroll", "sst", "fixed_assets", "attachments", "reports.source_period", "conversion reports and sign-offs"] },
             "coverage_notice": if coverage == Coverage::All {
@@ -529,15 +541,22 @@ fn aging_rows(value: &Value, receivables: bool) -> Vec<Value> {
     let mut rows = Vec::new();
     if let Some(groups) = value[if receivables { "customers" } else { "parties" }].as_array() {
         for group in groups {
-            if let Some(documents) = group["documents"].as_array() {
-                for document in documents {
-                    let mut row = document.clone();
-                    if receivables {
-                        row["customer_id"] = group["customer_id"].clone();
-                        row["customer_code"] = group["code"].clone();
-                        row["customer_name"] = group["name"].clone();
+            for (stream, credit) in [("documents", false), ("credits", true)] {
+                if let Some(documents) = group[stream].as_array() {
+                    for document in documents {
+                        let mut row = document.clone();
+                        row["balance_side"] = json!(if credit == receivables {
+                            "credit"
+                        } else {
+                            "debit"
+                        });
+                        if receivables {
+                            row["customer_id"] = group["customer_id"].clone();
+                            row["customer_code"] = group["code"].clone();
+                            row["customer_name"] = group["name"].clone();
+                        }
+                        rows.push(row);
                     }
-                    rows.push(row);
                 }
             }
         }
@@ -545,8 +564,13 @@ fn aging_rows(value: &Value, receivables: bool) -> Vec<Value> {
     if let Some(exceptions) = value["exceptions"].as_array() {
         rows.extend(exceptions.iter().cloned());
     }
+    for row in &mut rows {
+        row["through_opening_batch_id"] = value["through_opening_batch_id"].clone();
+        row["through_settlement_number"] = value["through_settlement_number"].clone();
+    }
     rows
 }
+
 fn summary_rows(rows: &Value, as_of: Date, through: i64) -> Vec<Value> {
     with_pin(rows.as_array().cloned().unwrap_or_default(), as_of, through)
 }
