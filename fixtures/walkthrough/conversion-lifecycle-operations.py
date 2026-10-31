@@ -164,6 +164,10 @@ for module,values in inputs.items():
     ui_facts=ui["decisions"][-1]["review"]
     for field in ["state","reason","currency_code","minor_units","total","opening_balance","difference","posts","depreciation"]:
         require(ui_facts.get(field)==facts.get(field),f"UI/MCP reviewed facts differ: {module}/{field}")
+    if module in ("receivables", "payables"):
+        def without_ids(rows):
+            return [{k:v for k,v in row.items() if k != "account_id"} for row in rows]
+        require(without_ids(ui_facts["reconciliation"]) == without_ids(facts["reconciliation"]),f"UI/MCP account reconciliations differ: {module}")
 require(read(channel,"finance.ledger.trial_balance.get",company,"approver",as_of="2026-08-01")==before_trial,"corrections posted entries")
 for module in ["receivables","payables"]:
     live=read(channel,f"finance.{module}.aging.get",company,"approver",as_of="2026-08-01")

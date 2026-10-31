@@ -296,7 +296,7 @@ impl Opening {
                     id: "conversion-boundary",
                     kind: StatusKind::Info,
                     body: Html::text(
-                        "Import positive residual invoices or bills only, including partially settled documents. Opening credits, source-period tax detail and historical transactions remain outside this import. Review the complete register against the approved opening control balance.",
+                        "Import positive residual bills, including partially settled bills. Map each row to its control account and review each approved opening balance. Opening credits, source-period tax detail and historical transactions remain outside this import.",
                     ),
                     ..Alert::default()
                 })?;
