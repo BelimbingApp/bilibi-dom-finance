@@ -30,6 +30,7 @@ struct Review {
     input: Value,
     contract: &'static str,
     instance: Value,
+    attestation: Option<String>,
 }
 #[derive(Template)]
 #[template(
@@ -624,7 +625,7 @@ impl State {
             }
             if let Some(review) = self.review.as_ref().filter(|_| self.confirm) {
                 let instance = &review.instance;
-                let banner = render(bilibi_ui::InstanceBanner {
+                let mut confirmation = render(bilibi_ui::InstanceBanner {
                     id: "conversion-instance",
                     tone: StatusKind::Info,
                     role: instance["environment"].as_str().unwrap_or(""),
@@ -632,7 +633,15 @@ impl State {
                     message: instance["notice"].as_str().unwrap_or(""),
                     ..bilibi_ui::InstanceBanner::default()
                 })?;
-                body.push(&render(Confirmation {consequence:if review.contract==ISSUE {"Issue this conversion report?"}else{"Sign this issued conversion report?"},detail:&format!("Current company: {name}. Review the report's sources, differences and limits before confirming. This record cannot be changed."),confirm:if review.contract==ISSUE {"Issue"}else{"Sign"},event:if review.contract==ISSUE {"issue"}else{"sign"},body:banner})?);
+                if let Some(attestation) = &review.attestation {
+                    confirmation.push(&render(Alert {
+                        id: "conversion-sign-attestation",
+                        kind: StatusKind::Info,
+                        body: Html::text(attestation),
+                        ..Alert::default()
+                    })?);
+                }
+                body.push(&render(Confirmation {consequence:if review.contract==ISSUE {"Issue this conversion report?"}else{"Sign this issued conversion report?"},detail:&format!("Current company: {name}. Review the report's sources, differences and limits before confirming. This record cannot be changed."),confirm:if review.contract==ISSUE {"Issue"}else{"Sign"},event:if review.contract==ISSUE {"issue"}else{"sign"},body:confirmation})?);
             }
         } else {
             body.push(&render(Alert {
@@ -773,11 +782,21 @@ impl LiveState<Scope, Error> for State {
                             match self.pages.contracts.preview(&call, input.clone()).await {
                                 Ok(review) => {
                                     if let Some(code) = review["plan_code"].as_str() {
-                                        self.document = if contract == ISSUE {
-                                            review["results"][0]["preview"]["result"].clone()
+                                        let result = &review["results"][0]["preview"]["result"];
+                                        let attestation = if contract == SIGN {
+                                            Some(
+                                                result["attestation"]
+                                                    .as_str()
+                                                    .ok_or(Error::Internal)?
+                                                    .to_owned(),
+                                            )
                                         } else {
-                                            review["results"][0]["preview"]["result"]["record"]
-                                                .clone()
+                                            None
+                                        };
+                                        self.document = if contract == ISSUE {
+                                            result.clone()
+                                        } else {
+                                            result["record"].clone()
                                         };
                                         self.path.clear();
                                         self.offset = 0;
@@ -786,6 +805,7 @@ impl LiveState<Scope, Error> for State {
                                             input,
                                             contract,
                                             instance: review["instance"].clone(),
+                                            attestation,
                                         });
                                     } else {
                                         let fields = &review["results"][0]["error"]["fields"];
