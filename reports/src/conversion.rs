@@ -400,7 +400,7 @@ impl Reports {
             differences.push(json!({"area":area,"kind":"schedule_assessment","reason":"The accountant has not assessed this schedule's applicability or completeness."}));
         }
         let report = json!({"version":1,"company_id":company,"as_of":as_of.to_string(),"conversion_date":opening.entry.entry_date.to_string(),"currency_code":target.currency_code,"minor_units":target.minor_units,"through_entry_number":through,
-            "opening":opening,"source_trial_balance":{"rows":comparisons,"basis":"Approved source opening journal only; signed debit less credit balances."},"target_trial_balance":target,"accounts":comparisons,"postings_by_owner":owners,
+            "opening":opening,"source_trial_balance":{"rows":comparisons,"basis":"Approved source opening journal only; signed debit less credit balances."},"target_trial_balance":target,"postings_by_owner":owners,
             "receivables":{"detail":ar_detail,"control":ar},"payables":{"detail":ap_detail,"control":ap},"assets":asset_snapshot,"bank_bridges":bank_bridges,"sources":evidence,
             "unresolved_differences":differences,"register_coverage":register_coverage,
             "excluded_history":["Transactions before conversion other than the approved opening journal and retained opening registers.","Previously settled invoice and bill history, historical asset depreciation entries and legacy bank matches are not imported."],

@@ -453,7 +453,8 @@ impl State {
                             ..Button::default()
                         })?);
                     }
-                    if self.path.last().is_some_and(|p| p == "accounts") {
+                    if matches!(self.path.as_slice(), [.., section, rows] if section == "source_trial_balance" && rows == "rows")
+                    {
                         body.push(&self.account_table()?);
                     } else {
                         body.push(&self.table()?);
@@ -651,9 +652,14 @@ impl LiveState<Scope, Error> for State {
                     }
                     "accounts" => {
                         self.path = if self.id.is_some() {
-                            vec!["report".into(), "content".into(), "accounts".into()]
+                            vec![
+                                "report".into(),
+                                "content".into(),
+                                "source_trial_balance".into(),
+                                "rows".into(),
+                            ]
                         } else {
-                            vec!["accounts".into()]
+                            vec!["source_trial_balance".into(), "rows".into()]
                         };
                         self.offset = 0;
                     }

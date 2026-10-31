@@ -91,7 +91,11 @@ pub async fn before(db: &Db, services: &Services) -> Outcome<Kept> {
     assert!(plans.commit(&s, &authority, code, &op).await.is_err());
     let kept = reports.get_issued_report(&s, COMPANY, id).await?;
     assert_eq!(kept.kind, "conversion");
-    assert_eq!(kept.content["accounts"], preview["accounts"]);
+    assert_eq!(
+        kept.content["source_trial_balance"]["rows"],
+        preview["source_trial_balance"]["rows"]
+    );
+    assert!(kept.content.get("accounts").is_none());
     let pending = plans.preview(&authority, &op).await?;
     assert_eq!(pending["valid"], true);
     let grants = services.get::<bilibi_authz::grants::Grants>("base/authz.grants")?;
