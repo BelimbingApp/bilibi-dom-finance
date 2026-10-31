@@ -778,12 +778,12 @@ fn source_tax_facts(
     let tax = facts
         .get("tax_total")
         .filter(|v| !v.is_null())
-        .map(&amount)
+        .map(amount)
         .transpose()?;
     let net = facts
         .get("net")
         .filter(|v| !v.is_null())
-        .map(&amount)
+        .map(amount)
         .transpose()?;
     if tax.zip(net).is_some_and(|(tax, net)| tax + net != gross) {
         return Err("source net plus tax_total must equal original_total".into());

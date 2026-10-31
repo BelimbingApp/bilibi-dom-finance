@@ -400,7 +400,6 @@ impl Credits {
                 class: "mt-4",
                 body: form_body,
                 actions: super::format::actions(buttons)?,
-                ..Form::default()
             })?;
             body.push(&render(Modal{id:"credit-settlement-modal",title:verb(&d.action),description:"Settle this credit for the current company. Review the dated balances and posting before confirming.",cancel_event:"cancel_credit",width:ModalWidth::Wide,body:form,..Modal::default()})?);
         }
