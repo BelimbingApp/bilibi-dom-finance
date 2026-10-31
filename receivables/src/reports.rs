@@ -477,7 +477,10 @@ impl Receivables {
             days.entry(r.get(1)).or_default().insert(r.get(0));
         }
         for (day, ids) in days {
-            for d in balances(&**client, scope, company, &day, pin, None, i64::MAX).await? {
+            // Source-backed opening credits carry no newly taxable receipt or
+            // inferred tax share. Their settlement stream changes aging only;
+            // retain the native receipt/note basis for current-period tax.
+            for d in balances(&**client, scope, company, &day, pin, None, 0).await? {
                 let id: i64 = d.get("id");
                 let amount: Decimal = d.get("outstanding");
                 if !ids.contains(&id) || amount <= Decimal::ZERO {

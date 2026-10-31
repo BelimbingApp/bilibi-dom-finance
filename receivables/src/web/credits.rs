@@ -187,9 +187,10 @@ impl Credits {
                     .cell(
                         "amount",
                         Cell::text(
-                            units
-                                .map(|u| money(&e["amount"], u))
-                                .unwrap_or_else(|| text(&e["amount"])),
+                            text(&e["amount"])
+                                .parse()
+                                .map(|amount| Money::display_decimal(amount, units))
+                                .unwrap_or_else(|_| "—".into()),
                         ),
                     )
                     .cell("target", Cell::text(text(&e["target_document_id"])))

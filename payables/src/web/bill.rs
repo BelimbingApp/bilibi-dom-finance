@@ -200,7 +200,14 @@ impl Bill {
         let mut items = vec![
             f::fact("Party's number", f::optional(&d.party_document_number)),
             f::fact("Date", &d.document_date.to_string()),
-            f::fact("Due", &d.due_date.to_string()),
+            f::fact(
+                "Due",
+                &if d.document_type == "opening_credit" {
+                    "—".into()
+                } else {
+                    d.due_date.to_string()
+                },
+            ),
             f::fact("Description", f::optional(&d.description)),
             Fact {
                 title: "Corrects",

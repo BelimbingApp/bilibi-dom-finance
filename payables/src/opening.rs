@@ -837,8 +837,8 @@ fn source_tax_facts(
         if complete && tax.is_some_and(|total| total != line_tax) {
             return Err("source tax line amounts must equal tax_total".into());
         }
-    } else if tax.is_none() {
-        return Err("supplied tax facts require tax_total or source lines".into());
+    } else if tax.is_none() && net.is_none() {
+        return Err("supplied tax facts require a net, tax_total or source lines".into());
     }
     Ok(facts)
 }

@@ -486,6 +486,23 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
     too_much["reference"] = json!("too-much");
     too_much["amount"] = json!("11");
     assert!(ap.apply_credit(&manager, company, &too_much).await.is_err());
+    // Conversion correction cannot orphan an unreversed settlement.
+    let mut dependent_ar = ar_input.clone();
+    dependent_ar["source_reference"] = json!("DEPENDENT-AR");
+    dependent_ar["replaces_batch_id"] = a["id"].clone();
+    dependent_ar["reason"] = json!("Reviewed conversion correction");
+    let mut dependent_ap = ap_input.clone();
+    dependent_ap["source_reference"] = json!("DEPENDENT-AP");
+    dependent_ap["replaces_batch_id"] = b["id"].clone();
+    dependent_ap["reason"] = json!("Reviewed conversion correction");
+    assert!(ar
+        .import_opening_invoices(&reviewer, company, &dependent_ar)
+        .await
+        .is_err());
+    assert!(ap
+        .import_opening_bills(&reviewer, company, &dependent_ap)
+        .await
+        .is_err());
     let reverse_ar =
         json!({"settlement_id":ae["id"],"effective_date":"2026-07-15","reference":"reverse-same"});
     let reverse_ap =
@@ -555,11 +572,10 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         assert!(entry
             .lines
             .iter()
-            .any(|l| l.account_id == debit && l.debit.amount().to_string() == "30.0000"));
-        assert!(entry
-            .lines
-            .iter()
-            .any(|l| l.account_id == credit && l.credit.amount().to_string() == "30.0000"));
+            .any(|l| l.account_id == debit
+                && l.debit == Money::parse("30", before.minor_units).unwrap()));
+        assert!(entry.lines.iter().any(|l| l.account_id == credit
+            && l.credit == Money::parse("30", before.minor_units).unwrap()));
     }
     tied(&ar, &ap, &reviewer, company, date(2026, 7, 31)).await?;
     let refund_ar = json!({"credit_document_id":ar_id("credit"),"effective_date":"2026-07-21","amount":"10","cash_account_id":config["bank"],"reference":"refund"});
