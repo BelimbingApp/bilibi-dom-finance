@@ -85,6 +85,22 @@ pub(super) fn historical_control_codes(input: &Value) -> Result<BTreeSet<String>
     Ok(codes)
 }
 
+async fn configured_control_ids(
+    c: &dyn OperationClient,
+    tenant: i64,
+    company: i64,
+) -> Result<BTreeSet<i64>> {
+    Ok(c
+        .query(
+            "SELECT receivable_account_id FROM finance_receivables_setups WHERE tenant_id=$1 AND company_id=$2 UNION SELECT old_value FROM finance_receivables_setup_changes WHERE tenant_id=$1 AND company_id=$2 AND field='receivable_account_id' AND old_value IS NOT NULL UNION SELECT new_value FROM finance_receivables_setup_changes WHERE tenant_id=$1 AND company_id=$2 AND field='receivable_account_id'",
+            &[&tenant, &company],
+        )
+        .await?
+        .into_iter()
+        .map(|row| row.get(0))
+        .collect())
+}
+
 impl Receivables {
     pub(super) async fn opening_context(
         &self,
@@ -96,9 +112,7 @@ impl Receivables {
         self.authorize_on(c, s, company, VIEW).await?;
         let opening = self.ledger.opening_context_on(c, s, company).await?;
         let book = self.ledger.get_book_on(c, s, company).await?;
-        let configured = store::find(c, store::SETUPS, s.tenant(), company, None)
-            .await?
-            .and_then(|setup| setup["receivable_account_id"].as_i64());
+        let configured = configured_control_ids(c, s.tenant(), company).await?;
         let historical_control_accounts = self
             .ledger
             .list_accounts_on(c, s, company)
@@ -106,8 +120,8 @@ impl Receivables {
             .into_iter()
             .filter(|account| {
                 account.account_type == AccountType::Asset
-                    && account.postable()
-                    && Some(account.id) != configured
+                    && !account.is_group
+                    && !configured.contains(&account.id)
                     && opening
                         .balances
                         .get(&account.id)
@@ -234,15 +248,33 @@ impl Receivables {
                 "the receivables control account must be active and postable",
             ));
         }
-        let mut control_accounts = BTreeSet::from([control]);
+        let known_controls = configured_control_ids(c, s.tenant(), company).await?;
+        let mut control_accounts = BTreeSet::new();
+        for id in known_controls {
+            if context
+                .balances
+                .get(&id)
+                .is_some_and(|balance| *balance != Money::ZERO)
+            {
+                let account = chart
+                    .iter()
+                    .find(|account| {
+                        account.id == id
+                            && account.account_type == AccountType::Asset
+                            && !account.is_group
+                    })
+                    .ok_or(Error::Internal)?;
+                control_accounts.insert(account.id);
+            }
+        }
         for code in &historical_control_codes {
             let account = chart
                 .iter()
-                .find(|a| a.code == *code && a.account_type == AccountType::Asset && a.postable())
+                .find(|a| a.code == *code && a.account_type == AccountType::Asset && !a.is_group)
                 .ok_or_else(|| {
                     invalid(
                         "historical_control_account_codes",
-                        format!("{code} must identify an active, postable asset account"),
+                        format!("{code} must identify an asset account"),
                     )
                 })?;
             if account.id == control {

@@ -112,6 +112,14 @@ async fn setup(db: &Db, services: &Services, company: i64) -> Outcome<Value> {
             .expect("fixture account")
             .id
     };
+    if multiple_controls {
+        ar.configure(
+            &admin,
+            company,
+            &json!({"receivable_account_id":account("1110"),"income_account_id":account("4000")}),
+        )
+        .await?;
+    }
     ar.configure(
         &admin,
         company,
@@ -140,6 +148,21 @@ async fn setup(db: &Db, services: &Services, company: i64) -> Outcome<Value> {
         )
         .await?
     };
+    if multiple_controls {
+        ap.put_settings(
+            &admin,
+            company,
+            &SettingsInput {
+                settings: Settings {
+                    payable_account_id: account("2010"),
+                    quantity_tolerance: None,
+                    price_tolerance: None,
+                },
+                reason: Some("Historical conversion control".into()),
+            },
+        )
+        .await?;
+    }
     ap.put_settings(
         &admin,
         company,
@@ -890,8 +913,8 @@ async fn prove_historical_controls(db: &Db, services: &Services) -> Outcome<()> 
     let trial = ledger
         .trial_balance(&reviewer, company, date(2026, 7, 1), None)
         .await?;
-    let ar_input = json!({"source_reference":"MULTI-AR","currency_code":"MYR","series_id":config["invoice_series"],"historical_control_account_codes":["1110"],"csv":MULTI_AR});
-    let ap_input = json!({"source_reference":"MULTI-AP","currency_code":"MYR","historical_control_account_codes":["2010"],"csv":MULTI_AP});
+    let ar_input = json!({"source_reference":"MULTI-AR","currency_code":"MYR","series_id":config["invoice_series"],"csv":MULTI_AR});
+    let ap_input = json!({"source_reference":"MULTI-AP","currency_code":"MYR","csv":MULTI_AP});
     let mut incomplete = ar_input.clone();
     incomplete["csv"] = json!(MULTI_AR.lines().take(2).collect::<Vec<_>>().join("\n") + "\n");
     let refusal = ar

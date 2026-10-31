@@ -61,6 +61,22 @@ pub(super) fn historical_control_codes(input: &Value) -> Result<BTreeSet<String>
     Ok(codes)
 }
 
+async fn configured_control_ids(
+    c: &dyn OperationClient,
+    tenant: i64,
+    company: i64,
+) -> Result<BTreeSet<i64>> {
+    Ok(c
+        .query(
+            "SELECT payable_account_id FROM finance_payables_settings WHERE tenant_id=$1 AND company_id=$2 UNION SELECT old_payable_account_id FROM finance_payables_settings_changes WHERE tenant_id=$1 AND company_id=$2 AND old_payable_account_id IS NOT NULL UNION SELECT new_payable_account_id FROM finance_payables_settings_changes WHERE tenant_id=$1 AND company_id=$2",
+            &[&tenant, &company],
+        )
+        .await?
+        .into_iter()
+        .map(|row| row.get(0))
+        .collect())
+}
+
 // Vendor controls name vendor_id on ordinary bills; an import edits the CSV.
 fn vendor_refusal(error: PayablesError, source: &str) -> PayablesError {
     let fields = match error {
@@ -87,9 +103,7 @@ impl Payables {
     ) -> Result<Value> {
         crate::agent_operations::authorize_on(c, s, company, VIEW).await?;
         let opening = self.ledger.opening_context_on(c, s, company).await?;
-        let configured = store::settings(c, s.tenant(), company)
-            .await?
-            .map(|(_, setup)| setup.payable_account_id);
+        let configured = configured_control_ids(c, s.tenant(), company).await?;
         let historical_control_accounts = self
             .ledger
             .list_accounts_on(c, s, company)
@@ -97,8 +111,8 @@ impl Payables {
             .into_iter()
             .filter(|account| {
                 account.account_type == AccountType::Liability
-                    && account.postable()
-                    && Some(account.id) != configured
+                    && !account.is_group
+                    && !configured.contains(&account.id)
                     && opening
                         .balances
                         .get(&account.id)
@@ -185,17 +199,35 @@ impl Payables {
                 "the payables control account must be active and postable",
             ));
         }
-        let mut control_accounts = BTreeSet::from([control]);
+        let known_controls = configured_control_ids(c, s.tenant(), company).await?;
+        let mut control_accounts = BTreeSet::new();
+        for id in known_controls {
+            if context
+                .balances
+                .get(&id)
+                .is_some_and(|balance| *balance != Money::ZERO)
+            {
+                let account = chart
+                    .iter()
+                    .find(|account| {
+                        account.id == id
+                            && account.account_type == AccountType::Liability
+                            && !account.is_group
+                    })
+                    .ok_or(Error::Internal)?;
+                control_accounts.insert(account.id);
+            }
+        }
         for code in &historical_control_codes {
             let account = chart
                 .iter()
                 .find(|a| {
-                    a.code == *code && a.account_type == AccountType::Liability && a.postable()
+                    a.code == *code && a.account_type == AccountType::Liability && !a.is_group
                 })
                 .ok_or_else(|| {
                     invalid(
                         "historical_control_account_codes",
-                        format!("{code} must identify an active, postable liability account"),
+                        format!("{code} must identify a liability account"),
                     )
                 })?;
             if account.id == control {

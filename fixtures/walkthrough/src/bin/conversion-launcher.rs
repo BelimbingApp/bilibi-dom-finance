@@ -146,11 +146,30 @@ async fn main() -> Outcome<()> {
     ar.configure(
         &scope,
         company,
+        &json!({"receivable_account_id":account("1110"),"income_account_id":account("4000")}),
+    )
+    .await?;
+    ar.configure(
+        &scope,
+        company,
         &json!({"receivable_account_id":account("1100"),"income_account_id":account("4000")}),
     )
     .await?;
     let series = ar.create_series(&scope, company, &json!({"code":"OPENING","name":"Opening invoices","kind":"invoice","prefix":"OPEN-","number_width":4})).await?;
     let customer = ar.create_customer(&scope, company, &json!({"new_company":{"name":"Conversion proof counterparty"},"payment_terms_days":30})).await?;
+    ap.put_settings(
+        &scope,
+        company,
+        &SettingsInput {
+            settings: Settings {
+                payable_account_id: account("2010"),
+                quantity_tolerance: None,
+                price_tolerance: None,
+            },
+            reason: Some("Historical conversion control".into()),
+        },
+    )
+    .await?;
     ap.put_settings(
         &scope,
         company,
@@ -207,7 +226,7 @@ async fn main() -> Outcome<()> {
     write!(
         file,
         "{}",
-        json!({"company_id":company,"series_id":series.id,"ar_csv":ar_csv,"ap_csv":ap_csv,"ar_historical_control_account_codes":["1110"],"ap_historical_control_account_codes":["2010"]})
+        json!({"company_id":company,"series_id":series.id,"ar_csv":ar_csv,"ap_csv":ap_csv})
     )?;
     let access = app
         .services

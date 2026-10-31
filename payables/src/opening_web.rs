@@ -54,7 +54,7 @@ fn field_label(key: &str) -> &str {
         "series_id" => "Opening invoice series",
         "source_reference" => "Source reference",
         "currency_code" => "Book currency",
-        "historical_control_account_codes" => "Historical control accounts",
+        "historical_control_account_codes" => "Additional historical control accounts",
         "override_reason" => "Approval exception reason",
         _ => key,
     }
@@ -432,14 +432,14 @@ impl Opening {
                 fields.push(&render(
                     MultiSelect::in_form("conversion", "historical_control_account_codes")
                         .id("conversion-historical_control_account_codes")
-                        .label("Historical control accounts")
-                        .placeholder("No historical controls")
+                        .label("Additional historical control accounts")
+                        .placeholder("No additional controls")
                         .selection_label(
-                            ":count historical control selected|:count historical controls selected",
+                            ":count additional control selected|:count additional controls selected",
                         )
                         .options(historical_control_accounts)
                         .values(selected_controls)
-                        .hint("Select every other liability account in this bill register; the configured control is included automatically."),
+                        .hint("Select old-system controls that were never configured here."),
                 )?);
 
                 fields.push(&render(Alert {
