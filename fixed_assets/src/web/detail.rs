@@ -290,7 +290,7 @@ impl Detail {
                 assumptions.push(&super::source_evidence::render(
                     opening["source_id"].as_str().unwrap_or(""),
                     &opening["source_evidence"],
-                    units,
+                    units.ok_or(Error::Internal)?,
                 )?);
             }
             let rows = d
