@@ -151,6 +151,20 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
     let ap = services.get::<Payables>(bilibi_finance_payables::SERVICE)?;
     let chart = ledger.list_accounts(&reviewer, company).await?;
     let account = |code: &str| chart.iter().find(|a| a.code == code).unwrap().id;
+    // A zero historical control can already be inactive at conversion.
+    for code in ["1120", "2020"] {
+        ledger
+            .update_account(
+                &reviewer,
+                company,
+                account(code),
+                &bilibi_finance_ledger::AccountChange {
+                    active: Some(false),
+                    ..Default::default()
+                },
+            )
+            .await?;
+    }
     let before = ledger
         .trial_balance(&reviewer, company, date(2026, 7, 1), None)
         .await?;
@@ -504,32 +518,25 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         .await
         .is_err());
     // Saved inactive controls remain settleable. The transfer is owned.
-    ledger
-        .update_account(
-            &reviewer,
-            company,
-            account("1110"),
-            &bilibi_finance_ledger::AccountChange {
-                active: Some(false),
-                ..Default::default()
-            },
-        )
-        .await?;
-    ledger
-        .update_account(
-            &reviewer,
-            company,
-            account("2010"),
-            &bilibi_finance_ledger::AccountChange {
-                active: Some(false),
-                ..Default::default()
-            },
-        )
-        .await?;
     let cross_ar = json!({"credit_document_id":ar_id("historical-credit"),"target_document_id":ar_id("invoice"),"effective_date":"2026-07-20","amount":"30","reference":"cross-control"});
     let cross_ap = json!({"credit_document_id":ap_id("historical-credit"),"target_document_id":ap_id("invoice"),"effective_date":"2026-07-20","amount":"30","reference":"cross-control"});
     let ax = ar.apply_credit(&manager, company, &cross_ar).await?;
     let bx = ap.apply_credit(&manager, company, &cross_ap).await?;
+    // Deactivate only at zero, then restore through the owned reversal.
+    // The subsequent application proves settlement of that saved inactive control.
+    for code in ["1110", "2010"] {
+        ledger
+            .update_account(
+                &reviewer,
+                company,
+                account(code),
+                &bilibi_finance_ledger::AccountChange {
+                    active: Some(false),
+                    ..Default::default()
+                },
+            )
+            .await?;
+    }
     for (event, debit, credit) in [
         (&ax, account("1110"), account("1100")),
         (&bx, account("2000"), account("2010")),
@@ -575,6 +582,17 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         }
         tied(&ar, &ap, &reviewer, company, date(2026, 7, 31)).await?;
     }
+    let mut inactive_ar = cross_ar.clone();
+    inactive_ar["reference"] = json!("inactive-transfer");
+    inactive_ar["effective_date"] = json!("2026-07-26");
+    let mut inactive_ap = cross_ap.clone();
+    inactive_ap["reference"] = json!("inactive-transfer");
+    inactive_ap["effective_date"] = json!("2026-07-26");
+    let inactive_ar = ar.apply_credit(&manager, company, &inactive_ar).await?;
+    let inactive_ap = ap.apply_credit(&manager, company, &inactive_ap).await?;
+    tied(&ar, &ap, &reviewer, company, date(2026, 7, 31)).await?;
+    ar.reverse_settlement(&manager,company,&json!({"settlement_id":inactive_ar["id"],"effective_date":"2026-07-27","reference":"reverse-inactive"})).await?;
+    ap.reverse_settlement(&manager,company,&json!({"settlement_id":inactive_ap["id"],"effective_date":"2026-07-27","reference":"reverse-inactive"})).await?;
     let ar_events = ar
         .evidence_page(&reviewer, company, "settlement", None, None)
         .await?;
