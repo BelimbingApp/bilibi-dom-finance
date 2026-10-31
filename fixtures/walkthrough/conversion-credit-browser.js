@@ -14,23 +14,23 @@ function requireProof(condition, message) {
 }
 async function fillCredit(name, value) {
   await page.fill("#credit-" + name, value);
-  await page.wait(350); // Let the shared Form retain its changed draft.
+  await page.wait(500); // Let the shared Form retain its changed draft.
 }
 async function choose(selector, value) {
   await page.fill(selector, value);
   await page.press("ArrowDown");
   await page.press("Enter");
-  await page.wait(350);
+  await page.wait(500);
 }
 async function reviewAndCommit(posts) {
   await page.click("#credit-submit");
-  await page.wait(450);
+  await page.wait("#credit-form details");
   const review = await page.eval(() => document.querySelector("#credit-form").innerText);
   requireProof(review.includes(posts ? "Owned ledger entry" : "No ledger entry"), "Unexpected settlement posting review");
   requireProof(review.includes("Opening credit proof counterparty"), "Review omitted the party");
   requireProof(review.includes("Account"), "Review omitted the saved controls");
   await page.click("#credit-submit");
-  await page.wait(500);
+  await page.wait("main:not(:has(#credit-form))");
   requireProof(await page.eval(() => document.querySelector("main").innerText.includes("Credit settlement recorded.")), "Browser settlement commit refused");
 }
 async function reverse(date, reference, posts) {
@@ -84,7 +84,7 @@ for (const [module, source] of [["receivables", "ar"], ["payables", "ap"]]) {
   await choose("#credit-target_document_id", target);
   await fillCredit("override_reason", exception);
   await page.click("#credit-submit");
-  await page.wait(450);
+  await page.wait('#credit-amount[aria-invalid="true"]');
   requireProof(await page.eval(() => document.querySelector("#credit-amount")?.getAttribute("aria-invalid") === "true"), "Over-application refusal did not stay beside Amount");
   await fillCredit("amount", "20");
   await reviewAndCommit(false);
