@@ -15,7 +15,9 @@ pub const ISSUE: &str = "finance.reports.issue";
 /// Generates and downloads a company auditor pack.
 pub const EXPORT: &str = "finance.reports.reports-export";
 
-pub const CAPABILITIES: [&str; 2] = [ISSUE, EXPORT];
+/// Records an accountant attestation against an issued conversion snapshot.
+pub const SIGN_OFF: &str = "finance.reports.sign-off";
+pub const CAPABILITIES: [&str; 3] = [ISSUE, EXPORT, SIGN_OFF];
 
 macro_rules! provenance {
     () => {
@@ -33,8 +35,8 @@ pub(crate) use provenance;
 // the module needs no sibling to have declared one. The keys are unchanged.
 inventory::submit! { Contribution::new(VOCABULARY, "finance/reports", provenance!(), &VocabularyContribution {
     domains: &["finance"],
-    verbs: &["issue", "reports-export"],
-    capabilities: &[C::tenant(ISSUE), C::tenant(EXPORT)],
+    verbs: &["issue", "reports-export", "sign-off"],
+    capabilities: &[C::tenant(ISSUE), C::tenant(EXPORT), C::tenant(SIGN_OFF)],
     roles: &[RoleDefinition {
         code: "tenant_owner", name: "Tenant Owner", description: "Contributed system role; reconciled explicitly",
         grant_all: false, capabilities: &CAPABILITIES,

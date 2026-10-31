@@ -510,14 +510,26 @@ impl Receivables {
         as_of: Date,
         pins: &BalancePins,
     ) -> Result<ControlAccountsTieOut> {
-        // Release the authorization connection before entering the ledger facade.
-        {
-            let client = self.db.get().await.map_err(Error::from)?;
-            authorize(&**client, scope, company, VIEW).await?;
-        }
+        let client = self.db.get().await.map_err(Error::from)?;
+        self.tie_out_control_accounts_on(&**client, scope, company, as_of, pins)
+            .await
+    }
+
+    /// Authorized control tie-out on the caller's snapshot, including other owners.
+    pub async fn tie_out_control_accounts_on(
+        &self,
+        client: &(impl tokio_postgres::GenericClient + Sync),
+        scope: &Scope,
+        company: i64,
+        as_of: Date,
+        pins: &BalancePins,
+    ) -> Result<ControlAccountsTieOut> {
+        authorize(client, scope, company, VIEW).await?;
+        window(None, None, pins.through_entry_number)?;
         let ledger = self
             .ledger
-            .account_totals_by_owner(
+            .account_totals_by_owner_on(
+                client,
                 scope,
                 company,
                 &TotalsQuery {
@@ -527,13 +539,12 @@ impl Receivables {
                 },
             )
             .await?;
-        let chart = self.ledger.list_accounts(scope, company).await?;
-        let client = self.db.get().await.map_err(Error::from)?;
+        let chart = self.ledger.list_accounts_on(client, scope, company).await?;
         let opening_pin =
-            crate::opening::pin(&**client, scope, company, pins.through_opening_batch_id).await?;
+            crate::opening::pin(client, scope, company, pins.through_opening_batch_id).await?;
         let mut subledger: BTreeMap<i64, Decimal> = BTreeMap::new();
         for d in balances(
-            &**client,
+            client,
             scope,
             company,
             &as_of.to_string(),

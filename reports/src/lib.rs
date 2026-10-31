@@ -34,6 +34,8 @@ mod auditor_pack;
 mod configuration;
 mod contributions;
 mod controls;
+mod conversion;
+mod conversion_operations;
 mod issued;
 mod layout;
 mod pack_owner;
@@ -47,7 +49,7 @@ mod web;
 pub use auditor_pack::AuditorPack;
 pub use bilibi_finance_ledger::{PostingEvent, PostingSubscription};
 pub use configuration::SECTIONS;
-pub use contributions::{CAPABILITIES, EXPORT, ISSUE};
+pub use contributions::{CAPABILITIES, EXPORT, ISSUE, SIGN_OFF};
 pub use issued::{EvidencePage, IssuedReport};
 pub use setup::{SetupArea, SetupOverview, SetupState};
 
@@ -95,6 +97,7 @@ inventory::submit! {
         migrations: &[
             ("finance-reports-001-issued", include_str!("../migrations/001-issued.sql")),
             ("finance-reports-002-source-period", include_str!("../migrations/002-source-period.sql")),
+            ("finance-reports-002-conversion-signoffs", include_str!("../migrations/002-conversion-signoffs.sql")),
         ],
         services: &[Service { id: SERVICE, factory: |services| { let reports = Arc::new(Reports {
             db: services.get::<Db>("base/database.pool")?.as_ref().clone(),

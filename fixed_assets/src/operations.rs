@@ -168,7 +168,7 @@ impl ReadHandler for Read {
                     json!({"records":owner.categories_on(c,s,company).await.map_err(failure)?})
                 }
                 Self::Register | Self::Schedule => {
-                    json!({"report":owner.report_on(c,s,company,date(input,"as_of").map_err(failure)?,&pins(input).map_err(failure)?).await.map_err(failure)?})
+                    json!({"report":owner.register_report_on(c,s,company,date(input,"as_of").map_err(failure)?,&pins(input).map_err(failure)?).await.map_err(failure)?})
                 }
                 Self::Asset => {
                     json!({"record":owner.asset_on(c,s,company,id(input,"asset_id").map_err(failure)?).await.map_err(failure)?})

@@ -1,0 +1,321 @@
+//! One operation per action for the page, HTTP API and MCP.
+use crate::{agent_operations::OWNER, Reports, ReportsError, ISSUE, MODULE, SIGN_OFF, VIEW};
+use bilibi_agent_api::{
+    Channels, Definitions, Handler, Operation, OperationClient, OperationFuture, ReadHandler,
+    WriteHandler, DEFINITIONS,
+};
+use bilibi_database::{Change, Error, MutationTransaction};
+use bilibi_module_registry::{Contribution, Provenance};
+use bilibi_tenancy::Scope;
+use jiff::civil::Date;
+use serde_json::{json, Value};
+use std::collections::BTreeMap;
+fn owner() -> bilibi_agent_api::Result<&'static Reports> {
+    Ok(OWNER.get().ok_or(Error::Internal)?)
+}
+fn invalid(field: &str, text: impl Into<String>) -> bilibi_agent_api::Error {
+    bilibi_agent_api::Error::InvalidInput(BTreeMap::from([(field.into(), vec![text.into()])]))
+}
+fn refusal(e: ReportsError) -> bilibi_agent_api::Error {
+    match e {
+        ReportsError::Unauthorized => bilibi_agent_api::Error::Forbidden,
+        ReportsError::ReportNotFound | ReportsError::CompanyNotFound => {
+            bilibi_agent_api::Error::NotFound
+        }
+        ReportsError::Failed(e) => e.into(),
+        e => invalid("base", e.to_string()),
+    }
+}
+fn id(input: &Value, key: &str) -> bilibi_agent_api::Result<i64> {
+    input[key]
+        .as_i64()
+        .filter(|n| *n > 0)
+        .ok_or_else(|| invalid(key, "Choose a record."))
+}
+fn day(input: &Value) -> bilibi_agent_api::Result<Date> {
+    input["as_of"]
+        .as_str()
+        .and_then(|s| s.parse().ok())
+        .ok_or_else(|| invalid("as_of", "Choose the reporting date."))
+}
+fn text(input: &Value, key: &str, max: usize) -> bilibi_agent_api::Result<String> {
+    let value = input[key].as_str().unwrap_or("").trim();
+    if value.is_empty() || value.chars().count() > max || value.contains('\0') {
+        Err(invalid(key, format!("Enter 1 to {max} characters.")))
+    } else {
+        Ok(value.into())
+    }
+}
+async fn writable(
+    c: &tokio_postgres::Transaction<'_>,
+    s: &Scope,
+    company: i64,
+    cap: &str,
+) -> bilibi_agent_api::Result<()> {
+    owner()?
+        .conversion_access(c, s, company, cap)
+        .await
+        .map_err(refusal)?;
+    bilibi_company::require_writable(c, s, company, true)
+        .await
+        .map_err(|e| invalid("base", e.to_string()))?;
+    Ok(())
+}
+async fn fence(c: &dyn OperationClient, v: &Value, consume: bool) -> bilibi_agent_api::Result<()> {
+    let encoded = v.to_string();
+    let row=c.query_opt("SELECT encode(sha256(convert_to($1,'UTF8')),'hex'),COALESCE(NULLIF(current_setting('finance.conversion_reviews',true),''),'[]')::jsonb",&[&encoded]).await?.ok_or(Error::Internal)?;
+    let hash: String = row.get(0);
+    let mut pending: Vec<String> =
+        serde_json::from_value(row.get(1)).map_err(|_| Error::Internal)?;
+    if consume {
+        if pending.first() != Some(&hash) {
+            return Err(bilibi_agent_api::Error::StalePlan);
+        }
+        pending.remove(0);
+    } else {
+        pending.push(hash);
+    }
+    c.query_opt(
+        "SELECT set_config('finance.conversion_reviews',$1,true)",
+        &[&json!(pending).to_string()],
+    )
+    .await?;
+    Ok(())
+}
+struct Preview;
+impl ReadHandler for Preview {
+    fn owner(&self) -> &'static str {
+        MODULE
+    }
+    fn call<'a>(
+        &'a self,
+        _c: &'a dyn OperationClient,
+        s: &'a Scope,
+        input: &'a Value,
+    ) -> OperationFuture<'a> {
+        Box::pin(async move {
+            Ok(owner()?
+                .conversion_report(s, id(input, "company_id")?, day(input)?)
+                .await
+                .map_err(refusal)?
+                .into())
+        })
+    }
+}
+struct Issued;
+impl ReadHandler for Issued {
+    fn owner(&self) -> &'static str {
+        MODULE
+    }
+    fn call<'a>(
+        &'a self,
+        _c: &'a dyn OperationClient,
+        s: &'a Scope,
+        input: &'a Value,
+    ) -> OperationFuture<'a> {
+        Box::pin(async move {
+            let o = owner()?;
+            let c = o.db.get().await.map_err(Error::from)?;
+            Ok(
+                o.conversion_issued_on(&**c, s, id(input, "company_id")?, id(input, "report_id")?)
+                    .await
+                    .map_err(refusal)?
+                    .into(),
+            )
+        })
+    }
+}
+struct List;
+impl ReadHandler for List {
+    fn owner(&self) -> &'static str {
+        MODULE
+    }
+    fn call<'a>(
+        &'a self,
+        _c: &'a dyn OperationClient,
+        s: &'a Scope,
+        input: &'a Value,
+    ) -> OperationFuture<'a> {
+        Box::pin(async move {
+            let o = owner()?;
+            let c = o.db.get().await.map_err(Error::from)?;
+            let company = id(input, "company_id")?;
+            o.conversion_access(&**c, s, company, VIEW)
+                .await
+                .map_err(refusal)?;
+            let after = input["after"].as_i64().unwrap_or(0);
+            if after < 0 {
+                return Err(invalid("after", "Choose a nonnegative cursor."));
+            }
+            let rows=c.query("SELECT id,issued_at::text,through_entry_number,content->>'as_of',EXISTS(SELECT 1 FROM finance_reports_conversion_signoffs s WHERE s.tenant_id=$1 AND s.company_id=$2 AND s.report_id=r.id) FROM finance_reports_issued r WHERE tenant_id=$1 AND company_id=$2 AND kind='conversion' AND id>$3 ORDER BY id LIMIT 100",&[&s.tenant(),&company,&after]).await.map_err(Error::from)?.iter().map(|r|json!({"id":r.get::<_,i64>(0),"issued_at":r.get::<_,String>(1),"through_entry_number":r.get::<_,i64>(2),"as_of":r.get::<_,String>(3),"signed":r.get::<_,bool>(4)})).collect::<Vec<_>>();
+            let next = if rows.len() == 100 {
+                rows.last().map(|r| r["id"].clone())
+            } else {
+                None
+            };
+            Ok(json!({"rows":rows,"next":next}).into())
+        })
+    }
+}
+struct Issue;
+async fn issue_review(
+    c: &tokio_postgres::Transaction<'_>,
+    s: &Scope,
+    input: &Value,
+) -> bilibi_agent_api::Result<Value> {
+    let company = id(input, "company_id")?;
+    writable(c, s, company, ISSUE).await?;
+    let mut report = owner()?
+        .conversion_on(c, s, company, day(input)?)
+        .await
+        .map_err(refusal)?;
+    report["reviewer_reference"] = json!(text(input, "reviewer_reference", 2000)?);
+    report["review_note"] = json!(text(input, "note", 8000)?);
+    Ok(report)
+}
+impl WriteHandler for Issue {
+    fn owner(&self) -> &'static str {
+        MODULE
+    }
+    fn preview<'a>(
+        &'a self,
+        c: &'a dyn OperationClient,
+        s: &'a Scope,
+        input: &'a Value,
+    ) -> OperationFuture<'a> {
+        Box::pin(async move {
+            let v = issue_review(c.transaction().ok_or(Error::Internal)?, s, input).await?;
+            fence(c, &v, false).await?;
+            Ok(v.into())
+        })
+    }
+    fn commit<'a>(
+        &'a self,
+        tx: &'a mut MutationTransaction<'_>,
+        s: &'a Scope,
+        input: &'a Value,
+    ) -> OperationFuture<'a> {
+        Box::pin(async move {
+            let v = issue_review(tx.sql(), s, input).await?;
+            fence(tx.sql(), &v, true).await?;
+            Ok(owner()?
+                .issue_conversion_on(tx, s, id(input, "company_id")?, v)
+                .await
+                .map_err(refusal)?
+                .into())
+        })
+    }
+}
+struct Sign;
+async fn sign_review(
+    c: &tokio_postgres::Transaction<'_>,
+    s: &Scope,
+    input: &Value,
+) -> bilibi_agent_api::Result<Value> {
+    let company = id(input, "company_id")?;
+    writable(c, s, company, SIGN_OFF).await?;
+    let record = owner()?
+        .conversion_issued_on(c, s, company, id(input, "report_id")?)
+        .await
+        .map_err(refusal)?;
+    if record["signoffs"].as_array().is_none_or(|a| !a.is_empty()) {
+        return Err(invalid("report_id", "This report is already signed."));
+    }
+    let approval = Reports::conversion_approval(&record, None).map_err(refusal)?;
+    let decision = owner()?
+        .ledger
+        .preview_approval_on(c, s, company, &approval)
+        .await
+        .map_err(|e| invalid("base", e.to_string()))?;
+    Ok(
+        json!({"record":record,"reviewer_reference":text(input,"reviewer_reference",2000)?,"note":text(input,"note",8000)?,"approval":decision,"attestation":"I have reviewed this exact issued snapshot, its differences, excluded history and schedule limits. My note explains my conclusion and any qualifications. This attestation does not change the figures or resolve differences."}),
+    )
+}
+impl WriteHandler for Sign {
+    fn owner(&self) -> &'static str {
+        MODULE
+    }
+    fn preview<'a>(
+        &'a self,
+        c: &'a dyn OperationClient,
+        s: &'a Scope,
+        input: &'a Value,
+    ) -> OperationFuture<'a> {
+        Box::pin(async move {
+            let v = sign_review(c.transaction().ok_or(Error::Internal)?, s, input).await?;
+            fence(c, &v, false).await?;
+            Ok(v.into())
+        })
+    }
+    fn commit<'a>(
+        &'a self,
+        tx: &'a mut MutationTransaction<'_>,
+        s: &'a Scope,
+        input: &'a Value,
+    ) -> OperationFuture<'a> {
+        Box::pin(async move {
+            let v = sign_review(tx.sql(), s, input).await?;
+            fence(tx.sql(), &v, true).await?;
+            let company = id(input, "company_id")?;
+            let report = id(input, "report_id")?;
+            let approval = Reports::conversion_approval(&v["record"], None).map_err(refusal)?;
+            owner()?
+                .ledger
+                .check_approval(tx, s, company, &approval)
+                .await
+                .map_err(|e| invalid("base", e.to_string()))?;
+            let tenant = s.tenant();
+            let user = s.user();
+            let impersonator = s.impersonator().map(|i| i.user());
+            let reference = v["reviewer_reference"]
+                .as_str()
+                .ok_or(Error::Internal)?
+                .to_string();
+            let note = v["note"].as_str().ok_or(Error::Internal)?.to_string();
+            let row=tx.mutate(move|sql|Box::pin(async move {
+ let row:Value=sql.query_one("INSERT INTO finance_reports_conversion_signoffs(tenant_id,company_id,report_id,reviewer_reference,note,signed_by_user_id,signed_by_impersonator_id) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING to_jsonb(finance_reports_conversion_signoffs)",&[&tenant,&company,&report,&reference,&note,&user,&impersonator]).await?.get(0);
+ let change=Change {kind:"finance.reports.conversion_signoff".into(),id:row["id"].as_i64().ok_or(Error::Internal)?,old:Value::Null,new:row.clone()};Ok((row,vec![change]))})).await?;
+            Ok(row.into())
+        })
+    }
+}
+fn schema() -> Value {
+    json!({"type":"object","required":["company_id"],"properties":{"company_id":{"type":"integer","minimum":1},"after":{"type":"integer","minimum":0}}})
+}
+fn dated() -> Value {
+    let mut s = schema();
+    s["required"] = json!(["company_id", "as_of"]);
+    s["properties"]["as_of"] = json!({"type":"string","format":"date"});
+    s
+}
+fn record() -> Value {
+    let mut s = schema();
+    s["required"] = json!(["company_id", "report_id"]);
+    s["properties"]["report_id"] = json!({"type":"integer","minimum":1});
+    s
+}
+fn write_schema(mut s: Value) -> Value {
+    s["required"]
+        .as_array_mut()
+        .unwrap()
+        .extend([json!("reviewer_reference"), json!("note")]);
+    s["properties"]["reviewer_reference"] = json!({"type":"string","minLength":1,"maxLength":2000});
+    s["properties"]["note"] = json!({"type":"string","minLength":1,"maxLength":8000});
+    s
+}
+fn issue_schema() -> Value {
+    write_schema(dated())
+}
+fn sign_schema() -> Value {
+    write_schema(record())
+}
+fn output() -> Value {
+    json!({"type":"object"})
+}
+inventory::submit! {Contribution::new(DEFINITIONS,"finance/reports.conversion-operations",Provenance {module:MODULE,source:file!(),line:line!()},&Definitions {operations:&[
+ Operation {key:"finance.reports.conversion.preview",title:"Read conversion reconciliation",summary:"Collect opening sources, target balances, module reconciliations and explicit limits on one snapshot.",keywords:&["conversion"],capability:VIEW,input:dated,output,handler:Handler::Read(&Preview),channels:Channels::Every,step_up:&[]},
+ Operation {key:"finance.reports.conversion.list",title:"List conversion reports",summary:"Read issued conversion reports and their sign-off status, 100 at a time.",keywords:&[],capability:VIEW,input:schema,output,handler:Handler::Read(&List),channels:Channels::Every,step_up:&[]},
+ Operation {key:"finance.reports.conversion.get",title:"Read an issued conversion report",summary:"Read the immutable snapshot and accountant sign-off with all source permissions rechecked.",keywords:&[],capability:VIEW,input:record,output,handler:Handler::Read(&Issued),channels:Channels::Every,step_up:&[]},
+ Operation {key:"finance.reports.conversion.issue",title:"Issue conversion reconciliation",summary:"Freeze the reviewed report and source evidence. Issuance does not sign it or certify completeness.",keywords:&[],capability:ISSUE,input:issue_schema,output,handler:Handler::SafeWrite(&Issue),channels:Channels::Every,step_up:&[]},
+ Operation {key:"finance.reports.conversion.sign",title:"Sign conversion reconciliation",summary:"Record an accountant's attestation, references and qualifications against one issued snapshot; duty separation includes source preparers.",keywords:&[],capability:SIGN_OFF,input:sign_schema,output,handler:Handler::SafeWrite(&Sign),channels:Channels::Every,step_up:&[]},
+],guides:&[]})}

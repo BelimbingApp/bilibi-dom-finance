@@ -2067,14 +2067,26 @@ impl Ledger {
         company_id: i64,
         query: &TotalsQuery,
     ) -> Result<OwnerTotals> {
-        let window = totals::Window::new(query)?;
         let client = self.db.get().await.map_err(Error::from)?;
-        authorize(&**client, scope, company_id, VIEW).await?;
+        self.account_totals_by_owner_on(&**client, scope, company_id, query)
+            .await
+    }
+
+    /// Owner totals on the caller's snapshot, with the same authorization and pins.
+    pub async fn account_totals_by_owner_on(
+        &self,
+        client: &dyn bilibi_agent_api::OperationClient,
+        scope: &Scope,
+        company_id: i64,
+        query: &TotalsQuery,
+    ) -> Result<OwnerTotals> {
+        let window = totals::Window::new(query)?;
+        agent_operations::authorize_on(client, scope, company_id, VIEW).await?;
         let tenant = scope.tenant();
-        let book = books::find(&**client, tenant, company_id)
+        let book = books::find(client, tenant, company_id)
             .await?
             .ok_or(LedgerError::BookNotOpen)?;
-        let (through, rows) = totals::by_owner(&**client, tenant, company_id, &window).await?;
+        let (through, rows) = totals::by_owner(client, tenant, company_id, &window).await?;
         Ok(Totals {
             company_id,
             from: window.from,
