@@ -62,6 +62,24 @@ pub(crate) async fn lowest(
     .map_err(|_| Error::Internal)?)
 }
 
+pub(crate) fn complete_pins(
+    entry: Option<i64>,
+    batch: Option<i64>,
+    settlement: Option<i64>,
+) -> Result<()> {
+    let supplied = [entry, batch, settlement]
+        .into_iter()
+        .filter(Option::is_some)
+        .count();
+    if supplied != 0 && supplied != 3 {
+        return Err(invalid(
+            "through_entry_number",
+            "the entry, opening-batch and settlement boundaries must be supplied together",
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) async fn pin(
     c: &dyn OperationClient,
     s: &Scope,
@@ -81,10 +99,15 @@ pub(crate) async fn pin(
     }
     let incompatible=c.query_opt("SELECT e.id FROM finance_receivables_settlements e WHERE e.tenant_id=$1 AND e.company_id=$2 AND e.effective_date<=$6::text::date AND (
      (e.entry_number IS NOT NULL AND ((e.settlement_number<=$3)<>(e.entry_number<=$4)))
-     OR (e.settlement_number<=$3 AND (EXISTS(SELECT 1 FROM finance_receivables_opening_items i WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id IN (e.credit_document_id,e.target_document_id) AND i.batch_id>$5)
-     OR EXISTS(SELECT 1 FROM finance_receivables_documents item WHERE item.tenant_id=$1 AND item.company_id=$2 AND item.id IN (e.credit_document_id,e.target_document_id) AND (item.ledger_entry_number IS NULL OR item.ledger_entry_number>$4))\n     OR EXISTS(SELECT 1 FROM finance_receivables_settlements o WHERE o.tenant_id=$1 AND o.company_id=$2 AND o.id=e.reverses_settlement_id AND o.settlement_number>$3)))) LIMIT 1",&[&s.tenant(),&company,&pin,&entry,&batch,&day.to_string()]).await?.is_some();
+     OR (e.settlement_number<=$3 AND (
+       EXISTS(SELECT 1 FROM finance_receivables_opening_items i WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id IN (e.credit_document_id,e.target_document_id) AND i.batch_id>$5)
+       OR EXISTS(SELECT 1 FROM finance_receivables_documents item WHERE item.tenant_id=$1 AND item.company_id=$2 AND item.id IN (e.credit_document_id,e.target_document_id) AND (item.ledger_entry_number IS NULL OR item.ledger_entry_number>$4))
+       OR EXISTS(SELECT 1 FROM finance_receivables_settlements o WHERE o.tenant_id=$1 AND o.company_id=$2 AND o.id=e.reverses_settlement_id AND o.settlement_number>$3)
+       OR (e.reverses_settlement_id IS NULL AND EXISTS(SELECT 1 FROM finance_receivables_opening_items i JOIN finance_receivables_opening_decisions x ON x.tenant_id=$1 AND x.company_id=$2 AND x.replaces_batch_id=i.batch_id WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id IN (e.credit_document_id,e.target_document_id) AND x.batch_id<=$5 AND x.effective_date<=$6::text::date) AND NOT EXISTS(SELECT 1 FROM finance_receivables_settlements r WHERE r.tenant_id=$1 AND r.company_id=$2 AND r.reverses_settlement_id=e.id AND r.effective_date<=$6::text::date AND r.settlement_number<=$3 AND (r.entry_number IS NULL OR r.entry_number<=$4)))
+     ))
+    ) LIMIT 1",&[&s.tenant(),&company,&pin,&entry,&batch,&day.to_string()]).await?.is_some();
     if incompatible {
-        return Err(invalid("through_settlement_number","the entry, opening-batch and settlement boundaries split a settlement from its entry, source item or original event"));
+        return Err(invalid("through_settlement_number","the report boundaries split a settlement from its entry, source item or original event, or leave an inactive-batch settlement unneutralized"));
     }
     Ok(pin)
 }
@@ -516,6 +539,11 @@ impl Receivables {
         bilibi_company::authorize_work_target(&tx, s, company, VIEW)
             .await
             .map_err(crate::refusal)?;
+        complete_pins(
+            input["through_entry_number"].as_i64(),
+            input["through_opening_batch_id"].as_i64(),
+            input["through_settlement_number"].as_i64(),
+        )?;
         let entry = self
             .ledger
             .entry_boundary_on(&tx, s, company, input["through_entry_number"].as_i64())
@@ -581,13 +609,13 @@ impl Receivables {
                         event["effective_date"]
                             .as_str()
                             .is_some_and(|date| date <= day_text.as_str())
-                            && (event["ledger_entry_number"].is_null()
-                                || event["ledger_entry_number"]
-                                    .as_i64()
-                                    .is_some_and(|number| number <= entry))
+                            && event["ledger_entry_number"]
+                                .as_i64()
+                                .is_some_and(|number| number <= entry)
                     });
+                    return !events.is_empty();
                 }
-                true
+                false
             });
         }
         if record["opening"].is_object() {

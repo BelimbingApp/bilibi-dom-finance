@@ -568,11 +568,19 @@ pub(super) fn balance_query(query: &std::collections::HashMap<String, String>) -
     if let Some(day) = query.get("as_of") {
         input["as_of"] = json!(day);
     }
-    for key in [
+    let pin_keys = [
         "through_entry_number",
         "through_opening_batch_id",
         "through_settlement_number",
-    ] {
+    ];
+    let supplied = pin_keys
+        .iter()
+        .filter(|key| query.contains_key(**key))
+        .count();
+    if supplied != 0 && supplied != pin_keys.len() {
+        return Err(Error::Invalid);
+    }
+    for key in pin_keys {
         if let Some(value) = query.get(key) {
             input[key] = json!(value.parse::<i64>().map_err(|_| Error::Invalid)?);
         }

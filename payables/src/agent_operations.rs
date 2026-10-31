@@ -965,6 +965,23 @@ fn schema(required: &[&str], props: Value) -> Value {
         .collect();
     object(&required, json!(props))
 }
+fn complete_pins(mut value: Value) -> Value {
+    value["oneOf"] = json!([
+        {"required":["as_of","through_entry_number","through_opening_batch_id","through_settlement_number"]},
+        {"not":{"anyOf":[
+            {"required":["through_entry_number"]},
+            {"required":["through_opening_batch_id"]},
+            {"required":["through_settlement_number"]}
+        ]}}
+    ]);
+    value
+}
+fn aging() -> Value {
+    complete_pins(schema(
+        &["as_of"],
+        json!({"as_of":day(),"through_entry_number":{"type":"integer","minimum":0},"through_opening_batch_id":{"type":"integer","minimum":0},"through_settlement_number":{"type":"integer","minimum":0},"bucket_days":{"type":"array","items":{"type":"integer","minimum":1,"maximum":36500}}}),
+    ))
+}
 fn output() -> Value {
     json!({"type":"object","description":"Payables records or normalized review facts. Amounts and rates are exact decimal strings; dates are ISO dates. Generated IDs, numbers and timestamps exist only after commit. No Payables page is added by these operations; committed path is null."})
 }
@@ -1078,7 +1095,7 @@ fn list_schema(kind: &str) -> Value {
 
 inventory::submit! {Contribution::new(DEFINITIONS,"finance/payables.operations",Provenance {module:MODULE,source:file!(),line:line!()},&Definitions {
     operations:&[
-        Operation {key:"finance.payables.aging.get",title:"Read payables aging",summary:"Read supplier residuals at a date and posting pin. Bills age from their due dates; unapplied credits age from their source dates. Opening records are excluded before conversion.",keywords:&["conversion"],capability:VIEW,input:||schema(&["as_of"],json!({"as_of":day(),"through_entry_number":{"type":"integer","minimum":0},"through_opening_batch_id":{"type":"integer","minimum":0},"through_settlement_number":{"type":"integer","minimum":0},"bucket_days":{"type":"array","items":{"type":"integer","minimum":1,"maximum":36500}}})),output,handler:Handler::Read(&Read::Aging),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.payables.aging.get",title:"Read payables aging",summary:"Read supplier residuals at a date and posting pin. Bills age from their due dates; unapplied credits age from their source dates. Opening records are excluded before conversion.",keywords:&["conversion"],capability:VIEW,input:aging,output,handler:Handler::Read(&Read::Aging),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.payables.vendor.get",title:"Read a vendor",summary:"Read Finance settings and the linked Core company.",keywords:&[],capability:VIEW,input:||schema(&["vendor_id"],json!({"vendor_id":identifier()})),output,handler:Handler::Read(&Read::Vendor),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.payables.vendor.list",title:"List vendors",summary:"Read the current company's vendors by ID.",keywords:&[],capability:VIEW,input:||list_schema("vendor"),output,handler:Handler::Read(&Read::Vendors),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.payables.vendor.supplier_keys",title:"Review historical supplier keys",summary:"Read every distinct snapshot, possible collision and confirmed mapping without netting balances.",keywords:&[],capability:VIEW,input:||schema(&[],json!({})),output,handler:Handler::Read(&Read::SupplierHistory),channels:Channels::Every,step_up:&[]},
@@ -1121,5 +1138,5 @@ fn dated_document() -> Value {
     ] {
         s["properties"][key] = json!({"type":"integer","minimum":0});
     }
-    s
+    complete_pins(s)
 }

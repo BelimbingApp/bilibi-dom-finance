@@ -82,6 +82,19 @@ impl Reports {
         pins: &ConversionPins,
     ) -> Result<Value> {
         self.conversion_access(c, s, company, VIEW).await?;
+        let supplied = [
+            pins.through_entry_number,
+            pins.receivables_opening_batch_id,
+            pins.receivables_settlement_number,
+            pins.payables_opening_batch_id,
+            pins.payables_settlement_number,
+        ]
+        .into_iter()
+        .filter(Option::is_some)
+        .count();
+        if supplied != 0 && supplied != 5 {
+            return Err(ReportsError::InvalidOption);
+        }
         let opening = self.ledger.opening_context_on(c, s, company).await?;
         if as_of < opening.entry.entry_date {
             return Err(ReportsError::Ledger(

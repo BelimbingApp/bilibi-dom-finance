@@ -430,8 +430,66 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
     let old_ap = ap
         .aged_payables(&reviewer, company, date(2026, 7, 31), &Default::default())
         .await?;
+    assert!(ar
+        .aged_receivables(
+            &reviewer,
+            company,
+            date(2026, 7, 31),
+            &AgingOptions {
+                through_entry_number: Some(old_ar.through_entry_number),
+                through_opening_batch_id: Some(old_ar.through_opening_batch_id),
+                ..Default::default()
+            },
+        )
+        .await
+        .is_err());
+    assert!(ap
+        .aged_payables(
+            &reviewer,
+            company,
+            date(2026, 7, 31),
+            &AgingQuery {
+                through_entry_number: Some(old_ap.through_entry_number),
+                through_opening_batch_id: Some(old_ap.through_opening_batch_id),
+                ..Default::default()
+            },
+        )
+        .await
+        .is_err());
     let reports =
         services.get::<bilibi_finance_reports::Reports>(bilibi_finance_reports::SERVICE)?;
+    assert!(reports
+        .conversion_report(
+            &reviewer,
+            company,
+            date(2026, 7, 31),
+            &bilibi_finance_reports::ConversionPins {
+                through_entry_number: Some(old_ar.through_entry_number),
+                ..Default::default()
+            },
+        )
+        .await
+        .is_err());
+    let write_off = ar
+        .submit_write_off(
+            &manager,
+            company,
+            &json!({
+                "document_id":ar_id("invoice"),
+                "entry_date":"2026-07-09",
+                "amount":"1",
+                "offset_account_id":config["expense"],
+                "reason":"Backdated proposal after report capture",
+                "evidence":"Disposable replay regression"
+            }),
+        )
+        .await?;
+    ar.reject_write_off(
+        &reviewer,
+        company,
+        &json!({"write_off_id":write_off.id,"reason":"Do not post the replay regression"}),
+    )
+    .await?;
     let conversion = reports
         .conversion_report(&reviewer, company, date(2026, 7, 31), &Default::default())
         .await?;
@@ -739,6 +797,10 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         .unwrap()
         .is_empty());
     assert!(ar_record["result"]["settlements"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert!(ar_record["result"]["write_offs"]
         .as_array()
         .unwrap()
         .is_empty());
@@ -1097,6 +1159,14 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
     let replaced_ap = ap
         .import_opening_bills(&reviewer, company, &replacement_ap)
         .await?;
+    assert!(ar
+        .aged_receivables(&reviewer, company, date(2026, 7, 12), &Default::default(),)
+        .await
+        .is_err());
+    assert!(ap
+        .aged_payables(&reviewer, company, date(2026, 7, 12), &Default::default(),)
+        .await
+        .is_err());
     let replay = reports
         .conversion_report(&reviewer, company, date(2026, 7, 31), &conversion_pins)
         .await?;

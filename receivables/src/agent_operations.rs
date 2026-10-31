@@ -643,6 +643,17 @@ fn schema(required: &[&str], properties: Value) -> Value {
         .collect();
     object(&required, Value::Object(properties))
 }
+fn complete_pins(mut value: Value) -> Value {
+    value["oneOf"] = json!([
+        {"required":["as_of","through_entry_number","through_opening_batch_id","through_settlement_number"]},
+        {"not":{"anyOf":[
+            {"required":["through_entry_number"]},
+            {"required":["through_opening_batch_id"]},
+            {"required":["through_settlement_number"]}
+        ]}}
+    ]);
+    value
+}
 fn output() -> Value {
     json!({"type":"object","description":"Receivables record, cursor page, or deterministic review facts. Exact decimals are strings; dates are ISO. Committed path is the page of the record written, or the settings page for setup, series and tax codes."})
 }
@@ -825,10 +836,10 @@ fn document_page() -> Value {
     )
 }
 fn aging() -> Value {
-    schema(
+    complete_pins(schema(
         &["as_of"],
         json!({"as_of":day(),"through_entry_number":{"type":"integer","minimum":0},"through_opening_batch_id":{"type":"integer","minimum":0},"through_settlement_number":{"type":"integer","minimum":0},"bucket_days":{"type":"array","items":{"type":"integer","minimum":1,"maximum":36500}}}),
-    )
+    ))
 }
 fn payments() -> Value {
     let mut p = page_fields();
@@ -882,5 +893,5 @@ fn dated_document() -> Value {
     ] {
         s["properties"][key] = json!({"type":"integer","minimum":0});
     }
-    s
+    complete_pins(s)
 }

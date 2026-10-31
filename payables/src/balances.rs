@@ -219,6 +219,11 @@ impl Payables {
         q: &AgingQuery,
     ) -> Result<AgedPayables> {
         authorize(c, s, company, VIEW).await?;
+        crate::settlements::complete_pins(
+            q.through_entry_number,
+            q.through_opening_batch_id,
+            q.through_settlement_number,
+        )?;
         fence(q.through_entry_number)?;
         if q.bucket_days.is_empty()
             || q.bucket_days.iter().any(|v| *v <= 0)
@@ -399,6 +404,11 @@ impl Payables {
         pins: &BalancePins,
     ) -> Result<TieOut> {
         authorize(client, s, company, VIEW).await?;
+        crate::settlements::complete_pins(
+            pins.through_entry_number,
+            pins.through_opening_batch_id,
+            pins.through_settlement_number,
+        )?;
         fence(pins.through_entry_number)?;
         let ledger = self
             .ledger

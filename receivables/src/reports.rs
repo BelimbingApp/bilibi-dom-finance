@@ -245,6 +245,11 @@ impl Receivables {
         options: &AgingOptions,
     ) -> Result<AgedReceivables> {
         authorize(client, scope, company, VIEW).await?;
+        crate::settlements::complete_pins(
+            options.through_entry_number,
+            options.through_opening_batch_id,
+            options.through_settlement_number,
+        )?;
         window(None, None, options.through_entry_number)?;
         if options.bucket_days.is_empty()
             || options.bucket_days.iter().any(|n| *n <= 0 || *n > 36_500)
@@ -582,6 +587,11 @@ impl Receivables {
         pins: &BalancePins,
     ) -> Result<ControlAccountsTieOut> {
         authorize(client, scope, company, VIEW).await?;
+        crate::settlements::complete_pins(
+            pins.through_entry_number,
+            pins.through_opening_batch_id,
+            pins.through_settlement_number,
+        )?;
         window(None, None, pins.through_entry_number)?;
         let ledger = self
             .ledger
