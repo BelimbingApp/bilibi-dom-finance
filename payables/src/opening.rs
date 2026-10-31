@@ -801,50 +801,114 @@ fn source_tax_facts(
     if tax.zip(net).is_some_and(|(tax, net)| tax + net != gross) {
         return Err("source net plus tax_total must equal original_total".into());
     }
+    let mut line_net = Money::ZERO;
     let mut line_tax = Money::ZERO;
-    let mut complete = true;
+    let mut line_gross = Money::ZERO;
+    let mut complete_net = true;
+    let mut complete_tax = true;
+    let mut complete_gross = true;
     if let Some(lines) = facts.get("lines") {
         let lines = lines
             .as_array()
             .filter(|l| !l.is_empty() && l.len() <= 500)
             .ok_or("source tax lines must contain 1 to 500 lines")?;
-        for line in lines {
+        for (index, line) in lines.iter().enumerate() {
+            let number = index + 1;
             if !line.is_object() {
-                return Err("each source tax line must be an object".into());
+                return Err(format!("source tax line {number} must be an object"));
             }
-            if let Some(value) = line.get("tax_amount").filter(|v| !v.is_null()) {
-                line_tax = Money::new((line_tax + amount(value)?).amount(), units)
-                    .map_err(|e| e.to_string())?;
+            let line_amount = |key: &str| -> std::result::Result<Option<Money>, String> {
+                line.get(key)
+                    .filter(|value| !value.is_null())
+                    .map(|value| {
+                        amount(value)
+                            .map_err(|message| format!("source tax line {number} {key}: {message}"))
+                    })
+                    .transpose()
+            };
+            let taxable = line_amount("taxable_amount")?;
+            let net = line_amount("net")?;
+            let tax_amount = line_amount("tax_amount")?;
+            let line_total = line_amount("gross")?;
+            let add = |total: Money, value: Money| {
+                Money::new((total + value).amount(), units)
+                    .map_err(|error| format!("source tax line {number}: {error}"))
+            };
+            if let Some(value) = net {
+                line_net = add(line_net, value)?;
             } else {
-                complete = false;
+                complete_net = false;
             }
-            for key in ["taxable_amount", "net", "gross"] {
-                if let Some(value) = line.get(key).filter(|v| !v.is_null()) {
-                    amount(value)?;
+            if let Some(value) = tax_amount {
+                line_tax = add(line_tax, value)?;
+            } else {
+                complete_tax = false;
+            }
+            if let Some(value) = line_total {
+                line_gross = add(line_gross, value)?;
+            } else {
+                complete_gross = false;
+            }
+            if let (Some(net), Some(tax_amount), Some(line_total)) = (net, tax_amount, line_total) {
+                if net + tax_amount != line_total {
+                    return Err(format!(
+                        "source tax line {number}: net plus tax_amount must equal gross"
+                    ));
                 }
             }
-            if let (Some(net), Some(tax), Some(gross)) = (
-                line.get("net").filter(|v| !v.is_null()),
-                line.get("tax_amount").filter(|v| !v.is_null()),
-                line.get("gross").filter(|v| !v.is_null()),
-            ) {
-                if amount(net)? + amount(tax)? != amount(gross)? {
-                    return Err("a source line's net plus tax_amount must equal its gross".into());
-                }
-            }
-            if let Some(rate) = line.get("rate").filter(|v| !v.is_null()) {
-                let rate = rate
-                    .as_str()
-                    .ok_or("source tax rate must be a decimal string")?
-                    .parse::<rust_decimal::Decimal>()
-                    .map_err(|_| "source tax rate must be a decimal string")?;
-                if rate < rust_decimal::Decimal::ZERO {
-                    return Err("source tax rate cannot be negative".into());
+            let rate = line
+                .get("rate")
+                .filter(|value| !value.is_null())
+                .map(|rate| {
+                    let rate = rate
+                        .as_str()
+                        .ok_or_else(|| {
+                            format!("source tax line {number} rate must be a decimal string")
+                        })?
+                        .parse::<rust_decimal::Decimal>()
+                        .map_err(|_| {
+                            format!("source tax line {number} rate must be a decimal string")
+                        })?;
+                    if rate < rust_decimal::Decimal::ZERO {
+                        return Err(format!("source tax line {number} rate cannot be negative"));
+                    }
+                    Ok(rate)
+                })
+                .transpose()?;
+            if let (Some(taxable), Some(rate), Some(tax_amount)) = (taxable, rate, tax_amount) {
+                let calculated = taxable
+                    .amount()
+                    .checked_mul(rate)
+                    .and_then(|value| value.checked_div(rust_decimal::Decimal::from(100)))
+                    .ok_or_else(|| {
+                        format!("source tax line {number} rate calculation is too large")
+                    })?
+                    .round_dp_with_strategy(
+                        u32::from(units.get()),
+                        rust_decimal::RoundingStrategy::MidpointAwayFromZero,
+                    );
+                if calculated != tax_amount.amount() {
+                    return Err(format!(
+                        "source tax line {number}: taxable_amount multiplied by rate must round to tax_amount"
+                    ));
                 }
             }
         }
-        if complete && tax.is_some_and(|total| total != line_tax) {
-            return Err("source tax line amounts must equal tax_total".into());
+        let line_subject = if lines.len() == 1 {
+            "source tax line 1".to_owned()
+        } else {
+            format!("source tax lines 1 to {}", lines.len())
+        };
+        if complete_net && net.is_some_and(|total| total != line_net) {
+            return Err(format!("{line_subject}: net amounts must equal net"));
+        }
+        if complete_tax && tax.is_some_and(|total| total != line_tax) {
+            return Err(format!("{line_subject}: tax amounts must equal tax_total"));
+        }
+        if complete_gross && line_gross != gross {
+            return Err(format!(
+                "{line_subject}: gross amounts must equal original_total"
+            ));
         }
     } else if tax.is_none() && net.is_none() {
         return Err("supplied tax facts require a net, tax_total or source lines".into());

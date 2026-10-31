@@ -64,7 +64,7 @@ pub(super) fn csv(payable: bool, only: bool) -> String {
             primary,
             normal,
             normal,
-            json!({"status":"supplied","net":"100","tax_total":"6","lines":[{"code":"source-tax","rate":"6","taxable_amount":"100","tax_amount":"6"}]}),
+            json!({"status":"supplied","net":"100","tax_total":"6","lines":[{"code":"source-tax","rate":"6","taxable_amount":"100","net":"100","tax_amount":"6","gross":"106"}]}),
         );
     }
     row(
@@ -76,7 +76,7 @@ pub(super) fn csv(payable: bool, only: bool) -> String {
         primary,
         credit,
         "credit_note",
-        json!({"status":"supplied","net":"50","tax_total":"3","lines":[{"code":"source-tax","rate":"6","taxable_amount":"50","tax_amount":"3"}]}),
+        json!({"status":"supplied","net":"50","tax_total":"3","lines":[{"code":"source-tax","rate":"6","taxable_amount":"50","net":"50","tax_amount":"3","gross":"53"}]}),
     );
     if !only {
         row(
@@ -197,6 +197,8 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
             "mismatch",
             "omitted",
             "unused_zero",
+            "tax_breakdown",
+            "tax_rate",
         ] {
             let mut wrong = input.clone();
             if change == "omitted" {
@@ -213,6 +215,9 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
                 wrong["opening_account_classifications"][account(code).to_string()] = json!(kind);
             } else {
                 let source = wrong["csv"].as_str().unwrap();
+                let supplied_tax = tax(
+                    json!({"status":"supplied","net":"100","tax_total":"6","lines":[{"code":"source-tax","rate":"6","taxable_amount":"100","net":"100","tax_amount":"6","gross":"106"}]}),
+                );
                 wrong["csv"] = json!(match change {
                     "precision" => source.replace(",106,100,", ",106,100.001,"),
                     "currency" => source.replace(",MYR,", ",USD,"),
@@ -236,6 +241,16 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
                     "mapping" => source
                         .replace(",1120,", ",1000,")
                         .replace(",2020,", ",1000,"),
+                    "tax_breakdown" => source.replacen(
+                        &supplied_tax,
+                        &tax(json!({"status":"supplied","net":"100","tax_total":"6","lines":[{"code":"source-tax","rate":"6","taxable_amount":"100","net":"194","tax_amount":"6","gross":"200"}]})),
+                        1,
+                    ),
+                    "tax_rate" => source.replacen(
+                        &supplied_tax,
+                        &tax(json!({"status":"supplied","net":"100","tax_total":"6","lines":[{"code":"source-tax","rate":"7","taxable_amount":"100","net":"100","tax_amount":"6","gross":"106"}]})),
+                        1,
+                    ),
                     _ => source.replace(",106,100,", ",106,99,"),
                 });
             }
@@ -248,19 +263,32 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
                 wrong["opening_account_classifications"][account(code).to_string()] = json!(kind);
             }
             if input == &ar_input {
-                assert!(
-                    ar.import_opening_invoices(&reviewer, company, &wrong)
-                        .await
-                        .is_err(),
-                    "AR {change}"
-                );
+                let Err(error) = ar.import_opening_invoices(&reviewer, company, &wrong).await
+                else {
+                    panic!("AR accepted {change}");
+                };
+                if matches!(change, "tax_breakdown" | "tax_rate") {
+                    let fields = match &error {
+                        bilibi_finance_receivables::ReceivableError::Invalid(fields) => fields,
+                        _ => panic!("AR {change} returned the wrong refusal: {error:?}"),
+                    };
+                    assert!(fields
+                        .iter()
+                        .any(|field| field.message.contains("source tax line 1")));
+                }
             } else {
-                assert!(
-                    ap.import_opening_bills(&reviewer, company, &wrong)
-                        .await
-                        .is_err(),
-                    "AP {change}"
-                );
+                let Err(error) = ap.import_opening_bills(&reviewer, company, &wrong).await else {
+                    panic!("AP accepted {change}");
+                };
+                if matches!(change, "tax_breakdown" | "tax_rate") {
+                    let fields = match &error {
+                        bilibi_finance_payables::PayablesError::Invalid(fields) => fields,
+                        _ => panic!("AP {change} returned the wrong refusal: {error:?}"),
+                    };
+                    assert!(fields
+                        .iter()
+                        .any(|field| field.message.contains("source tax line 1")));
+                }
             }
         }
     }
