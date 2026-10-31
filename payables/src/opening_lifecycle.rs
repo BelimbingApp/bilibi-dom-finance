@@ -57,6 +57,8 @@ impl Payables {
         if input["currency_code"] != book.currency_code {
             return Err(invalid("currency_code", "must match the book's currency"));
         }
+        self.validate_opening_classifications(c, s, company, input)
+            .await?;
         let payload = stage_payload(input)?;
         if payload.to_string().len() > 262144 {
             return Err(invalid(
@@ -160,7 +162,6 @@ impl Payables {
                 "has missing batches; stage every batch before reconciliation",
             ));
         }
-        // Finalize the retained manifest; callers cannot silently change its mapping.
         for key in ["currency_code", "series_id", "replaces_batch_id", "reason"] {
             if !input[key].is_null() && input[key] != first[key] {
                 return Err(invalid(
@@ -169,9 +170,9 @@ impl Payables {
                 ));
             }
         }
-        if !input["historical_control_account_codes"].is_null()
-            && json!(crate::opening::historical_control_codes(input)?)
-                != first["historical_control_account_codes"]
+        if !input["opening_account_classifications"].is_null()
+            && crate::opening::opening_classifications(input)?
+                != crate::opening::opening_classifications(&first)?
         {
             return Err(invalid(
                 "source_reference",
@@ -274,7 +275,7 @@ impl Payables {
     }
 }
 fn stage_payload(input: &Value) -> Result<Value> {
-    let historical_control_codes = crate::opening::historical_control_codes(input)?;
+    let classifications = crate::opening::opening_classifications(input)?;
     let mut value = input.clone();
     if let Some(object) = value.as_object_mut() {
         object.retain(|key, _| {
@@ -283,7 +284,7 @@ fn stage_payload(input: &Value) -> Result<Value> {
                 "currency_code",
                 "csv",
                 "series_id",
-                "historical_control_account_codes",
+                "opening_account_classifications",
                 "replaces_batch_id",
                 "reason",
                 "part",
@@ -293,7 +294,7 @@ fn stage_payload(input: &Value) -> Result<Value> {
         });
     }
     value["source_reference"] = json!(input["source_reference"].as_str().unwrap_or("").trim());
-    value["historical_control_account_codes"] = json!(historical_control_codes);
+    value["opening_account_classifications"] = json!(classifications);
     Ok(value)
 }
 fn stage_manifest(input: &Value) -> Value {

@@ -42,7 +42,7 @@ fn context_schema() -> Value {
     value
 }
 fn base_schema() -> Value {
-    json!({"type":"object","required":["company_id","source_reference","currency_code","csv"],"properties":{"company_id":{"type":"integer","minimum":1},"source_reference":{"type":"string","maxLength":100},"currency_code":{"type":"string","maxLength":3},"csv":{"type":"string","maxLength":131072,"description":"UTF-8 CSV; obtain the exact required header from opening.context. Import the complete opening register, at most 500 rows."},"historical_control_account_codes":{"type":"array","maxItems":10000,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":50},"description":"Additional old-system payables controls that were never configured here. Non-zero current and former controls are automatic."},"override_reason":{"type":"string","maxLength":500}}})
+    json!({"type":"object","required":["company_id","source_reference","currency_code","csv","opening_account_classifications"],"properties":{"company_id":{"type":"integer","minimum":1},"source_reference":{"type":"string","maxLength":100},"currency_code":{"type":"string","maxLength":3},"csv":{"type":"string","maxLength":131072,"description":"UTF-8 CSV; obtain the exact required header from opening.context. Import the complete opening register, at most 500 rows."},"opening_account_classifications":{"type":"object","maxProperties":10000,"propertyNames":{"pattern":"^[1-9][0-9]*$"},"additionalProperties":{"type":"string","enum":["receivables_control","payables_control","not_a_control"]},"description":"Classify every non-zero asset and liability returned by opening.context."},"override_reason":{"type":"string","maxLength":500}}})
 }
 fn schema() -> Value {
     let mut value = base_schema();

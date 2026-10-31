@@ -12,9 +12,9 @@ use bilibi_module_registry::{
     Contribution, Provenance,
 };
 use bilibi_ui::{
-    page::*, params, Alert, BuiltinColumn, Button, ButtonVariant, Card, Cell, ErrorSummary, Field,
-    FlashGroup, FlexRow, FlexTable, Form, Header, Html, InputKind, ListColumns, Modal, ModalWidth,
-    MultiSelect, PageVariant, StatusKind,
+    page::*, params, Alert, BuiltinColumn, Button, ButtonVariant, Card, Cell, Choice, Combobox,
+    ErrorSummary, Field, FlashGroup, FlexRow, FlexTable, Form, Header, Html, InputKind,
+    ListColumns, Modal, ModalWidth, PageVariant, StatusKind,
 };
 
 use serde_json::{json, Value};
@@ -54,25 +54,37 @@ fn field_label(key: &str) -> &str {
         "series_id" => "Opening invoice series",
         "source_reference" => "Source reference",
         "currency_code" => "Book currency",
-        "historical_control_account_codes" => "Additional historical control accounts",
+        "opening_account_classifications" => "Opening account classifications",
         "override_reason" => "Approval exception reason",
         _ => key,
     }
 }
 
-fn posted_values(payload: &Value, key: &str) -> Vec<String> {
-    let mut values = Vec::new();
-    let mut keep = |value: &Value| {
-        if let Some(text) = value.as_str().filter(|text| !text.is_empty()) {
-            values.push(text.to_owned());
+fn posted_classifications(payload: &Value) -> Value {
+    let prefix = "conversion[opening_account_classifications][";
+    let mut values = serde_json::Map::new();
+    if let Some(object) = payload.as_object() {
+        for (key, value) in object {
+            if let Some(id) = key
+                .strip_prefix(prefix)
+                .and_then(|key| key.strip_suffix(']'))
+            {
+                if let Some(classification) = value.as_str() {
+                    values.insert(id.to_owned(), json!(classification));
+                }
+            }
         }
-    };
-    match payload.get(format!("conversion[{key}][]")) {
-        Some(Value::Array(items)) => items.iter().take(10_001).for_each(&mut keep),
-        Some(value) => keep(value),
-        None => {}
     }
-    values
+    Value::Object(values)
+}
+
+fn classification_label(value: &str) -> &str {
+    match value {
+        "receivables_control" => "Receivables control",
+        "payables_control" => "Payables control",
+        "not_a_control" => "Not a control",
+        _ => "",
+    }
 }
 
 fn render(t: impl Template) -> Result<Html> {
@@ -99,6 +111,7 @@ struct Opening {
     message: Option<(StatusKind, String)>,
     review: Option<Review>,
     columns: ListColumns,
+    classification_columns: ListColumns,
     balance_columns: ListColumns,
     stage_columns: ListColumns,
 }
@@ -110,6 +123,15 @@ impl Opening {
             fields: BTreeMap::new(),
             message: None,
             review: None,
+            classification_columns: ListColumns::mount(
+                "conversion-classifications",
+                vec![
+                    BuiltinColumn::new("account", "Account"),
+                    BuiltinColumn::new("opening", "Opening balance").right(),
+                    BuiltinColumn::new("classification", "Classification"),
+                ],
+            )
+            .map_err(|_| Error::Internal)?,
             stage_columns: ListColumns::mount(
                 "conversion-stages",
                 vec![
@@ -393,54 +415,83 @@ impl Opening {
                     fields.push(&render(field)?);
                 }
 
-                let historical_control_accounts = context["historical_control_accounts"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|account| {
-                        Some(bilibi_ui::Choice::new(
-                            format!(
-                                "{} · {}",
-                                account["name"].as_str()?,
-                                account["code"].as_str()?
-                            ),
-                            account["code"].as_str()?,
-                        ))
-                    })
-                    .collect();
-                let selected_controls = self.values["historical_control_account_codes"]
-                    .as_array()
+                let units = context["book"]["minor_units"]
+                    .as_i64()
+                    .and_then(bilibi_finance_ledger::MinorUnits::new)
+                    .ok_or(Error::Internal)?;
+                let selected_classifications = self.values["opening_account_classifications"]
+                    .as_object()
+                    .cloned()
                     .or_else(|| {
                         context["stages"]
                             .as_array()
                             .and_then(|stages| stages.last())
-                            .and_then(|stage| stage["historical_control_account_codes"].as_array())
+                            .and_then(|stage| stage["opening_account_classifications"].as_object())
+                            .cloned()
                     })
                     .or_else(|| {
                         context["decisions"]
                             .as_array()
                             .and_then(|decisions| decisions.last())
                             .and_then(|decision| {
-                                decision["review"]["historical_control_account_codes"].as_array()
+                                decision["review"]["opening_account_classifications"].as_object()
                             })
+                            .cloned()
                     })
+                    .unwrap_or_default();
+                for (index, account) in context["opening_accounts"]
+                    .as_array()
                     .into_iter()
                     .flatten()
-                    .filter_map(Value::as_str)
-                    .map(str::to_owned)
-                    .collect();
-                fields.push(&render(
-                    MultiSelect::in_form("conversion", "historical_control_account_codes")
-                        .id("conversion-historical_control_account_codes")
-                        .label("Additional historical control accounts")
-                        .placeholder("No additional controls")
-                        .selection_label(
-                            ":count additional control selected|:count additional controls selected",
+                    .enumerate()
+                {
+                    let id = account["id"].as_i64().ok_or(Error::Internal)?.to_string();
+                    let opening_balance = account["opening_balance"]
+                        .as_str()
+                        .and_then(|value| bilibi_finance_ledger::Money::parse(value, units).ok())
+                        .map(|value| value.display(units))
+                        .ok_or(Error::Internal)?;
+                    fields.push(&render(
+                        Combobox::new(
+                            if index == 0 {
+                                "conversion-opening_account_classifications".to_owned()
+                            } else {
+                                format!("conversion-opening-account-{id}")
+                            },
+                            format!("conversion[opening_account_classifications][{id}]"),
                         )
-                        .options(historical_control_accounts)
-                        .values(selected_controls)
-                        .hint("Select old-system controls that were never configured here."),
-                )?);
+                        .label(format!(
+                            "{} · {} *",
+                            account["name"].as_str().unwrap_or(""),
+                            account["code"].as_str().unwrap_or("")
+                        ))
+                        .aria_label(format!(
+                            "Classify {}",
+                            account["code"].as_str().unwrap_or("")
+                        ))
+                        .options(vec![
+                            Choice::new("Receivables control", "receivables_control"),
+                            Choice::new("Payables control", "payables_control"),
+                            Choice::new("Not a control", "not_a_control"),
+                        ])
+                        .value(
+                            selected_classifications
+                                .get(&id)
+                                .and_then(Value::as_str)
+                                .unwrap_or(""),
+                        )
+                        .errors(if index == 0 {
+                            self.errors("opening_account_classifications")
+                        } else {
+                            vec![]
+                        })
+                        .hint(format!(
+                            "{} opening balance {}.",
+                            account["account_type"].as_str().unwrap_or("Account"),
+                            opening_balance
+                        )),
+                    )?);
+                }
 
                 fields.push(&render(Alert {
                     id: "conversion-header",
@@ -536,6 +587,39 @@ impl Opening {
             body.push(&render(Alert{id:"conversion-review-context",body:Html::text(&format!("Conversion date {}. Source {}. {} records. Review every source identifier, date, amount and account mapping before approval.",facts["conversion_date"].as_str().or_else(||context["opening"]["entry"]["entry_date"].as_str()).unwrap_or(""),facts["source_reference"].as_str().unwrap_or(""),facts["rows"].as_array().map_or_else(||facts["rows"].as_u64().unwrap_or(0) as usize,Vec::len))),..Alert::default()})?);
             if !facts["replaces_batch_id"].is_null() {
                 body.push(&render(Alert{id:"conversion-correction-review",kind:StatusKind::Warning,body:Html::text(&format!("Replace register {} as of the conversion date {}. Reason: {}. Prior records and approvals remain available at their original report boundaries.",facts["replaces_batch_id"],facts["conversion_date"].as_str().unwrap_or(""),facts["reason"].as_str().unwrap_or(""))),..Alert::default()})?);
+            }
+            if let Some(classifications) = facts["classified_opening_accounts"].as_array() {
+                let rows = classifications
+                    .iter()
+                    .map(|account| {
+                        FlexRow::new(account["account_id"].to_string())
+                            .cell(
+                                "account",
+                                Cell::text(format!(
+                                    "{} · {}",
+                                    account["account_name"].as_str().unwrap_or(""),
+                                    account["account_code"].as_str().unwrap_or("")
+                                )),
+                            )
+                            .cell("opening", Cell::text(money(&account["opening_balance"])))
+                            .cell(
+                                "classification",
+                                Cell::text(classification_label(
+                                    account["classification"].as_str().unwrap_or(""),
+                                )),
+                            )
+                    })
+                    .collect();
+                let mut classifications = FlexTable::new(
+                    "conversion-classifications",
+                    self.classification_columns.flex_columns(),
+                    rows,
+                );
+                classifications.caption = "Opening account classifications";
+                classifications.zoom = self.classification_columns.zoom;
+                classifications.suggestions = self.classification_columns.flex_suggestions();
+                classifications.add_query = &self.classification_columns.add_query;
+                body.push(&render(classifications)?);
             }
             if let Some(reconciliation) = facts["reconciliation"].as_array() {
                 let rows = reconciliation
@@ -658,18 +742,22 @@ impl LiveState<Scope, Error> for Opening {
                     "preview_opening" => {
                         self.review = None;
                         self.fields.clear();
-                        let historical_control_account_codes =
-                            posted_values(value, "historical_control_account_codes");
-                        let mut fields = params::form_values_checked(
-                            value,
+                        let opening_account_classifications = posted_classifications(value);
+                        let mut scalar_values = value.clone();
+                        if let Some(object) = scalar_values.as_object_mut() {
+                            object.retain(|key, _| {
+                                !key.starts_with("conversion[opening_account_classifications][")
+                            });
+                        }
+                        let fields = params::form_values_checked(
+                            &scalar_values,
                             "conversion",
                             crate::opening_csv::MAX_BYTES,
                         )
                         .map_err(Error::refused)?;
-                        fields.remove("historical_control_account_codes][");
                         self.values = json!(fields);
-                        self.values["historical_control_account_codes"] =
-                            json!(historical_control_account_codes);
+                        self.values["opening_account_classifications"] =
+                            opening_account_classifications;
                         let mut input = self.values.clone();
                         input["company_id"] = r
                             .scope
@@ -691,13 +779,6 @@ impl LiveState<Scope, Error> for Opening {
                         let staged = self.values["mode"] == "reconcile";
                         if let Some(object) = input.as_object_mut() {
                             object.remove("mode");
-                            if object
-                                .get("historical_control_account_codes")
-                                .and_then(Value::as_array)
-                                .is_some_and(Vec::is_empty)
-                            {
-                                object.remove("historical_control_account_codes");
-                            }
                             for key in ["part", "part_count", "replaces_batch_id"] {
                                 let value = object
                                     .get(key)

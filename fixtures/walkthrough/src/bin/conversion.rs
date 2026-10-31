@@ -112,14 +112,6 @@ async fn setup(db: &Db, services: &Services, company: i64) -> Outcome<Value> {
             .expect("fixture account")
             .id
     };
-    if multiple_controls {
-        ar.configure(
-            &admin,
-            company,
-            &json!({"receivable_account_id":account("1110"),"income_account_id":account("4000")}),
-        )
-        .await?;
-    }
     ar.configure(
         &admin,
         company,
@@ -148,21 +140,6 @@ async fn setup(db: &Db, services: &Services, company: i64) -> Outcome<Value> {
         )
         .await?
     };
-    if multiple_controls {
-        ap.put_settings(
-            &admin,
-            company,
-            &SettingsInput {
-                settings: Settings {
-                    payable_account_id: account("2010"),
-                    quantity_tolerance: None,
-                    price_tolerance: None,
-                },
-                reason: Some("Historical conversion control".into()),
-            },
-        )
-        .await?;
-    }
     ap.put_settings(
         &admin,
         company,
@@ -265,8 +242,22 @@ async fn setup(db: &Db, services: &Services, company: i64) -> Outcome<Value> {
     let asset_csv = format!(
         "source_id,description,category_revision_id,acquisition_date,in_service_date,cost,accumulated_depreciation,remaining_life_months,residual_value\nasset-3,Source register asset,{revision},2024-06-01,2024-07-01,12000,1800,96,0\n"
     );
+    let mut classifications = serde_json::Map::new();
+    for (code, classification) in [
+        ("1000", "not_a_control"),
+        ("1100", "receivables_control"),
+        ("1200", "not_a_control"),
+        ("1290", "not_a_control"),
+        ("2000", "payables_control"),
+    ] {
+        classifications.insert(account(code).to_string(), json!(classification));
+    }
+    if multiple_controls {
+        classifications.insert(account("1110").to_string(), json!("receivables_control"));
+        classifications.insert(account("2010").to_string(), json!("payables_control"));
+    }
     Ok(
-        json!({"company_id":company,"vendor_id":vendor.id,"vendor_key":format!("vendor:{}", vendor.id),"customer_id":customer.id,"invoice_series":invoice.id,"payment_series":payment.id,"bank":account("1000"),"bank_account_id":bank_account.id,"ar":if multiple_controls { MULTI_AR } else { AR },"ap":if multiple_controls { MULTI_AP } else { AP },"expense":account("5000"),"assets":asset_csv,"revision":revision}),
+        json!({"company_id":company,"vendor_id":vendor.id,"vendor_key":format!("vendor:{}", vendor.id),"customer_id":customer.id,"invoice_series":invoice.id,"payment_series":payment.id,"bank":account("1000"),"bank_account_id":bank_account.id,"ar":if multiple_controls { MULTI_AR } else { AR },"ap":if multiple_controls { MULTI_AP } else { AP },"expense":account("5000"),"assets":asset_csv,"revision":revision,"opening_account_classifications":classifications,"historical_ar":if multiple_controls { json!(account("1110")) } else { Value::Null },"historical_ap":if multiple_controls { json!(account("2010")) } else { Value::Null }}),
     )
 }
 async fn prove(db: &Db, services: &Services) -> Outcome<()> {
@@ -312,8 +303,8 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
     let before_assets = assets
         .register_report(&s, company, date(2026, 7, 1), &Default::default())
         .await?;
-    let ar_input = json!({"source_reference":"AR-SOURCE","currency_code":"MYR","series_id":config["invoice_series"],"csv":AR});
-    let ap_input = json!({"source_reference":"AP-SOURCE","currency_code":"MYR","csv":AP});
+    let ar_input = json!({"source_reference":"AR-SOURCE","currency_code":"MYR","series_id":config["invoice_series"],"csv":AR,"opening_account_classifications":config["opening_account_classifications"]});
+    let ap_input = json!({"source_reference":"AP-SOURCE","currency_code":"MYR","csv":AP,"opening_account_classifications":config["opening_account_classifications"]});
     let asset_input = json!({"source_reference":"ASSET-SOURCE","currency_code":"MYR","csv":config["assets"].as_str().unwrap().replace(",12000,1800,96,0", ",11000,800,96,0") + &format!("asset-4,Fully depreciated,{revision},2024-06-01,2024-07-01,1000,1000,0,0\n", revision=config["revision"])});
     for input in [&ar_input, &ap_input, &asset_input] {
         assert!(input["csv"].as_str().is_some());
@@ -913,10 +904,13 @@ async fn prove_historical_controls(db: &Db, services: &Services) -> Outcome<()> 
     let trial = ledger
         .trial_balance(&reviewer, company, date(2026, 7, 1), None)
         .await?;
-    let ar_input = json!({"source_reference":"MULTI-AR","currency_code":"MYR","series_id":config["invoice_series"],"csv":MULTI_AR});
-    let ap_input = json!({"source_reference":"MULTI-AP","currency_code":"MYR","csv":MULTI_AP});
+    let ar_input = json!({"source_reference":"MULTI-AR","currency_code":"MYR","series_id":config["invoice_series"],"csv":MULTI_AR,"opening_account_classifications":config["opening_account_classifications"]});
+    let ap_input = json!({"source_reference":"MULTI-AP","currency_code":"MYR","csv":MULTI_AP,"opening_account_classifications":config["opening_account_classifications"]});
     let mut incomplete = ar_input.clone();
-    incomplete["csv"] = json!(MULTI_AR.lines().take(2).collect::<Vec<_>>().join("\n") + "\n");
+    incomplete["opening_account_classifications"]
+        .as_object_mut()
+        .expect("classifications")
+        .remove(&config["historical_ar"].as_i64().unwrap().to_string());
     let refusal = ar
         .import_opening_invoices(&reviewer, company, &incomplete)
         .await
@@ -924,7 +918,10 @@ async fn prove_historical_controls(db: &Db, services: &Services) -> Outcome<()> 
     let refusal = format!("{refusal:?}");
     assert!(refusal.contains("1110") && refusal.contains("500.00"));
     let mut incomplete = ap_input.clone();
-    incomplete["csv"] = json!(MULTI_AP.lines().take(2).collect::<Vec<_>>().join("\n") + "\n");
+    incomplete["opening_account_classifications"]
+        .as_object_mut()
+        .expect("classifications")
+        .remove(&config["historical_ap"].as_i64().unwrap().to_string());
     let refusal = ap
         .import_opening_bills(&reviewer, company, &incomplete)
         .await

@@ -146,30 +146,11 @@ async fn main() -> Outcome<()> {
     ar.configure(
         &scope,
         company,
-        &json!({"receivable_account_id":account("1110"),"income_account_id":account("4000")}),
-    )
-    .await?;
-    ar.configure(
-        &scope,
-        company,
         &json!({"receivable_account_id":account("1100"),"income_account_id":account("4000")}),
     )
     .await?;
     let series = ar.create_series(&scope, company, &json!({"code":"OPENING","name":"Opening invoices","kind":"invoice","prefix":"OPEN-","number_width":4})).await?;
     let customer = ar.create_customer(&scope, company, &json!({"new_company":{"name":"Conversion proof counterparty"},"payment_terms_days":30})).await?;
-    ap.put_settings(
-        &scope,
-        company,
-        &SettingsInput {
-            settings: Settings {
-                payable_account_id: account("2010"),
-                quantity_tolerance: None,
-                price_tolerance: None,
-            },
-            reason: Some("Historical conversion control".into()),
-        },
-    )
-    .await?;
     ap.put_settings(
         &scope,
         company,
@@ -217,6 +198,16 @@ async fn main() -> Outcome<()> {
     ledger.approve_journal(&scope, company, journal.id).await?;
     let ar_csv = format!("source_id,customer_code,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind\ninvoice-17,{},OLD-INV-17,2026-05-15,2026-06-30,5000,2500,1100,company\ninvoice-18,{},OLD-INV-18,2026-04-15,2026-05-31,1000,500,1110,company\n",customer.code,customer.code);
     let ap_csv = format!("source_id,vendor_code,vendor_name,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind\nbill-29,{},Conversion proof counterparty,OLD-BILL-29,2026-05-01,2026-06-15,2500,1200,2000,company\nbill-30,{},Conversion proof counterparty,OLD-BILL-30,2026-04-01,2026-05-15,900,300,2010,company\n",vendor.code,vendor.code);
+    let classifications = [
+        ("1000", "not_a_control"),
+        ("1100", "receivables_control"),
+        ("1110", "receivables_control"),
+        ("2000", "payables_control"),
+        ("2010", "payables_control"),
+    ]
+    .into_iter()
+    .map(|(code, classification)| (account(code).to_string(), json!(classification)))
+    .collect::<serde_json::Map<_, _>>();
     let path = std::env::var("CONVERSION_FIXTURE_DATA")?;
     let mut file = OpenOptions::new()
         .create_new(true)
@@ -226,7 +217,7 @@ async fn main() -> Outcome<()> {
     write!(
         file,
         "{}",
-        json!({"company_id":company,"series_id":series.id,"ar_csv":ar_csv,"ap_csv":ap_csv})
+        json!({"company_id":company,"series_id":series.id,"ar_csv":ar_csv,"ap_csv":ap_csv,"opening_account_classifications":classifications})
     )?;
     let access = app
         .services

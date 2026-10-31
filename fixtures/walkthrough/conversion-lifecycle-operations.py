@@ -107,6 +107,11 @@ def refused(channel, key, company, contains, who="manager", **values):
     require(body.get("valid") is False and "plan_code" not in body and contains in json.dumps(body), f"{key}: expected refusal {contains}")
 
 
+def opening_classifications(context):
+    roles = {"1100": "receivables_control", "2000": "payables_control"}
+    return {str(account["id"]): roles.get(account["code"], "not_a_control") for account in context["opening_accounts"]}
+
+
 # Company 001 is exercised in the browser; Company 002 uses the MCP door.
 channel, company = "mcp", 2
 inputs = {}
@@ -119,10 +124,10 @@ for module in ["receivables", "payables", "fixed_assets"]:
         series=read(channel,"finance.receivables.series.list",company,"approver")["records"]
         series_id=next(r["id"] for r in series if r["code"]=="OPENING")
         csv="source_id,customer_code,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind\ninvoice-17,company_010,OLD-INV-17,2026-05-15,2026-06-30,5000,3000,1100,company\n"
-        values={"source_reference":"AR-SOURCE","currency_code":"MYR","series_id":series_id,"csv":csv}
+        values={"source_reference":"AR-SOURCE","currency_code":"MYR","series_id":series_id,"csv":csv,"opening_account_classifications":opening_classifications(context)}
     elif module == "payables":
         csv="source_id,vendor_code,vendor_name,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind\nbill-29,company_010,Conversion vendor,OLD-BILL-29,2026-05-01,2026-06-15,2500,1500,2000,company\n"
-        values={"source_reference":"AP-SOURCE","currency_code":"MYR","csv":csv}
+        values={"source_reference":"AP-SOURCE","currency_code":"MYR","csv":csv,"opening_account_classifications":opening_classifications(context)}
     else:
         revision=next(r["id"] for r in context["category_revisions"] if r["category_name"]=="Conversion assets")
         csv=f"source_id,description,category_revision_id,acquisition_date,in_service_date,cost,accumulated_depreciation,remaining_life_months,residual_value\nasset-3,Source register asset,{revision},2024-06-01,2024-07-01,12000,1800,96,0\n"

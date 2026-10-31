@@ -32,7 +32,7 @@ def call(tool, arguments):
 
 
 def source(module):
-    values = {"company_id": fixture["company_id"], "source_reference": "AR-SOURCE" if module == "receivables" else "AP-SOURCE", "currency_code": "MYR", "csv": fixture["ar_csv" if module == "receivables" else "ap_csv"]}
+    values = {"company_id": fixture["company_id"], "source_reference": "AR-SOURCE" if module == "receivables" else "AP-SOURCE", "currency_code": "MYR", "csv": fixture["ar_csv" if module == "receivables" else "ap_csv"], "opening_account_classifications": fixture["opening_account_classifications"]}
     if module == "receivables":
         values["series_id"] = fixture["series_id"]
     return {"key": f"finance.{module}.opening.import", "input": values}
@@ -52,6 +52,7 @@ def preview():
         facts = response["results"][0]["preview"]["result"]["changes"]
         assert len(facts["rows"]) == len(facts["reconciliation"]) == 2
         assert all(Decimal(row["difference"]) == 0 for row in facts["reconciliation"])
+        assert facts["opening_account_classifications"] == fixture["opening_account_classifications"]
         (evidence / (module + "-mcp-review.json")).write_text(json.dumps(facts))
         print(f"{module}: MCP preview contains both reconciled controls")
 
@@ -63,6 +64,7 @@ def verify():
         facts = json.loads((evidence / (module + "-mcp-review.json")).read_text())
         assert context["batch"]["source_reference"] == source(module)["input"]["source_reference"]
         assert context["decisions"][-1]["review"]["reconciliation"] == facts["reconciliation"]
+        assert context["decisions"][-1]["review"]["opening_account_classifications"] == facts["opening_account_classifications"]
         saved = {row["source_id"]: row["source_facts"] for row in context["items"]}
         for row in facts["rows"]:
             for field in ("account_id", "account_code", "document_reference", "document_date", "due_date", "original_total", "outstanding"):
