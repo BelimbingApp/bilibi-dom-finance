@@ -110,6 +110,20 @@ pub(super) fn csv(payable: bool, only: bool) -> String {
     }
     out
 }
+fn ar_evidence_rows(page: &bilibi_finance_receivables::EvidencePage) -> Vec<Value> {
+    page.rows
+        .iter()
+        .map(|row| {
+            Value::Object(
+                page.fields
+                    .iter()
+                    .zip(row)
+                    .map(|(key, value)| ((*key).to_owned(), value.clone()))
+                    .collect(),
+            )
+        })
+        .collect()
+}
 async fn tied(
     ar: &Receivables,
     ap: &Payables,
@@ -117,44 +131,6 @@ async fn tied(
     company: i64,
     day: jiff::civil::Date,
 ) -> Outcome<()> {
-    let mut duplicate_ar = stage_ar.clone();
-    duplicate_ar["source_reference"] = json!("DUPLICATE-STAGED");
-    duplicate_ar["part_count"] = json!(2);
-    duplicate_ar["csv"] = json!(format!(
-        "{}\n{}\n",
-        ar_csv.lines().next().unwrap(),
-        ar_csv.lines().nth(1).unwrap()
-    ));
-    ar.stage_opening_import(&manager, company, &duplicate_ar)
-        .await?;
-    duplicate_ar["part"] = json!(2);
-    ar.stage_opening_import(&reviewer, company, &duplicate_ar)
-        .await?;
-    duplicate_ar["staged"] = json!(true);
-    duplicate_ar["csv"] = json!("");
-    assert!(ar
-        .import_opening_invoices(&reviewer, company, &duplicate_ar)
-        .await
-        .is_err());
-    let mut duplicate_ap = stage_ap.clone();
-    duplicate_ap["source_reference"] = json!("DUPLICATE-STAGED");
-    duplicate_ap["part_count"] = json!(2);
-    duplicate_ap["csv"] = json!(format!(
-        "{}\n{}\n",
-        ap_csv.lines().next().unwrap(),
-        ap_csv.lines().nth(1).unwrap()
-    ));
-    ap.stage_opening_import(&manager, company, &duplicate_ap)
-        .await?;
-    duplicate_ap["part"] = json!(2);
-    ap.stage_opening_import(&reviewer, company, &duplicate_ap)
-        .await?;
-    duplicate_ap["staged"] = json!(true);
-    duplicate_ap["csv"] = json!("");
-    assert!(ap
-        .import_opening_bills(&reviewer, company, &duplicate_ap)
-        .await
-        .is_err());
     let a = ar
         .tie_out_control_accounts(s, company, day, &ReceivablePins::default())
         .await?;
@@ -249,6 +225,44 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         .is_err());
     assert!(ap
         .import_opening_bills(&manager, company, &staged_ap)
+        .await
+        .is_err());
+    let mut duplicate_ar = stage_ar.clone();
+    duplicate_ar["source_reference"] = json!("DUPLICATE-STAGED");
+    duplicate_ar["part_count"] = json!(2);
+    duplicate_ar["csv"] = json!(format!(
+        "{}\n{}\n",
+        ar_csv.lines().next().unwrap(),
+        ar_csv.lines().nth(1).unwrap()
+    ));
+    ar.stage_opening_import(&manager, company, &duplicate_ar)
+        .await?;
+    duplicate_ar["part"] = json!(2);
+    ar.stage_opening_import(&reviewer, company, &duplicate_ar)
+        .await?;
+    duplicate_ar["staged"] = json!(true);
+    duplicate_ar["csv"] = json!("");
+    assert!(ar
+        .import_opening_invoices(&reviewer, company, &duplicate_ar)
+        .await
+        .is_err());
+    let mut duplicate_ap = stage_ap.clone();
+    duplicate_ap["source_reference"] = json!("DUPLICATE-STAGED");
+    duplicate_ap["part_count"] = json!(2);
+    duplicate_ap["csv"] = json!(format!(
+        "{}\n{}\n",
+        ap_csv.lines().next().unwrap(),
+        ap_csv.lines().nth(1).unwrap()
+    ));
+    ap.stage_opening_import(&manager, company, &duplicate_ap)
+        .await?;
+    duplicate_ap["part"] = json!(2);
+    ap.stage_opening_import(&reviewer, company, &duplicate_ap)
+        .await?;
+    duplicate_ap["staged"] = json!(true);
+    duplicate_ap["csv"] = json!("");
+    assert!(ap
+        .import_opening_bills(&reviewer, company, &duplicate_ap)
         .await
         .is_err());
     let a = ar
@@ -364,12 +378,12 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         .list_issued_documents(&reviewer, company, None, None)
         .await?
         .is_empty());
-    assert!(ar
-        .evidence_page(&reviewer, company, "opening_stage", None, None)
-        .await?
-        .rows
-        .iter()
-        .any(|r| r["payload"]["csv"] == ar_csv));
+    assert!(ar_evidence_rows(
+        &ar.evidence_page(&reviewer, company, "opening_stage", None, None)
+            .await?
+    )
+    .iter()
+    .any(|r| r["payload"]["csv"] == ar_csv));
     assert!(ap
         .evidence_page(&reviewer, company, "opening_stage", None, None)
         .await?
@@ -567,7 +581,8 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
     let ap_events = ap
         .evidence_page(&reviewer, company, "settlement", None, None)
         .await?;
-    for rows in [&ar_events.rows, &ap_events.rows] {
+    let ar_event_rows = ar_evidence_rows(&ar_events);
+    for rows in [&ar_event_rows, &ap_events.rows] {
         assert!(rows
             .iter()
             .any(|e| e["kind"] == "reverse" && !e["reverses_settlement_id"].is_null()));
