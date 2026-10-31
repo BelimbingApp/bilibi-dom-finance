@@ -130,6 +130,11 @@ impl Documents {
     }
 
     async fn load(&mut self, scope: &Scope) -> Result<()> {
+        self.load_page(scope).await?;
+        self.load_choices(scope).await
+    }
+
+    async fn load_page(&mut self, scope: &Scope) -> Result<()> {
         let mut input = json!({"search":self.list.search,"page":self.list.page,"page_size":self.list.page_size});
         for (key, input_key) in [
             ("source", "source"),
@@ -163,6 +168,10 @@ impl Documents {
             serde_json::from_value(page["documents"].clone()).map_err(|_| Error::Internal)?;
         self.total = page["total"].as_u64().ok_or(Error::Internal)?;
         self.list.page = page["page"].as_u64().ok_or(Error::Internal)?;
+        Ok(())
+    }
+
+    async fn load_choices(&mut self, scope: &Scope) -> Result<()> {
         self.customers = self
             .pages
             .read_all(
@@ -585,17 +594,17 @@ impl Documents {
             "clear-flash" => self.flash.dismiss(v),
             "filter" => {
                 self.list.apply_filters(&params::form_values(v, "filters"));
-                self.load(scope).await?;
+                self.load_page(scope).await?;
             }
             "page" => {
                 self.list.put_page(v["page"].as_str());
-                self.load(scope).await?;
+                self.load_page(scope).await?;
             }
             "grid" => {
                 if let ColumnsOutcome::Sort(column) = self.columns.handle(&params::string_values(v))
                 {
                     self.list.next_sort(&column);
-                    self.load(scope).await?;
+                    self.load_page(scope).await?;
                 }
             }
             kind @ ("show_create_invoice" | "show_create_credit_note") => {
@@ -692,7 +701,7 @@ impl Documents {
                             if let Some(id) = record["id"].as_i64() {
                                 redirect = Some(format!("{INVOICES}/{id}"));
                             }
-                            self.load(scope).await?;
+                            self.load_page(scope).await?;
                         }
                         Written::Invalid(fields) => {
                             self.create = Some(Draft {
@@ -759,7 +768,7 @@ impl LiveState<Scope, Error> for Documents {
                                 ("kind".into(), "".into()),
                                 ("customer".into(), "".into()),
                             ]));
-                            self.load(r.scope).await?;
+                            self.load_page(r.scope).await?;
                         }
                     }
                     _ => return self.event(r.scope, r.credential, value).await,
@@ -770,7 +779,7 @@ impl LiveState<Scope, Error> for Documents {
                 LiveInput::Params(values) => {
                     self.list =
                         ListState::parse(values, SPEC.clone()).map_err(|_| Error::Internal)?;
-                    self.load(r.scope).await?;
+                    self.load_page(r.scope).await?;
                 }
                 LiveInput::Event(_) => {}
             }

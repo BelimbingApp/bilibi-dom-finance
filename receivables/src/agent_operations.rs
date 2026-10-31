@@ -542,10 +542,16 @@ impl ReadHandler for Read {
                         {
                             return Err(ReceivableError::InvalidOption);
                         }
+                        let filters_sql = " FROM finance_receivables_documents d WHERE d.tenant_id=$1 AND d.company_id=$2 AND ($3::text IS NULL OR d.kind=$3) AND ($4::text IS NULL OR ($4='unpaid' AND d.kind='invoice' AND d.status='issued' AND NOT EXISTS(SELECT 1 FROM finance_receivables_opening_items i JOIN finance_receivables_opening_decisions x ON x.replaces_batch_id=i.batch_id AND x.tenant_id=$1 AND x.company_id=$2 WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=d.id) AND finance_receivables_outstanding(d.id)>0) OR ($4<>'unpaid' AND d.status=$4)) AND ($5::bigint IS NULL OR d.customer_id=$5) AND ($6::text IS NULL OR EXISTS (SELECT 1 FROM finance_receivables_opening_items i WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=d.id)=($6='opening'))";
+                        let filter_params: [&(dyn tokio_postgres::types::ToSql + Sync); 6] =
+                            [&tenant, &company, &kind, &status, &customer, &source];
                         let mut matching_customers = Vec::new();
                         if !search.is_empty() {
                             let needle = search.to_lowercase();
-                            for row in client.query("SELECT to_jsonb(c) FROM finance_receivables_customers c WHERE tenant_id=$1 AND company_id=$2 ORDER BY id", &[&tenant, &company]).await? {
+                            let candidates = format!("SELECT to_jsonb(c) FROM finance_receivables_customers c WHERE c.tenant_id=$1 AND c.company_id=$2 AND EXISTS (SELECT 1{filters_sql} AND d.status IN ('draft','discarded') AND d.party_name IS NULL AND d.customer_id=c.id AND strpos(lower(COALESCE(d.document_reference,'Draft #' || d.id::text)),lower($7))=0 AND strpos(lower(COALESCE(d.description,'')),lower($7))=0) ORDER BY c.id");
+                            let mut candidate_params = filter_params.to_vec();
+                            candidate_params.push(&search);
+                            for row in client.query(&candidates, &candidate_params).await? {
                                 let record = service.customer(client, scope, row.get(0)).await?;
                                 if record.code.to_lowercase().contains(&needle)
                                     || record.name.to_lowercase().contains(&needle)
@@ -554,7 +560,7 @@ impl ReadHandler for Read {
                                 }
                             }
                         }
-                        let where_sql = " FROM finance_receivables_documents d WHERE d.tenant_id=$1 AND d.company_id=$2 AND ($3::text IS NULL OR d.kind=$3) AND ($4::text IS NULL OR ($4='unpaid' AND d.kind='invoice' AND d.status='issued' AND NOT EXISTS(SELECT 1 FROM finance_receivables_opening_items i JOIN finance_receivables_opening_decisions x ON x.replaces_batch_id=i.batch_id AND x.tenant_id=$1 AND x.company_id=$2 WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=d.id) AND finance_receivables_outstanding(d.id)>0) OR ($4<>'unpaid' AND d.status=$4)) AND ($5::bigint IS NULL OR d.customer_id=$5) AND ($6::text IS NULL OR EXISTS (SELECT 1 FROM finance_receivables_opening_items i WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=d.id)=($6='opening')) AND ($7='' OR strpos(lower(COALESCE(d.document_reference,'Draft #' || d.id::text)),lower($7))>0 OR strpos(lower(COALESCE(d.party_code,'')),lower($7))>0 OR strpos(lower(COALESCE(d.party_name,'')),lower($7))>0 OR strpos(lower(COALESCE(d.description,'')),lower($7))>0 OR (d.party_name IS NULL AND d.customer_id=ANY($8::bigint[])))";
+                        let where_sql = format!("{filters_sql} AND ($7='' OR strpos(lower(COALESCE(d.document_reference,'Draft #' || d.id::text)),lower($7))>0 OR strpos(lower(COALESCE(d.party_code,'')),lower($7))>0 OR strpos(lower(COALESCE(d.party_name,'')),lower($7))>0 OR strpos(lower(COALESCE(d.description,'')),lower($7))>0 OR (d.party_name IS NULL AND d.customer_id=ANY($8::bigint[])))");
                         let params: [&(dyn tokio_postgres::types::ToSql + Sync); 8] = [&tenant, &company, &kind, &status, &customer, &source, &search, &matching_customers];
                         let total: i64 = client
                             .query_opt(&format!("SELECT count(*){where_sql}"), &params)

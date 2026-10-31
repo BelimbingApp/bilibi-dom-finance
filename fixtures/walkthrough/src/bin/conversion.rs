@@ -327,6 +327,18 @@ async fn prove_opening_invoice_page_scale(db: &Db, services: &Services) -> Outco
         )
         .await?;
     ar.issue_document(&manager, company, ordinary.id).await?;
+    let current_draft = ar
+        .create_draft(
+            &manager,
+            company,
+            &json!({
+                "kind":"invoice",
+                "series_id":config["invoice_series"],
+                "customer_id":config["customer_id"],
+                "description":"Current customer search proof",
+            }),
+        )
+        .await?;
     let client = db.get().await?;
     let page = registry
         .call(
@@ -345,6 +357,28 @@ async fn prove_opening_invoice_page_scale(db: &Db, services: &Services) -> Outco
     assert_eq!(documents[0]["description"], "Opening invoice SCALE-ROW-0");
     assert_eq!(documents[0]["document_reference"], "OPEN-2102");
     assert_eq!(documents[0]["total"], "900");
+    let snapshot_page = registry
+        .call(
+            &**client,
+            &admin,
+            "finance.receivables.document.page",
+            &json!({"company_id":company,"source":"opening","search":"company_010","page":1,"page_size":25}),
+        )
+        .await?;
+    assert_eq!(snapshot_page["result"]["total"], 2102);
+    assert!(snapshot_page["result"]["documents"]
+        .as_array()
+        .is_some_and(|rows| rows.iter().all(|row| row["party_code"] == "company_010")));
+    let current_page = registry
+        .call(
+            &**client,
+            &admin,
+            "finance.receivables.document.page",
+            &json!({"company_id":company,"source":"ordinary","status":"draft","search":"company_010","page":1,"page_size":25}),
+        )
+        .await?;
+    assert_eq!(current_page["result"]["total"], 1);
+    assert_eq!(current_page["result"]["documents"][0]["id"], current_draft.id);
     println!("Opening invoice scale proof: staged reconciliation, SQL source/search filtering, sorting, count and clamping passed.");
     Ok(())
 }
