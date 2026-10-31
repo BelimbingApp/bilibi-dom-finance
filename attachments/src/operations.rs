@@ -88,7 +88,7 @@ impl Attachments {
 
     async fn authorize_source(
         &self,
-        client: &impl GenericClient,
+        client: &(impl GenericClient + Sync),
         scope: &Scope,
         company_id: i64,
         source: &Registered,
