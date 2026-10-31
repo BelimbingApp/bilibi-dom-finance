@@ -68,8 +68,8 @@ fn evidence_schema() -> Value {
     let history = json!({"type":"object","required":["kind","effective_date","reference","note"],"properties":{
         "kind":{"type":"string","enum":["impairment","impairment_reversal","disposal","residual_value_change","estimate_change"]},
         "effective_date":{"type":"string","format":"date"},
-        "reference":{"type":"string","minLength":1,"maxLength":500},
-        "note":{"type":"string","minLength":1,"maxLength":2000},
+        "reference":{"type":"string","maxLength":500},
+        "note":{"type":"string","maxLength":2000},
         "amount":{"type":"string","nullable":true},
         "residual_value":{"type":"string","nullable":true},
         "remaining_life_months":{"type":"integer","minimum":0,"maximum":1200,"nullable":true},
@@ -78,19 +78,19 @@ fn evidence_schema() -> Value {
     }});
     let expense = json!({"type":"object","required":["from","through","amount","reference"],"properties":{
         "from":{"type":"string","format":"date"},"through":{"type":"string","format":"date"},
-        "amount":{"type":"string"},"reference":{"type":"string","minLength":1,"maxLength":500}
+        "amount":{"type":"string"},"reference":{"type":"string","maxLength":500}
     }});
     let tax = json!({"type":"object","required":["from","through","qualifying_expenditure","allowances","reference"],"properties":{
         "from":{"type":"string","format":"date"},"through":{"type":"string","format":"date"},
         "qualifying_expenditure":{"type":"string"},"allowances":{"type":"string"},
-        "reference":{"type":"string","minLength":1,"maxLength":500}
+        "reference":{"type":"string","maxLength":500}
     }});
-    json!({"type":"array","maxItems":500,"description":"Optional source-only history and schedules, one record per source_id in this CSV batch. These facts never post or change prospective estimates.","items":{
+    json!({"type":"array","description":"Optional source-only history and schedules, one record per source_id in this CSV batch. These facts never post or change prospective estimates.","items":{
         "type":"object","required":["source_id"],"properties":{
-            "source_id":{"type":"string","minLength":1,"maxLength":200},
-            "history":{"type":"array","maxItems":200,"items":history},
-            "source_period_expense":{"type":"array","maxItems":200,"items":expense},
-            "tax_capital_allowances":{"type":"array","maxItems":200,"items":tax}
+            "source_id":{"type":"string","maxLength":200},
+            "history":{"type":"array","items":history},
+            "source_period_expense":{"type":"array","items":expense},
+            "tax_capital_allowances":{"type":"array","items":tax}
         }
     }})
 }
