@@ -353,11 +353,20 @@ impl Documents {
                 .cell("kind", Cell::text(f::kind_label(&d.kind)))
                 .cell("customer", Cell::text(self.page_customer_name(d)))
                 .cell("issue_date", Cell::text(f::optional(&d.issue_date)))
-                .cell("due_date", Cell::text(f::optional(&d.due_date)))
+                .cell(
+                    "due_date",
+                    Cell::text(if d.kind == "opening_credit" {
+                        "—"
+                    } else {
+                        f::optional(&d.due_date)
+                    }),
+                )
                 .slot("total", f::tabular(&self.figures.money(d.total))?)
                 .slot(
                     "outstanding",
-                    f::tabular(&if d.status == "issued" && d.kind == "invoice" {
+                    f::tabular(&if d.status == "issued"
+                        && matches!(d.kind.as_str(), "invoice" | "opening_credit")
+                    {
                         self.figures.optional(d.outstanding)
                     } else {
                         "—".into()

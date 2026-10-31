@@ -482,7 +482,7 @@ impl Pages {
                     a["name"].as_str(),
                     a["account_type"].as_str(),
                 ) {
-                    accounts.push((id, format!("{code} {name}"), kind.to_owned()));
+                    accounts.push((id, format!("{name} · {code}"), kind.to_owned()));
                 }
             }
             if let Some(code) = page["result"]["next_after_code"].as_str() {

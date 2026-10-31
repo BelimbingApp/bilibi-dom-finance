@@ -376,7 +376,14 @@ impl Document {
         items.push(text_fact(
             "due_date",
             "Due date",
-            d.due_date.as_deref().unwrap_or(""),
+            if d.kind == "opening_credit" {
+                d.opening
+                    .as_ref()
+                    .and_then(|v| v["due_date"].as_str())
+                    .unwrap_or("—")
+            } else {
+                d.due_date.as_deref().unwrap_or("")
+            },
         )?);
         if self.draft() {
             let mut field = f::inline(
