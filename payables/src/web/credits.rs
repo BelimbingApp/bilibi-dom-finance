@@ -521,6 +521,7 @@ impl Credits {
                         d.fields=serde_json::from_value(result["error"]["fields"].clone()).unwrap_or_else(|_|BTreeMap::from([("base".into(),vec!["The settlement could not be reviewed. Check access and try again.".into()])]));
                     }
                 }
+                Err(bilibi_agent_api::Error::InvalidInput(fields)) => d.fields = fields,
                 Err(_) => {
                     d.fields = BTreeMap::from([(
                         "base".into(),
@@ -553,6 +554,7 @@ impl Credits {
                             self.message =
                                 Some((StatusKind::Success, "Credit settlement recorded.".into()));
                         }
+                        Err(bilibi_agent_api::Error::InvalidInput(fields)) => d.fields = fields,
                         Err(_) => {
                             d.fields.insert("base".into(),vec!["The reviewed details changed or the settlement was refused. Review it again.".into()]);
                         }
