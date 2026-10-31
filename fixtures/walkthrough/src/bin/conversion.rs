@@ -1007,9 +1007,7 @@ async fn main() -> Outcome<()> {
     grants
         .set_direct(&admin, 1, "admin.company.tenant-wide.manage", Some(true))
         .await?;
-    if std::env::args().any(|s| s == "multi-controls") {
-        prove_historical_controls(&db, &app.services).await?;
-    } else if std::env::args().any(|s| s == "serve") {
+    if std::env::args().any(|s| s == "serve") {
         for company in [1, 2] {
             println!(
                 "Disposable conversion source: {}",
