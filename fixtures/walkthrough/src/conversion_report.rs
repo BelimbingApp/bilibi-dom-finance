@@ -6,6 +6,7 @@ use bilibi_finance_attachments::NewFile;
 use bilibi_finance_ledger::{Ledger, Money, NewEntry, NewLine};
 use bilibi_finance_reconciliation::{NewMatch, NewReconciliation, Reconciliation};
 use bilibi_finance_reports::Reports;
+use bilibi_finance_walkthrough_fixture::sign_in;
 
 use bilibi_module_registry::Services;
 use bilibi_tenancy::{Authentication, ProofFuture};
@@ -24,7 +25,7 @@ impl PlanAuthority for Authority {
             Ok(PlanIdentity {
                 scope: self
                     .authentication
-                    .authenticate(tx, 1, self.user, String::new())
+                    .authenticate_session(tx, 1, self.user, None, Some(COMPANY), String::new())
                     .await?,
                 credential_binding: format!("conversion-fixture:{}", self.user),
             })
@@ -82,7 +83,7 @@ fn opening_import(
     }
 }
 pub async fn before(db: &Db, services: &Services) -> Outcome<Kept> {
-    let s = crate::in_company(db, services, 4, company).await?;
+    let s = crate::in_company(db, services, 4, COMPANY).await?;
     let auth = services.get::<Authentication>("base/tenancy.authentication")?;
     let authority = Authority {
         authentication: auth,
@@ -242,7 +243,7 @@ pub async fn before(db: &Db, services: &Services) -> Outcome<Kept> {
     ] {
         grants.set_direct(&s, 1, capability, Some(true)).await?;
     }
-    let manager = crate::in_company(db, services, 1, company).await?;
+    let manager = crate::in_company(db, services, 1, COMPANY).await?;
     reconciliation
         .finalise_reconciliation(&manager, COMPANY, opened.id)
         .await?;
@@ -437,7 +438,7 @@ pub async fn before(db: &Db, services: &Services) -> Outcome<Kept> {
     })
 }
 pub async fn after(db: &Db, services: &Services, kept: Kept) -> Outcome<()> {
-    let s = crate::in_company(db, services, 4, company).await?;
+    let s = crate::in_company(db, services, 4, COMPANY).await?;
     let reports = services.get::<Reports>(bilibi_finance_reports::SERVICE)?;
     let ledger = services.get::<Ledger>(bilibi_finance_ledger::SERVICE)?;
     let reconciliation = services.get::<Reconciliation>(bilibi_finance_reconciliation::SERVICE)?;
