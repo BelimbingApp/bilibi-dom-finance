@@ -149,6 +149,14 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
     let ledger = services.get::<Ledger>(bilibi_finance_ledger::SERVICE)?;
     let ar = services.get::<Receivables>(bilibi_finance_receivables::SERVICE)?;
     let ap = services.get::<Payables>(bilibi_finance_payables::SERVICE)?;
+    for (code, kind) in [
+        ("1190", AccountType::Asset),
+        ("2190", AccountType::Liability),
+    ] {
+        let mut group = NewAccount::new(code, "Source control group", kind);
+        group.is_group = true;
+        ledger.create_account(&reviewer, company, &group).await?;
+    }
     let chart = ledger.list_accounts(&reviewer, company).await?;
     let account = |code: &str| chart.iter().find(|a| a.code == code).unwrap().id;
     // A zero historical control can already be inactive at conversion.
@@ -177,6 +185,8 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
             "precision",
             "currency",
             "duplicate",
+            "identity",
+            "group",
             "mapping",
             "mismatch",
             "omitted",
@@ -193,11 +203,35 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
                     "precision" => source.replace(",106,100,", ",106,100.001,"),
                     "currency" => source.replace(",MYR,", ",USD,"),
                     "duplicate" => format!("{}{}\n", source, source.lines().nth(1).unwrap()),
+                    "identity" => {
+                        let credit = source
+                            .lines()
+                            .find(|line| line.starts_with("credit,"))
+                            .unwrap();
+                        format!(
+                            "{}{}\n",
+                            source.replacen(",53,30,", ",53,15,", 1),
+                            credit
+                                .replacen("credit,", "duplicate-credit,", 1)
+                                .replacen(",53,30,", ",53,15,", 1)
+                        )
+                    }
+                    "group" => source
+                        .replace(",1100,", ",1190,")
+                        .replace(",2000,", ",2190,"),
                     "mapping" => source
                         .replace(",1120,", ",1000,")
                         .replace(",2020,", ",1000,"),
                     _ => source.replace(",106,100,", ",106,99,"),
                 });
+            }
+            if change == "group" {
+                let (code, kind) = if input == &ar_input {
+                    ("1190", "receivables_control")
+                } else {
+                    ("2190", "payables_control")
+                };
+                wrong["opening_account_classifications"][account(code).to_string()] = json!(kind);
             }
             if input == &ar_input {
                 assert!(
