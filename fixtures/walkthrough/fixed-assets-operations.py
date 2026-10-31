@@ -191,8 +191,16 @@ try:
     else:
         raise RuntimeError("company row holder did not start")
     for key, args in [(prefix + "run.post", dict(period="2026-07-01")), (prefix + "category.save", category | {"name": "Locked category"}), (prefix + "opening.import", dict(source_reference="LOCKED", currency_code="MYR", csv=csv))]:
-        body = plan(channel, [operation(key, company, **args)], "approver")
-        require(body.get("valid") is False and "plan_code" not in body and "record_changed" in json.dumps(body) and "error" not in body, f"{key}: lock contention must be a nonfatal retryable record_changed refusal")
+        started = time.monotonic()
+        status, envelope = request("/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "plan", "arguments": {"operations": [operation(key, company, **args)]}}}, "approver", "mcp")
+        require(time.monotonic() - started < 2, f"{key}: lock contention was not bounded")
+        if status == 422:
+            # Shared bearer/workplace proof can refuse before the owner preview.
+            require(envelope == {"error": "rejected", "reason": "record_changed"}, f"{key}: expected typed retryable proof refusal")
+        else:
+            require(status == 200 and "result" in envelope, f"{key}: unexpected contention transport")
+            body = envelope["result"]["structuredContent"]
+            require(body.get("valid") is False and "plan_code" not in body and "record_changed" in json.dumps(body) and "error" not in body, f"{key}: lock contention must be a nonfatal retryable record_changed refusal")
 finally:
     holder.kill()
     holder.wait()
