@@ -400,7 +400,7 @@ impl Reports {
             "coverage_notice": if coverage == Coverage::All {
                 "All Finance source datasets are included."
             } else {
-                "Complete ledger, trial balance and issued reports only. Source-period records, payroll source records and other subledger/source evidence are excluded. Payroll journal lines remain in the ledger. This is not a complete audit evidence pack."
+                "Complete ledger, trial balance and issued reports only. Payroll source records, source-period records and other subledger/source evidence are excluded. Payroll journal lines remain in the ledger. This is not a complete audit evidence pack."
             },
             "filters":{"evidence": if coverage == Coverage::All { "all Finance company records, including drafts and reversals" } else { "all ledger company records and issued reports, including drafts and reversals" }, "trial_balance_and_aging_as_of":as_of.to_string()},
             "decimal_encoding":"exact decimal strings; CSV numeric cells are unrounded",
