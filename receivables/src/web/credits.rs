@@ -575,7 +575,7 @@ pub(super) fn balance_query(query: &std::collections::HashMap<String, String>) -
             input[key] = json!(value.parse::<i64>().map_err(|_| Error::Invalid)?);
         }
     }
-    if input.as_object().is_some_and(|o| o.len() > 1) && input["as_of"].is_null() {
+    if input.as_object().is_some_and(|o| !o.is_empty()) && input["as_of"].is_null() {
         return Err(Error::Invalid);
     }
     Ok(input)

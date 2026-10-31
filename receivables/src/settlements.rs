@@ -50,7 +50,7 @@ pub(crate) async fn lowest(
     document: i64,
     since: Date,
 ) -> Result<Money> {
-    let row = c.query_opt("SELECT min(finance_receivables_residual($1,$2,$3,day,9223372036854775807,9223372036854775807)) FROM (SELECT $4::text::date day UNION SELECT effective_date FROM finance_receivables_settlements WHERE tenant_id=$1 AND company_id=$2 AND (credit_document_id=$3 OR target_document_id=$3) AND effective_date>$4::text::date UNION SELECT issue_date FROM finance_receivables_documents WHERE tenant_id=$1 AND company_id=$2 AND credited_document_id=$3 AND status='issued' AND issue_date>$4::text::date
+    let row = c.query_opt("SELECT min(finance_receivables_residual($1,$2,$3,balance_day,9223372036854775807,9223372036854775807)) FROM (SELECT $4::text::date AS balance_day UNION SELECT effective_date FROM finance_receivables_settlements WHERE tenant_id=$1 AND company_id=$2 AND (credit_document_id=$3 OR target_document_id=$3) AND effective_date>$4::text::date UNION SELECT issue_date FROM finance_receivables_documents WHERE tenant_id=$1 AND company_id=$2 AND credited_document_id=$3 AND status='issued' AND issue_date>$4::text::date
  UNION SELECT p.payment_date FROM finance_receivables_payments p JOIN finance_receivables_allocations a ON a.payment_id=p.id AND a.tenant_id=$1 AND a.company_id=$2 WHERE p.tenant_id=$1 AND p.company_id=$2 AND a.document_id=$3 AND p.payment_date>$4::text::date
  UNION SELECT x.reversal_date FROM finance_receivables_payment_reversals x JOIN finance_receivables_allocations a ON a.payment_id=x.payment_id AND a.tenant_id=$1 AND a.company_id=$2 WHERE x.tenant_id=$1 AND x.company_id=$2 AND a.document_id=$3 AND x.reversal_date>$4::text::date
  UNION SELECT e.effective_date FROM finance_receivables_write_off_events e JOIN finance_receivables_write_offs w ON w.id=e.write_off_id AND w.tenant_id=$1 AND w.company_id=$2 WHERE e.tenant_id=$1 AND e.company_id=$2 AND w.document_id=$3 AND e.effective_date>$4::text::date) dates", &[&tenant,&company,&document,&since.to_string()]).await?.ok_or(Error::Internal)?;
@@ -532,5 +532,28 @@ impl Receivables {
         Ok(
             json!({"outstanding":amount,"balance_pins":{"as_of":day.to_string(),"through_entry_number":entry,"through_opening_batch_id":batch,"through_settlement_number":settlement}}),
         )
+    }
+}
+
+/// Keep the record's amount and displayed settlement history on the same tuple.
+pub(super) fn replay_record(record: &mut Value, balance: &Value) {
+    record["outstanding"] = balance["outstanding"].clone();
+    record["balance_pins"] = balance["balance_pins"].clone();
+    if let Some(events) = record["settlements"].as_array_mut() {
+        events.retain(|e| {
+            e["settlement_number"]
+                .as_i64()
+                .zip(balance["balance_pins"]["through_settlement_number"].as_i64())
+                .is_some_and(|(a, b)| a <= b)
+                && e["effective_date"]
+                    .as_str()
+                    .zip(balance["balance_pins"]["as_of"].as_str())
+                    .is_some_and(|(a, b)| a <= b)
+                && (e["entry_number"].is_null()
+                    || e["entry_number"]
+                        .as_i64()
+                        .zip(balance["balance_pins"]["through_entry_number"].as_i64())
+                        .is_some_and(|(a, b)| a <= b))
+        });
     }
 }

@@ -517,7 +517,7 @@ impl ReadHandler for Read {
                     Self::Customer => json!(service.get_customer(scope, company, id(input,"customer_id")?).await?),
                     Self::Document => {
                         let mut record=json!(documents::read(client,tenant,company,id(input,"document_id")?).await?);
-                        if !input["as_of"].is_null(){let balance=service.document_balance_at(scope,company,id(input,"document_id")?,input).await?;record["outstanding"]=balance["outstanding"].clone();record["balance_pins"]=balance["balance_pins"].clone();}
+                        if !input["as_of"].is_null()||["through_entry_number","through_opening_batch_id","through_settlement_number"].iter().any(|key|!input[key].is_null()){let balance=service.document_balance_at(scope,company,id(input,"document_id")?,input).await?;crate::settlements::replay_record(&mut record,&balance);}
                         record
                     },
                     Self::DocumentPage => {

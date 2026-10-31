@@ -47,7 +47,7 @@ pub(crate) async fn lowest(
     document: i64,
     since: Date,
 ) -> Result<Money> {
-    let row = c.query_opt("SELECT min(finance_payables_residual($1,$2,$3,day,9223372036854775807,9223372036854775807)) FROM (SELECT $4::text::date day UNION SELECT effective_date FROM finance_payables_settlements WHERE tenant_id=$1 AND company_id=$2 AND (credit_document_id=$3 OR target_document_id=$3) AND effective_date>$4::text::date UNION SELECT document_date FROM finance_payables_documents WHERE tenant_id=$1 AND company_id=$2 AND corrects_document_id=$3 AND status='posted' AND document_date>$4::text::date
+    let row = c.query_opt("SELECT min(finance_payables_residual($1,$2,$3,balance_day,9223372036854775807,9223372036854775807)) FROM (SELECT $4::text::date AS balance_day UNION SELECT effective_date FROM finance_payables_settlements WHERE tenant_id=$1 AND company_id=$2 AND (credit_document_id=$3 OR target_document_id=$3) AND effective_date>$4::text::date UNION SELECT document_date FROM finance_payables_documents WHERE tenant_id=$1 AND company_id=$2 AND corrects_document_id=$3 AND status='posted' AND document_date>$4::text::date
  UNION SELECT p.payment_date FROM finance_payables_payments p JOIN finance_payables_payment_allocations a ON a.payment_id=COALESCE(p.reverses_payment_id,p.id) AND a.tenant_id=$1 AND a.company_id=$2 WHERE p.tenant_id=$1 AND p.company_id=$2 AND a.document_id=$3 AND p.payment_date>$4::text::date) dates", &[&tenant,&company,&document,&since.to_string()]).await?.ok_or(Error::Internal)?;
     let amount: rust_decimal::Decimal = row.get(0);
     Ok(Money::parse(
@@ -538,5 +538,28 @@ impl Payables {
         Ok(
             json!({"outstanding":amount,"balance_pins":{"as_of":day.to_string(),"through_entry_number":entry,"through_opening_batch_id":batch,"through_settlement_number":settlement}}),
         )
+    }
+}
+
+/// Keep the record's amount and displayed settlement history on the same tuple.
+pub(super) fn replay_record(record: &mut Value, balance: &Value) {
+    record["outstanding"] = balance["outstanding"].clone();
+    record["balance_pins"] = balance["balance_pins"].clone();
+    if let Some(events) = record["settlements"].as_array_mut() {
+        events.retain(|e| {
+            e["settlement_number"]
+                .as_i64()
+                .zip(balance["balance_pins"]["through_settlement_number"].as_i64())
+                .is_some_and(|(a, b)| a <= b)
+                && e["effective_date"]
+                    .as_str()
+                    .zip(balance["balance_pins"]["as_of"].as_str())
+                    .is_some_and(|(a, b)| a <= b)
+                && (e["entry_number"].is_null()
+                    || e["entry_number"]
+                        .as_i64()
+                        .zip(balance["balance_pins"]["through_entry_number"].as_i64())
+                        .is_some_and(|(a, b)| a <= b))
+        });
     }
 }

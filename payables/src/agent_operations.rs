@@ -893,7 +893,7 @@ impl ReadHandler for Read {
                     }).await?),
                     Self::Document=>{
                         let mut record=document_value(store::document_record(c,tenant,company,id(v,"document_id")?).await?.ok_or(PayablesError::DocumentNotFound)?);
-                        if !v["as_of"].is_null(){let balance=owner()?.document_balance_at(s,company,id(v,"document_id")?,v).await?;record["outstanding"]=balance["outstanding"].clone();record["balance_pins"]=balance["balance_pins"].clone();}record
+                        if !v["as_of"].is_null()||["through_entry_number","through_opening_batch_id","through_settlement_number"].iter().any(|key|!v[key].is_null()){let balance=owner()?.document_balance_at(s,company,id(v,"document_id")?,v).await?;crate::settlements::replay_record(&mut record,&balance);}record
                     },
                     Self::Request=>json!(payments::request(c,tenant,company,id(v,"request_id")?).await?),
                     Self::Payment=>json!(payments::payment(c,tenant,company,id(v,"payment_id")?).await?),
