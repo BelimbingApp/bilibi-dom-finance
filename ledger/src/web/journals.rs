@@ -494,6 +494,8 @@ pub(super) struct Journals {
     loaded_keys: Option<Vec<String>>,
     flash: Flash,
     draft: Option<Draft>,
+    opening_dialog: Option<super::opening_dialog::OpeningDialog>,
+    destination: Option<String>,
     /// A journal named in the address (`correct` or `copy`) whose dialog is
     /// still to open: it is read through the contract on the first update.
     opening: Option<Opening>,
@@ -547,13 +549,16 @@ impl Journals {
             window,
             browser_zone: None,
             timezone_request: Timestamp::now().to_string(),
-            pages,
+            pages: pages.clone(),
             list: ListState::parse(query, SPEC.clone()).map_err(|_| Error::Internal)?,
             columns: ListColumns::mount("ledger-journals-table", columns)
                 .map_err(|_| Error::Internal)?,
             flash: Flash::default(),
             loaded_keys: None,
             draft: None,
+            opening_dialog: (query.get("opening").map(String::as_str) == Some("1"))
+                .then(|| super::opening_dialog::OpeningDialog::new(pages.clone(), None)),
+            destination: None,
             opening: Opening::parse(query),
             framed,
         })
@@ -589,6 +594,13 @@ impl Journals {
                     )?),
                     Some(book) => {
                         if can_submit {
+                            actions.push(&render(Button {
+                                id: "ledger-opening-new",
+                                event: "new_opening",
+                                button_type: "button",
+                                body: Html::text("Opening balances"),
+                                ..Button::default()
+                            })?);
                             actions.push(&render(CreateButton {
                                 noun: "Journal",
                                 id: "ledger-journal-new",
@@ -635,7 +647,13 @@ impl Journals {
                 ..Modal::default()
             })?);
         }
+        if let Some(dialog) = &mut self.opening_dialog {
+            page.push(&dialog.view(scope).await?);
+        }
         let mut query = self.list.to_params();
+        if self.opening_dialog.is_some() {
+            query.insert("opening".into(), "1".into());
+        }
         query.extend(self.window.params());
         if let Some(draft) = &self.draft {
             match &draft.replaces {
@@ -647,6 +665,7 @@ impl Journals {
             html: shell("ledger-journals", PageVariant::List, &self.flash, page)?,
             query,
             rows: shown,
+            redirect: self.destination.take(),
             ..LiveBody::default()
         })
     }
@@ -717,6 +736,7 @@ impl Journals {
         let mut sources = vec![
             Choice::new("All sources", ""),
             Choice::new("Manual", "manual"),
+            Choice::new("Opening", "opening"),
         ];
         if let Some(items) = value["sources"].as_array() {
             for item in items {
@@ -1281,6 +1301,13 @@ impl Journals {
             });
             return Ok(());
         }
+        if journal.opening {
+            self.opening_dialog = Some(super::opening_dialog::OpeningDialog::new(
+                self.pages.clone(),
+                opening.replaces.then_some(journal.id),
+            ));
+            return Ok(());
+        }
         if journal.lines.len() > MAX_LINES {
             self.flash.error(format!(
                 "Journal {} has more than {MAX_LINES} lines, more than the dialog holds.",
@@ -1435,9 +1462,30 @@ impl LiveState<Scope, Error> for Journals {
                                 self.list.apply_filters(&posted);
                             }
                             "grid" => {
-                                if let ColumnsOutcome::Sort(_) =
+                                if let Some(dialog) = &mut self.opening_dialog {
+                                    dialog.event(r.scope, r.credential, value).await?;
+                                } else if let ColumnsOutcome::Sort(_) =
                                     self.columns.handle(&params::string_values(value))
                                 {
+                                }
+                            }
+                            "new_opening" => {
+                                if self.pages.allowed(r.scope, SUBMIT_JOURNALS).await? {
+                                    self.opening_dialog =
+                                        Some(super::opening_dialog::OpeningDialog::new(
+                                            self.pages.clone(),
+                                            None,
+                                        ));
+                                }
+                            }
+                            "close_opening" => self.opening_dialog = None,
+                            "preview_opening" | "submit_opening" | "cancel_opening" => {
+                                if let Some(dialog) = &mut self.opening_dialog {
+                                    dialog.event(r.scope, r.credential, value).await?;
+                                    self.destination = dialog.take_destination();
+                                    if self.destination.is_some() {
+                                        self.opening_dialog = None;
+                                    }
                                 }
                             }
                             "new" => self.open_new(r.scope).await?,

@@ -28,7 +28,7 @@ pub(crate) async fn list(
     let rows = client.query(
         "WITH items AS (\
          SELECT e.id, 'entry'::text AS kind, e.posted_at AS stamp, e.entry_number AS number, \
-          e.entry_date, e.description, COALESCE(e.owner_module,'manual') AS source, \
+          e.entry_date, e.description, CASE WHEN EXISTS (SELECT 1 FROM finance_ledger_opening_balances o JOIN finance_ledger_journal_events v ON v.journal_id=o.journal_id AND v.tenant_id=o.tenant_id AND v.company_id=o.company_id WHERE o.tenant_id=e.tenant_id AND o.company_id=e.company_id AND v.entry_id=e.id) THEN 'opening' ELSE COALESCE(e.owner_module,'manual') END AS source, \
           CASE WHEN EXISTS (SELECT 1 FROM finance_ledger_entries r WHERE r.tenant_id=e.tenant_id AND r.company_id=e.company_id AND r.reverses_entry_id=e.id) THEN 'reversed' \
                WHEN e.reverses_entry_id IS NOT NULL THEN 'reversal' ELSE 'posted' END AS status, \
           (SELECT COALESCE(sum(l.debit),0) FROM finance_ledger_entry_lines l WHERE l.tenant_id=e.tenant_id AND l.company_id=e.company_id AND l.entry_id=e.id) AS amount, \
@@ -37,7 +37,7 @@ pub(crate) async fn list(
           AND ($10::bigint IS NULL OR e.entry_number <= $10) \
           AND ($9::bigint IS NULL OR EXISTS (SELECT 1 FROM finance_ledger_entry_lines l WHERE l.tenant_id=e.tenant_id AND l.company_id=e.company_id AND l.entry_id=e.id AND l.account_id=$9)) \
          UNION ALL \
-         SELECT j.id, 'journal', j.submitted_at, NULL::bigint, j.entry_date, j.description, 'manual', \
+         SELECT j.id, 'journal', j.submitted_at, NULL::bigint, j.entry_date, j.description, CASE WHEN EXISTS (SELECT 1 FROM finance_ledger_opening_balances o WHERE o.tenant_id=j.tenant_id AND o.company_id=j.company_id AND o.journal_id=j.id) THEN 'opening' ELSE 'manual' END, \
           COALESCE(ev.event,'submitted'), \
           (SELECT COALESCE(sum(l.debit),0) FROM finance_ledger_journal_lines l WHERE l.tenant_id=j.tenant_id AND l.company_id=j.company_id AND l.journal_id=j.id), \
           j.journal_number \

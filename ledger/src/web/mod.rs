@@ -13,7 +13,7 @@ mod groups;
 mod journal;
 mod journal_period;
 mod journals;
-mod opening;
+mod opening_dialog;
 mod trial;
 mod view;
 mod years;
@@ -68,11 +68,6 @@ macro_rules! route {
         }) }
     };
 }
-route!(
-    "finance/ledger.opening-balances",
-    "/finance/ledger/opening-balances",
-    "opening"
-);
 route!("finance/ledger.book", "/finance/ledger/books/{id}", "book");
 route!("finance/ledger.books", "/finance/ledger/books", "books");
 route!(
@@ -162,12 +157,6 @@ menu!(
     "Trial balance",
     "/finance/ledger/trial-balance",
     10
-);
-menu!(
-    "finance.ledger.opening-balances",
-    "Opening balances",
-    "/finance/ledger/opening-balances",
-    11
 );
 menu!(
     "finance.ledger.books",
@@ -1021,6 +1010,7 @@ pub(crate) fn figure(text: &str) -> Result<Html> {
 /// The module that owns an entry, in the words a bookkeeper uses.
 pub(crate) fn source_label(module: &str) -> String {
     match module {
+        "opening" => "Opening".into(),
         "finance/payables" => "Payables".into(),
         "finance/receivables" => "Receivables".into(),
         "finance/reconciliation" => "Bank reconciliation".into(),
@@ -1111,7 +1101,6 @@ impl Pages {
             None
         };
         Ok(match r.operation {
-            "opening" => Box::new(opening::Opening::new(pages, r.query)),
             "book" => Box::new(book::Book::new(pages, id_param(r.path)?)),
             "books" => Box::new(books::Books::new(pages, r.query, r.framed)?),
             "accounts" => Box::new(accounts::Accounts::new(pages, r.query, r.framed)?),

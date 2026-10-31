@@ -41,7 +41,7 @@ The following mounted routes were opened in the browser as the recorder and thei
 
 | Area | Unchanged routes under `/finance` |
 | --- | --- |
-| Ledger | `ledger/book`, `ledger/books`, `ledger/opening-balances`, `ledger/accounts`, `ledger/accounts/1`, `ledger/account-groups`, `ledger/entries`, `ledger/entries/1`, `ledger/journals`, `ledger/fiscal-years`, `ledger/trial-balance` |
+| Ledger | `ledger/books`, `ledger/accounts`, `ledger/accounts/1`, `ledger/account-groups`, `ledger/entries`, `ledger/entries/1`, `ledger/journals`, `ledger/fiscal-years`, `ledger/trial-balance` |
 | Receivables | `receivables/customers`, `receivables/customers/1`, `receivables/invoices`, `receivables/receipts`, `receivables/aging`, `receivables/settings` |
 | Payables | `payables/bills`, `payables/bills/new`, `payables/debit-notes/new`, `payables/payments`, `payables/payments/new`, `payables/aged`, `payables/setup` |
 | Bank | `reconciliation`, `reconciliation/accounts/1`, `reconciliation/accounts/1/matching` |

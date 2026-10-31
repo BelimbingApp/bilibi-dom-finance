@@ -6,8 +6,8 @@
 use super::{
     dialog_actions, error_text, event_type, figure, instant,
     journals::{status_badge, INDEX},
-    no_company, opening, render, shell, unavailable, view, who, Announce, EntryLink, Failure,
-    Flash, JournalLink, Pages, Read, Refusal, Review,
+    no_company, render, shell, unavailable, view, who, Announce, EntryLink, Failure, Flash,
+    JournalLink, Pages, Read, Refusal, Review,
 };
 use crate::{APPROVE_JOURNALS, SUBMIT_JOURNALS};
 use bilibi_database::{Error, Result};
@@ -453,11 +453,7 @@ impl Journal {
         if can_correct {
             actions.push(&render(Button {
                 id: "ledger-journal-correct",
-                href: &if journal.opening {
-                    format!("{}?correct={}", opening::INDEX, journal.id)
-                } else {
-                    format!("{INDEX}?correct={}", journal.id)
-                },
+                href: &format!("{INDEX}?correct={}", journal.id),
                 body: Html::text("Correct"),
                 ..Button::default()
             })?);
@@ -473,7 +469,7 @@ impl Journal {
             actions.push(&render(Button {
                 id: "ledger-journal-restart",
                 href: &if journal.opening {
-                    opening::INDEX.to_owned()
+                    format!("{INDEX}?opening=1")
                 } else {
                     format!("{INDEX}?copy={}", journal.id)
                 },

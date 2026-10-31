@@ -370,7 +370,7 @@ pub(crate) async fn refuse_manual_replacement(
         return Err(refused(
             "journal_id",
             format!(
-                "is an opening balances journal; correct it from Opening balances (/finance/ledger/opening-balances?correct={journal_id}) or by submitting opening balances again with replaces_journal_id"
+                "is an opening balances journal; correct it from Journals (/finance/ledger/journals?correct={journal_id}) or by submitting opening balances again with replaces_journal_id"
             ),
         ));
     }
