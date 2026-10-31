@@ -59,6 +59,7 @@ pub(super) struct Opening {
     columns: ListColumns,
     balance_columns: ListColumns,
     stage_columns: ListColumns,
+    class_columns: ListColumns,
 }
 impl Opening {
     pub(super) fn new(pages: Pages) -> Result<Self> {
@@ -69,6 +70,18 @@ impl Opening {
             fields: BTreeMap::new(),
             message: None,
             review: None,
+            class_columns: ListColumns::mount(
+                "conversion-classes",
+                vec![
+                    BuiltinColumn::new("class", "Category ID"),
+                    BuiltinColumn::new("cost_account", "Cost account ID"),
+                    BuiltinColumn::new("accumulated_account", "Accumulation account ID"),
+                    BuiltinColumn::new("cost", "Source cost").right(),
+                    BuiltinColumn::new("accumulated", "Source accumulation").right(),
+                    BuiltinColumn::new("carrying", "Carrying value").right(),
+                ],
+            )
+            .map_err(|_| Error::Internal)?,
             stage_columns: ListColumns::mount(
                 "conversion-stages",
                 vec![
@@ -251,9 +264,7 @@ impl Opening {
                 let mut fields = render(Alert {
                     id: "conversion-boundary",
                     kind: StatusKind::Info,
-                    body: Html::text(
-                        "Retain source cost and accumulated depreciation. Depreciate carrying value less residual value prospectively over the remaining useful life using straight-line depreciation, with a full first month at month-end. Historical depreciation is not posted again.",
-                    ),
+                    body: Html::text(crate::opening::CONVENTION),
                     ..Alert::default()
                 })?;
                 let mut summary = ErrorSummary::new("conversion-errors");
@@ -451,6 +462,45 @@ impl Opening {
             if !facts["replaces_batch_id"].is_null() {
                 body.push(&render(Alert{id:"conversion-correction-review",kind:StatusKind::Warning,body:Html::text(&format!("Replace register {} as of the conversion date {}. Reason: {}. Prior records and approvals remain available at their original report boundaries.",facts["replaces_batch_id"],facts["conversion_date"].as_str().unwrap_or(""),facts["reason"].as_str().unwrap_or(""))),..Alert::default()})?);
             }
+            if let Some(classes) = facts["class_totals"].as_array() {
+                let rows = classes
+                    .iter()
+                    .map(|row| {
+                        FlexRow::new(format!(
+                            "{}-{}-{}",
+                            row["category_id"],
+                            row["cost_account_id"],
+                            row["accumulated_account_id"]
+                        ))
+                        .cell("class", Cell::text(row["category_id"].to_string()))
+                        .cell(
+                            "cost_account",
+                            Cell::text(row["cost_account_id"].to_string()),
+                        )
+                        .cell(
+                            "accumulated_account",
+                            Cell::text(row["accumulated_account_id"].to_string()),
+                        )
+                        .cell("cost", Cell::text(money(&row["cost"])))
+                        .cell(
+                            "accumulated",
+                            Cell::text(money(&row["accumulated_depreciation"])),
+                        )
+                        .cell("carrying", Cell::text(money(&row["carrying_value"])))
+                    })
+                    .collect();
+                let mut table = FlexTable::new(
+                    "conversion-classes",
+                    self.class_columns.flex_columns(),
+                    rows,
+                );
+                table.caption = "Source totals by class and account pair";
+                table.event = "class_grid";
+                table.zoom = self.class_columns.zoom;
+                table.suggestions = self.class_columns.flex_suggestions();
+                table.add_query = &self.class_columns.add_query;
+                body.push(&render(table)?);
+            }
             if let Some(reconciliation) = facts["reconciliation"].as_array() {
                 let rows = reconciliation
                     .iter()
@@ -505,6 +555,13 @@ impl Opening {
                 body.push(&render(Alert{id:"conversion-review-reconciliation",kind:StatusKind::Info,body:Html::text("The complete register reconciles exactly to the approved opening account balances. This import records opening state and retains source evidence; it creates no new ledger entry."),..Alert::default()})?);
             } else {
                 body.push(&render(Alert{id:"conversion-stage-review",body:Html::text(&format!("Previewed source batch {} of {}, containing {} rows. Committing this batch retains source evidence. It does not create opening records or approve reconciliation.",facts["part"],facts["part_count"],facts["rows"])),..Alert::default()})?);
+            }
+            if let Some(convention) = facts["month_convention"].as_str() {
+                body.push(&render(Alert {
+                    id: "conversion-month-convention",
+                    body: Html::text(convention),
+                    ..Alert::default()
+                })?);
             }
             if let Some(policy) = facts["depreciation"].as_str() {
                 body.push(&render(Alert {
@@ -676,6 +733,9 @@ impl Opening {
                     }
                 }
                 "cancel_opening" => self.review = None,
+                "class_grid" => {
+                    self.class_columns.handle(&params::string_values(value));
+                }
                 "stage_grid" => {
                     self.stage_columns.handle(&params::string_values(value));
                 }

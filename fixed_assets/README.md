@@ -176,3 +176,10 @@ Opening assets share the Fixed assets list and asset pages. **Source** and **Sta
 The shared browser, MCP and focused list-proof commands are in the [conversion walkthrough](../fixtures/walkthrough/README.md#accounting-system-conversion).
 
 Readers can open the opening dialog to inspect retained source batches. The import form still requires the module's existing opening-write permission, and approval checks run in the shared contract.
+
+
+### Opening reconciliation and cut-off
+
+Source balances describe the position immediately before the conversion date. The first prospective charge falls at the end of the conversion calendar month. A mid-month cut-off receives a full month, without daily proration. Review the cut-off before approving the register; importing never records a historical catch-up charge.
+
+The import review groups source cost, accumulated depreciation and carrying value by category and its cost/accumulation account pair. Account reconciliation then combines all classes sharing an account and compares that total with the approved opening trial balance. Class totals explain the source register; they are not separate ledger balances.
