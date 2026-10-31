@@ -146,6 +146,8 @@ refused(channel, prefix + "opening.import", company, "source_evidence", who="app
 review = plan(channel, [operation(prefix + "opening.import", company, **opening)], "approver")
 require(review.get("valid") is True, "opening evidence review")
 facts = review["results"][0]["preview"]["result"]["changes"]
+if facts.get("already_imported"):
+    facts = next(d["review"] for d in context["decisions"] if d["review"].get("source_reference") == "MCP-ASSET-111")
 require(len(facts["class_totals"]) == 1 and Decimal(facts["class_totals"][0]["cost"]) == 12000, "class/account totals")
 require("mid-month" in facts["month_convention"], "cut-off convention missing")
 require("results" in commit(channel, [operation(prefix + "opening.import", company, **opening)], review, "approver"), "opening evidence commit")
@@ -171,6 +173,7 @@ require(initial["rows"][1]["schedule"] == [] and Decimal(initial["rows"][1]["car
 retained = read(channel, prefix + "asset.get", company, "approver", asset_id=asset["id"])["record"]["opening"]["source_evidence"]
 require(retained["history"][0]["note"] == evidence[0]["history"][0]["note"], "source history not retained")
 require(Decimal(retained["source_period_expense"][0]["amount"]) == 600 and Decimal(retained["tax_capital_allowances"][0]["allowances"]) == 2400, "source YTD and tax evidence not separate")
+print("PASS MCP opening: zero-life schedule, source history/YTD/tax separation, class/account review, immutable retry and exact reconciliation")
 # The source aggregate is not an ordinary acquisition debit.
 refused(channel, prefix + "asset.acquire", company, "opening", who="approver", source="entry", source_id=asset["entry_id"], line_number=1, category_revision_id=revision["id"], description="Refused aggregate", in_service_date="2026-07-01")
 # Another transaction holding the company row is a retryable refusal, never an infrastructure failure or a write.
@@ -196,6 +199,7 @@ finally:
     sql("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=current_database() AND query LIKE '%pg_sleep(60)%' AND pid<>pg_backend_pid()")
 require(counts() == before, "lock contention wrote business or audit rows")
 require(plan(channel, [operation(prefix + "run.post", company, period="2026-07-01")], "approver").get("valid") is True, "preview did not recover after the lock was released")
+print("PASS MCP contention: authorized write previews refuse a busy company and recover after its lock is released")
 # Preview-all-before-execute must refuse the dependent second run and roll back the first.
 ops = [operation(prefix + "run.post", company, period="2026-07-01")] * 2
 review = plan(channel, ops, "approver")
