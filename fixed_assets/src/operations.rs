@@ -543,9 +543,14 @@ impl FixedAssets {
                 Error::Forbidden | Error::Unauthorized => FixedAssetsError::Unauthorized,
                 e => FixedAssetsError::Failed(e),
             })?;
-        let target = bilibi_party_ids::OrganisationId::new(company)
-            .map_err(|_| FixedAssetsError::CompanyNotFound)?;
-        if s.principal().is_none() && !bilibi_tenancy::reaches_work_company(c, s, target).await? {
+        if s.principal().is_none()
+            && !self
+                .parties
+                .reachable_organisations(c, s)
+                .await?
+                .iter()
+                .any(|target| target.id.get() == company)
+        {
             return Err(FixedAssetsError::Unauthorized);
         }
         let Some(row) = c
