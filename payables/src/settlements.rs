@@ -186,7 +186,7 @@ impl Payables {
             .as_ref()
             .and_then(|v| v["credit_document_id"].as_i64())
             .unwrap_or(id(input, "credit_document_id").unwrap_or(0));
-        let facts:Value=c.query_opt("SELECT to_jsonb(d)||jsonb_build_object('source',i.source_facts,'item_id',i.id,'batch',to_jsonb(b)) FROM finance_payables_documents d JOIN finance_payables_opening_items i ON i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=d.id JOIN finance_payables_opening_batches b ON b.tenant_id=$1 AND b.company_id=$2 AND b.id=i.batch_id WHERE d.tenant_id=$1 AND d.company_id=$2 AND d.id=$3 AND d.document_type='opening_credit'",&[&s.tenant(),&company,&credit]).await?.ok_or_else(||invalid("credit_document_id","must identify an opening credit of the current company"))?.get(0);
+        let facts:Value=c.query_opt("SELECT to_jsonb(d)||jsonb_build_object('source',i.source_facts,'item_id',i.id,'batch',to_jsonb(b)-'source_csv') FROM finance_payables_documents d JOIN finance_payables_opening_items i ON i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=d.id JOIN finance_payables_opening_batches b ON b.tenant_id=$1 AND b.company_id=$2 AND b.id=i.batch_id WHERE d.tenant_id=$1 AND d.company_id=$2 AND d.id=$3 AND d.document_type='opening_credit'",&[&s.tenant(),&company,&credit]).await?.ok_or_else(||invalid("credit_document_id","must identify an opening credit of the current company"))?.get(0);
         crate::opening::settlement_date(c, s.tenant(), company, credit, day, "credit_document_id")
             .await?;
         let amount = if let Some(event) = &original {
@@ -538,7 +538,7 @@ impl Payables {
         let units = self.ledger.get_book_on(&tx, s, company).await?.minor_units;
         let amount =
             Money::new(amount, units).map_err(|e| invalid("document_id", e.to_string()))?;
-        let events:Vec<Value>=tx.query("SELECT to_jsonb(e) FROM finance_payables_settlements e WHERE e.tenant_id=$1 AND e.company_id=$2 AND (e.credit_document_id=$3 OR e.target_document_id=$3) AND e.effective_date<=$4::text::date AND e.settlement_number<=$5 AND (e.entry_number IS NULL OR e.entry_number<=$6) ORDER BY e.settlement_number",&[&s.tenant(),&company,&document,&day.to_string(),&settlement,&entry]).await.map_err(Error::from)?.iter().map(|r|r.get(0)).collect();
+        let events:Vec<Value>=tx.query("SELECT to_jsonb(e)-'review' FROM finance_payables_settlements e WHERE e.tenant_id=$1 AND e.company_id=$2 AND (e.credit_document_id=$3 OR e.target_document_id=$3) AND e.effective_date<=$4::text::date AND e.settlement_number<=$5 AND (e.entry_number IS NULL OR e.entry_number<=$6) ORDER BY e.settlement_number",&[&s.tenant(),&company,&document,&day.to_string(),&settlement,&entry]).await.map_err(Error::from)?.iter().map(|r|r.get(0)).collect();
         tx.commit().await.map_err(Error::from)?;
         Ok(
             json!({"settlements":events,"outstanding":amount,"balance_pins":{"as_of":day.to_string(),"through_entry_number":entry,"through_opening_batch_id":batch,"through_settlement_number":settlement}}),

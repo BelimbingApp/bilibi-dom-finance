@@ -409,7 +409,8 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
         .await?
         .parties
         .is_empty());
-    for (documents, primary, zero) in [(&invoices, "credit", "zero-credit")] {
+    {
+        let (documents, primary, zero) = (&invoices, "credit", "zero-credit");
         let source = documents
             .iter()
             .find(|d| {
