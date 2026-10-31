@@ -103,6 +103,23 @@ fn classification_label(value: &str) -> &str {
     }
 }
 
+fn retained_classifications(
+    context: &Value,
+    source_reference: &str,
+) -> Option<serde_json::Map<String, Value>> {
+    let source_reference = source_reference.trim();
+    if source_reference.is_empty() {
+        return None;
+    }
+    context["stage_sources"]
+        .as_array()?
+        .iter()
+        .find(|source| source["source_reference"].as_str() == Some(source_reference))?
+        ["opening_account_classifications"]
+        .as_object()
+        .cloned()
+}
+
 fn render(t: impl Template) -> Result<Html> {
     Html::render(&t).map_err(|_| Error::Internal)
 }
@@ -435,16 +452,18 @@ impl Opening {
                     .as_i64()
                     .and_then(bilibi_finance_ledger::MinorUnits::new)
                     .ok_or(Error::Internal)?;
-                let selected_classifications = self.values["opening_account_classifications"]
-                    .as_object()
-                    .cloned()
+                let selected_classifications =
+                    if matches!(self.values["mode"].as_str(), Some("stage" | "reconcile")) {
+                        retained_classifications(
+                            &context,
+                            self.values["source_reference"].as_str().unwrap_or(""),
+                        )
+                    } else {
+                        None
+                    }
                     .or_else(|| {
-                        context["stage_sources"]
-                            .as_array()
-                            .and_then(|sources| sources.last())
-                            .and_then(|source| {
-                                source["opening_account_classifications"].as_object()
-                            })
+                        self.values["opening_account_classifications"]
+                            .as_object()
                             .cloned()
                     })
                     .or_else(|| {
@@ -783,6 +802,31 @@ impl LiveState<Scope, Error> for Opening {
                         self.values = json!(fields);
                         self.values["opening_account_classifications"] =
                             opening_account_classifications;
+                        let mode = self.values["mode"].as_str().unwrap_or("").to_owned();
+                        if matches!(mode.as_str(), "stage" | "reconcile") {
+                            if let Some(company) = r.scope.current_company().map(|id| id.get()) {
+                                match self
+                                    .pages
+                                    .contracts
+                                    .read(r.scope, CONTEXT, &json!({"company_id":company}))
+                                    .await
+                                {
+                                    Ok(context) => {
+                                        if let Some(classifications) = retained_classifications(
+                                            &context["result"],
+                                            self.values["source_reference"].as_str().unwrap_or(""),
+                                        ) {
+                                            self.values["opening_account_classifications"] =
+                                                Value::Object(classifications);
+                                        }
+                                    }
+                                    Err(error) => {
+                                        self.fail(error);
+                                        return self.body(r.scope).await;
+                                    }
+                                }
+                            }
+                        }
                         let mut input = self.values.clone();
                         input["company_id"] = r
                             .scope
@@ -796,12 +840,8 @@ impl LiveState<Scope, Error> for Opening {
                                 .expect("form object")
                                 .remove("override_reason");
                         }
-                        let contract = if self.values["mode"] == "stage" {
-                            STAGE
-                        } else {
-                            CONTRACT
-                        };
-                        let staged = self.values["mode"] == "reconcile";
+                        let contract = if mode == "stage" { STAGE } else { CONTRACT };
+                        let staged = mode == "reconcile";
                         if let Some(object) = input.as_object_mut() {
                             object.remove("mode");
                             for key in ["part", "part_count", "replaces_batch_id"] {
