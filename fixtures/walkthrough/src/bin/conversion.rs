@@ -1041,6 +1041,14 @@ async fn main() -> Outcome<()> {
     let origin = std::env::var("APP_ORIGIN").unwrap_or_else(|_| "http://127.0.0.1:8147".into());
     let app = bilibi_web::App::new(db.clone(), &origin)?;
     bilibi_finance_walkthrough_fixture::without_step_up(&app.services)?;
+    if std::env::args().any(|s| s == "launcher-ordinary") {
+        launcher_ordinary(&db, &app.services).await?;
+        return Ok(());
+    }
+    if std::env::args().any(|s| s == "launcher-credentials") {
+        launcher_credentials(&db, &app.services).await?;
+        return Ok(());
+    }
     install(&db, &app.services).await?;
     // Identity-only fixture repair: the reviewer has a real Person affiliation,
     // so browser sessions can choose the current company. No business rows use SQL.
@@ -1052,6 +1060,21 @@ async fn main() -> Outcome<()> {
     grants
         .set_direct(&admin, 1, "admin.company.tenant-wide.manage", Some(true))
         .await?;
+    if std::env::args().any(|s| s == "prepare-launcher") {
+        // Fixture identity only: the launcher's demo retirement matches the
+        // original generated name. Keep the counterparty these records use.
+        db.get().await?.execute("UPDATE companies SET name='Opening proof counterparty' WHERE tenant_id=1 AND id=10 AND name='Company 010'", &[]).await?;
+        let mut sources = Vec::new();
+        for company in [1, 2, 4] {
+            sources.push(setup(&db, &app.services, company).await?);
+        }
+        std::fs::write(
+            std::env::var("BILIBI_OPENING_PROOF_CONFIG")?,
+            serde_json::to_vec_pretty(&sources)?,
+        )?;
+        println!("Opening list sources prepared. Start the Platform launcher on this disposable database.");
+        return Ok(());
+    }
     if std::env::args().any(|s| s == "serve") {
         for company in [1, 2, 4] {
             println!(
@@ -1075,5 +1098,153 @@ async fn main() -> Outcome<()> {
         prove(&db, &app.services).await?;
         prove_historical_controls(&db, &app.services).await?;
     }
+    Ok(())
+}
+
+// One-door proof: keep the normal Platform launcher and its administrator.
+// This is called after launch-only retirement of the old walkthrough users.
+async fn launcher_credentials(db: &Db, services: &Services) -> Outcome<()> {
+    use bilibi_core::agent_access::{
+        code_challenge, AgentAccess, AuthorizeParams, ClientRegistration, CodeExchange,
+    };
+    use std::{
+        fs::OpenOptions,
+        io::Write,
+        os::unix::fs::OpenOptionsExt,
+        time::{Duration, SystemTime},
+    };
+    if std::env::var("BILIBI_AGENT_PROOF").as_deref() != Ok("disposable") {
+        return Err("disposable proof required".into());
+    }
+    let client = db.get().await?;
+    let row = client
+        .query_one(
+            "SELECT tenant_id,id FROM users WHERE email='ai@agent.my'",
+            &[],
+        )
+        .await?;
+    let (tenant, user): (i64, i64) = (row.get(0), row.get(1));
+    drop(client);
+    let scope = sign_in(db, services, tenant, user).await?;
+    let access = services.get::<AgentAccess>("core/agent_access.grants")?;
+    let callback = "https://example.test/opening-list-proof/callback";
+    let registration=access.register_client(&serde_json::from_value::<ClientRegistration>(json!({"client_name":"Opening list proof","redirect_uris":[callback],"token_endpoint_auth_method":"none"}))?).await?;
+    let client_id = registration["client_id"]
+        .as_str()
+        .ok_or("missing client ID")?;
+    let origin = std::env::var("APP_ORIGIN")?;
+    let mut tokens = serde_json::Map::new();
+    let resource = format!("{}/mcp", origin.trim_end_matches('/'));
+    let verifier = "opening-list-proof-verifier-with-at-least-forty-three-characters";
+    let params = AuthorizeParams {
+        client_id: client_id.into(),
+        redirect_uri: callback.into(),
+        response_type: "code".into(),
+        resource: resource.clone(),
+        scope: Some("bilibi".into()),
+        code_challenge: code_challenge(verifier),
+        code_challenge_method: "S256".into(),
+        state: None,
+    };
+    let code = access
+        .authorize(
+            &scope,
+            &params,
+            &resource,
+            SystemTime::now() + Duration::from_secs(3600),
+        )
+        .await?;
+    let token = access
+        .exchange_code(
+            &CodeExchange {
+                code,
+                client_id: params.client_id,
+                redirect_uri: params.redirect_uri,
+                code_verifier: verifier.into(),
+                resource: resource.clone(),
+            },
+            &resource,
+        )
+        .await?;
+    tokens.insert("mcp".into(), json!(token.access_token));
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(std::env::var("BILIBI_AGENT_CREDENTIALS")?)?;
+    file.write_all(&serde_json::to_vec(&tokens)?)?;
+    println!("Opening list OAuth credentials saved privately.");
+    Ok(())
+}
+
+// Create a normal acquisition after the opening register was approved in the
+// browser. Both kinds must be visible together on the same record list.
+async fn launcher_ordinary(db: &Db, services: &Services) -> Outcome<()> {
+    use bilibi_finance_ledger::{NewEntry, NewLine, PostOptions};
+    if std::env::var("BILIBI_AGENT_PROOF").as_deref() != Ok("disposable") {
+        return Err("disposable proof required".into());
+    }
+    let client = db.get().await?;
+    let row = client
+        .query_one(
+            "SELECT tenant_id,id FROM users WHERE email='ai@agent.my'",
+            &[],
+        )
+        .await?;
+    let (tenant, user): (i64, i64) = (row.get(0), row.get(1));
+    drop(client);
+    let scope = sign_in(db, services, tenant, user).await?;
+    let ledger = services.get::<Ledger>(bilibi_finance_ledger::SERVICE)?;
+    let assets = services.get::<FixedAssets>(bilibi_finance_fixed_assets::SERVICE)?;
+    let book = ledger.get_book(&scope, 1).await?;
+    let accounts = ledger.list_accounts(&scope, 1).await?;
+    let account = |code| {
+        accounts
+            .iter()
+            .find(|a| a.code == code)
+            .map(|a| a.id)
+            .ok_or("proof account missing")
+    };
+    let category = assets
+        .list_categories(&scope, 1)
+        .await?
+        .into_iter()
+        .find(|c| c.name == "Conversion assets")
+        .ok_or("proof category missing")?;
+    let amount = Money::parse("500.00", book.minor_units)?;
+    let entry = ledger
+        .post_entry(
+            &scope,
+            1,
+            &NewEntry {
+                entry_date: date(2026, 10, 1),
+                description: "Ordinary acquisition for list proof".into(),
+                reference: None,
+                lines: vec![
+                    NewLine::debit(account("1200")?, amount),
+                    NewLine::credit(account("1000")?, amount),
+                ],
+            },
+            &PostOptions::default(),
+        )
+        .await?;
+    assets
+        .acquire_from_entry(
+            &scope,
+            1,
+            entry.id,
+            1,
+            &bilibi_finance_fixed_assets::AcquisitionInput {
+                category_revision_id: category.revision.id,
+                description: "Ordinary acquired asset".into(),
+                in_service_date: date(2026, 10, 1),
+                residual_value: None,
+                method: None,
+                life_months: None,
+                annual_rate: None,
+            },
+        )
+        .await?;
+    println!("Ordinary asset prepared through the ledger and Fixed Assets facades.");
     Ok(())
 }

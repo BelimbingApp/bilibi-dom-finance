@@ -9,7 +9,6 @@ mod opening;
 mod opening_csv;
 mod opening_lifecycle;
 mod opening_operations;
-mod opening_web;
 mod operations;
 mod reports;
 mod schedule;
@@ -46,13 +45,14 @@ inventory::submit! { Module {
             ("finance-fixed-assets-004-opening-lifecycle", include_str!("../migrations/004-opening-lifecycle.sql")),
         ("finance-fixed-assets-005-fully-depreciated-opening", include_str!("../migrations/005-fully-depreciated-opening.sql")),
     ],
-    services: &[Service {id:opening_web::PAGES,factory:|services| Ok(Arc::new(bilibi_ui::page::PageService::<Scope,Error>(Arc::new(opening_web::Pages {db:services.get::<Db>("base/database.pool")?.as_ref().clone(),contracts:services.get(bilibi_agent_api::page::SERVICE)?,plans:services.get("base/agent_api.plans")?}))))},Service { id: SERVICE, factory: |s| { let assets = Arc::new(FixedAssets {
+    services: &[Service { id: SERVICE, factory: |s| { let assets = Arc::new(FixedAssets {
         db: s.get::<Db>("base/database.pool")?.as_ref().clone(),
         ledger: s.get(bilibi_finance_ledger::SERVICE)?,
         payables: s.get(bilibi_finance_payables::SERVICE)?,
         parties: s.get("base/tenancy.parties")?,
     }); opening_operations::bind(assets.clone())?; operations::bind(assets.clone())?; Ok(assets) } }, Service { id: web::PAGES, factory: |s| Ok(Arc::new(bilibi_ui::page::PageService::<Scope, Error>(Arc::new(web::Pages {
         contracts: s.get(bilibi_agent_api::page::SERVICE)?,
+        plans: s.get("base/agent_api.plans")?,
         db: s.get::<Db>("base/database.pool")?.as_ref().clone(),
         display: s.get("base/datetime.display")?,
         locales: s.get("base/locale.locales")?,
