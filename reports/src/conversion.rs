@@ -138,6 +138,7 @@ impl Reports {
                 &bilibi_finance_receivables::AgingOptions {
                     through_entry_number: Some(through),
                     through_opening_batch_id: Some(ar.through_opening_batch_id),
+                    through_settlement_number: Some(ar.through_settlement_number),
                     ..Default::default()
                 },
             )
@@ -154,6 +155,7 @@ impl Reports {
                 &bilibi_finance_payables::AgingQuery {
                     through_entry_number: Some(through),
                     through_opening_batch_id: Some(ap.through_opening_batch_id),
+                    through_settlement_number: Some(ap.through_settlement_number),
                     ..Default::default()
                 },
             )

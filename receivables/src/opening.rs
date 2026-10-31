@@ -545,6 +545,15 @@ impl Receivables {
         if c.query_opt("SELECT id FROM finance_receivables_payments WHERE tenant_id=$1 AND company_id=$2 AND deposit_account_id=ANY($3::bigint[]) LIMIT 1", &[&s.tenant(), &company, &account_ids]).await?.is_some() {
             return Err(invalid("csv", "an account used for receipt deposits cannot be a receivables control"));
         }
+        let parties: Vec<i64> = rows
+            .iter()
+            .filter_map(|r| r["customer_id"].as_i64())
+            .collect();
+        let references: Vec<&str> = rows
+            .iter()
+            .filter_map(|r| r["document_reference"].as_str())
+            .collect();
+        if c.query_opt("SELECT d.id FROM unnest($3::bigint[],$4::text[]) u(party,reference) JOIN finance_receivables_documents d ON d.tenant_id=$1 AND d.company_id=$2 AND d.customer_id=u.party AND d.status='issued' LEFT JOIN finance_receivables_opening_items i ON i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=d.id WHERE (d.document_reference=u.reference OR i.source_facts->>'document_reference'=u.reference) AND (i.id IS NULL OR (i.batch_id<>COALESCE($5::bigint,0) AND NOT EXISTS(SELECT 1 FROM finance_receivables_opening_decisions x WHERE x.tenant_id=$1 AND x.company_id=$2 AND x.replaces_batch_id=i.batch_id))) LIMIT 1",&[&s.tenant(),&company,&parties,&references,&input["replaces_batch_id"].as_i64()]).await?.is_some() {return Err(invalid("csv","a customer source document is already recorded"));}
         let source_ids: Vec<&str> = rows
             .iter()
             .filter_map(|r| r["source_id"].as_str())

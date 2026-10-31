@@ -80,6 +80,8 @@ pub struct TaxLine {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Document {
     #[serde(default)]
+    pub settlements: Vec<serde_json::Value>,
+    #[serde(default)]
     pub opening: Option<serde_json::Value>,
     pub id: i64,
     pub kind: String,

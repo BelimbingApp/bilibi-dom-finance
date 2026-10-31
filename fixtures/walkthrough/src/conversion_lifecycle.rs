@@ -354,6 +354,7 @@ pub async fn prove(
             &bilibi_finance_payables::AgingQuery {
                 through_entry_number: Some(ap_before.through_entry_number),
                 through_opening_batch_id: Some(ap_before.through_opening_batch_id),
+                    through_settlement_number: Some(ap_before.through_settlement_number),
                 ..Default::default()
             },
         )

@@ -507,7 +507,7 @@ impl ReadHandler for Read {
                     }
                     Self::Aging => {
                         let as_of: jiff::civil::Date = input["as_of"].as_str().ok_or(ReceivableError::InvalidOption)?.parse().map_err(|_| invalid("as_of", "is not a date"))?;
-                        let mut options = AgingOptions {through_entry_number:input["through_entry_number"].as_i64(),through_opening_batch_id:input["through_opening_batch_id"].as_i64(),..Default::default()};
+                        let mut options = AgingOptions {through_entry_number:input["through_entry_number"].as_i64(),through_opening_batch_id:input["through_opening_batch_id"].as_i64(),through_settlement_number:input["through_settlement_number"].as_i64(),..Default::default()};
                         if let Some(days) = input["bucket_days"].as_array() {
                             options.bucket_days = days.iter().filter_map(Value::as_i64).collect();
                         }
@@ -821,7 +821,7 @@ fn document_page() -> Value {
 fn aging() -> Value {
     schema(
         &["as_of"],
-        json!({"as_of":day(),"through_entry_number":{"type":"integer","minimum":0},"through_opening_batch_id":{"type":"integer","minimum":0},"bucket_days":{"type":"array","items":{"type":"integer","minimum":1,"maximum":36500}}}),
+        json!({"as_of":day(),"through_entry_number":{"type":"integer","minimum":0},"through_opening_batch_id":{"type":"integer","minimum":0},"through_settlement_number":{"type":"integer","minimum":0},"bucket_days":{"type":"array","items":{"type":"integer","minimum":1,"maximum":36500}}}),
     )
 }
 fn payments() -> Value {

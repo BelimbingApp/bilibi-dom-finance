@@ -207,7 +207,9 @@ impl Receivables {
                 "issue_date",
             )
             .await?;
-            if invoice.outstanding.is_none_or(|owed| draft.total > owed) {
+            if crate::settlements::lowest(client, scope.tenant(), company, invoice.id, date).await?
+                < draft.total
+            {
                 return Err(invalid(
                     "total",
                     "exceeds what the credited invoice still owes",
@@ -489,7 +491,9 @@ impl Receivables {
                 }
                 crate::write_offs::settlement_date(client, scope, company, id, date, "document_id")
                     .await?;
-                if invoice.outstanding.is_none_or(|owed| allocated > owed) {
+                if crate::settlements::lowest(client, scope.tenant(), company, id, date).await?
+                    < allocated
+                {
                     return Err(invalid(
                         "document_id",
                         "owes less than the allocated amount",

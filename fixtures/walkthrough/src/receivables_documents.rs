@@ -288,6 +288,7 @@ pub async fn run(db: &Db, services: &Services) -> Result<(), Box<dyn std::error:
             &AgingOptions {
                 through_entry_number: Some(before_rename.through_entry_number),
                 through_opening_batch_id: Some(before_rename.through_opening_batch_id),
+                    through_settlement_number: Some(before_rename.through_settlement_number),
                 ..AgingOptions::default()
             },
         )

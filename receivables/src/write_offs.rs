@@ -209,7 +209,10 @@ async fn validate(
         book.minor_units,
     )
     .map_err(|e| invalid("amount", e.to_string()))?;
-    if amount <= Money::ZERO || invoice.outstanding.is_none_or(|owed| amount > owed) {
+    if amount <= Money::ZERO
+        || crate::settlements::lowest(client, scope.tenant(), company, document, day).await?
+            < amount
+    {
         return Err(invalid(
             "amount",
             "must be positive and no more than the invoice outstanding",

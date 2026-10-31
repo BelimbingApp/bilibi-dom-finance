@@ -330,6 +330,7 @@ impl Receivables {
         company: i64,
         batch: i64,
     ) -> Result<()> {
+        if c.query_opt("SELECT e.id FROM finance_receivables_settlements e JOIN finance_receivables_opening_items i ON i.tenant_id=$1 AND i.company_id=$2 AND (i.document_id=e.credit_document_id OR i.document_id=e.target_document_id) WHERE e.tenant_id=$1 AND e.company_id=$2 AND i.batch_id=$3 AND e.kind<>'reverse' AND NOT EXISTS(SELECT 1 FROM finance_receivables_settlements x WHERE x.tenant_id=$1 AND x.company_id=$2 AND x.reverses_settlement_id=e.id) LIMIT 1",&[&s.tenant(),&company,&batch]).await?.is_some() {return Err(invalid("replaces_batch_id","reverse dependent credit applications and refunds through their settlement operation before replacing the register"));}
         if c.query_opt("SELECT i.id FROM finance_receivables_opening_items i WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.batch_id=$3 AND (
  EXISTS(SELECT 1 FROM finance_receivables_allocations a JOIN finance_receivables_payments p ON p.id=a.payment_id AND p.tenant_id=$1 AND p.company_id=$2 WHERE a.tenant_id=$1 AND a.company_id=$2 AND a.document_id=i.document_id AND NOT EXISTS(SELECT 1 FROM finance_receivables_payment_reversals r WHERE r.tenant_id=$1 AND r.company_id=$2 AND r.payment_id=p.id))
  OR EXISTS(SELECT 1 FROM finance_receivables_documents d WHERE d.tenant_id=$1 AND d.company_id=$2 AND d.credited_document_id=i.document_id AND d.status='issued')

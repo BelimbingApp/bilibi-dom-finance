@@ -218,7 +218,7 @@ pub(crate) async fn document_record(
     }
     let status = text(&v, "status")?;
     let kind = text(&v, "document_type")?;
-    let outstanding = if kind == "bill" && status == "posted" {
+    let outstanding = if ["bill", "opening_credit"].contains(&kind.as_str()) && status == "posted" {
         Some(outstanding(c, tenant, company, id).await?)
     } else {
         None

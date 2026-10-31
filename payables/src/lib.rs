@@ -261,6 +261,8 @@ pub struct TaxLine {
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct Document {
+    #[serde(default)]
+    pub settlements: Vec<serde_json::Value>,
     pub opening: Option<serde_json::Value>,
     pub id: i64,
     pub vendor_id: Option<i64>,

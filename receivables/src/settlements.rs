@@ -135,14 +135,12 @@ impl Receivables {
         bilibi_company::authorize_work_target(c, s, company, POST_PAYMENTS)
             .await
             .map_err(crate::refusal)?;
-        bilibi_company::require_writable(c, s, company, true)
-            .await
-            .map_err(|e| match e {
-                bilibi_company::WriteError::Archived => crate::ReceivableError::CompanyArchived,
-                bilibi_company::WriteError::NotFound => crate::ReceivableError::CompanyNotFound,
-                bilibi_company::WriteError::Access(e) => crate::refusal(e),
-                _ => crate::ReceivableError::Failed(Error::Internal),
-            })?;
+        // Pool-owning writes already entered Ledger::write. Preview adapters
+        // retain this same company lock on their handed transaction.
+        let row=c.query_opt("SELECT status FROM companies WHERE tenant_id=$1 AND id=$2 AND deleted_at IS NULL FOR UPDATE",&[&s.tenant(),&company]).await?.ok_or(ReceivableError::CompanyNotFound)?;
+        if row.get::<_, String>(0) == "archived" {
+            return Err(ReceivableError::CompanyArchived);
+        }
         let reference = input["reference"].as_str().unwrap_or("").trim();
         if reference.is_empty() || reference.chars().count() > 100 || reference.contains('\0') {
             return Err(invalid(
@@ -432,5 +430,45 @@ impl Receivables {
             let new:Value=row.get(0);let id=new["id"].as_i64().ok_or(Error::Internal)?;
             Ok((new.clone(),vec![Change {kind:"finance.receivables.settlement".into(),id,old:Value::Null,new}]))
         })).await.map_err(Into::into)
+    }
+}
+
+impl Receivables {
+    pub(super) async fn credit_context(
+        &self,
+        c: &dyn OperationClient,
+        s: &Scope,
+        company: i64,
+        input: &Value,
+    ) -> Result<Value> {
+        bilibi_company::authorize_work_target(c, s, company, VIEW)
+            .await
+            .map_err(crate::refusal)?;
+        let credit = id(input, "credit_document_id")?;
+        let source:Value=c.query_opt("SELECT to_jsonb(d) FROM finance_receivables_documents d WHERE d.tenant_id=$1 AND d.company_id=$2 AND d.id=$3 AND d.kind='opening_credit'",&[&s.tenant(),&company,&credit]).await?.ok_or_else(||invalid("credit_document_id","must identify an opening credit"))?.get(0);
+        let search = input["search"].as_str().unwrap_or("");
+        let after = input["after_id"].as_i64().unwrap_or(0);
+        let rows=c.query("SELECT to_jsonb(d)||jsonb_build_object('available',finance_receivables_residual($1,$2,d.id,'infinity'::date,9223372036854775807,9223372036854775807)) FROM finance_receivables_documents d WHERE d.tenant_id=$1 AND d.company_id=$2 AND d.customer_id::text=$3 AND d.currency_code=$4 AND d.kind='invoice' AND d.status='issued' AND d.id>$5 AND (strpos(lower(COALESCE(d.document_reference,'')),lower($6))>0) AND NOT EXISTS(SELECT 1 FROM finance_receivables_opening_items i JOIN finance_receivables_opening_decisions x ON x.replaces_batch_id=i.batch_id AND x.tenant_id=$1 AND x.company_id=$2 WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=d.id) AND finance_receivables_residual($1,$2,d.id,'infinity'::date,9223372036854775807,9223372036854775807)>0 ORDER BY d.id LIMIT 101",&[&s.tenant(),&company,&source["customer_id"].as_str().map(str::to_owned).unwrap_or_else(||source["customer_id"].to_string()),&source["currency_code"].as_str().ok_or(Error::Internal)?,&after,&search]).await?;
+        let more = rows.len() > 100;
+        let targets: Vec<Value> = rows.into_iter().take(100).map(|r| r.get(0)).collect();
+        let next = more
+            .then(|| targets.last().map(|r| r["id"].clone()))
+            .flatten();
+        let control = source["receivable_account_id"]
+            .as_i64()
+            .ok_or(Error::Internal)?;
+        let accounts = self
+            .ledger
+            .list_accounts_on(c, s, company)
+            .await?
+            .into_iter()
+            .filter(|a| {
+                a.postable()
+                    && a.account_type == bilibi_finance_ledger::AccountType::Asset
+                    && a.id != control
+            })
+            .collect::<Vec<_>>();
+        let book = self.ledger.get_book_on(c, s, company).await?;
+        Ok(json!({"targets":targets,"next_after_id":next,"cash_accounts":accounts,"book":book}))
     }
 }

@@ -8,11 +8,13 @@ use std::collections::BTreeMap;
 pub struct BalancePins {
     pub through_entry_number: Option<i64>,
     pub through_opening_batch_id: Option<i64>,
+    pub through_settlement_number: Option<i64>,
 }
 
 #[derive(Clone, Debug)]
 pub struct AgingQuery {
     pub through_opening_batch_id: Option<i64>,
+    pub through_settlement_number: Option<i64>,
     pub through_entry_number: Option<i64>,
     pub bucket_days: Vec<i32>,
 }
@@ -20,6 +22,7 @@ impl Default for AgingQuery {
     fn default() -> Self {
         Self {
             through_opening_batch_id: None,
+            through_settlement_number: None,
             through_entry_number: None,
             bucket_days: vec![30, 60, 90],
         }
@@ -29,6 +32,8 @@ impl Default for AgingQuery {
 pub struct AgedDocument {
     pub id: i64,
     pub document_number: i64,
+    pub control_account_id: i64,
+    pub kind: String,
     pub party_key: String,
     pub party_name: String,
     pub party_code: String,
@@ -52,6 +57,9 @@ pub struct AgedParty {
     pub party_name: String,
     pub party_code: String,
     pub documents: Vec<AgedDocument>,
+    pub credits: Vec<AgedDocument>,
+    #[serde(deserialize_with = "read_money")]
+    pub credit_total: Money,
     #[serde(deserialize_with = "read_money_list")]
     pub buckets: Vec<Money>,
     #[serde(deserialize_with = "read_money")]
@@ -60,12 +68,17 @@ pub struct AgedParty {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct AgedPayables {
     pub through_opening_batch_id: i64,
+    pub through_settlement_number: i64,
     pub company_id: i64,
     #[serde(serialize_with = "date_text", deserialize_with = "read_date")]
     pub as_of: Date,
     pub through_entry_number: i64,
     pub bucket_days: Vec<i32>,
     pub parties: Vec<AgedParty>,
+    #[serde(deserialize_with = "read_money")]
+    pub gross_debits: Money,
+    #[serde(deserialize_with = "read_money")]
+    pub gross_credits: Money,
     #[serde(deserialize_with = "read_money_list")]
     pub buckets: Vec<Money>,
     #[serde(deserialize_with = "read_money")]
@@ -110,6 +123,7 @@ pub struct ControlAccount {
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct TieOut {
     pub through_opening_batch_id: i64,
+    pub through_settlement_number: i64,
     pub company_id: i64,
     #[serde(serialize_with = "date_text")]
     pub as_of: Date,
@@ -124,10 +138,8 @@ pub struct TieOut {
 
 // Own-table sums only. Each reduction counts by both effective date and posting number.
 const OWED: &str = r#"
-SELECT b.id,b.total
-- COALESCE((SELECT sum(n.total) FROM finance_payables_documents n WHERE n.tenant_id=b.tenant_id AND n.company_id=b.company_id AND n.corrects_document_id=b.id AND n.status='posted' AND n.document_date<=$3::text::date AND n.entry_number<=$4),0)
-- COALESCE((SELECT sum(a.amount) FROM finance_payables_payment_allocations a JOIN finance_payables_payments p ON p.tenant_id=a.tenant_id AND p.company_id=a.company_id AND p.id=a.payment_id WHERE a.tenant_id=b.tenant_id AND a.company_id=b.company_id AND a.document_id=b.id AND p.payment_date<=$3::text::date AND p.entry_number<=$4 AND NOT EXISTS(SELECT 1 FROM finance_payables_payments r WHERE r.tenant_id=p.tenant_id AND r.company_id=p.company_id AND r.reverses_payment_id=p.id AND r.payment_date<=$3::text::date AND r.entry_number<=$4)),0) AS owed
-FROM finance_payables_documents b WHERE b.tenant_id=$1 AND b.company_id=$2 AND b.document_type='bill' AND b.status='posted' AND b.document_date<=$3::text::date AND b.entry_number<=$4
+SELECT b.id,finance_payables_residual($1,$2,b.id,$3::text::date,$4,$6) AS owed
+FROM finance_payables_documents b WHERE b.tenant_id=$1 AND b.company_id=$2 AND b.document_type IN ('bill','opening_credit') AND b.status='posted' AND b.document_date<=$3::text::date AND b.entry_number<=$4
 AND NOT EXISTS(SELECT 1 FROM finance_payables_opening_items i JOIN finance_payables_opening_batches o ON o.id=i.batch_id AND o.tenant_id=$1 AND o.company_id=$2 WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=b.id AND o.conversion_date>$3::text::date)
 "#;
 pub(crate) async fn owed(
@@ -141,7 +153,14 @@ pub(crate) async fn owed(
     let r = c
         .query_opt(
             &format!("SELECT owed FROM ({OWED}) o WHERE id=$5"),
-            &[&tenant, &company, &date.to_string(), &through, &bill],
+            &[
+                &tenant,
+                &company,
+                &date.to_string(),
+                &through,
+                &bill,
+                &i64::MAX,
+            ],
         )
         .await?
         .ok_or(Error::NotFound)?;
@@ -155,7 +174,7 @@ pub(crate) async fn lowest(
     bill: i64,
     since: Date,
 ) -> bilibi_database::Result<Money> {
-    let dates=c.query("SELECT document_date::text FROM finance_payables_documents WHERE tenant_id=$1 AND company_id=$2 AND corrects_document_id=$3 AND status='posted' AND document_date>$4::text::date UNION SELECT p.payment_date::text FROM finance_payables_payments p JOIN finance_payables_payment_allocations a ON a.tenant_id=p.tenant_id AND a.company_id=p.company_id AND a.payment_id=COALESCE(p.reverses_payment_id,p.id) WHERE a.tenant_id=$1 AND a.company_id=$2 AND a.document_id=$3 AND p.payment_date>$4::text::date",&[&tenant,&company,&bill,&since.to_string()]).await?;
+    let dates=c.query("SELECT document_date::text FROM finance_payables_documents WHERE tenant_id=$1 AND company_id=$2 AND corrects_document_id=$3 AND status='posted' AND document_date>$4::text::date UNION SELECT p.payment_date::text FROM finance_payables_payments p JOIN finance_payables_payment_allocations a ON a.tenant_id=p.tenant_id AND a.company_id=p.company_id AND a.payment_id=COALESCE(p.reverses_payment_id,p.id) WHERE a.tenant_id=$1 AND a.company_id=$2 AND a.document_id=$3 AND p.payment_date>$4::text::date UNION SELECT effective_date::text FROM finance_payables_settlements WHERE tenant_id=$1 AND company_id=$2 AND (credit_document_id=$3 OR target_document_id=$3) AND effective_date>$4::text::date",&[&tenant,&company,&bill,&since.to_string()]).await?;
     let mut minimum = owed(c, tenant, company, bill, since, i64::MAX).await?;
     for d in dates {
         let date = d.get::<_, String>(0).parse().map_err(|_| Error::Invalid)?;
@@ -178,8 +197,16 @@ impl Payables {
         as_of: Date,
         q: &AgingQuery,
     ) -> Result<AgedPayables> {
-        let c = self.db.get().await.map_err(Error::from)?;
-        self.aged_payables_on(&**c, s, company, as_of, q).await
+        let mut c = self.db.get().await.map_err(Error::from)?;
+        let tx = c
+            .build_transaction()
+            .isolation_level(tokio_postgres::IsolationLevel::RepeatableRead)
+            .start()
+            .await
+            .map_err(Error::from)?;
+        let result = self.aged_payables_on(&tx, s, company, as_of, q).await?;
+        tx.commit().await.map_err(Error::from)?;
+        Ok(result)
     }
 
     /// Authorized figures on the caller's database snapshot.
@@ -200,8 +227,22 @@ impl Payables {
             return Err(PayablesError::InvalidOption);
         }
         let opening_pin = crate::opening::pin(c, s, company, q.through_opening_batch_id).await?;
-        let through=match q.through_entry_number {Some(n)=>n,None=>c.query_one("SELECT greatest(COALESCE((SELECT max(entry_number) FROM finance_payables_documents WHERE tenant_id=$1 AND company_id=$2),0),COALESCE((SELECT max(entry_number) FROM finance_payables_payments WHERE tenant_id=$1 AND company_id=$2),0))",&[&s.tenant(),&company]).await?.get(0)};
-        let rows=c.query(&format!("SELECT b.id,b.document_number,b.party_key,b.party_name,b.party_document_number,b.document_date::text,b.due_date::text,b.currency_code,b.total,o.owed,b.party_code FROM ({OWED}) o JOIN finance_payables_documents b ON b.id=o.id AND b.tenant_id=$1 AND b.company_id=$2 WHERE o.owed<>0 AND NOT EXISTS(SELECT 1 FROM finance_payables_opening_items i WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=b.id AND (i.batch_id>$5 OR EXISTS(SELECT 1 FROM finance_payables_opening_decisions own WHERE own.tenant_id=$1 AND own.company_id=$2 AND own.batch_id=i.batch_id AND own.effective_date>$3::text::date) OR EXISTS(SELECT 1 FROM finance_payables_opening_decisions x WHERE x.tenant_id=$1 AND x.company_id=$2 AND x.replaces_batch_id=i.batch_id AND x.effective_date<=$3::text::date AND x.batch_id<=$5))) ORDER BY b.party_key,b.due_date,b.id"),&[&s.tenant(),&company,&as_of.to_string(),&through,&opening_pin]).await?;
+        let through = self
+            .ledger
+            .trial_balance_on(c, s, company, as_of, q.through_entry_number)
+            .await?
+            .through_entry_number;
+        let settlement_pin = crate::settlements::pin(
+            c,
+            s,
+            company,
+            q.through_settlement_number,
+            through,
+            opening_pin,
+            as_of,
+        )
+        .await?;
+        let rows=c.query(&format!("SELECT b.id,b.document_number,b.party_key,b.party_name,b.party_document_number,b.document_date::text,b.due_date::text,b.currency_code,b.total,o.owed,b.party_code,b.document_type,b.payable_account_id FROM ({OWED}) o JOIN finance_payables_documents b ON b.id=o.id AND b.tenant_id=$1 AND b.company_id=$2 WHERE o.owed<>0 AND NOT EXISTS(SELECT 1 FROM finance_payables_opening_items i WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=b.id AND (i.batch_id>$5 OR EXISTS(SELECT 1 FROM finance_payables_opening_decisions own WHERE own.tenant_id=$1 AND own.company_id=$2 AND own.batch_id=i.batch_id AND own.effective_date>$3::text::date) OR EXISTS(SELECT 1 FROM finance_payables_opening_decisions x WHERE x.tenant_id=$1 AND x.company_id=$2 AND x.replaces_batch_id=i.batch_id AND x.effective_date<=$3::text::date AND x.batch_id<=$5))) ORDER BY b.party_key,b.due_date,b.id"),&[&s.tenant(),&company,&as_of.to_string(),&through,&opening_pin,&settlement_pin]).await?;
         let empty = vec![Money::ZERO; q.bucket_days.len() + 2];
         let mut parties: BTreeMap<String, AgedParty> = BTreeMap::new();
         let mut latest: BTreeMap<String, (Date, i64)> = BTreeMap::new();
@@ -224,6 +265,8 @@ impl Payables {
             let d = AgedDocument {
                 id: r.get(0),
                 document_number: r.get(1),
+                kind: r.get(11),
+                control_account_id: r.get(12),
                 party_key: r.get(2),
                 party_name: r.get(3),
                 party_code: r.get(10),
@@ -248,6 +291,8 @@ impl Payables {
                     party_name: d.party_name.clone(),
                     party_code: d.party_code.clone(),
                     documents: vec![],
+                    credits: vec![],
+                    credit_total: Money::ZERO,
                     buckets: empty.clone(),
                     total: Money::ZERO,
                 });
@@ -255,6 +300,12 @@ impl Payables {
             if latest.get(&d.party_key).is_none_or(|v| date > *v) {
                 party.party_name = d.party_name.clone();
                 latest.insert(d.party_key.clone(), date);
+            }
+            if d.kind == "opening_credit" {
+                party.credit_total = party.credit_total + d.outstanding;
+                party.total = party.total - d.outstanding;
+                party.credits.push(d);
+                continue;
             }
             party.buckets[bucket] = party.buckets[bucket] + d.outstanding;
             party.total = party.total + d.outstanding;
@@ -273,11 +324,14 @@ impl Payables {
         }
         Ok(AgedPayables {
             through_opening_batch_id: opening_pin,
+            through_settlement_number: settlement_pin,
             company_id: company,
             as_of,
             through_entry_number: through,
             bucket_days: q.bucket_days.clone(),
             total: parties.iter().map(|p| p.total).sum(),
+            gross_debits: parties.iter().map(|p| p.credit_total).sum(),
+            gross_credits: buckets.iter().copied().sum(),
             parties,
             buckets,
             exceptions_total: exceptions.iter().map(|e| e.outstanding).sum(),
@@ -314,9 +368,18 @@ impl Payables {
         as_of: Date,
         pins: &BalancePins,
     ) -> Result<TieOut> {
-        let client = self.db.get().await.map_err(Error::from)?;
-        self.tie_out_control_accounts_on(&**client, s, company, as_of, pins)
+        let mut client = self.db.get().await.map_err(Error::from)?;
+        let tx = client
+            .build_transaction()
+            .isolation_level(tokio_postgres::IsolationLevel::RepeatableRead)
+            .start()
             .await
+            .map_err(Error::from)?;
+        let result = self
+            .tie_out_control_accounts_on(&tx, s, company, as_of, pins)
+            .await?;
+        tx.commit().await.map_err(Error::from)?;
+        Ok(result)
     }
 
     /// Authorized control tie-out on the caller's snapshot, including other owners.
@@ -346,7 +409,17 @@ impl Payables {
         let chart = self.ledger.list_accounts_on(client, s, company).await?;
         let opening_pin =
             crate::opening::pin(client, s, company, pins.through_opening_batch_id).await?;
-        let rows=client.query(&format!("SELECT b.payable_account_id,sum(o.owed) FROM ({OWED}) o JOIN finance_payables_documents b ON b.id=o.id AND b.tenant_id=$1 AND b.company_id=$2 WHERE NOT EXISTS(SELECT 1 FROM finance_payables_opening_items i WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=b.id AND (i.batch_id>$5 OR EXISTS(SELECT 1 FROM finance_payables_opening_decisions own WHERE own.tenant_id=$1 AND own.company_id=$2 AND own.batch_id=i.batch_id AND own.effective_date>$3::text::date) OR EXISTS(SELECT 1 FROM finance_payables_opening_decisions x WHERE x.tenant_id=$1 AND x.company_id=$2 AND x.replaces_batch_id=i.batch_id AND x.effective_date<=$3::text::date AND x.batch_id<=$5))) GROUP BY b.payable_account_id"),&[&s.tenant(),&company,&as_of.to_string(),&ledger.through_entry_number,&opening_pin]).await?;
+        let settlement_pin = crate::settlements::pin(
+            client,
+            s,
+            company,
+            pins.through_settlement_number,
+            ledger.through_entry_number,
+            opening_pin,
+            as_of,
+        )
+        .await?;
+        let rows=client.query(&format!("SELECT b.payable_account_id,sum(CASE WHEN b.document_type='opening_credit' THEN -o.owed ELSE o.owed END) FROM ({OWED}) o JOIN finance_payables_documents b ON b.id=o.id AND b.tenant_id=$1 AND b.company_id=$2 WHERE NOT EXISTS(SELECT 1 FROM finance_payables_opening_items i WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=b.id AND (i.batch_id>$5 OR EXISTS(SELECT 1 FROM finance_payables_opening_decisions own WHERE own.tenant_id=$1 AND own.company_id=$2 AND own.batch_id=i.batch_id AND own.effective_date>$3::text::date) OR EXISTS(SELECT 1 FROM finance_payables_opening_decisions x WHERE x.tenant_id=$1 AND x.company_id=$2 AND x.replaces_batch_id=i.batch_id AND x.effective_date<=$3::text::date AND x.batch_id<=$5))) GROUP BY b.payable_account_id"),&[&s.tenant(),&company,&as_of.to_string(),&ledger.through_entry_number,&opening_pin,&settlement_pin]).await?;
         let mut subledger = BTreeMap::new();
         for r in rows {
             subledger.insert(r.get::<_, i64>(0), store::money(r.get(1))?);
@@ -386,6 +459,7 @@ impl Payables {
         accounts.sort_by(|a, b| a.code.cmp(&b.code));
         Ok(TieOut {
             through_opening_batch_id: opening_pin,
+            through_settlement_number: settlement_pin,
             company_id: company,
             as_of,
             through_entry_number: ledger.through_entry_number,
@@ -411,6 +485,7 @@ impl TieOut {
         BalancePins {
             through_entry_number: Some(self.through_entry_number),
             through_opening_batch_id: Some(self.through_opening_batch_id),
+            through_settlement_number: Some(self.through_settlement_number),
         }
     }
 }
@@ -419,6 +494,7 @@ impl AgedPayables {
         BalancePins {
             through_entry_number: Some(self.through_entry_number),
             through_opening_batch_id: Some(self.through_opening_batch_id),
+            through_settlement_number: Some(self.through_settlement_number),
         }
     }
 }

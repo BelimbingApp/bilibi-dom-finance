@@ -811,6 +811,7 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
             &AgingOptions {
                 through_entry_number: Some(before_ar.through_entry_number),
                 through_opening_batch_id: Some(before_ar.through_opening_batch_id),
+                    through_settlement_number: Some(before_ar.through_settlement_number),
                 ..Default::default()
             },
         )
@@ -827,6 +828,7 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
             &bilibi_finance_payables::AgingQuery {
                 through_entry_number: Some(before_ap.through_entry_number),
                 through_opening_batch_id: Some(before_ap.through_opening_batch_id),
+                    through_settlement_number: Some(before_ap.through_settlement_number),
                 ..Default::default()
             },
         )
