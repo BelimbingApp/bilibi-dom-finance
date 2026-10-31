@@ -291,7 +291,17 @@ impl WriteHandler for Sign {
             let note = text(input, "note", 8000)?;
             let attestation = v["attestation"].as_str().ok_or(Error::Internal)?.to_owned();
             let row = owner()?
-                .sign_conversion_on(tx, s, company, &v["record"], reference, note, attestation)
+                .sign_conversion_on(
+                    tx,
+                    s,
+                    company,
+                    &v["record"],
+                    crate::conversion::SignOff {
+                        reviewer_reference: reference,
+                        note,
+                        attestation,
+                    },
+                )
                 .await
                 .map_err(refusal)?;
             Ok(row.into())

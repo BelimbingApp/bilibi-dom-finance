@@ -18,6 +18,12 @@ use tokio_postgres::{GenericClient, Transaction};
 pub(crate) const KIND: &str = "conversion";
 const MAX_BYTES: usize = 64 * 1024 * 1024;
 
+pub(crate) struct SignOff {
+    pub reviewer_reference: String,
+    pub note: String,
+    pub attestation: String,
+}
+
 impl Reports {
     /// A coherent conversion preview. Issuance collects the same facts on the
     /// reviewed write's transaction, then stores them rather than just pins.
@@ -529,9 +535,7 @@ impl Reports {
         s: &Scope,
         company: i64,
         report: &Value,
-        reference: String,
-        note: String,
-        attestation: String,
+        sign_off: SignOff,
     ) -> Result<Value> {
         self.conversion_access(tx.sql(), s, company, SIGN_OFF)
             .await?;
@@ -542,6 +546,11 @@ impl Reports {
                     bilibi_finance_ledger::FieldError::new("base", e.to_string()),
                 ]))
             })?;
+        let SignOff {
+            reviewer_reference: reference,
+            note,
+            attestation,
+        } = sign_off;
         let id = report["report"]["id"].as_i64().ok_or(Error::Internal)?;
         if tx.sql().query_opt("SELECT id FROM finance_reports_conversion_signoffs WHERE tenant_id=$1 AND company_id=$2 AND report_id=$3",&[&s.tenant(),&company,&id]).await.map_err(Error::from)?.is_some(){return Err(ReportsError::Ledger(bilibi_finance_ledger::LedgerError::Invalid(vec![bilibi_finance_ledger::FieldError::new("report_id","This report is already signed.")])));}
         let approval = Self::conversion_approval(report, None)?;
