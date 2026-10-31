@@ -12,6 +12,12 @@ import time
 import urllib.error
 import urllib.request
 import urllib.parse
+import socket
+
+_dns_lookup = socket.getaddrinfo
+def _local_lookup(host, port, *args, **kwargs):
+    return _dns_lookup("127.0.0.1" if isinstance(host, str) and host.endswith(".localhost") else host, port, *args, **kwargs)
+socket.getaddrinfo = _local_lookup
 
 if os.environ.get("BILIBI_AGENT_PROOF") != "disposable":
     raise SystemExit("BILIBI_AGENT_PROOF=disposable is required")

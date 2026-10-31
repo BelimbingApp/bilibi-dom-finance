@@ -1332,6 +1332,24 @@ async fn main() -> Outcome<()> {
         launcher_credentials(&db, &app.services).await?;
         return Ok(());
     }
+    if std::env::args().any(|s| s == "launcher-asset-credentials") {
+        if std::env::var("BILIBI_AGENT_PROOF").as_deref() != Ok("disposable") {
+            return Err("disposable proof required".into());
+        }
+        let c = db.get().await?;
+        let proof: bool = c.query_one("SELECT current_database()='fin_issue_110_rest_ui' AND EXISTS(SELECT 1 FROM users WHERE id=6 AND email='ai@agent.my') AND EXISTS(SELECT 1 FROM finance_ledger_entries WHERE company_id=2)",&[]).await?.get(0);
+        if !proof {
+            return Err(
+                "prepare this task's disposable conversion database before restoring identities"
+                    .into(),
+            );
+        }
+        // Fixture identities only: the normal launcher retires the old demo users.
+        c.batch_execute("INSERT INTO persons(id,tenant_id,code,name,kind,email) VALUES(1,1,'ada_manager','Ada Manager','human','manager@example.test') ON CONFLICT DO NOTHING;
+        INSERT INTO person_affiliations(id,tenant_id,person_id,organisation_id,title) VALUES(1,1,1,1,'Manager') ON CONFLICT DO NOTHING;
+        INSERT INTO users(id,tenant_id,name,email,password_hash,person_id) SELECT 1,1,'Ada Manager','manager@example.test',password_hash,1 FROM users WHERE id=6 AND email='ai@agent.my' ON CONFLICT DO NOTHING;
+        INSERT INTO user_desks(tenant_id,person_id,company_id) VALUES(1,1,1) ON CONFLICT DO NOTHING;").await?;
+    }
     install(&db, &app.services).await?;
     // Identity-only fixture repair: the reviewer has a real Person affiliation,
     // so browser sessions can choose the current company. No business rows use SQL.
@@ -1361,6 +1379,11 @@ async fn main() -> Outcome<()> {
     grants
         .set_direct(&admin, 1, "admin.company.tenant-wide.manage", Some(true))
         .await?;
+    if std::env::args().any(|s| s == "launcher-asset-credentials") {
+        bilibi_finance_walkthrough_fixture::assets_lifecycle::credentials(&db, &app.services)
+            .await?;
+        return Ok(());
+    }
     if std::env::args().any(|s| s == "opening-list-scale") {
         prove_opening_invoice_page_scale(&db, &app.services).await?;
         return Ok(());
