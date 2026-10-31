@@ -47,6 +47,13 @@ const MULTI_AR: &str = "source_id,customer_code,document_reference,document_date
 const MULTI_AP: &str = "source_id,vendor_code,vendor_name,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind\nbill-29,company_010,Conversion vendor,OLD-BILL-29,2026-05-01,2026-06-15,2500,1200,2000,company\nbill-30,company_010,Conversion vendor,OLD-BILL-30,2026-04-01,2026-05-15,900,300,2010,company\n";
 async fn setup(db: &Db, services: &Services, company: i64) -> Outcome<Value> {
     let admin = sign_in(db, services, 1, 4).await?;
+    // Workplace reach is explicit on the pinned Platform. Capability grants
+    // alone do not let a fixture preparer or reviewer work in another company.
+    let users = services.get::<bilibi_core::user::UserService>("core/user.accounts")?;
+    for user in [1, 4] {
+        users.set_desk(&admin, user, company, true).await?;
+    }
+    let admin = sign_in(db, services, 1, 4).await?;
     let manager = sign_in(db, services, 1, 1).await?;
     let multiple_controls = company == 4;
     let l = services.get::<Ledger>(bilibi_finance_ledger::SERVICE)?;
