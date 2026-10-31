@@ -112,15 +112,29 @@ async fn review(
             "The source period must end before conversion.",
         ));
     }
-    if kind == "movement"
-        && (start.day() != 1
-            || end != start.last_of_month()
-            || start.year() != opening.entry.entry_date.year())
-    {
-        return Err(invalid(
-            "period_start",
-            "Choose one complete month in the conversion year.",
-        ));
+    if kind == "movement" {
+        let years = owner
+            .ledger
+            .list_fiscal_years_on(client, scope, company)
+            .await
+            .map_err(|_| invalid("opening", "Read the conversion fiscal year first."))?;
+        let year = years
+            .iter()
+            .find(|y| {
+                y.start_date <= opening.entry.entry_date && opening.entry.entry_date <= y.end_date
+            })
+            .ok_or_else(|| invalid("opening", "Open the conversion fiscal year first."))?;
+        let last_source_day = opening
+            .entry
+            .entry_date
+            .yesterday()
+            .map_err(|_| invalid("opening", "The conversion date is invalid."))?;
+        if start.day() != 1
+            || start < year.start_date
+            || end != start.last_of_month().min(last_source_day)
+        {
+            return Err(invalid("period_start", "Choose one source month in the conversion fiscal year, ending at cut-off for a partial month."));
+        }
     }
     let rows = input["rows"]
         .as_array()
@@ -352,7 +366,7 @@ fn write_schema() -> Value {
     schema["properties"]["accounting_timezone"] = json!({"type":"string","maxLength":100});
     schema["properties"]["period_start"] = json!({"type":"string","format":"date"});
     schema["properties"]["period_end"] = json!({"type":"string","format":"date"});
-    schema["properties"]["rows"] = json!({"type":"array","minItems":1,"maxItems":500,"items":{"type":"object","required":["source_id","amount"],"properties":{"source_id":{"type":"string","maxLength":100},"amount":{"type":"string"},"account_id":{"type":"integer"},"side":{"type":"string","enum":["debit","credit"]},"authority":{"type":"string","maxLength":100},"reference":{"type":"string","maxLength":100},"event_date":{"type":"string","format":"date"}}}});
+    schema["properties"]["rows"] = json!({"type":"array","items":{"type":"object","required":["source_id","amount"],"properties":{"source_id":{"type":"string","maxLength":100},"amount":{"type":"string"},"account_id":{"type":"integer"},"side":{"type":"string","enum":["debit","credit"]},"authority":{"type":"string","maxLength":100},"reference":{"type":"string","maxLength":100},"event_date":{"type":"string","format":"date"}}}});
     schema
 }
 fn output() -> Value {
