@@ -405,9 +405,13 @@ impl Document {
         } else {
             items.push(f::fact("Description", f::optional(&d.description)));
         }
-        if issued && d.kind == "invoice" {
+        if issued && matches!(d.kind.as_str(), "invoice" | "opening_credit") {
             items.push(f::fact(
-                "Outstanding",
+                if d.kind == "opening_credit" {
+                    "Available credit"
+                } else {
+                    "Outstanding"
+                },
                 &self
                     .figures
                     .with_currency_opt(d.outstanding, &d.currency_code),
