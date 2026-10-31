@@ -8,7 +8,7 @@
 //!
 //! Company 001 (tenant 1's primary company) gets a book in [`CURRENCY`] with
 //! [`MINOR_UNITS`] decimal places and the chart in [`CHART`], created by the
-//! fixture's `manager@example.test`, who is affiliated with that company, and
+//! fixture's `manager@example.test`, whose Person has a desk there, and
 //! its first fiscal year, [`FISCAL_YEAR_START`] for twelve months, since a new
 //! book is controlled and posts only into a period it has opened. The
 //! fixture's roles hold ledger capabilities only through
@@ -54,7 +54,7 @@ pub use {bilibi_authz as authz, bilibi_module_registry as registry, inventory};
 
 /// The company whose book the fixture opens: Company 001, tenant 1's primary.
 pub const COMPANY: i64 = 1;
-/// The fixture manager's account (`manager@example.test`), affiliated with
+/// The fixture manager's account (`manager@example.test`), with a desk in
 /// Company 001.
 pub const MANAGER: i64 = 1;
 pub const CURRENCY: &str = "MYR";

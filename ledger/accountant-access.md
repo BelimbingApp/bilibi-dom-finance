@@ -7,7 +7,7 @@ This addresses [Finance #61](https://github.com/BelimbingApp/bilibi-dom-finance/
 ## Install and assign
 
 1. Mount Finance with Ledger and Reports, migrate normally and run `cargo run -p bilibi-web -- authz-reconcile`. Reconciliation installs the `external_accountant` system role in each tenant; deploying code does not assign it.
-2. Bind the named person's account to the intended company's live affiliation through Core account administration. Assign **External accountant** through Authorization. The grant is audited and subject to the Platform's grant-administration checks and 2FA policy.
+2. Link the account to the named Person and give them a desk in the intended workplace from the company's people panel or the Person's Desks panel. Assign **External accountant** through Authorization. Desk and role changes are audited; role grants follow the Platform's grant-administration checks and 2FA policy.
 3. Review the person's other roles and direct grants. **This role adds permissions; it is not a deny policy.** Remove unrelated grants, especially tenant-wide company reach, approval, posting, settings and Payroll access. Direct denies override role grants.
 4. Revoke the assignment when the engagement ends. Engagement purpose and dates must currently be managed outside this role; the Platform does not enforce an engagement period.
 
@@ -23,9 +23,9 @@ The role contains exactly `finance.ledger.view`, `finance.ledger.journals.submit
 | Auditor-pack button | Ledger-and-reports ZIP: general ledger, all Ledger evidence datasets, trial balance and issued reports. The page and manifest identify excluded sources. Payroll journal lines are included; Payroll sources are excluded. |
 | Payroll, receivables/payables, reconciliation, tax, fixed assets, attachments | No source-module permission from this role. These modules' own records, source evidence and downloads still require their owner's grants. |
 | Chart/settings changes, closing/reopening, control changes, report issuance | No permission from this role. |
-| Another company or tenant | Refused. The role grants no tenant-wide reach or cross-tenant access. |
+| Another company or tenant | Another workplace requires an explicit desk and the operation permission. Other tenants remain isolated. This role grants neither desks nor cross-tenant access. |
 
-A company can authorize several accountants. The current Platform binds an account to one active affiliation; it does not attach this role assignment to a selectable set of company engagements. Granting tenant-wide company reach would expand every held capability to other companies and is unsuitable as a substitute. [Platform #203](https://github.com/BelimbingApp/bilibi/issues/203) tracks explicit company context; its selector must preserve owner authorization and cannot itself grant access.
+A workplace can give desks to several accountants. Staff accounts belong to the tenant and Person; explicit desks select the tenant's legal businesses they may work in. Existing capability grants apply within those desks, with no separate per-company role model. Tenant-wide company-record management grants no workplace access. Customers and suppliers stay address-book records. An accountant serving separate client businesses works across tenants; [cross-tenant work](https://github.com/BelimbingApp/bilibi/issues/147) is a later feature.
 
 ## Exports and revocation
 
@@ -33,7 +33,7 @@ The export facade chooses coverage using current permissions, independently of r
 
 The manifest records `coverage`, the omitted modules, the company, person, time, snapshot, entry cutoff, totals and file hashes. Payroll sources are named explicitly in the restricted coverage notice. The restricted pack is not a complete audit evidence pack. All ledger rows, including mixed payroll/sales entries, remain readable and exportable; totals therefore remain complete.
 
-The artifact's immutable reference stores its coverage. Publication and every subsequent download recheck that coverage's permissions and company. Losing any source permission blocks an old full pack; it cannot be relabelled as restricted. Losing ledger view or export blocks both pack kinds, including existing links. Base Artifacts records publication and reads; Authz records role changes, direct denies and authorization decisions. There is no new export-purpose prompt or scheduled engagement expiry in this change.
+The artifact's immutable reference stores its coverage. Publication and every subsequent download recheck that coverage's permissions and company. Losing any source permission blocks an old full pack; it cannot be relabelled as restricted. Losing the company desk, ledger view or export blocks both pack kinds, including existing links. Base Artifacts records publication and reads; Authz records role changes, direct denies and authorization decisions. There is no new export-purpose prompt or scheduled engagement expiry in this change.
 
 The current Platform dashboard shows tenant-wide company counts to signed-in users, even without Company view. It does not grant access to those companies or books. Withholding those counts, if required for an engagement, is a Platform follow-up; Finance does not change the shared dashboard.
 
