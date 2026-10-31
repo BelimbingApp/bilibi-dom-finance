@@ -198,6 +198,7 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
             "omitted",
             "unused_zero",
             "tax_breakdown",
+            "tax_breakdown_without_aggregates",
             "tax_rate",
         ] {
             let mut wrong = input.clone();
@@ -246,6 +247,11 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
                         &tax(json!({"status":"supplied","net":"100","tax_total":"6","lines":[{"code":"source-tax","rate":"6","taxable_amount":"100","net":"194","tax_amount":"6","gross":"200"}]})),
                         1,
                     ),
+                    "tax_breakdown_without_aggregates" => source.replacen(
+                        &supplied_tax,
+                        &tax(json!({"status":"supplied","lines":[{"code":"source-tax","rate":"6","taxable_amount":"100","net":"194","tax_amount":"6"}]})),
+                        1,
+                    ),
                     "tax_rate" => source.replacen(
                         &supplied_tax,
                         &tax(json!({"status":"supplied","net":"100","tax_total":"6","lines":[{"code":"source-tax","rate":"7","taxable_amount":"100","net":"100","tax_amount":"6","gross":"106"}]})),
@@ -267,7 +273,10 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
                 else {
                     panic!("AR accepted {change}");
                 };
-                if matches!(change, "tax_breakdown" | "tax_rate") {
+                if matches!(
+                    change,
+                    "tax_breakdown" | "tax_breakdown_without_aggregates" | "tax_rate"
+                ) {
                     let fields = match &error {
                         bilibi_finance_receivables::ReceivableError::Invalid(fields) => fields,
                         _ => panic!("AR {change} returned the wrong refusal: {error:?}"),
@@ -280,7 +289,10 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
                 let Err(error) = ap.import_opening_bills(&reviewer, company, &wrong).await else {
                     panic!("AP accepted {change}");
                 };
-                if matches!(change, "tax_breakdown" | "tax_rate") {
+                if matches!(
+                    change,
+                    "tax_breakdown" | "tax_breakdown_without_aggregates" | "tax_rate"
+                ) {
                     let fields = match &error {
                         bilibi_finance_payables::PayablesError::Invalid(fields) => fields,
                         _ => panic!("AP {change} returned the wrong refusal: {error:?}"),
@@ -518,6 +530,16 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
             .unwrap();
         assert_eq!(source["original_total"], "53");
         assert_eq!(source["source_tax_facts"]["tax_total"], "3");
+        assert!(documents
+            .iter()
+            .find(|d| d
+                .opening
+                .as_ref()
+                .is_some_and(|s| s["source_id"] == primary))
+            .unwrap()
+            .description
+            .as_deref()
+            .is_some_and(|description| description.starts_with("Opening credit ")));
         assert_eq!(
             documents
                 .iter()
@@ -687,6 +709,60 @@ pub(super) async fn prove(db: &Db, services: &Services) -> Outcome<()> {
     payment_input.allocations[0].amount = Money::parse("5", before.minor_units)?;
     let request = ap.submit_payment(&manager, company, &payment_input).await?;
     let payment = ap.approve_payment(&reviewer, company, request.id).await?;
+    let registry = services.get::<bilibi_agent_api::Registry>("base/agent_api.registry")?;
+    let client = db.get().await?;
+    let ar_key = "finance.receivables.document.get";
+    let bilibi_agent_api::Handler::Read(ar_read) = registry.operations[ar_key].definition.handler
+    else {
+        panic!("receivables document read must be a read operation");
+    };
+    let ar_record = ar_read
+        .call(
+            &**client,
+            &reviewer,
+            &json!({"company_id":company,"document_id":ar_id("invoice"),"as_of":"2026-07-31","through_entry_number":old_ar.through_entry_number,"through_opening_batch_id":old_ar.through_opening_batch_id,"through_settlement_number":old_ar.through_settlement_number}),
+        )
+        .await?
+        .envelope(ar_key);
+    assert!(ar_record["result"]["receipts"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert!(ar_record["result"]["settlements"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        ar_record["result"]["outstanding"]
+            .as_str()
+            .unwrap()
+            .parse::<rust_decimal::Decimal>()?,
+        rust_decimal::Decimal::from(100)
+    );
+    let ap_key = "finance.payables.document.get";
+    let bilibi_agent_api::Handler::Read(ap_read) = registry.operations[ap_key].definition.handler
+    else {
+        panic!("payables document read must be a read operation");
+    };
+    let ap_record = ap_read
+        .call(
+            &**client,
+            &reviewer,
+            &json!({"company_id":company,"document_id":ap_id("invoice"),"as_of":"2026-07-31","through_entry_number":old_ap.through_entry_number,"through_opening_batch_id":old_ap.through_opening_batch_id,"through_settlement_number":old_ap.through_settlement_number}),
+        )
+        .await?
+        .envelope(ap_key);
+    assert!(ap_record["result"]["settlements"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        ap_record["result"]["outstanding"]
+            .as_str()
+            .unwrap()
+            .parse::<rust_decimal::Decimal>()?,
+        rust_decimal::Decimal::from(100)
+    );
     tied(&ar, &ap, &reviewer, company, date(2026, 7, 31)).await?;
     ar.reverse_payment(
         &reviewer,

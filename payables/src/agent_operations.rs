@@ -892,8 +892,14 @@ impl ReadHandler for Read {
                         page_size:v["page_size"].as_i64().unwrap_or(25),
                     }).await?),
                     Self::Document=>{
-                        let mut record=document_value(store::document_record(c,tenant,company,id(v,"document_id")?).await?.ok_or(PayablesError::DocumentNotFound)?);
-                        if !v["as_of"].is_null()||["through_entry_number","through_opening_batch_id","through_settlement_number"].iter().any(|key|!v[key].is_null()){let balance=owner()?.document_balance_at(s,company,id(v,"document_id")?,v).await?;crate::settlements::replay_record(&mut record,&balance);}record
+                        if !v["as_of"].is_null()||["through_entry_number","through_opening_batch_id","through_settlement_number"].iter().any(|key|!v[key].is_null()) {
+                            let (document,pins)=owner()?.document_at(s,company,id(v,"document_id")?,v).await?;
+                            let mut record=document_value(document);
+                            record["balance_pins"]=pins;
+                            record
+                        } else {
+                            document_value(store::document_record(c,tenant,company,id(v,"document_id")?).await?.ok_or(PayablesError::DocumentNotFound)?)
+                        }
                     },
                     Self::Request=>json!(payments::request(c,tenant,company,id(v,"request_id")?).await?),
                     Self::Payment=>json!(payments::payment(c,tenant,company,id(v,"payment_id")?).await?),
@@ -1081,7 +1087,7 @@ inventory::submit! {Contribution::new(DEFINITIONS,"finance/payables.operations",
         Operation {key:"finance.payables.vendor.map_supplier_key",title:"Confirm a historical supplier match",summary:"Permanently map one reviewed key with a reason. Original snapshots, allocations and aging groups stay unchanged.",keywords:&[],capability:MANAGE_SETTINGS,input:||schema(&["vendor_id","supplier_key","reason"],json!({"vendor_id":identifier(),"supplier_key":string(100),"reason":string(500)})),output,handler:Handler::SafeWrite(&Write::MapKey),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.payables.settings.get",title:"Read payables settings",summary:"Read the control account and matching tolerances; null before configuration.",keywords:&[],capability:VIEW,input:||schema(&[],json!({})),output,handler:Handler::Read(&Read::Settings),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.payables.tax_code.list",title:"List payables tax codes",summary:"Read configured tax codes by ID with a bounded cursor.",keywords:&[],capability:VIEW,input:||list_schema("tax"),output,handler:Handler::Read(&Read::Taxes),channels:Channels::Every,step_up:&[]},
-        Operation {key:"finance.payables.document.get",title:"Read a payable document",summary:"Read a bill or debit note, immutable line and tax snapshots, status and outstanding.",keywords:&[],capability:VIEW,input:dated_document,output,handler:Handler::Read(&Read::Document),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.payables.document.get",title:"Read a payable document",summary:"Read a bill or debit note with immutable snapshots and either current or pinned outstanding and activity.",keywords:&[],capability:VIEW,input:dated_document,output,handler:Handler::Read(&Read::Document),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.payables.document.page",title:"Read bills page",summary:"Read bills and debit notes with source and status filters, search, SQL totals and bounded page offsets.",keywords:&["opening"],capability:VIEW,input:document_page_schema,output,handler:Handler::Read(&Read::DocumentPage),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.payables.document.list",title:"List payable documents",summary:"Read bills and debit notes by ID, optionally filtered by source, party, type and status.",keywords:&[],capability:VIEW,input:||list_schema("document"),output,handler:Handler::Read(&Read::Documents),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.payables.payment_request.get",title:"Read a payment request",summary:"Read retained allocations, submitter, decision and posted payment ID.",keywords:&[],capability:VIEW,input:request_id,output,handler:Handler::Read(&Read::Request),channels:Channels::Every,step_up:&[]},

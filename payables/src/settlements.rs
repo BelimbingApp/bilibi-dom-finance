@@ -495,13 +495,13 @@ impl Payables {
 impl Payables {
     // A record drill-down replays the report tuple; its current remaining
     // amount must never replace the historical figure a person followed.
-    pub(super) async fn document_balance_at(
+    pub(super) async fn document_at(
         &self,
         s: &Scope,
         company: i64,
         document: i64,
         input: &Value,
-    ) -> Result<Value> {
+    ) -> Result<(Document, Value)> {
         let day: Date = input["as_of"]
             .as_str()
             .and_then(|v| v.parse().ok())
@@ -534,38 +534,39 @@ impl Payables {
             day,
         )
         .await?;
-        let amount:rust_decimal::Decimal=tx.query_opt("SELECT CASE WHEN d.document_date<=$3::text::date AND d.entry_number<=$4 AND NOT EXISTS(SELECT 1 FROM finance_payables_opening_items i JOIN finance_payables_opening_batches b ON b.tenant_id=$1 AND b.company_id=$2 AND b.id=i.batch_id WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=d.id AND (b.conversion_date>$3::text::date OR b.id>$5 OR EXISTS(SELECT 1 FROM finance_payables_opening_decisions x WHERE x.tenant_id=$1 AND x.company_id=$2 AND x.batch_id=b.id AND x.effective_date>$3::text::date) OR EXISTS(SELECT 1 FROM finance_payables_opening_decisions x WHERE x.tenant_id=$1 AND x.company_id=$2 AND x.replaces_batch_id=b.id AND x.batch_id<=$5 AND x.effective_date<=$3::text::date))) THEN finance_payables_residual($1,$2,d.id,$3::text::date,$4,$6) ELSE 0 END FROM finance_payables_documents d WHERE d.tenant_id=$1 AND d.company_id=$2 AND d.id=$7 AND d.document_type IN ('bill','opening_credit') AND d.status='posted'",&[&s.tenant(),&company,&day.to_string(),&entry,&batch,&settlement,&document]).await.map_err(Error::from)?.ok_or_else(||invalid("document_id","must identify an issued invoice, posted bill or opening credit"))?.get(0);
+        let day_text = day.to_string();
+        let mut record = crate::store::document(&tx, s.tenant(), company, document)
+            .await?
+            .ok_or(PayablesError::DocumentNotFound)?;
+        let amount:rust_decimal::Decimal=tx.query_opt("SELECT CASE WHEN d.document_date<=$3::text::date AND d.entry_number<=$4 AND NOT EXISTS(SELECT 1 FROM finance_payables_opening_items i JOIN finance_payables_opening_batches b ON b.tenant_id=$1 AND b.company_id=$2 AND b.id=i.batch_id WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=d.id AND (b.conversion_date>$3::text::date OR b.id>$5 OR EXISTS(SELECT 1 FROM finance_payables_opening_decisions x WHERE x.tenant_id=$1 AND x.company_id=$2 AND x.batch_id=b.id AND x.effective_date>$3::text::date) OR EXISTS(SELECT 1 FROM finance_payables_opening_decisions x WHERE x.tenant_id=$1 AND x.company_id=$2 AND x.replaces_batch_id=b.id AND x.batch_id<=$5 AND x.effective_date<=$3::text::date))) THEN finance_payables_residual($1,$2,d.id,$3::text::date,$4,$6) ELSE 0 END FROM finance_payables_documents d WHERE d.tenant_id=$1 AND d.company_id=$2 AND d.id=$7 AND d.document_type IN ('bill','opening_credit') AND d.status='posted'",&[&s.tenant(),&company,&day_text,&entry,&batch,&settlement,&document]).await.map_err(Error::from)?.ok_or_else(||invalid("document_id","must identify an issued invoice, posted bill or opening credit"))?.get(0);
         let units = self.ledger.get_book_on(&tx, s, company).await?.minor_units;
         let amount =
             Money::new(amount, units).map_err(|e| invalid("document_id", e.to_string()))?;
-        let events:Vec<Value>=tx.query("SELECT to_jsonb(e)-'review' FROM finance_payables_settlements e WHERE e.tenant_id=$1 AND e.company_id=$2 AND (e.credit_document_id=$3 OR e.target_document_id=$3) AND e.effective_date<=$4::text::date AND e.settlement_number<=$5 AND (e.entry_number IS NULL OR e.entry_number<=$6) ORDER BY e.settlement_number",&[&s.tenant(),&company,&document,&day.to_string(),&settlement,&entry]).await.map_err(Error::from)?.iter().map(|r|r.get(0)).collect();
-        tx.commit().await.map_err(Error::from)?;
-        Ok(
-            json!({"settlements":events,"outstanding":amount,"balance_pins":{"as_of":day.to_string(),"through_entry_number":entry,"through_opening_batch_id":batch,"through_settlement_number":settlement}}),
-        )
-    }
-}
-
-/// Keep the record's amount and displayed settlement history on the same tuple.
-pub(super) fn replay_record(record: &mut Value, balance: &Value) {
-    record["settlements"] = balance["settlements"].clone();
-    record["outstanding"] = balance["outstanding"].clone();
-    record["balance_pins"] = balance["balance_pins"].clone();
-    if let Some(events) = record["settlements"].as_array_mut() {
-        events.retain(|e| {
-            e["settlement_number"]
-                .as_i64()
-                .zip(balance["balance_pins"]["through_settlement_number"].as_i64())
-                .is_some_and(|(a, b)| a <= b)
-                && e["effective_date"]
-                    .as_str()
-                    .zip(balance["balance_pins"]["as_of"].as_str())
-                    .is_some_and(|(a, b)| a <= b)
-                && (e["entry_number"].is_null()
-                    || e["entry_number"]
-                        .as_i64()
-                        .zip(balance["balance_pins"]["through_entry_number"].as_i64())
-                        .is_some_and(|(a, b)| a <= b))
+        let events:Vec<Value>=tx.query("SELECT to_jsonb(e)-'review' FROM finance_payables_settlements e WHERE e.tenant_id=$1 AND e.company_id=$2 AND (e.credit_document_id=$3 OR e.target_document_id=$3) AND e.effective_date<=$4::text::date AND e.settlement_number<=$5 AND (e.entry_number IS NULL OR e.entry_number<=$6) ORDER BY e.settlement_number",&[&s.tenant(),&company,&document,&day_text,&settlement,&entry]).await.map_err(Error::from)?.iter().map(|r|r.get(0)).collect();
+        if let Some(opening) = &mut record.opening {
+            let opening_batch = opening["batch_id"].as_i64();
+            opening["replaced_by_batch_id"] = match opening_batch {
+                Some(opening_batch) => tx
+                    .query_opt("SELECT batch_id FROM finance_payables_opening_decisions WHERE tenant_id=$1 AND company_id=$2 AND replaces_batch_id=$3 AND batch_id<=$4 AND effective_date<=$5::text::date", &[&s.tenant(), &company, &opening_batch, &batch, &day_text])
+                    .await
+                    .map_err(Error::from)?
+                    .map_or(Value::Null, |row| json!(row.get::<_, i64>(0))),
+                None => Value::Null,
+            };
+        }
+        record.match_events.retain(|event| {
+            event
+                .occurred_at
+                .get(..10)
+                .is_some_and(|date| date <= day_text.as_str())
         });
+        record.match_status = crate::matching::status(&record);
+        record.settlements = events;
+        record.outstanding = Some(amount);
+        tx.commit().await.map_err(Error::from)?;
+        Ok((
+            record,
+            json!({"as_of":day_text,"through_entry_number":entry,"through_opening_batch_id":batch,"through_settlement_number":settlement}),
+        ))
     }
 }

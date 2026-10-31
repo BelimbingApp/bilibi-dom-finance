@@ -803,10 +803,9 @@ fn source_tax_facts(
     }
     let mut line_net = Money::ZERO;
     let mut line_tax = Money::ZERO;
-    let mut line_gross = Money::ZERO;
+    let mut line_total = Money::ZERO;
     let mut complete_net = true;
     let mut complete_tax = true;
-    let mut complete_gross = true;
     if let Some(lines) = facts.get("lines") {
         let lines = lines
             .as_array()
@@ -829,7 +828,7 @@ fn source_tax_facts(
             let taxable = line_amount("taxable_amount")?;
             let net = line_amount("net")?;
             let tax_amount = line_amount("tax_amount")?;
-            let line_total = line_amount("gross")?;
+            let gross = line_amount("gross")?;
             let add = |total: Money, value: Money| {
                 Money::new((total + value).amount(), units)
                     .map_err(|error| format!("source tax line {number}: {error}"))
@@ -844,18 +843,23 @@ fn source_tax_facts(
             } else {
                 complete_tax = false;
             }
-            if let Some(value) = line_total {
-                line_gross = add(line_gross, value)?;
-            } else {
-                complete_gross = false;
-            }
-            if let (Some(net), Some(tax_amount), Some(line_total)) = (net, tax_amount, line_total) {
-                if net + tax_amount != line_total {
+            if let (Some(net), Some(tax_amount), Some(gross)) = (net, tax_amount, gross) {
+                if net + tax_amount != gross {
                     return Err(format!(
                         "source tax line {number}: net plus tax_amount must equal gross"
                     ));
                 }
             }
+            let total = match (gross, net, tax_amount) {
+                (Some(gross), _, _) => gross,
+                (None, Some(net), Some(tax_amount)) => add(net, tax_amount)?,
+                _ => {
+                    return Err(format!(
+                        "source tax line {number}: gross or both net and tax_amount are required to reconcile with original_total"
+                    ));
+                }
+            };
+            line_total = add(line_total, total)?;
             let rate = line
                 .get("rate")
                 .filter(|value| !value.is_null())
@@ -899,15 +903,25 @@ fn source_tax_facts(
         } else {
             format!("source tax lines 1 to {}", lines.len())
         };
-        if complete_net && net.is_some_and(|total| total != line_net) {
+        if net.is_some() && !complete_net {
+            return Err(format!(
+                "{line_subject}: every net amount is required to agree with net"
+            ));
+        }
+        if net.is_some_and(|total| total != line_net) {
             return Err(format!("{line_subject}: net amounts must equal net"));
         }
-        if complete_tax && tax.is_some_and(|total| total != line_tax) {
+        if tax.is_some() && !complete_tax {
+            return Err(format!(
+                "{line_subject}: every tax_amount is required to agree with tax_total"
+            ));
+        }
+        if tax.is_some_and(|total| total != line_tax) {
             return Err(format!("{line_subject}: tax amounts must equal tax_total"));
         }
-        if complete_gross && line_gross != gross {
+        if line_total != gross {
             return Err(format!(
-                "{line_subject}: gross amounts must equal original_total"
+                "{line_subject}: line totals must equal original_total"
             ));
         }
     } else if tax.is_none() && net.is_none() {

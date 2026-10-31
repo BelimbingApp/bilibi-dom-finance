@@ -98,17 +98,10 @@ impl Bill {
     }
 
     pub(super) async fn reload(&mut self, scope: &Scope) -> Result<()> {
-        self.document = match company(scope) {
-            Some(c) => self
-                .pages
-                .payables
-                .get_document(scope, c, self.id)
-                .await
-                .ok(),
-            None => None,
-        };
+        let historical = !self.balance_input["as_of"].is_null();
+        self.document = None;
         (self.units, self.accounts) = self.pages.account_context(scope).await?;
-        if !self.balance_input["as_of"].is_null() {
+        if historical {
             let mut input = self.balance_input.clone();
             input["company_id"] = json!(company(scope).ok_or(Error::Unauthorized)?);
             input["document_id"] = json!(self.id);
@@ -118,23 +111,32 @@ impl Bill {
                 .read(scope, "finance.payables.document.get", &input)
                 .await
                 .map_err(|_| Error::Invalid)?;
-            self.balance_pins = answer["result"]["balance_pins"].clone();
+            let mut result = answer["result"].clone();
+            self.balance_pins = result["balance_pins"].clone();
             self.balance_input = self.balance_pins.clone();
-            if let Some(d) = &mut self.document {
-                d.settlements = serde_json::from_value(answer["result"]["settlements"].clone())
-                    .map_err(|_| Error::Internal)?;
-                if let Some(units) = self.units {
-                    d.outstanding = answer["result"]["outstanding"]
-                        .as_str()
-                        .and_then(|v| bilibi_finance_ledger::Money::parse(v, units).ok());
-                }
-            }
+            result["match_events"] = result["match_context"].take();
+            self.document = Some(serde_json::from_value(result).map_err(|_| Error::Internal)?);
+            self.credit_actions = super::credits::Credits::new()?;
+            self.dialog = None;
+        } else {
+            self.balance_pins = Value::Null;
+            self.document = match company(scope) {
+                Some(c) => self
+                    .pages
+                    .payables
+                    .get_document(scope, c, self.id)
+                    .await
+                    .ok(),
+                None => None,
+            };
         }
 
         if let Some(d) = &self.document {
-            self.credit_actions
-                .load(&self.pages, scope, d.id, &d.document_type)
-                .await?;
+            if !historical {
+                self.credit_actions
+                    .load(&self.pages, scope, d.id, &d.document_type)
+                    .await?;
+            }
             self.lines.load(&d.lines, |l| l.id.to_string());
             self.events.load(&d.match_events, |e| e.id.to_string());
             if let Some(e) = f::last_match(d) {
@@ -183,11 +185,12 @@ impl Bill {
             .render()
             .map_err(|_| Error::Internal);
         };
-        let can_approve = self.pages.allowed(scope, APPROVE_DOCUMENTS).await?;
-        let can_post = self.pages.allowed(scope, POST_DOCUMENTS).await?;
-        let can_match = self.pages.allowed(scope, APPROVE_MATCH).await?;
-        let can_create = self.pages.allowed(scope, CREATE_DOCUMENTS).await?;
-        let can_pay = self.pages.allowed(scope, SUBMIT_PAYMENTS).await?;
+        let historical = self.balance_pins.is_object();
+        let can_approve = !historical && self.pages.allowed(scope, APPROVE_DOCUMENTS).await?;
+        let can_post = !historical && self.pages.allowed(scope, POST_DOCUMENTS).await?;
+        let can_match = !historical && self.pages.allowed(scope, APPROVE_MATCH).await?;
+        let can_create = !historical && self.pages.allowed(scope, CREATE_DOCUMENTS).await?;
+        let can_pay = !historical && self.pages.allowed(scope, SUBMIT_PAYMENTS).await?;
         let display = self.pages.display(scope).await?;
         let (units, accounts) = (self.units, &self.accounts);
         let party = render(Facts {
@@ -300,6 +303,10 @@ impl Bill {
                         .unwrap_or_default(),
                 ));
             }
+            items.push(f::fact(
+                "Activity shown through",
+                pins.get("as_of").and_then(Value::as_str).unwrap_or(""),
+            ));
         }
         if let Some(opening) = &d.opening {
             items.push(f::fact(
@@ -562,6 +569,14 @@ impl Bill {
 
     async fn event(&mut self, scope: &Scope, credential: &str, v: &Value) -> Result<bool> {
         let event = v["type"].as_str().ok_or(Error::Invalid)?;
+        if self.balance_pins.is_object()
+            && !matches!(
+                event,
+                "clear-flash" | "lines_grid" | "matches_grid" | "events_grid" | "credit_grid"
+            )
+        {
+            return Err(Error::Invalid);
+        }
         match event {
             "ask_credit_apply" | "ask_credit_refund" | "ask_credit_reverse" | "cancel_credit"
             | "change_credit" | "preview_credit" | "commit_credit" | "credit_grid" => {
@@ -771,7 +786,7 @@ impl LiveState<Scope, Error> for Bill {
         })
     }
     fn panels(&self) -> Vec<PanelSpec> {
-        if self.document.is_none() {
+        if self.document.is_none() || self.balance_pins.is_object() {
             return vec![];
         }
         vec![PanelSpec {

@@ -200,7 +200,7 @@ pub struct HistoryPage {
     pub next_after: Option<i64>,
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Party {
     pub key: String,
     pub code: String,
@@ -236,19 +236,20 @@ pub struct TaxAmountInput {
     pub tax_code_id: i64,
     pub tax_amount: Money,
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DocumentLine {
     pub id: i64,
     pub line_number: i32,
     pub description: String,
     pub account_id: i64,
+    #[serde(deserialize_with = "read_money")]
     pub amount: Money,
     pub tax_code_id: Option<i64>,
     pub external_order_line_id: Option<String>,
     pub order_line_id: Option<i64>,
     pub quantity: Option<Decimal>,
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TaxLine {
     pub id: i64,
     pub line_number: i32,
@@ -256,10 +257,12 @@ pub struct TaxLine {
     pub tax_code: String,
     pub rate: Decimal,
     pub account_id: i64,
+    #[serde(deserialize_with = "read_money")]
     pub taxable_amount: Money,
+    #[serde(deserialize_with = "read_money")]
     pub tax_amount: Money,
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Document {
     #[serde(default)]
     pub settlements: Vec<serde_json::Value>,
@@ -272,14 +275,17 @@ pub struct Document {
     pub corrects_document_id: Option<i64>,
     pub party: Party,
     pub party_document_number: Option<String>,
-    #[serde(serialize_with = "as_text")]
+    #[serde(serialize_with = "as_text", deserialize_with = "read_date")]
     pub document_date: Date,
-    #[serde(serialize_with = "as_text")]
+    #[serde(serialize_with = "as_text", deserialize_with = "read_date")]
     pub due_date: Date,
     pub currency_code: String,
     pub description: Option<String>,
+    #[serde(deserialize_with = "read_money")]
     pub total_net: Money,
+    #[serde(deserialize_with = "read_money")]
     pub total_tax: Money,
+    #[serde(deserialize_with = "read_money")]
     pub total: Money,
     pub created_by_user_id: i64,
     pub created_by_impersonator_id: Option<i64>,
@@ -299,7 +305,9 @@ pub struct Document {
     pub entry_number: Option<i64>,
     pub lines: Vec<DocumentLine>,
     pub tax_lines: Vec<TaxLine>,
+    #[serde(default)]
     pub debit_note_ids: Vec<i64>,
+    #[serde(default, deserialize_with = "read_optional_money")]
     pub outstanding: Option<Money>,
     /// None unless a bill (not voided) names an order line; else one of
     /// [`MATCH_STATUSES`], read from its latest match event.
@@ -309,7 +317,7 @@ pub struct Document {
 }
 /// One append-only match record: `held`, `exception_approved` (naming the
 /// hold it approves, with a reason) or `posted`, with the database's time.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MatchEvent {
     pub id: i64,
     pub event: String,
@@ -323,7 +331,7 @@ pub struct MatchEvent {
 }
 /// The figures one match compared for one bill line. Ordered and received
 /// figures are absent when the order source could not answer.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MatchLine {
     pub line_number: i32,
     pub order_line_id: i64,
@@ -339,7 +347,7 @@ pub struct MatchLine {
     pub exceptions: Vec<MatchException>,
 }
 /// One of [`MATCH_EXCEPTION_CODES`] with its plain-language detail.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MatchException {
     pub code: String,
     pub detail: String,
@@ -503,6 +511,29 @@ fn as_text<S: serde::Serializer>(
     serializer: S,
 ) -> std::result::Result<S::Ok, S::Error> {
     serializer.serialize_str(&date.to_string())
+}
+
+fn read_date<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Date, D::Error> {
+    String::deserialize(d)?
+        .parse()
+        .map_err(serde::de::Error::custom)
+}
+
+fn read_money<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Money, D::Error> {
+    let amount = Decimal::deserialize(d)?;
+    Money::new(amount, bilibi_finance_ledger::MinorUnits::new(4).unwrap())
+        .map_err(serde::de::Error::custom)
+}
+
+fn read_optional_money<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<Option<Money>, D::Error> {
+    Option::<Decimal>::deserialize(d)?
+        .map(|amount| {
+            Money::new(amount, bilibi_finance_ledger::MinorUnits::new(4).unwrap())
+                .map_err(serde::de::Error::custom)
+        })
+        .transpose()
 }
 
 async fn join(tx: &MutationTransaction<'_>, s: &Scope, company: i64, cap: &str) -> Result<()> {

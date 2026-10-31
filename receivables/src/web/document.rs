@@ -149,6 +149,8 @@ impl Document {
     }
 
     async fn load(&mut self, scope: &Scope) -> Result<()> {
+        self.receipts.clear();
+        self.credits.clear();
         let mut input = self.balance_input.clone();
         input["document_id"] = json!(self.id);
         self.record = match self
@@ -156,23 +158,37 @@ impl Document {
             .read(scope, "finance.receivables.document.get", input)
             .await
         {
-            Ok(value) => {
+            Ok(mut value) => {
                 self.balance_pins = value["balance_pins"].clone();
                 if self.balance_pins.is_object() {
                     self.balance_input = self.balance_pins.clone();
+                    self.receipts = serde_json::from_value(value["receipts"].take())
+                        .map_err(|_| Error::Internal)?;
+                    self.credits = serde_json::from_value(value["credits"].take())
+                        .map_err(|_| Error::Internal)?;
                 }
                 serde_json::from_value(value).ok()
             }
             Err(Error::NotFound) => None,
             Err(error) => return Err(error),
         };
-        self.write_offs.load(&self.pages, scope).await?;
-        self.can_manage = self.pages.allowed(scope, MANAGE_DOCUMENTS).await?;
-        self.can_issue = self.pages.allowed(scope, ISSUE).await?;
+        let historical = self.balance_pins.is_object();
+        if historical {
+            self.write_offs = super::write_offs::Journals::new()?;
+            self.credit_actions = super::credits::Credits::new()?;
+            self.can_manage = false;
+            self.can_issue = false;
+        } else {
+            self.write_offs.load(&self.pages, scope).await?;
+            self.can_manage = self.pages.allowed(scope, MANAGE_DOCUMENTS).await?;
+            self.can_issue = self.pages.allowed(scope, ISSUE).await?;
+        }
         let Some(d) = &self.record else { return Ok(()) };
-        self.credit_actions
-            .load(&self.pages, scope, d.id, &d.kind)
-            .await?;
+        if !historical {
+            self.credit_actions
+                .load(&self.pages, scope, d.id, &d.kind)
+                .await?;
+        }
         let customer_id = d.customer_id;
         let series_id = d.series_id;
         let issued = d.status == "issued";
@@ -209,9 +225,7 @@ impl Document {
             .await?
             .0;
         self.accounts = self.pages.accounts(scope).await;
-        self.receipts.clear();
-        self.credits.clear();
-        if issued {
+        if issued && !historical {
             let id = self.id;
             let payments: Vec<Payment> = self
                 .pages
@@ -439,6 +453,10 @@ impl Document {
                         .unwrap_or_default(),
                 ));
             }
+            items.push(f::fact(
+                "Activity shown through",
+                pins.get("as_of").and_then(Value::as_str).unwrap_or(""),
+            ));
         }
         if let Some(opening) = &d.opening {
             items.push(f::fact(
@@ -842,7 +860,9 @@ impl Document {
                 )
                 .await?,
         );
-        body.push(&attachments_slot()?);
+        if !self.balance_pins.is_object() {
+            body.push(&attachments_slot()?);
+        }
 
         let modal = if let Some(dialog) =
             self.write_offs
@@ -1145,7 +1165,21 @@ impl Document {
     }
 
     async fn event(&mut self, scope: &Scope, credential: &str, v: &Value) -> Result<()> {
-        match v["type"].as_str().ok_or(Error::Invalid)? {
+        let event = v["type"].as_str().ok_or(Error::Invalid)?;
+        if self.balance_pins.is_object()
+            && !matches!(
+                event,
+                "clear-flash"
+                    | "lines_grid"
+                    | "tax_grid"
+                    | "applied_grid"
+                    | "write_off_grid"
+                    | "credit_grid"
+            )
+        {
+            return Err(Error::Invalid);
+        }
+        match event {
             "ask_credit_apply" | "ask_credit_refund" | "ask_credit_reverse" | "cancel_credit"
             | "change_credit" | "preview_credit" | "commit_credit" | "credit_grid" => {
                 self.credit_actions
@@ -1447,7 +1481,7 @@ impl LiveState<Scope, Error> for Document {
     }
 
     fn panels(&self) -> Vec<PanelSpec> {
-        if self.record.is_none() {
+        if self.record.is_none() || self.balance_pins.is_object() {
             return vec![];
         }
         vec![PanelSpec {
