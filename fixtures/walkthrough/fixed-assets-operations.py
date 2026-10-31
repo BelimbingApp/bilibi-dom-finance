@@ -182,7 +182,7 @@ command, environment = psql("BEGIN; SELECT 1 FROM companies WHERE tenant_id=1 AN
 holder = subprocess.Popen(command, env=environment, stdout=subprocess.DEVNULL)
 try:
     for _ in range(100):
-        if sql("SELECT count(*) FROM pg_stat_activity WHERE state='active' AND query LIKE '%pg_sleep(60)%' AND pid<>pg_backend_pid()") == "1":
+        if sql("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND state='active' AND query LIKE '%pg_sleep(60)%' AND pid<>pg_backend_pid()") == "1":
             break
         time.sleep(0.1)
     else:
@@ -193,7 +193,7 @@ try:
 finally:
     holder.kill()
     holder.wait()
-    sql("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE query LIKE '%pg_sleep(60)%' AND pid<>pg_backend_pid()")
+    sql("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=current_database() AND query LIKE '%pg_sleep(60)%' AND pid<>pg_backend_pid()")
 require(counts() == before, "lock contention wrote business or audit rows")
 require(plan(channel, [operation(prefix + "run.post", company, period="2026-07-01")], "approver").get("valid") is True, "preview did not recover after the lock was released")
 # Preview-all-before-execute must refuse the dependent second run and roll back the first.

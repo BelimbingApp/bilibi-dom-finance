@@ -72,8 +72,8 @@ impl FixedAssets {
         company: i64,
         input: &Value,
     ) -> Result<Prepared> {
+        self.lifecycle_preview_lock(c, s, company, ACQUIRE).await?;
         self.opening_authorize(c, s, company, ACQUIRE).await?;
-        self.lifecycle_preview_lock(c, s, company).await?;
         let context = self.ledger.opening_context_on(c, s, company).await?;
         let book = self.ledger.get_book_on(c, s, company).await?;
         let mut evidence =

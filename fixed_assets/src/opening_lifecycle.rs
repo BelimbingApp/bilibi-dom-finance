@@ -13,6 +13,7 @@ impl FixedAssets {
         s: &Scope,
         company: i64,
     ) -> Result<()> {
+        self.lifecycle_preview_lock(c, s, company, ACQUIRE).await?;
         self.opening_authorize(c, s, company, ACQUIRE).await?;
         Ok(())
     }

@@ -248,9 +248,11 @@ impl Write {
         company: i64,
         input: &Value,
     ) -> Result<Value> {
+        // Prove reach before the nonblocking lock, then reauthorize through Core.
+        owner
+            .lifecycle_preview_lock(c, s, company, self.cap())
+            .await?;
         owner.opening_authorize(c, s, company, self.cap()).await?;
-        // Lock the target exactly as every write does, before reading its facts.
-        owner.lifecycle_preview_lock(c, s, company).await?;
         match self {
             Self::Category => {
                 let revision: RevisionInput = decode(input)?;
@@ -529,9 +531,23 @@ impl FixedAssets {
         c: &dyn OperationClient,
         s: &Scope,
         company: i64,
+        capability: &str,
     ) -> Result<()> {
-        // PartyProofs proves reach first. This owned company lock serializes
-        // previews with facade writers without consuming a new pool slot.
+        // Core's authorizer takes KEY SHARE on the company. Prove capability
+        // and the sealed desk reach first, without that company lock, so a
+        // competing writer can yield Conflict instead of blocking the preview.
+        // The caller rechecks through Core after this try-lock succeeds.
+        bilibi_authz::authorize_proof(c, s, capability)
+            .await
+            .map_err(|e| match e {
+                Error::Forbidden | Error::Unauthorized => FixedAssetsError::Unauthorized,
+                e => FixedAssetsError::Failed(e),
+            })?;
+        let target = bilibi_party_ids::OrganisationId::new(company)
+            .map_err(|_| FixedAssetsError::CompanyNotFound)?;
+        if s.principal().is_none() && !bilibi_tenancy::reaches_work_company(c, s, target).await? {
+            return Err(FixedAssetsError::Unauthorized);
+        }
         let Some(row) = c
             .query_opt(
                 "SELECT status FROM companies WHERE tenant_id=$1 AND id=$2 AND deleted_at IS NULL FOR UPDATE SKIP LOCKED",
