@@ -2990,24 +2990,25 @@ impl Ledger {
                 "finance.ledger.record_late_recording_review",
             )
             .await?;
+        let review =
+            Self::record_late_recording_review_on(&mut tx, scope, company_id, entry_id, reason)
+                .await?;
+        tx.commit().await?;
+        Ok(review)
+    }
+
+    async fn record_late_recording_review_on(
+        tx: &mut MutationTransaction<'_>,
+        scope: &Scope,
+        company_id: i64,
+        entry_id: i64,
+        reason: &str,
+    ) -> Result<LateRecordingReview> {
+        join(tx, scope, company_id, REVIEW_LATE_RECORDINGS).await?;
+        let reason =
+            late_recordings::prepare(tx.sql(), scope, company_id, entry_id, reason).await?;
         let tenant = scope.tenant();
-        let entry = late_recordings::entry(tx.sql(), tenant, company_id, entry_id)
-            .await?
-            .ok_or(LedgerError::EntryNotFound)?;
         let (actor, impersonator) = people(scope);
-        if entry.days < late_recordings::APPROACHING_DAYS {
-            return Err(LedgerError::NotLateRecorded);
-        }
-        if entry.reviewed {
-            return Err(LedgerError::AlreadyReviewed);
-        }
-        if same_person(
-            (actor, impersonator),
-            (entry.posted_by_user_id, entry.posted_by_impersonator_id),
-        ) {
-            return Err(LedgerError::ReviewerNotIndependent);
-        }
-        let reason = late_recordings::validate(reason).map_err(LedgerError::Invalid)?;
         let review = tx
             .mutate(move |sql| {
                 Box::pin(async move {
@@ -3025,7 +3026,6 @@ impl Ledger {
                 })
             })
             .await?;
-        tx.commit().await?;
         Ok(review)
     }
 

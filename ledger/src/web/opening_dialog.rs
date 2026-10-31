@@ -1,21 +1,17 @@
-//! Opening-balance conversion; one reviewed contract serves the page and MCP.
+//! Journals’ reviewed opening-balance dialog; the same contract serves MCP.
 //! Bilimbi has no equivalent page; posting still uses its journal controls.
 use super::{
-    dialog_actions, error_text, event_type, no_company, render, shell, Failure, Flash, Pages,
-    Refusal, Review,
+    dialog_actions, error_text, event_type, no_company, render, Failure, Flash, Pages, Refusal,
+    Review,
 };
 use bilibi_database::{Error, Result};
 use bilibi_tenancy::Scope;
 use bilibi_ui::{
-    page::{LiveBody, LiveFuture, LiveInput, LiveRequest, LiveState},
-    params, Alert, BuiltinColumn, Button, ButtonVariant, Card, Cell, ColumnsOutcome, Field,
-    FlexRow, FlexTable, Form, Header, Html, InputKind, ListColumns, Modal, ModalWidth, PageVariant,
-    StatusKind,
+    params, Alert, BuiltinColumn, Button, ButtonVariant, Cell, ColumnsOutcome, Field, FlexRow,
+    FlexTable, Form, Html, InputKind, ListColumns, Modal, ModalWidth, StatusKind,
 };
 use serde_json::{json, Value};
-use std::collections::HashMap;
 
-pub(super) const INDEX: &str = "/finance/ledger/opening-balances";
 const CONTRACT: &str = "finance.ledger.opening_balances.submit";
 const FIELDS: [&str; 4] = [
     "conversion_date",
@@ -24,7 +20,7 @@ const FIELDS: [&str; 4] = [
     "csv",
 ];
 
-pub(super) struct Opening {
+pub(super) struct OpeningDialog {
     pages: Pages,
     values: Value,
     refusal: Refusal,
@@ -36,11 +32,11 @@ pub(super) struct Opening {
     replaces: Option<i64>,
 }
 
-impl Opening {
-    pub(super) fn new(pages: Pages, query: &HashMap<String, String>) -> Self {
+impl OpeningDialog {
+    pub(super) fn new(pages: Pages, replaces: Option<i64>) -> Self {
         Self {
             pages,
-            replaces: query.get("correct").and_then(|v| v.parse().ok()),
+            replaces,
             values: json!({}),
             refusal: Refusal::default(),
             flash: Flash::default(),
@@ -59,13 +55,16 @@ impl Opening {
         }
     }
 
-    async fn view(&mut self, scope: &Scope) -> Result<LiveBody> {
-        let mut page = render(Header {
-            title: Html::text("Opening balances"),
-            subtitle: "Establish the source closing trial balance as one journal for approval.",
-            title_actions: bilibi_ui::Html::EMPTY,
-            ..Header::default()
-        })?;
+    pub(super) fn replaces(&self) -> Option<i64> {
+        self.replaces
+    }
+
+    pub(super) fn take_destination(&mut self) -> Option<String> {
+        self.destination.take()
+    }
+
+    pub(super) async fn view(&mut self, scope: &Scope) -> Result<Html> {
+        let mut page = Html::EMPTY;
         if Pages::company(scope).is_none() {
             page.push(&no_company("opening-no-company")?);
         } else if self.pages.allowed(scope, crate::SUBMIT_JOURNALS).await? {
@@ -153,21 +152,41 @@ impl Opening {
                 event: "preview_opening",
                 class: "mt-4",
                 body,
-                actions: dialog_actions(render(Button {
-                    id: "opening-preview",
-                    button_type: "submit",
-                    variant: ButtonVariant::Primary,
-                    body: Html::text("Preview opening balances"),
-                    working: "Checking…",
-                    ..Button::default()
-                })?)?,
+                actions: {
+                    let mut actions = render(Button {
+                        event: "close_opening",
+                        button_type: "button",
+                        body: Html::text("Cancel"),
+                        ..Button::default()
+                    })?;
+                    actions.push(&render(Button {
+                        id: "opening-preview",
+                        button_type: "submit",
+                        variant: ButtonVariant::Primary,
+                        body: Html::text("Preview opening balances"),
+                        working: "Checking…",
+                        ..Button::default()
+                    })?);
+                    dialog_actions(actions)?
+                },
                 ..Form::default()
             })?;
-            page.push(&render(Card {
-                id: "opening-card",
-                body: form,
-                ..Card::default()
-            })?);
+            if self.review.is_none() {
+                let mut body = render(bilibi_ui::FlashGroup {
+                    id: "opening-flash",
+                    flash: self.flash.map(),
+                })?;
+                body.push(&form);
+                page.push(&render(Modal {
+                    id: "opening-modal",
+                    title: "Opening balances",
+                    description: "Submit one opening journal for approval.",
+                    cancel_event: "close_opening",
+                    width: ModalWidth::Wide,
+                    body,
+                    ..Modal::default()
+                })?);
+            }
         } else {
             page.push(&render(Alert {
                 id: "opening-denied",
@@ -267,11 +286,7 @@ impl Opening {
                 description:"Compare every mapped balance with the approved source trial balance before submitting.",
                 cancel_event:"cancel_opening", width:ModalWidth::Wide, body, ..Modal::default() })?);
         }
-        Ok(LiveBody {
-            html: shell("opening-page", PageVariant::Form, &self.flash, page)?,
-            redirect: self.destination.take(),
-            ..LiveBody::default()
-        })
+        Ok(page)
     }
 
     fn failed(&mut self, failure: Failure) {
@@ -282,79 +297,75 @@ impl Opening {
     }
 }
 
-impl LiveState<Scope, Error> for Opening {
-    fn update<'a>(&'a mut self, r: LiveRequest<'a, Scope>) -> LiveFuture<'a, Error> {
-        Box::pin(async move {
-            if let LiveInput::Event(value) = r.input {
-                match event_type(value)? {
-                    "preview_opening" => {
-                        self.review = None;
-                        self.refusal = Refusal::default();
-                        // CSV exceeds the ordinary form parser's 1 KiB field limit.
-                        // The checked owner limit refuses the whole event instead of dropping it.
-                        let fields = params::form_values_checked(
-                            value,
-                            "opening",
-                            crate::opening_csv::MAX_BYTES,
-                        )
+impl OpeningDialog {
+    pub(super) async fn event(
+        &mut self,
+        scope: &Scope,
+        credential: &str,
+        value: &Value,
+    ) -> Result<()> {
+        match event_type(value)? {
+            "preview_opening" => {
+                self.review = None;
+                self.refusal = Refusal::default();
+                // CSV exceeds the ordinary form parser's 1 KiB field limit.
+                // The checked owner limit refuses the whole event instead of dropping it.
+                let fields =
+                    params::form_values_checked(value, "opening", crate::opening_csv::MAX_BYTES)
                         .map_err(Error::refused)?;
-                        self.values = json!(fields);
-                        let mut input = self.values.clone();
-                        if let Some(journal) = self.replaces {
-                            input["replaces_journal_id"] = json!(journal);
+                self.values = json!(fields);
+                let mut input = self.values.clone();
+                if let Some(journal) = self.replaces {
+                    input["replaces_journal_id"] = json!(journal);
+                }
+                match self
+                    .pages
+                    .review(scope, credential, "preview_opening", CONTRACT, input)
+                    .await?
+                {
+                    Ok(review) => {
+                        if let Some(rows) = review.facts["rows"].as_array() {
+                            self.columns.load(rows, |row| {
+                                row["source_id"].as_str().unwrap_or("").to_owned()
+                            });
                         }
-                        match self
-                            .pages
-                            .review(r.scope, r.credential, "preview_opening", CONTRACT, input)
-                            .await?
-                        {
-                            Ok(review) => {
-                                if let Some(rows) = review.facts["rows"].as_array() {
-                                    self.columns.load(rows, |row| {
-                                        row["source_id"].as_str().unwrap_or("").to_owned()
-                                    });
-                                }
-                                self.review = Some(review);
-                            }
-                            Err(failure) => self.failed(failure),
-                        }
+                        self.review = Some(review);
                     }
-                    "submit_opening" => {
-                        if let Some(review) = self.review.take() {
-                            match self
-                                .pages
-                                .commit(r.scope, r.credential, "submit_opening", CONTRACT, review)
-                                .await?
-                            {
-                                Ok(done) => {
-                                    if let Some(journal) = done["results"][0]["result"]["result"]
-                                        ["record"]["id"]
-                                        .as_i64()
-                                    {
-                                        self.destination =
-                                            Some(format!("/finance/ledger/journals/{journal}"));
-                                    } else {
-                                        self.flash.success(
-                                            "The opening journal is recorded. Find it in Journals.",
-                                        );
-                                    }
-                                }
-                                Err(failure) => self.failed(failure),
-                            }
-                        }
-                    }
-                    "cancel_opening" => self.review = None,
-                    "grid" => {
-                        if let ColumnsOutcome::Sort(_) =
-                            self.columns.handle(&params::string_values(value))
-                        {
-                        }
-                    }
-                    "clear-flash" => self.flash.dismiss(value),
-                    _ => return Err(Error::Invalid),
+                    Err(failure) => self.failed(failure),
                 }
             }
-            self.view(r.scope).await
-        })
+            "submit_opening" => {
+                if let Some(review) = self.review.take() {
+                    match self
+                        .pages
+                        .commit(scope, credential, "submit_opening", CONTRACT, review)
+                        .await?
+                    {
+                        Ok(done) => {
+                            if let Some(journal) =
+                                done["results"][0]["result"]["result"]["record"]["id"].as_i64()
+                            {
+                                self.destination =
+                                    Some(format!("/finance/ledger/journals/{journal}"));
+                            } else {
+                                self.flash.success(
+                                    "The opening journal is recorded. Find it in Journals.",
+                                );
+                            }
+                        }
+                        Err(failure) => self.failed(failure),
+                    }
+                }
+            }
+            "cancel_opening" => self.review = None,
+            "grid" => {
+                if let ColumnsOutcome::Sort(_) = self.columns.handle(&params::string_values(value))
+                {
+                }
+            }
+            "clear-flash" => self.flash.dismiss(value),
+            _ => return Err(Error::Invalid),
+        }
+        Ok(())
     }
 }

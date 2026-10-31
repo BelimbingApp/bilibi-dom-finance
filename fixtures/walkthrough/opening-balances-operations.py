@@ -137,6 +137,9 @@ require(sql("SELECT count(*) FROM finance_ledger_opening_balances") == "0", "pla
 committed = commit(channel, ops, preview)
 require("results" in committed, "reviewed opening commit failed")
 journal = committed["results"][0]["result"]["result"]["record"]
+opening_rows = read(channel, "journals.list", company, source="opening", status="submitted")["records"]
+require(len(opening_rows) == 1 and opening_rows[0]["id"] == journal["id"] and opening_rows[0]["kind"] == "journal", "opening source did not find the waiting journal")
+require(not read(channel, "journals.list", company, source="manual")["records"], "opening leaked into manual source")
 require(commit(channel, ops, preview).get("error") == "plan_already_used", "consumed plan was replayed")
 require(read(channel, "trial_balance.get", company, as_of="2026-07-01")["through_entry_number"] == 0, "submission posted")
 retry = write(channel, "opening_balances.submit", company, **source)
@@ -146,6 +149,9 @@ refused(channel, "opening_balances.submit", company, "already has an opening jou
 refused(channel, "journal.approve", company, "separation", journal_id=journal["id"])
 posted = write(channel, "journal.approve", company, "approver", journal_id=journal["id"])
 entry_id = posted["decision"]["entry_id"]
+opening_rows = read(channel, "journals.list", company, source="opening", status="posted")["records"]
+require(len(opening_rows) == 1 and opening_rows[0]["id"] == entry_id and opening_rows[0]["kind"] == "entry", "approved opening was duplicated or lost from Journals")
+require(not read(channel, "journals.list", company, source="opening", status="submitted")["records"], "approved opening still listed as waiting")
 trial = read(channel, "trial_balance.get", company, as_of="2026-07-01")
 expected = {"1000": ("10000", "0"), "1100": ("3000", "0"), "5000": ("2000", "0"), "2000": ("0", "1500"), "3000": ("0", "8000"), "4000": ("0", "5500")}
 for row in trial["rows"]:

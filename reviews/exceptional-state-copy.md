@@ -20,7 +20,7 @@ The linked note language follows [IRBM's cancellation API](https://sdk.myinvois.
 
 | Page | Browser evidence |
 | --- | --- |
-| `ledger/book` | Switched to Acme Trading, whose book was unopened; the open-book form named the company and explained the fixed currency and approval policy. |
+| `ledger/books/{company_id}` | Switched to Acme Trading, whose book was unopened; the open-book form named the company and explained the fixed currency and approval policy. |
 | `ledger/fiscal-years` | Closed then locked January in the disposable company; the lock confirmation said the period can never be reopened. |
 | `receivables/receipts/1` and `receivables/invoices/1` | Reversed a posted receipt; the invoice showed its balance owing again and the receipt as reversed. The reversal dialog explained the consequence and earliest date. |
 | `receivables/invoices/1`, bad-debt journal | Proposed a write-off, approved it as a different reviewer, then reversed it. The dialogs kept the collection-evidence reminder and stated that no tax refund or filing was recorded. |
@@ -41,11 +41,11 @@ The following mounted routes were opened in the browser as the recorder and thei
 
 | Area | Unchanged routes under `/finance` |
 | --- | --- |
-| Ledger | `ledger/book`, `ledger/books`, `ledger/opening-balances`, `ledger/accounts`, `ledger/accounts/1`, `ledger/account-groups`, `ledger/entries`, `ledger/entries/1`, `ledger/journals`, `ledger/fiscal-years`, `ledger/trial-balance` |
+| Ledger | `ledger/books`, `ledger/accounts`, `ledger/accounts/1`, `ledger/account-groups`, `ledger/journals`, `ledger/fiscal-years`, `ledger/trial-balance` |
 | Receivables | `receivables/customers`, `receivables/customers/1`, `receivables/invoices`, `receivables/receipts`, `receivables/aging`, `receivables/settings` |
 | Payables | `payables/bills`, `payables/bills/new`, `payables/debit-notes/new`, `payables/payments`, `payables/payments/new`, `payables/aged`, `payables/setup` |
 | Bank | `reconciliation`, `reconciliation/accounts/1`, `reconciliation/accounts/1/matching` |
-| Reports | `setup`, `reports`, `reports/sections`, `reports/bookkeeping`, `reports/approval-exceptions`; `reports/accounts/1` showed “Account not found” |
+| Reports | `setup`, `reports`, `reports/sections`, `reports/controls`, `reports/approval-exceptions`; `reports/accounts/1` showed “Account not found” |
 | Fixed assets | `fixed-assets/register`, `fixed-assets/categories`, `fixed-assets/runs` |
 | Payroll | `payroll`, `payroll/setup` |
 | SST | `sst`, `sst/setup` |

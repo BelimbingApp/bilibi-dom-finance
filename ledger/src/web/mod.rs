@@ -13,7 +13,7 @@ mod groups;
 mod journal;
 mod journal_period;
 mod journals;
-mod opening;
+mod opening_dialog;
 mod trial;
 mod view;
 mod years;
@@ -70,11 +70,11 @@ macro_rules! route {
     };
 }
 route!(
-    "finance/ledger.opening-balances",
-    "/finance/ledger/opening-balances",
-    "opening"
+    "finance/ledger.book",
+    "/finance/ledger/books/{id}",
+    "book",
+    bilibi_module_registry::contributions::CompanyScope::Tenant
 );
-route!("finance/ledger.book", "/finance/ledger/book", "book");
 route!(
     "finance/ledger.books",
     "/finance/ledger/books",
@@ -102,11 +102,6 @@ route!(
     "finance/ledger.group",
     "/finance/ledger/account-groups/{id}",
     "group"
-);
-route!(
-    "finance/ledger.entries",
-    "/finance/ledger/entries",
-    "entries"
 );
 route!(
     "finance/ledger.journals",
@@ -188,13 +183,6 @@ menu!(
     10
 );
 menu!(
-    "finance.ledger.opening-balances",
-    "Opening balances",
-    "/finance/ledger/opening-balances",
-    11
-);
-menu!("finance.ledger.book", "Book", "/finance/ledger/book", 12);
-menu!(
     "finance.ledger.books",
     "Company books",
     "/finance/ledger/books",
@@ -225,6 +213,7 @@ inventory::submit! { Contribution::new(PAGE_WRITES, PAGES, Provenance { module: 
         ("create_group", "finance.ledger.account_group.create"),
         ("save_group_field", "finance.ledger.account_group.update"),
         ("reverse", "finance.ledger.entry.reverse"),
+        ("record_late_review", "finance.ledger.entry.review_late"),
         ("preview_opening", "finance.ledger.opening_balances.submit"),
         ("submit_opening", "finance.ledger.opening_balances.submit"),
         ("submit_journal", "finance.ledger.journal.submit"),
@@ -1047,6 +1036,7 @@ pub(crate) fn figure(text: &str) -> Result<Html> {
 /// The module that owns an entry, in the words a bookkeeper uses.
 pub(crate) fn source_label(module: &str) -> String {
     match module {
+        "opening" => "Opening".into(),
         "finance/payables" => "Payables".into(),
         "finance/receivables" => "Receivables".into(),
         "finance/reconciliation" => "Bank reconciliation".into(),
@@ -1084,24 +1074,18 @@ pub(crate) fn event_type(event: &Value) -> Result<&str> {
 impl Page<Scope, Error> for Pages {
     fn title(&self, operation: &str) -> Option<&'static str> {
         Some(match operation {
-            "opening" => "Opening balances",
             "book" => "Book",
             "books" => "Company books",
             "accounts" => "Chart of accounts",
             "account" => "Account",
             "groups" => "Account groups",
             "group" => "Account group",
-            "entries" => return None,
             "journals" => "Journals",
             "journal" => "Journal",
             "years" => "Fiscal years",
             "trial" => "Trial balance",
             _ => return None,
         })
-    }
-
-    fn redirect(&self, operation: &str) -> Option<&'static str> {
-        (operation == "entries").then_some("/finance/ledger/journals")
     }
 
     fn render<'a>(&'a self, r: PageRequest<'a, Scope>) -> PageFuture<'a, Error> {
@@ -1137,14 +1121,12 @@ impl Pages {
             None
         };
         Ok(match r.operation {
-            "opening" => Box::new(opening::Opening::new(pages, r.query)),
-            "book" => Box::new(book::Book::new(pages)),
-            "books" => Box::new(books::Books::new(pages)),
+            "book" => Box::new(book::Book::new(pages, id_param(r.path)?)),
+            "books" => Box::new(books::Books::new(pages, r.query, r.framed)?),
             "accounts" => Box::new(accounts::Accounts::new(pages, r.query, r.framed)?),
             "account" => Box::new(account::Account::new(pages, id_param(r.path)?, company)),
             "groups" => Box::new(groups::Groups::new(pages, r.query, r.framed, company)?),
             "group" => Box::new(group::Group::new(pages, id_param(r.path)?, company)),
-            "entries" => Box::new(journals::Journals::new(pages, r.query, r.framed)?),
             "journals" => Box::new(journals::Journals::new(pages, r.query, r.framed)?),
             "journal" => {
                 let record = r.path.get("id").ok_or(Error::NotFound)?;
@@ -1159,7 +1141,7 @@ impl Pages {
                     Box::new(journal::Journal::new(pages, id_param(r.path)?))
                 }
             }
-            "years" => Box::new(years::Years::new(pages, r.query)),
+            "years" => Box::new(years::Years::new(pages, r.query)?),
             "trial" => Box::new(trial::Trial::new(pages, r.query)),
             _ => return Err(Error::NotFound),
         })

@@ -76,8 +76,8 @@ bilibi_menu::contribute!(
 );
 
 // Bilimbi Reports.Web.{BookkeepingLive,ApprovalExceptionsLive} routes/menu.
-inventory::submit! { Contribution::new(ROUTES, "finance/reports.bookkeeping", provenance!(), &Route { company_scope: bilibi_module_registry::contributions::CompanyScope::Company,
-    method: Method::Get, path: "/finance/reports/bookkeeping", service: "finance/reports.control-pages", operation: "bookkeeping", access: Access::Capability(crate::VIEW), framed: true,
+inventory::submit! { Contribution::new(ROUTES, "finance/reports.controls", provenance!(), &Route { company_scope: bilibi_module_registry::contributions::CompanyScope::Company,
+    method: Method::Get, path: "/finance/reports/controls", service: "finance/reports.control-pages", operation: "controls", access: Access::Capability(crate::VIEW), framed: true,
 }) }
 inventory::submit! { Contribution::new(ROUTES, "finance/reports.approval-exceptions", provenance!(), &Route { company_scope: bilibi_module_registry::contributions::CompanyScope::Company,
     method: Method::Get, path: "/finance/reports/approval-exceptions", service: "finance/reports.control-pages", operation: "approval-exceptions", access: Access::Capability(crate::VIEW), framed: true,
@@ -85,9 +85,9 @@ inventory::submit! { Contribution::new(ROUTES, "finance/reports.approval-excepti
 bilibi_menu::contribute!(
     "finance/reports",
     bilibi_menu::MenuItem::page(
-        "finance.reports.bookkeeping",
-        "Bookkeeping",
-        "/finance/reports/bookkeeping"
+        "finance.reports.controls",
+        "Bookkeeping controls",
+        "/finance/reports/controls"
     )
     .company_scoped()
     .icon("gmdi-money-r")
@@ -125,7 +125,7 @@ inventory::submit! { bilibi_module_registry::Contribution::new(bilibi_module_reg
 inventory::submit! { bilibi_module_registry::Contribution::new(bilibi_module_registry::contributions::PAGE_WRITES, "finance/reports.control-pages", bilibi_module_registry::Provenance { module: MODULE, source: file!(), line: line!() }, &bilibi_module_registry::contributions::PageWrites {
     service: "finance/reports.control-pages",
     contracts: &[],
-    pending: bilibi_module_registry::contributions::Pending::Every { reason: "Controlled bookkeeping, fiscal years, duty separation and reviews write through the Ledger facade, not the finance.ledger contracts yet." },
+    pending: bilibi_module_registry::contributions::Pending::Every { reason: "Controlled bookkeeping, duty separation and approval-exception reviews write through the Ledger facade, not the finance.ledger contracts yet." },
 }) }
 
 inventory::submit! { Contribution::new(ROUTES, "finance/reports.sections", provenance!(), &Route { company_scope: bilibi_module_registry::contributions::CompanyScope::Company,
