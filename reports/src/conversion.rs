@@ -217,17 +217,32 @@ impl Reports {
         retain!(
             "receivables",
             self.sources.receivables,
-            ["opening_batch", "opening_item", "opening_decision"]
+            [
+                "opening_batch",
+                "opening_item",
+                "opening_decision",
+                "opening_stage"
+            ]
         );
         retain!(
             "payables",
             self.sources.payables,
-            ["opening_batch", "opening_item", "opening_decision"]
+            [
+                "opening_batch",
+                "opening_item",
+                "opening_decision",
+                "opening_stage"
+            ]
         );
         retain!(
             "fixed_assets",
             self.sources.fixed_assets,
-            ["opening_batch", "opening_item", "opening_decision"]
+            [
+                "opening_batch",
+                "opening_item",
+                "opening_decision",
+                "opening_stage"
+            ]
         );
         retain!(
             "bank",
@@ -250,6 +265,33 @@ impl Reports {
             self.sources.payroll,
             bilibi_finance_payroll::Payroll::evidence_datasets()
         );
+        let mut register_coverage = serde_json::Map::new();
+        let mut pending_sources = Vec::new();
+        for module in ["receivables", "payables", "fixed_assets"] {
+            let batches = evidence[module]["opening_batch"]["rows"]
+                .as_array()
+                .ok_or(Error::Internal)?;
+            let items = evidence[module]["opening_item"]["rows"]
+                .as_array()
+                .ok_or(Error::Internal)?;
+            let stages = evidence[module]["opening_stage"]["rows"]
+                .as_array()
+                .ok_or(Error::Internal)?;
+            register_coverage.insert(module.into(),json!({"state":if batches.is_empty(){"no_opening_register_retained"}else{"opening_register_retained"},"retained_batches":batches.len(),"retained_source_rows":items.len(),"note":"Retained rows include superseded sources; the dated control report selects the effective register. Absence is not an accountant decision that the register is unnecessary."}));
+            let mut pending = std::collections::BTreeSet::new();
+            for stage in stages {
+                let reference = stage["source_reference"].as_str().unwrap_or("");
+                if !batches
+                    .iter()
+                    .any(|b| b["source_reference"].as_str() == Some(reference))
+                {
+                    pending.insert(reference);
+                }
+            }
+            for reference in pending {
+                pending_sources.push(json!({"area":module,"source_reference":reference,"reason":"Staged source parts have not been recognized as an opening register."}));
+            }
+        }
         let mut bank_bridges = Vec::new();
         let bank_accounts = evidence["bank"]["bank_account"]["rows"]
             .as_array()
@@ -326,7 +368,7 @@ impl Reports {
             };
             bank_bridges.push(json!({"account":account,"target_balance":current_balance,"bridge_end_balance":end_balance,"change_since_bridge":changed,"bridge":bridge}));
         }
-        let mut differences = Vec::new();
+        let mut differences = pending_sources;
         for row in &ar.accounts {
             if !row.difference.is_zero() {
                 differences.push(json!({"area":"receivables","account_id":row.account_id,"difference":row.difference}));
@@ -360,7 +402,7 @@ impl Reports {
         let report = json!({"version":1,"company_id":company,"as_of":as_of.to_string(),"conversion_date":opening.entry.entry_date.to_string(),"currency_code":target.currency_code,"minor_units":target.minor_units,"through_entry_number":through,
             "opening":opening,"source_trial_balance":{"rows":comparisons,"basis":"Approved source opening journal only; signed debit less credit balances."},"target_trial_balance":target,"accounts":comparisons,"postings_by_owner":owners,
             "receivables":{"detail":ar_detail,"control":ar},"payables":{"detail":ap_detail,"control":ap},"assets":asset_snapshot,"bank_bridges":bank_bridges,"sources":evidence,
-            "unresolved_differences":differences,
+            "unresolved_differences":differences,"register_coverage":register_coverage,
             "excluded_history":["Transactions before conversion other than the approved opening journal and retained opening registers.","Previously settled invoice and bill history, historical asset depreciation entries and legacy bank matches are not imported."],
             "schedule_limits":["Bank evidence retains statement and finalised reconciliation bridges. Open bridges require a separate reconciliation; no conversion bank bridge is inferred.","Tax and payroll evidence is retained where recorded. Legacy returns, payroll year-to-date and filing completeness require the accountant's external schedules and reviewer references."],
             "schedule_reviews":{"bank":{"status":"not_assessed"},"tax":{"status":"not_assessed"},"payroll":{"status":"not_assessed"}},
