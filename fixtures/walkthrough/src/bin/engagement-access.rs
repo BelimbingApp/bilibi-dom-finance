@@ -9,7 +9,7 @@
 use bilibi_authz::grants::{Assignment, Grants};
 use bilibi_database::{pool, Db, MutationBoundary};
 use bilibi_finance_ledger::{
-    EntryQuery, Ledger, LedgerError, Money, NewAccount, NewBook, NewEntry, NewLine, PostOptions,
+    EntryQuery, Ledger, LedgerError, Money, NewAccount, NewEntry, NewLine, PostOptions,
 };
 use bilibi_finance_receivables::{ReceivableError, Receivables};
 use bilibi_finance_reports::{Period, Reports, ReportsError};
@@ -237,22 +237,7 @@ async fn main() -> Outcome<()> {
         grants.assign_role(&admin, user, role, false).await?;
     }
 
-    // Company 002's book exists, so a refusal there is a refusal of a real book.
-    if matches!(
-        ledger.get_book(&manager, OTHER_COMPANY).await,
-        Err(LedgerError::BookNotOpen)
-    ) {
-        ledger
-            .open_book(
-                &manager,
-                OTHER_COMPANY,
-                &NewBook {
-                    currency_code: "USD".into(),
-                    minor_units: 2,
-                },
-            )
-            .await?;
-    }
+    // Company 002 has no book: every refusal below is the target-company decision, made before any book is read.
 
     // Company 001: receivables setup, a customer and a posted mixed entry.
     let chart = ledger.list_accounts(&manager, COMPANY).await?;
