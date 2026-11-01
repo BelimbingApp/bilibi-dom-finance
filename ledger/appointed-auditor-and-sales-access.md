@@ -1,6 +1,6 @@
 # Appointed auditor and sales workflow access
 
-This addresses [Finance #95](https://github.com/BelimbingApp/bilibi-dom-finance/issues/95). It builds on the Platform's company- and date-bound role assignments (Authz, [ADR 20](https://github.com/BelimbingApp/bilibi/blob/main/docs/architecture/decisions/20-company-role-assignments.md)); Finance adds no permission system of its own. [Accountant access](accountant-access.md) still describes the External accountant role, which is neither of these.
+This addresses [Finance #95](https://github.com/BelimbingProject/bilibi-dom-finance/issues/95). It builds on the Platform's company- and date-bound role assignments (Authz, [ADR 20](https://github.com/BelimbingProject/bilibi/blob/main/docs/architecture/decisions/20-company-role-assignments.md)); Finance adds no permission system of its own. [Accountant access](accountant-access.md) still describes the External accountant role, which is neither of these.
 
 ## Appointed auditor
 

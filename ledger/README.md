@@ -195,7 +195,7 @@ The chart's Company filter offers only companies from the shared authorized comp
 
 Every account row names its company and currency. Identical codes across companies remain separate accounts. Account and group links carry `?company=ID`; their pages identify that company, preserve it on Back and in sidebar pins, and bind every read, inline edit and confirmation to it. The top bar continues to show the session's current company: filtering and drill-through do not switch it or grant access. Journals still follow the current company, so an account belonging to another company asks the person to choose that company in the top bar before offering its entries link. Creation and starter-chart application require one selected company; changing the company filter drops any account draft or starter-chart review.
 
-This is a side-by-side operational comparison. Balances are not summed across companies, converted or consolidated. Practitioner validation of the default view and subsequent cross-company queues is tracked in [#103](https://github.com/BelimbingApp/bilibi-dom-finance/issues/103); consolidation scope in [#102](https://github.com/BelimbingApp/bilibi-dom-finance/issues/102), and bulk book opening in [#104](https://github.com/BelimbingApp/bilibi-dom-finance/issues/104).
+This is a side-by-side operational comparison. Balances are not summed across companies, converted or consolidated. Practitioner validation of the default view and subsequent cross-company queues is tracked in [#103](https://github.com/BelimbingProject/bilibi-dom-finance/issues/103); consolidation scope in [#102](https://github.com/BelimbingProject/bilibi-dom-finance/issues/102), and bulk book opening in [#104](https://github.com/BelimbingProject/bilibi-dom-finance/issues/104).
 
 
 ## Capabilities
@@ -407,7 +407,7 @@ Retain a concise report with the conversion date/timezone, source system/export 
 | Tax and payroll | Reconcile source liabilities/refunds, filed/paid periods and supporting tax/payroll schedules separately. The journal creates no tax document or tax-return history. |
 | Historical/comparative reporting | Preserve the source backup, signed financial statements, prior closing trial balance and historical documents. This slice imports no historical transactions, comparative periods or original invoice issuance. |
 
-The scope follows the [28 October 2026 practitioner review on issue #57](https://github.com/BelimbingApp/bilibi-dom-finance/issues/57#issuecomment-6461498216). The bounded opening-state workflow is separate from the bank, historical, tax and sign-off follow-ups listed below.
+The scope follows the [28 October 2026 practitioner review on issue #57](https://github.com/BelimbingProject/bilibi-dom-finance/issues/57#issuecomment-6461498216). The bounded opening-state workflow is separate from the bank, historical, tax and sign-off follow-ups listed below.
 
 ### Source-period schedules at conversion
 
@@ -772,7 +772,7 @@ Approve and reconcile the opening journal before importing residual registers. I
 
 `Ledger::opening_context_on` returns the approved, live source opening entry and account balances summed by SQL on the caller's connection. An owner recognizes a complete account through `recognize_opening_on` in its audited transaction. An eligible asset or liability account may have a reviewed zero balance, even when the approved opening entry has no line for it; this supports offsetting invoice and credit rows. The database verifies the approved entry, account eligibility and balance. Recognition records `opening_recognition` evidence and protects the source entry against reversal. It does not change the journal's owner or erase unrelated postings from owner-based control tie-outs. An aggregate opening debit must not be registered as an ordinary individual asset acquisition.
 
-The bounded imports still have explicit follow-ups for [broader asset estimates and history](https://github.com/BelimbingApp/bilibi-dom-finance/issues/110) and [general asset lifecycle operations for MCP](https://github.com/BelimbingApp/bilibi-dom-finance/issues/111). [Source-period schedules](#source-period-schedules-at-conversion) retain bounded evidence but do not create operational tax or payroll history. Opening bills and supplier credits resolve existing [Core-linked Finance vendors](../payables/README.md#vendors) by Core party kind and code and retain source names as evidence. These boundaries do not imply full historical transaction migration.
+The bounded imports still have explicit follow-ups for [broader asset estimates and history](https://github.com/BelimbingProject/bilibi-dom-finance/issues/110) and [general asset lifecycle operations for MCP](https://github.com/BelimbingProject/bilibi-dom-finance/issues/111). [Source-period schedules](#source-period-schedules-at-conversion) retain bounded evidence but do not create operational tax or payroll history. Opening bills and supplier credits resolve existing [Core-linked Finance vendors](../payables/README.md#vendors) by Core party kind and code and retain source names as evidence. These boundaries do not imply full historical transaction migration.
 
 ## Shared party controls
 

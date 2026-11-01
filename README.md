@@ -1,8 +1,8 @@
 # bilibi-dom-finance
 
-Finance Domain for [Bilibi](https://github.com/BelimbingApp/bilibi): a
+Finance Domain for [Bilibi](https://github.com/BelimbingProject/bilibi): a
 company's bookkeeping, ported from Bilimbi's
-[b-dom-finance](https://github.com/BelimbingApp/b-dom-finance). It is one
+[b-dom-finance](https://github.com/BelimbingProject/b-dom-finance). It is one
 optional, independently versioned repository that an adopter mounts into a
 Bilibi checkout; it does not build on its own.
 
@@ -31,7 +31,7 @@ Clone this repository into a Bilibi checkout at `apps/domains/finance` (a real
 nested checkout, never a symlink), then work from the Bilibi root:
 
 ```sh
-git clone https://github.com/BelimbingApp/bilibi-dom-finance.git apps/domains/finance
+git clone https://github.com/BelimbingProject/bilibi-dom-finance.git apps/domains/finance
 python3 scripts/discover-modules.py
 cargo metadata --format-version 1 > /dev/null
 python3 scripts/discover-modules.py --pin
