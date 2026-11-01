@@ -129,13 +129,7 @@ async fn agent(app: &bilibi_web::App, scope: &Scope, origin: &str) -> Outcome<Sc
         code_challenge_method: "S256".into(),
         state: None,
     };
-    let code = access
-        .authorize(
-            scope,
-            &params,
-            &resource,
-        )
-        .await?;
+    let code = access.authorize(scope, &params, &resource).await?;
     let token = access
         .exchange_code(
             &CodeExchange {

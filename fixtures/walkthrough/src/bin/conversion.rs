@@ -1581,11 +1581,7 @@ async fn launcher_credentials(db: &Db, services: &Services) -> Outcome<()> {
     use bilibi_core::agent_access::{
         code_challenge, AgentAccess, AuthorizeParams, ClientRegistration, CodeExchange,
     };
-    use std::{
-        fs::OpenOptions,
-        io::Write,
-        os::unix::fs::OpenOptionsExt,
-    };
+    use std::{fs::OpenOptions, io::Write, os::unix::fs::OpenOptionsExt};
     if std::env::var("BILIBI_AGENT_PROOF").as_deref() != Ok("disposable") {
         return Err("disposable proof required".into());
     }
@@ -1642,13 +1638,7 @@ async fn launcher_credentials(db: &Db, services: &Services) -> Outcome<()> {
         code_challenge_method: "S256".into(),
         state: None,
     };
-    let code = access
-        .authorize(
-            &scope,
-            &params,
-            &resource,
-        )
-        .await?;
+    let code = access.authorize(&scope, &params, &resource).await?;
     let token = access
         .exchange_code(
             &CodeExchange {

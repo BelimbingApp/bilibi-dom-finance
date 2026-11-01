@@ -11,11 +11,7 @@ use bilibi_finance_walkthrough_fixture::sign_in;
 use bilibi_module_registry::Services;
 use bilibi_settings::{Settings, Target};
 use serde_json::json;
-use std::{
-    fs::OpenOptions,
-    io::Write,
-    os::unix::fs::OpenOptionsExt,
-};
+use std::{fs::OpenOptions, io::Write, os::unix::fs::OpenOptionsExt};
 
 bilibi_walkthrough_fixture::walkthrough_vocabulary!();
 bilibi_walkthrough_fixture::walkthrough_module_roles!();

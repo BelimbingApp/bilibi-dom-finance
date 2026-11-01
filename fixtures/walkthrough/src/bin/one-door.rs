@@ -8,11 +8,7 @@ use bilibi_core::agent_access::{
 use bilibi_database::{pool, Error};
 use bilibi_finance_walkthrough_fixture::sign_in;
 use serde_json::json;
-use std::{
-    fs::OpenOptions,
-    io::Write,
-    os::unix::fs::OpenOptionsExt,
-};
+use std::{fs::OpenOptions, io::Write, os::unix::fs::OpenOptionsExt};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
