@@ -194,7 +194,13 @@ async fn main() -> Outcome<()> {
     // Steering for the HTTP MCP proof: change an assignment through the same Authz
     // facade between a plan and its commit. Never reinstalls the fixture.
     if let Some(mode) = std::env::args().nth(1).filter(|m| {
-        ["revoke-sales", "restore-sales", "revoke-auditor", "restore-auditor"].contains(&m.as_str())
+        [
+            "revoke-sales",
+            "restore-sales",
+            "revoke-auditor",
+            "restore-auditor",
+        ]
+        .contains(&m.as_str())
     }) {
         let admin = sign_in(&db, services, 1, 4).await?;
         let assigner = Assigner {
@@ -204,11 +210,25 @@ async fn main() -> Outcome<()> {
             admin,
         };
         let (user, role, bounds) = if mode.ends_with("sales") {
-            (SALES, role_id(&db, "sales_workflow").await?, Assignment { company_id: Some(COMPANY), purpose: "Sales team".into(), ..Assignment::default() })
+            (
+                SALES,
+                role_id(&db, "sales_workflow").await?,
+                Assignment {
+                    company_id: Some(COMPANY),
+                    purpose: "Sales team".into(),
+                    ..Assignment::default()
+                },
+            )
         } else {
-            (AUDITOR, role_id(&db, "appointed_auditor").await?, engagement(COMPANY, None, Some("2099-12-31")))
+            (
+                AUDITOR,
+                role_id(&db, "appointed_auditor").await?,
+                engagement(COMPANY, None, Some("2099-12-31")),
+            )
         };
-        assigner.set(user, role, mode.starts_with("restore"), &bounds).await?;
+        assigner
+            .set(user, role, mode.starts_with("restore"), &bounds)
+            .await?;
         println!("Steering applied: {mode}");
         return Ok(());
     }
@@ -229,8 +249,10 @@ async fn main() -> Outcome<()> {
     let storage = format!("{root}/artifacts");
     std::fs::create_dir_all(&storage)?;
     std::fs::set_permissions(&storage, std::fs::Permissions::from_mode(0o700))?;
-    bilibi_finance_walkthrough_fixture::attachments::configure_storage(&db, services, &admin, &storage)
-        .await?;
+    bilibi_finance_walkthrough_fixture::attachments::configure_storage(
+        &db, services, &admin, &storage,
+    )
+    .await?;
     let assigner = Assigner {
         db: &db,
         grants: grants.clone(),
@@ -363,7 +385,12 @@ async fn main() -> Outcome<()> {
     let none: BTreeSet<&str> = BTreeSet::new();
     decide_all(&db, &auditor, COMPANY, &none, "before appointment").await?;
     assigner
-        .set(AUDITOR, auditor_role, true, &engagement(COMPANY, None, None))
+        .set(
+            AUDITOR,
+            auditor_role,
+            true,
+            &engagement(COMPANY, None, None),
+        )
         .await?;
     let reads: BTreeSet<&str> = AUDIT_READS.into_iter().collect();
     decide_all(&db, &auditor, COMPANY, &reads, "appointed auditor").await?;
@@ -372,7 +399,11 @@ async fn main() -> Outcome<()> {
     // Facade doors: reads in the assigned company only.
     ledger.get_book(&auditor, COMPANY).await?;
     assert_eq!(
-        ledger.get_entry(&auditor, COMPANY, posted.id).await?.lines.len(),
+        ledger
+            .get_entry(&auditor, COMPANY, posted.id)
+            .await?
+            .lines
+            .len(),
         4,
         "a mixed entry is shown complete"
     );
@@ -437,7 +468,11 @@ async fn main() -> Outcome<()> {
             .create_account(
                 &auditor,
                 COMPANY,
-                &NewAccount::new("9999", "Audit adjustment", bilibi_finance_ledger::AccountType::Expense)
+                &NewAccount::new(
+                    "9999",
+                    "Audit adjustment",
+                    bilibi_finance_ledger::AccountType::Expense
+                )
             )
             .await,
         Err(LedgerError::Unauthorized)
@@ -462,7 +497,10 @@ async fn main() -> Outcome<()> {
     pass("auditor cannot post, submit, change the chart, draft, issue or configure");
 
     // Payroll person-level detail needs the separate payroll evidence role.
-    assert!(payroll.list_posting_events(&auditor, COMPANY).await.is_err());
+    assert!(payroll
+        .list_posting_events(&auditor, COMPANY)
+        .await
+        .is_err());
     assert!(payroll
         .evidence_page(&auditor, COMPANY, "posting_event", None, None)
         .await
@@ -505,8 +543,22 @@ async fn main() -> Outcome<()> {
     payroll.list_posting_events(&auditor, COMPANY).await?;
     let mut with_payroll = reads.clone();
     with_payroll.insert("finance.payroll.view");
-    decide_all(&db, &auditor, COMPANY, &with_payroll, "auditor with payroll evidence").await?;
-    decide_all(&db, &auditor, OTHER_COMPANY, &none, "auditor with payroll evidence").await?;
+    decide_all(
+        &db,
+        &auditor,
+        COMPANY,
+        &with_payroll,
+        "auditor with payroll evidence",
+    )
+    .await?;
+    decide_all(
+        &db,
+        &auditor,
+        OTHER_COMPANY,
+        &none,
+        "auditor with payroll evidence",
+    )
+    .await?;
     let full = reports
         .export_auditor_pack(&auditor, COMPANY, date(2026, 3, 31))
         .await?;
@@ -530,13 +582,21 @@ async fn main() -> Outcome<()> {
 
     // Revoking payroll evidence blocks the old full pack at once, retained scope included.
     assigner
-        .set(AUDITOR, payroll_role, false, &engagement(COMPANY, None, None))
+        .set(
+            AUDITOR,
+            payroll_role,
+            false,
+            &engagement(COMPANY, None, None),
+        )
         .await?;
     assert!(reports
         .read_auditor_pack(&auditor, COMPANY, &full.id)
         .await
         .is_err());
-    assert!(payroll.list_posting_events(&auditor, COMPANY).await.is_err());
+    assert!(payroll
+        .list_posting_events(&auditor, COMPANY)
+        .await
+        .is_err());
     reports
         .read_auditor_pack(&auditor, COMPANY, &restricted.id)
         .await?;
@@ -572,11 +632,21 @@ async fn main() -> Outcome<()> {
         .await
         .is_err());
     assigner
-        .set(AUDITOR, auditor_role, true, &engagement(COMPANY, None, None))
+        .set(
+            AUDITOR,
+            auditor_role,
+            true,
+            &engagement(COMPANY, None, None),
+        )
         .await?;
     decide_all(&db, &auditor, COMPANY, &reads, "open-ended engagement").await?;
     assigner
-        .set(AUDITOR, auditor_role, false, &engagement(COMPANY, None, None))
+        .set(
+            AUDITOR,
+            auditor_role,
+            false,
+            &engagement(COMPANY, None, None),
+        )
         .await?;
     decide_all(&db, &auditor, COMPANY, &none, "revoked engagement").await?;
     assert!(ledger.get_book(&auditor, COMPANY).await.is_err());
@@ -614,8 +684,12 @@ async fn main() -> Outcome<()> {
     let sales_keys: BTreeSet<&str> = SALES_KEYS.into_iter().collect();
     decide_all(&db, &sales, COMPANY, &sales_keys, "sales workflow").await?;
     decide_all(&db, &sales, OTHER_COMPANY, &none, "sales workflow").await?;
-    ar.list_customers(&sales, COMPANY).await.map_err(|e| format!("sales list_customers: {e:?}"))?;
-    ar.get_document(&sales, COMPANY, draft.id).await.map_err(|e| format!("sales get_document: {e:?}"))?;
+    ar.list_customers(&sales, COMPANY)
+        .await
+        .map_err(|e| format!("sales list_customers: {e:?}"))?;
+    ar.get_document(&sales, COMPANY, draft.id)
+        .await
+        .map_err(|e| format!("sales get_document: {e:?}"))?;
     // An invoice draft also reads the customer relationship in Core Company, which
     // asks for Core's own tenant-wide `admin.company.view`; the role cannot hold
     // it (Core keys are not company-scoped), so it is granted on its own.
@@ -637,11 +711,20 @@ async fn main() -> Outcome<()> {
             &json!({"kind":"invoice","series_id":series.id,"customer_id":customer.id,
                     "lines":[{"description":"Consulting","quantity":"2","unit_price":"150.00"}]}),
         )
-        .await.map_err(|e| format!("sales create_draft: {e:?}"))?;
-    ar.update_draft(&sales, COMPANY, mine.id, &json!({"description":"Updated by sales"}))
-        .await?;
+        .await
+        .map_err(|e| format!("sales create_draft: {e:?}"))?;
+    ar.update_draft(
+        &sales,
+        COMPANY,
+        mine.id,
+        &json!({"description":"Updated by sales"}),
+    )
+    .await?;
     ar.discard_draft(&sales, COMPANY, mine.id).await?;
-    assert!(ar.create_draft(&sales, OTHER_COMPANY, &json!({})).await.is_err());
+    assert!(ar
+        .create_draft(&sales, OTHER_COMPANY, &json!({}))
+        .await
+        .is_err());
     pass("sales workflow lists customers, reads drafts and prepares, edits and discards a draft in Company 001 without ledger view");
 
     // Everything outside the workflow: ledger, reports, aging, issue, receipts, payables, payroll.
@@ -676,7 +759,9 @@ async fn main() -> Outcome<()> {
         .await
         .is_err());
     assert!(matches!(
-        reports.read_auditor_pack(&sales, COMPANY, &restricted.id).await,
+        reports
+            .read_auditor_pack(&sales, COMPANY, &restricted.id)
+            .await,
         Err(ReportsError::Unauthorized)
     ));
     assert!(ar

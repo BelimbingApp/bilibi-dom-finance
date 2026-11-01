@@ -5,7 +5,8 @@
 //! `agent_operations.rs`; its pages and their menu items are in `web/`.
 use crate::MODULE;
 use bilibi_authz::{
-    CapabilityDefinition as C, EngagementRole, RoleDefinition, VocabularyContribution, ENGAGEMENT_ROLES, VOCABULARY,
+    CapabilityDefinition as C, EngagementRole, RoleDefinition, VocabularyContribution,
+    ENGAGEMENT_ROLES, VOCABULARY,
 };
 use bilibi_module_registry::{Contribution, Provenance};
 
