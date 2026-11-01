@@ -454,6 +454,30 @@ impl MultiPartyChooser {
         }
         Ok(())
     }
+    /// Adds a party that arrived by reference (a drop or an "Add to…" link, see
+    /// `bilibi_records::Records::receive`) as a pick of the search would: it
+    /// is read under the reader's own scope and refused when it is already
+    /// listed, an existing customer or not available. No prior search is
+    /// needed, since the reference names the record itself.
+    pub async fn add(
+        &mut self,
+        pages: &PartyPickerContext,
+        scope: &Scope,
+        kind: &str,
+        id: &str,
+    ) -> Result<()> {
+        let value = format!("{kind}:{id}");
+        if self.rows.iter().any(|r| r.id == value) {
+            return Ok(());
+        }
+        let was_new = self.is_new();
+        self.chooser.choose(pages, scope, &value).await?;
+        self.capture()?;
+        if was_new {
+            self.chooser.mode = Mode::New;
+        }
+        Ok(())
+    }
     fn capture(&mut self) -> Result<()> {
         let resolved = self.chooser.selected.take().ok_or(Error::Invalid)?;
         let id = format!("{}:{}", resolved.reference.kind, resolved.id);

@@ -64,6 +64,8 @@ struct Create {
 
 pub(super) struct Customers {
     pages: Pages,
+    /// Records an "Add to…" link carried (`?drop=`), opened once on first use.
+    dropped: Option<String>,
     list: ListState,
     columns: ListColumns,
     all: Vec<Customer>,
@@ -87,6 +89,7 @@ impl Customers {
         ];
         Ok(Self {
             pages,
+            dropped: query.get(bilibi_records::DROP_PARAM).cloned(),
             list: ListState::parse(query, SPEC.clone()).map_err(|_| Error::Internal)?,
             columns: ListColumns::mount("receivables-customers-table", columns)
                 .map_err(|_| Error::Internal)?,
@@ -101,7 +104,109 @@ impl Customers {
 
     pub(super) async fn first(&mut self, scope: &Scope) -> Result<String> {
         self.load(scope).await?;
+        self.open_dropped(scope).await?;
         self.body()
+    }
+
+    /// The live page opens on the same records the first render did.
+    pub(super) async fn mounted(&mut self, scope: &Scope) -> Result<()> {
+        self.open_dropped(scope).await
+    }
+
+    async fn open_dropped(&mut self, scope: &Scope) -> Result<()> {
+        match self.dropped.take() {
+            Some(text) => self.receive_drop(scope, &text).await,
+            None => Ok(()),
+        }
+    }
+
+    /// Opens the Add customers dialog, as "+ Customer" does. False when the
+    /// person may not add customers.
+    async fn open_create(&mut self, scope: &Scope) -> Result<bool> {
+        if !self.pages.allowed(scope, crate::MANAGE_CUSTOMERS).await? {
+            self.flash.set(StatusKind::Error, super::DENIED);
+            return Ok(false);
+        }
+        let (customers, _) = self
+            .pages
+            .read_all::<Customer>(
+                scope,
+                "finance.receivables.customer.list",
+                json!({}),
+                ("after", "next_after_id"),
+            )
+            .await?;
+        let existing = customers
+            .into_iter()
+            .map(|customer| {
+                (
+                    customer.party.reference(),
+                    format!("/finance/receivables/customers/{}", customer.id),
+                )
+            })
+            .collect();
+        self.create = Some(Create {
+            values: HashMap::new(),
+            chooser: MultiPartyChooser::new(PREFIX, FORM).existing(
+                "Already a customer",
+                "View customer",
+                existing,
+            ),
+            errors: Errors::default(),
+        });
+        Ok(true)
+    }
+
+    /// Companies and contacts dropped on the page, or carried by "Add to…":
+    /// the Add customers dialog opens with them chosen, as if each had been
+    /// found in the chooser. The package is a request only: `Records::receive`
+    /// re-reads every record under this person's scope, the chooser reads it
+    /// again, and `customer.create` decides when the dialog is confirmed.
+    async fn receive_drop(&mut self, scope: &Scope, text: &str) -> Result<()> {
+        if !self.pages.allowed(scope, crate::MANAGE_CUSTOMERS).await? {
+            self.flash.set(StatusKind::Error, super::DENIED);
+            return Ok(());
+        }
+        let dropped = match self
+            .pages
+            .records
+            .receive(scope, super::CUSTOMER_TARGET, text)
+            .await?
+        {
+            Ok(dropped) => dropped,
+            Err(refusal) => {
+                self.flash.set(StatusKind::Error, refusal.message());
+                return Ok(());
+            }
+        };
+        if self.create.is_none() && !self.open_create(scope).await? {
+            return Ok(());
+        }
+        let picker = self.pages.party_picker();
+        let mut refused = 0;
+        if let Some(create) = self.create.as_mut() {
+            for record in &dropped {
+                match create
+                    .chooser
+                    .add(&picker, scope, &record.reference.kind, &record.id)
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(Error::Invalid | Error::NotFound | Error::Forbidden) => refused += 1,
+                    Err(error) => return Err(error),
+                }
+            }
+            create.errors = Errors::default();
+        }
+        if refused > 0 {
+            self.flash.set(
+                StatusKind::Error,
+                format!(
+                    "{refused} of the dropped records could not be added: they are already customers or not available to you."
+                ),
+            );
+        }
+        Ok(())
     }
 
     async fn load(&mut self, scope: &Scope) -> Result<()> {
@@ -270,13 +375,27 @@ impl Customers {
             Some(create) => Some(self.dialog(create)?),
             None => None,
         };
-        f::frame(
+        let html = f::frame(
             "receivables-customers",
             PageVariant::List,
             &self.flash,
             body,
             modal,
-        )
+        )?;
+        // Companies and contacts dropped on the page open the same dialog as
+        // "+ Customer", so the tile accepts them only while the button shows.
+        let zone = self
+            .pages
+            .records
+            .drop_target(super::CUSTOMER_TARGET)
+            .filter(|_| self.can_add)
+            .map(|target| target.zone());
+        Ok(match zone {
+            Some(zone) => zone
+                .wrap("receivables-customers-drop", Html::raw(html))
+                .to_string(),
+            None => html,
+        })
     }
 
     fn dialog(&self, create: &Create) -> Result<Html> {
@@ -524,37 +643,11 @@ impl Customers {
                 }
             }
             "show_create" => {
-                if self.pages.allowed(scope, crate::MANAGE_CUSTOMERS).await? {
-                    let (customers, _) = self
-                        .pages
-                        .read_all::<Customer>(
-                            scope,
-                            "finance.receivables.customer.list",
-                            json!({}),
-                            ("after", "next_after_id"),
-                        )
-                        .await?;
-                    let existing = customers
-                        .into_iter()
-                        .map(|customer| {
-                            (
-                                customer.party.reference(),
-                                format!("/finance/receivables/customers/{}", customer.id),
-                            )
-                        })
-                        .collect();
-                    self.create = Some(Create {
-                        values: HashMap::new(),
-                        chooser: MultiPartyChooser::new(PREFIX, FORM).existing(
-                            "Already a customer",
-                            "View customer",
-                            existing,
-                        ),
-                        errors: Errors::default(),
-                    });
-                } else {
-                    self.flash.set(StatusKind::Error, super::DENIED);
-                }
+                self.open_create(scope).await?;
+            }
+            bilibi_records::DROP_EVENT => {
+                let text = v["records"].as_str().ok_or(Error::Invalid)?;
+                self.receive_drop(scope, text).await?;
             }
             "cancel_create" => self.create = None,
             "customer_change" => self.take_form(scope, v).await?,

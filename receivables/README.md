@@ -21,6 +21,8 @@ Attributes are JSON objects with Bilimbi's field names. Partial updates preserve
 
 ## Customers and Core parties
 
+**Drop target (issue 265).** Companies and Contacts dragged from another tile onto Customers, or chosen with "Add to…" on their own list, open the Add customers dialog with them already chosen (`receivables.customer`, up to 20 at a time, `bilibi_records::drop_target!` in `src/web/mod.rs`). Nothing is written until the dialog is confirmed, and confirming calls `customer.create` as "+ Customer" does, so permissions, rules and history are the same. A party that is already a customer, or that the person may not see, is left out with a notice.
+
 Every customer is linked at creation to one Core Company or Person through Base Records (`record_kind`, `record_id`). Finance stores payment terms and availability, and owns no customer code or party details. The immutable Core code is the customer code in lists, search, documents, reports and evidence. Company and Person codes each have tenant-wide uniqueness within their Core kind; references and imports always include the kind.
 
 `customer.create` accepts exactly one of an existing `record_kind` (`company` or `person`) with `record_id`, `new_company`, or `new_person`. The shared `PartyLinks` helper in Ledger validates the reference on the transaction's connection. Core creation, the Finance record, the customer relationship and audit records commit together. A refusal rolls everything back. The party link cannot change. `customer.update` accepts only payment terms and availability.

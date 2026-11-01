@@ -27,6 +27,8 @@ struct Create {
 }
 pub(super) struct Vendors {
     pages: Pages,
+    /// Records an "Add to…" link carried (`?drop=`), opened once on first use.
+    dropped: Option<String>,
     all: Vec<Vendor>,
     history: Vec<SupplierHistory>,
     list: ListState,
@@ -43,6 +45,7 @@ impl Vendors {
     pub(super) fn new(pages: Pages, query: &HashMap<String, String>) -> Result<Self> {
         Ok(Self {
             pages,
+            dropped: query.get(bilibi_records::DROP_PARAM).cloned(),
             all: vec![],
             history: vec![],
             list: ListState::parse(query, SPEC.clone()).map_err(|_| Error::Invalid)?,
@@ -162,6 +165,99 @@ impl Vendors {
             field = field.readonly();
         }
         field
+    }
+    /// Opens the Add vendor dialog, as "Add vendor" does.
+    async fn open_create(&mut self, s: &Scope) -> Result<()> {
+        self.reload(s).await?;
+        let existing = self
+            .all
+            .iter()
+            .map(|vendor| {
+                let query = url::form_urlencoded::Serializer::new(String::new())
+                    .append_pair("search", &vendor.code)
+                    .finish();
+                (
+                    format!("{}:{}", vendor.record_kind, vendor.record_id),
+                    format!(
+                        "/finance/payables/vendors?{query}#payables-vendors-table-row-{}",
+                        vendor.id
+                    ),
+                )
+            })
+            .collect();
+        self.create = Some(Create {
+            chooser: MultiPartyChooser::new("vendor-new", FORM).existing(
+                "Already a supplier",
+                "View supplier",
+                existing,
+            ),
+            values: HashMap::new(),
+            errors: PartyErrors::default(),
+        });
+        Ok(())
+    }
+
+    /// The records an "Add to…" link carried, opened once.
+    pub(super) async fn open_dropped(&mut self, s: &Scope) -> Result<()> {
+        match self.dropped.take() {
+            Some(text) => self.receive_drop(s, &text).await,
+            None => Ok(()),
+        }
+    }
+
+    /// Companies and contacts dropped on the page, or carried by "Add to…":
+    /// the Add vendor dialog opens with them chosen, as if each had been found
+    /// in the chooser. The package is a request only: `Records::receive`
+    /// re-reads every record under this person's scope, the chooser reads it
+    /// again, and `vendor.create` decides when the dialog is confirmed.
+    async fn receive_drop(&mut self, s: &Scope, text: &str) -> Result<()> {
+        if !self.pages.allowed(s, MANAGE_SETTINGS).await? {
+            self.notice = Some((
+                StatusKind::Error,
+                "You do not have permission to manage vendors.".into(),
+            ));
+            return Ok(());
+        }
+        let dropped = match self
+            .pages
+            .records
+            .receive(s, super::VENDOR_TARGET, text)
+            .await?
+        {
+            Ok(dropped) => dropped,
+            Err(refusal) => {
+                self.notice = Some((StatusKind::Error, refusal.message()));
+                return Ok(());
+            }
+        };
+        if self.create.is_none() {
+            self.open_create(s).await?;
+        }
+        let context = self.context();
+        let mut refused = 0;
+        if let Some(create) = self.create.as_mut() {
+            for record in &dropped {
+                match create
+                    .chooser
+                    .add(&context, s, &record.reference.kind, &record.id)
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(Error::Invalid | Error::NotFound | Error::Forbidden) => refused += 1,
+                    Err(error) => return Err(error),
+                }
+            }
+            create.errors = PartyErrors::default();
+        }
+        if refused > 0 {
+            self.notice = Some((
+                StatusKind::Error,
+                format!(
+                    "{refused} of the dropped records could not be added: they are already suppliers or not available to you."
+                ),
+            ));
+        }
+        Ok(())
     }
     pub(super) async fn body(&self, s: &Scope) -> Result<String> {
         let mut actions = Html::EMPTY;
@@ -559,13 +655,27 @@ impl Vendors {
         if let Some((key, values, errors)) = &self.mapping {
             body.push(&self.map_dialog(key, values, errors)?);
         }
-        render(bilibi_ui::Page {
+        let html = render(bilibi_ui::Page {
             id: "payables-vendors",
             variant: PageVariant::List,
             class: "",
             body,
+        })?;
+        // Companies and contacts dropped on the page open the same dialog as
+        // "Add vendor", so the tile accepts them only while the button shows.
+        let zone = self
+            .pages
+            .records
+            .drop_target(super::VENDOR_TARGET)
+            .filter(|_| self.can_manage);
+        Ok(match zone {
+            Some(target) => target
+                .zone()
+                .wrap("payables-vendors-drop", html)
+                .as_str()
+                .to_owned(),
+            None => html.as_str().to_owned(),
         })
-        .map(|h| h.as_str().to_owned())
     }
     fn modal(&self, id: &str, title: &str, body: Html, event: &str, label: &str) -> Result<Html> {
         let mut actions = Self::button(&format!("{id}-cancel"), "cancel_vendor", "Cancel", "", "")?;
@@ -706,6 +816,7 @@ impl Vendors {
                 | "confirm_vendor_mapping"
                 | "record_vendor_relationship"
                 | "show_mapping"
+                | bilibi_records::DROP_EVENT
         ) && !self.pages.allowed(s, MANAGE_SETTINGS).await?
         {
             self.notice = Some((
@@ -729,33 +840,12 @@ impl Vendors {
             }
             "show_vendor" => {
                 if self.pages.allowed(s, MANAGE_SETTINGS).await? {
-                    self.reload(s).await?;
-                    let existing = self
-                        .all
-                        .iter()
-                        .map(|vendor| {
-                            let query = url::form_urlencoded::Serializer::new(String::new())
-                                .append_pair("search", &vendor.code)
-                                .finish();
-                            (
-                                format!("{}:{}",vendor.record_kind,vendor.record_id),
-                                format!(
-                                    "/finance/payables/vendors?{query}#payables-vendors-table-row-{}",
-                                    vendor.id
-                                ),
-                            )
-                        })
-                        .collect();
-                    self.create = Some(Create {
-                        chooser: MultiPartyChooser::new("vendor-new", FORM).existing(
-                            "Already a supplier",
-                            "View supplier",
-                            existing,
-                        ),
-                        values: HashMap::new(),
-                        errors: PartyErrors::default(),
-                    });
+                    self.open_create(s).await?;
                 }
+            }
+            bilibi_records::DROP_EVENT => {
+                let text = v["records"].as_str().ok_or(Error::Invalid)?;
+                self.receive_drop(s, text).await?;
             }
             "cancel_vendor" => {
                 self.create = None;

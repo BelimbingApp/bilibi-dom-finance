@@ -41,6 +41,26 @@ use std::{collections::BTreeMap, sync::Arc};
 
 pub(crate) const PAGES: &str = "finance/receivables.pages";
 pub(crate) const CUSTOMERS: &str = "/finance/receivables/customers";
+/// The drop target of the Add customers dialog (`bilibi_records::drop_target!`).
+pub(crate) const CUSTOMER_TARGET: &str = "receivables.customer";
+
+// Companies and contacts dropped on Customers, or carried by "Add to…", open
+// the Add customers dialog with them chosen; the dialog commits
+// `customer.create` as it does for "+ Customer". The chooser lists many
+// parties at once, so the page takes several records per drop.
+bilibi_records::drop_target!(
+    "finance/receivables",
+    bilibi_records::DropTarget {
+        id: CUSTOMER_TARGET,
+        service: PAGES,
+        contract: "finance.receivables.customer.create",
+        capability: crate::MANAGE_CUSTOMERS,
+        path: CUSTOMERS,
+        label: "Add as customer",
+        accepts: &["company", "person"],
+        max: 20,
+    }
+);
 pub(crate) const INVOICES: &str = "/finance/receivables/invoices";
 pub(crate) const RECEIPTS: &str = "/finance/receivables/receipts";
 const AGING: &str = "/finance/receivables/aging";
@@ -574,7 +594,12 @@ impl Page<Scope, Error> for Pages {
     }
 
     fn mount<'a>(&'a self, r: PageRequest<'a, Scope>) -> MountFuture<'a, Scope, Error> {
-        Box::pin(async move { Ok(Some(self.state(&r)?.into_live())) })
+        Box::pin(async move {
+            let scope = r.scope.ok_or(Error::Unauthorized)?;
+            let mut state = self.state(&r)?;
+            state.mounted(scope).await?;
+            Ok(Some(state.into_live()))
+        })
     }
 }
 
@@ -627,6 +652,15 @@ impl State {
             State::Receipt(s) => s.first(scope).await,
             State::Aging(s) => s.first(scope).await,
             State::Settings(s) => s.first(scope).await,
+        }
+    }
+
+    /// A page that opens on records an address carried does so again when it
+    /// goes live, so its first update keeps what the first render showed.
+    async fn mounted(&mut self, scope: &Scope) -> Result<()> {
+        match self {
+            State::Customers(s) => s.mounted(scope).await,
+            _ => Ok(()),
         }
     }
 
