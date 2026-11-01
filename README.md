@@ -23,7 +23,7 @@ The ledger contributes agent operations through Bilibi's shared `/api/v1` and `/
 
 ## Status
 
-Finance is in development and has no production users yet. The Malaysian starter chart and tax treatments are drafts that an accountant has not reviewed. Full conversion of existing books, appointed-auditor access and full statutory statements are not built. Bounded opening-balance and register imports and source-schedule retention exist; their limits are described in the module READMEs.
+Finance is in development and has no production users yet. The Malaysian starter chart and tax treatments are drafts that an accountant has not reviewed. Full conversion of existing books, strict sales-only record segregation and full statutory statements are not built. Bounded opening-balance and register imports and source-schedule retention exist; their limits are described in the module READMEs.
 
 ## Mount
 

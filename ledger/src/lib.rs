@@ -159,6 +159,14 @@ inventory::submit! {
 
 pub type Result<T> = std::result::Result<T, LedgerError>;
 
+/// A book's currency facts alone: what a page needs to format an amount.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct BookFigures {
+    pub company_id: i64,
+    pub currency_code: String,
+    pub minor_units: MinorUnits,
+}
+
 /// Why a call did not happen (Bilimbi's refusal atoms and changeset errors).
 #[derive(Debug, thiserror::Error)]
 pub enum LedgerError {
@@ -1258,6 +1266,50 @@ impl Ledger {
         books::find(client, scope.tenant(), company_id)
             .await?
             .ok_or(LedgerError::BookNotOpen)
+    }
+
+    /// The book's currency and minor units for a record owner that holds its
+    /// own Finance capability for the company but not `finance.ledger.view`
+    /// (a sales-workflow person preparing a draft). `authority` is the
+    /// caller's own capability and is decided here for that company; only the
+    /// currency facts are returned, never an entry, figure or account.
+    pub async fn book_figures_on(
+        &self,
+        client: &dyn bilibi_agent_api::OperationClient,
+        scope: &Scope,
+        company_id: i64,
+        authority: &str,
+    ) -> Result<BookFigures> {
+        if !authority.starts_with("finance.") || authority == VIEW {
+            return Err(LedgerError::InvalidOption);
+        }
+        agent_operations::authorize_on(client, scope, company_id, authority).await?;
+        let book = books::find(client, scope.tenant(), company_id)
+            .await?
+            .ok_or(LedgerError::BookNotOpen)?;
+        Ok(BookFigures {
+            company_id: book.company_id,
+            currency_code: book.currency_code,
+            minor_units: book.minor_units,
+        })
+    }
+
+    /// The chart on the caller's connection for a validation that needs only
+    /// which accounts exist and may be posted to, decided under the caller's
+    /// own Finance capability (see [`Ledger::book_figures_on`]). A person
+    /// without `finance.ledger.view` is never shown the chart by this.
+    pub async fn list_accounts_for_on(
+        &self,
+        client: &dyn bilibi_agent_api::OperationClient,
+        scope: &Scope,
+        company_id: i64,
+        authority: &str,
+    ) -> Result<Vec<Account>> {
+        if !authority.starts_with("finance.") || authority == VIEW {
+            return Err(LedgerError::InvalidOption);
+        }
+        agent_operations::authorize_on(client, scope, company_id, authority).await?;
+        Ok(accounts::list(client, scope.tenant(), company_id).await?)
     }
 
     /// Opens the company's book once (`finance.ledger.accounts.manage`); a

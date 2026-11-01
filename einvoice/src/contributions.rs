@@ -38,10 +38,14 @@ pub(crate) use provenance;
 inventory::submit! { Contribution::new(VOCABULARY, "finance/einvoice", provenance!(), &VocabularyContribution {
     domains: &["finance"],
     verbs: &["issue", "submit", "cancel"],
-    capabilities: &[C::tenant(VIEW), C::tenant(ISSUE), C::tenant(SUBMIT), C::tenant(CANCEL), C::tenant(SETTINGS)],
+    capabilities: &[C::company(VIEW), C::tenant(ISSUE), C::tenant(SUBMIT), C::tenant(CANCEL), C::tenant(SETTINGS)],
     roles: &[RoleDefinition {
         code: "tenant_owner", name: "Tenant Owner", description: "Contributed system role; reconciled explicitly",
         grant_all: false, capabilities: &CAPABILITIES,
+    }, RoleDefinition {
+        code: "appointed_auditor", name: "Appointed auditor",
+        description: "Read-only access to one company's ledger, reports and source evidence for a named audit engagement.",
+        grant_all: false, capabilities: &[VIEW],
     }],
     system_principals: &[],
 }) }

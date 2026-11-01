@@ -734,6 +734,8 @@ Opening a book through `finance.ledger.book.open` may include `separation_requir
 
 The ready-made **External accountant** role reads the complete ledger and reports, exports accounting records and submits proposed adjusting journals for approval. It cannot directly post, approve, close periods, change settings or read Payroll source records. Posted payroll journal lines remain visible. See [Accountant access](accountant-access.md) for the exact boundary, installation steps, evidence and unresolved responsibility restrictions.
 
+Two more ready-made roles use the Platform's company- and date-bound assignments: **Appointed auditor** (read-only, one company, a purpose, optional dates; **Appointed auditor: payroll evidence** adds Payroll separately) and **Sales workflow** (customers and draft invoices without ledger view; a workflow boundary, not data segregation). See [Appointed auditor and sales workflow access](appointed-auditor-and-sales-access.md) for the boundary, the open questions for the company's advisers and the running proof.
+
 ### Reuse a company's chart
 
 Save a reusable chart from **Chart of accounts → Save reusable chart** in the current company. Give it a unique key, name and description, choose any group branches that should be optional, then review every row before publishing. For example, a practice can make its payroll group optional so an adopter without employees leaves that section out.

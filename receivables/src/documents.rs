@@ -191,11 +191,20 @@ impl Receivables {
     ) -> Result<Prepared> {
         self.join(client, scope, company, MANAGE_DOCUMENTS).await?;
         let tenant = scope.tenant();
-        let book = self.ledger.get_book_on(client, scope, company).await?;
+        // A draft is prepared under Receivables' own capability, so a person
+        // without ledger view (the sales workflow) can prepare one. The ledger
+        // answers the book's currency and the chart for validation only.
+        let book = self
+            .ledger
+            .book_figures_on(client, scope, company, MANAGE_DOCUMENTS)
+            .await?;
         let setup = store::find(client, SETUPS, tenant, company, None)
             .await?
             .ok_or(R::NotConfigured)?;
-        let chart = self.ledger.list_accounts_on(client, scope, company).await?;
+        let chart = self
+            .ledger
+            .list_accounts_for_on(client, scope, company, MANAGE_DOCUMENTS)
+            .await?;
         let old = if let Some(id) = id {
             Some(draft(client, tenant, company, id).await?)
         } else {

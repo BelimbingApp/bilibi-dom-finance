@@ -18,6 +18,7 @@ pub const CAPABILITIES: [&str; 5] = [
 // platform's; this module's own verbs carry the `sst-` prefix.
 inventory::submit! { Contribution::new(VOCABULARY,MODULE,Provenance {module:MODULE,source:file!(),line:line!()},&VocabularyContribution {
     domains:&[],verbs:&["sst-prepare", "sst-finalise", "sst-amend"],
-    capabilities:&[C::tenant(VIEW),C::tenant(MANAGE_SETTINGS),C::tenant(PREPARE_RETURNS),C::tenant(FINALISE_RETURNS),C::tenant(AMEND_RETURNS)],
-    roles:&[RoleDefinition {code:"tenant_owner",name:"Tenant Owner",description:"Contributed system role; reconciled explicitly",grant_all:false,capabilities:&CAPABILITIES}],system_principals:&[],
+    capabilities:&[C::company(VIEW),C::tenant(MANAGE_SETTINGS),C::tenant(PREPARE_RETURNS),C::tenant(FINALISE_RETURNS),C::tenant(AMEND_RETURNS)],
+    roles:&[RoleDefinition {code:"tenant_owner",name:"Tenant Owner",description:"Contributed system role; reconciled explicitly",grant_all:false,capabilities:&CAPABILITIES},
+        RoleDefinition { code: "appointed_auditor", name: "Appointed auditor", description: "Read-only access to one company's ledger, reports and source evidence for a named audit engagement.", grant_all: false, capabilities: &[VIEW] }],system_principals:&[],
 }) }

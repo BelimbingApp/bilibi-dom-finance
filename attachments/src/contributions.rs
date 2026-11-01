@@ -47,10 +47,14 @@ macro_rules! provenance {
 inventory::submit! { Contribution::new(VOCABULARY, "finance/attachments", provenance!(), &VocabularyContribution {
     domains: &[],
     verbs: &[],
-    capabilities: &[C::tenant(VIEW), C::tenant(CREATE), C::tenant(DELETE), C::tenant(MANAGE_RETENTION)],
+    capabilities: &[C::company(VIEW), C::tenant(CREATE), C::tenant(DELETE), C::tenant(MANAGE_RETENTION)],
     roles: &[RoleDefinition {
         code: "tenant_owner", name: "Tenant Owner", description: "Contributed system role; reconciled explicitly",
         grant_all: false, capabilities: &CAPABILITIES,
+    }, RoleDefinition {
+        code: "appointed_auditor", name: "Appointed auditor",
+        description: "Read-only access to one company's ledger, reports and source evidence for a named audit engagement.",
+        grant_all: false, capabilities: &[VIEW],
     }],
     system_principals: &[SystemPrincipalDefinition { name: REFRESH_PRINCIPAL, capabilities: &[MANAGE_RETENTION] }],
 }) }

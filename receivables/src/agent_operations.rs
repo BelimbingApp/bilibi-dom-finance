@@ -465,6 +465,7 @@ enum Read {
     Payments,
     Aging,
     WriteOffAccounts,
+    BookFigures,
 }
 impl ReadHandler for Read {
     fn owner(&self) -> &'static str {
@@ -488,6 +489,9 @@ impl ReadHandler for Read {
             let after = input["after"].as_i64().unwrap_or(0);
             let result:Result<Value> = async {
                 Ok(match *self {
+                    // Only how an amount is written (currency and decimal places), decided
+                    // under Receivables view, so a page can format money without ledger view.
+                    Self::BookFigures => json!({"book":service.ledger.book_figures_on(client,scope,company,VIEW).await?}),
                     Self::WriteOffAccounts => json!({"accounts":write_offs::eligible_offsets(client,service,scope,company).await?}),
                     Self::Setup => json!({"setup":store::find(client,SETUPS,tenant,company,None).await?.map(store::decode::<Setup>).transpose()?}),
                     Self::Codes(table) => {
@@ -848,6 +852,7 @@ inventory::submit! { Contribution::new(DEFINITIONS,"finance/receivables.operatio
         Operation {key:"finance.receivables.write_off.approve",title:"Approve a bad-debt journal",summary:"Require a different reviewer, then post the owned journal and reduce the invoice balance atomically. No tax relief or filing.",keywords:&[],capability:APPROVE_WRITE_OFFS,input:write_off_decide,output,handler:Handler::SafeWrite(&Write::BadDebt("approve")),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.write_off.reject",title:"Reject a bad-debt journal",summary:"Keep the proposed journal and rejection reason without posting.",keywords:&[],capability:APPROVE_WRITE_OFFS,input:write_off_decide,output,handler:Handler::SafeWrite(&Write::BadDebt("reject")),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.write_off.reverse",title:"Reverse a bad-debt journal",summary:"Restore the invoice balance with an owned mirror journal before recording any recovery receipt. Also requires a different reviewer.",keywords:&[],capability:APPROVE_WRITE_OFFS,input:write_off_reverse,output,handler:Handler::SafeWrite(&Write::BadDebt("reverse")),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.receivables.book_figures.get",title:"Read how amounts are written",summary:"Read the company's currency code and decimal places so amounts display correctly. Needs only receivables view, not ledger view; nothing else of the book is returned.",keywords:&[],capability:VIEW,input:target,output,handler:Handler::Read(&Read::BookFigures),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.setup.get",title:"Read receivables setup",summary:"Read default control and income accounts; setup is null until configured.",keywords:&[],capability:VIEW,input:target,output,handler:Handler::Read(&Read::Setup),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.setup.changes",title:"Read setup history",summary:"Read account-default changes in ascending identifier order.",keywords:&[],capability:VIEW,input:history,output,handler:Handler::Read(&Read::History),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.series.list",title:"List numbering series",summary:"Read active and inactive series in code order with a bounded cursor.",keywords:&[],capability:VIEW,input:codes,output,handler:Handler::Read(&Read::Codes(SERIES)),channels:Channels::Every,step_up:&[]},
