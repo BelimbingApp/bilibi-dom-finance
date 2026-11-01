@@ -205,6 +205,10 @@ async fn main() -> Outcome<()> {
     let root = std::env::var("AUDITOR_PACK_PROOF_DIR")?;
     std::fs::create_dir_all(&root)?;
     std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))?;
+    let storage = format!("{root}/artifacts");
+    std::fs::create_dir_all(&storage)?;
+    bilibi_finance_walkthrough_fixture::attachments::configure_storage(&db, services, &admin, &storage)
+        .await?;
     let assigner = Assigner {
         db: &db,
         grants: grants.clone(),
