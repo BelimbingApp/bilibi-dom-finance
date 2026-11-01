@@ -8,12 +8,7 @@ use bilibi_core::agent_access::{
 use bilibi_database::{pool, Error};
 use bilibi_finance_walkthrough_fixture::sign_in;
 use serde_json::json;
-use std::{
-    fs::OpenOptions,
-    io::Write,
-    os::unix::fs::OpenOptionsExt,
-    time::{Duration, SystemTime},
-};
+use std::{fs::OpenOptions, io::Write, os::unix::fs::OpenOptionsExt};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -99,10 +94,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("manager", sign_in(&db, services, tenant, 10001).await?),
         ("approver", sign_in(&db, services, tenant, 10002).await?),
     ] {
-        let expiry = SystemTime::now() + Duration::from_secs(3600);
         let device = access.start_device(CLIENT_ID, "ledger-walkthrough").await?;
         access
-            .decide(&scope, &device.user_code, Decision::Approve, expiry)
+            .decide(&scope, &device.user_code, Decision::Approve)
             .await?;
         let api = access.exchange(CLIENT_ID, &device.device_code).await?;
         let verifier = "ledger-walkthrough-verifier-with-at-least-forty-three-characters";
@@ -116,7 +110,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             code_challenge_method: "S256".into(),
             state: Some("ledger-walkthrough".into()),
         };
-        let code = access.authorize(&scope, &params, &resource, expiry).await?;
+        let code = access.authorize(&scope, &params, &resource).await?;
         let mcp = access
             .exchange_code(
                 &CodeExchange {

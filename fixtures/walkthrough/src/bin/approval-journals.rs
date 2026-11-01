@@ -15,7 +15,6 @@ use bilibi_tenancy::{Authentication, ProofFuture, Scope};
 use bilibi_workflow::{ActionRequest, ApprovalItem, ApprovalPolicyChange, ApprovalQuery, Engine};
 use jiff::civil::date;
 use serde_json::json;
-use std::time::{Duration, SystemTime};
 use tokio_postgres::Transaction;
 
 bilibi_walkthrough_fixture::walkthrough_vocabulary!();
@@ -130,14 +129,7 @@ async fn agent(app: &bilibi_web::App, scope: &Scope, origin: &str) -> Outcome<Sc
         code_challenge_method: "S256".into(),
         state: None,
     };
-    let code = access
-        .authorize(
-            scope,
-            &params,
-            &resource,
-            SystemTime::now() + Duration::from_secs(3600),
-        )
-        .await?;
+    let code = access.authorize(scope, &params, &resource).await?;
     let token = access
         .exchange_code(
             &CodeExchange {

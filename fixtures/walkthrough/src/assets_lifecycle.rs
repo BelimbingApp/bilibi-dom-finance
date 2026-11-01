@@ -4,12 +4,7 @@ use bilibi_database::{Db, Error, MutationBoundary};
 use bilibi_module_registry::Services;
 use bilibi_settings::{Settings, Target};
 use serde_json::json;
-use std::{
-    fs::OpenOptions,
-    io::Write,
-    os::unix::fs::OpenOptionsExt,
-    time::{Duration, SystemTime},
-};
+use std::{fs::OpenOptions, io::Write, os::unix::fs::OpenOptionsExt};
 pub async fn credentials(db: &Db, services: &Services) -> Result<(), Box<dyn std::error::Error>> {
     use bilibi_core::agent_access::{
         code_challenge, AgentAccess, AuthorizeParams, ClientRegistration, CodeExchange,
@@ -70,14 +65,7 @@ pub async fn credentials(db: &Db, services: &Services) -> Result<(), Box<dyn std
             code_challenge_method: "S256".into(),
             state: None,
         };
-        let code = access
-            .authorize(
-                &scope,
-                &params,
-                &resource,
-                SystemTime::now() + Duration::from_secs(3600),
-            )
-            .await?;
+        let code = access.authorize(&scope, &params, &resource).await?;
         let token = access
             .exchange_code(
                 &CodeExchange {
