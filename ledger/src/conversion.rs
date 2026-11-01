@@ -14,6 +14,23 @@ pub struct OpeningContext {
 }
 
 impl Ledger {
+    /// Validate or capture a company's committed posting boundary on the handed snapshot.
+    pub async fn entry_boundary_on(
+        &self,
+        client: &dyn OperationClient,
+        scope: &Scope,
+        company: i64,
+        through: Option<i64>,
+    ) -> Result<i64> {
+        agent_operations::authorize_on(client, scope, company, VIEW).await?;
+        let maximum:i64=client.query_opt("SELECT COALESCE(max(entry_number),0) FROM finance_ledger_entries WHERE tenant_id=$1 AND company_id=$2",&[&scope.tenant(),&company]).await?.ok_or(Error::Internal)?.get(0);
+        let pin = through.unwrap_or(maximum);
+        if pin < 0 || pin > maximum {
+            return Err(LedgerError::InvalidOption);
+        }
+        Ok(pin)
+    }
+
     /// The approved, unreversed conversion journal on the caller's connection.
     /// A waiting journal is not an opening balance against which items can tie.
     pub async fn opening_context_on(
@@ -76,7 +93,24 @@ impl Ledger {
         agent_operations::authorize_on(tx.sql(), scope, company, VIEW).await?;
         lock(tx, scope, company).await?;
         let context = self.opening_context_on(tx.sql(), scope, company).await?;
-        if !entries::owner_valid(owner) || context.balances.get(&account) != Some(&balance) {
+        let eligible = self
+            .list_accounts_on(tx.sql(), scope, company)
+            .await?
+            .iter()
+            .any(|a| {
+                a.id == account
+                    && !a.is_group
+                    && [AccountType::Asset, AccountType::Liability].contains(&a.account_type)
+            });
+        if !entries::owner_valid(owner)
+            || !eligible
+            || context
+                .balances
+                .get(&account)
+                .copied()
+                .unwrap_or(Money::ZERO)
+                != balance
+        {
             return Err(LedgerError::Invalid(vec![FieldError::new(
                 "items",
                 "must reconcile exactly to the approved opening account balance",

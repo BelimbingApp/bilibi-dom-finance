@@ -145,7 +145,9 @@ impl Opening {
                 "conversion-balances",
                 vec![
                     BuiltinColumn::new("account", "Account"),
-                    BuiltinColumn::new("register", "Register balance").right(),
+                    BuiltinColumn::new("debits", "Gross debits").right(),
+                    BuiltinColumn::new("credits", "Gross credits").right(),
+                    BuiltinColumn::new("register", "Net register balance").right(),
                     BuiltinColumn::new("opening", "Opening balance").right(),
                     BuiltinColumn::new("difference", "Difference").right(),
                 ],
@@ -155,6 +157,10 @@ impl Opening {
                 "conversion-rows",
                 vec![
                     BuiltinColumn::new("source", "Source ID"),
+                    BuiltinColumn::new("type", "Item and source type"),
+                    BuiltinColumn::new("system", "Source system"),
+                    BuiltinColumn::new("currency", "Currency"),
+                    BuiltinColumn::new("tax", "Source tax facts"),
                     BuiltinColumn::new("record", "Record"),
                     BuiltinColumn::new("date", "Original date"),
                     BuiltinColumn::new("original", "Original total").right(),
@@ -311,7 +317,7 @@ impl Opening {
                     id: "conversion-boundary",
                     kind: StatusKind::Info,
                     body: Html::text(
-                        "Import positive residual invoices, including partially settled invoices. Map each row to its control account and review each approved opening balance. Opening credits, source-period tax detail and historical transactions remain outside this import.",
+                        "Import invoices and unapplied credits, including partly settled items. Retain source gross and tax facts, map each item to its original control, and review each control separately. No new tax or ledger entry is posted.",
                     ),
                     ..Alert::default()
                 })?;
@@ -451,6 +457,10 @@ impl Opening {
                     .enumerate()
                 {
                     let id = account["id"].as_i64().ok_or(Error::Internal)?.to_string();
+                    let zero = account["opening_balance"]
+                        .as_str()
+                        .and_then(|v| bilibi_finance_ledger::Money::parse(v, units).ok())
+                        == Some(bilibi_finance_ledger::Money::ZERO);
                     let opening_balance = account["opening_balance"]
                         .as_str()
                         .and_then(|value| bilibi_finance_ledger::Money::parse(value, units).ok())
@@ -477,9 +487,10 @@ impl Opening {
                             format!("conversion[opening_account_classifications][{id}]"),
                         )
                         .label(format!(
-                            "{} · {} *",
+                            "{} · {}{}",
                             account["name"].as_str().unwrap_or(""),
-                            account["code"].as_str().unwrap_or("")
+                            account["code"].as_str().unwrap_or(""),
+                            if zero { "" } else { " *" }
                         ))
                         .aria_label(format!(
                             "Classify {}",
@@ -490,7 +501,7 @@ impl Opening {
                             selected_classifications
                                 .get(&id)
                                 .and_then(Value::as_str)
-                                .unwrap_or(""),
+                                .unwrap_or(if zero { "not_a_control" } else { "" }),
                         )
                         .errors(if index == 0 {
                             self.errors("opening_account_classifications")
@@ -598,6 +609,17 @@ impl Opening {
                     FlexRow::new(text("source_id"))
                         .cell("source", Cell::text(text("source_id")))
                         .cell(
+                            "type",
+                            Cell::text(format!(
+                                "{} · {}",
+                                super::format::opening_item_kind_label(text("item_kind")),
+                                text("source_kind")
+                            )),
+                        )
+                        .cell("system", Cell::text(text("source_system")))
+                        .cell("currency", Cell::text(text("currency_code")))
+                        .cell("tax", Cell::text(r["source_tax_facts"].to_string()))
+                        .cell(
                             "record",
                             Cell::text(format!(
                                 "{} · {}",
@@ -671,6 +693,8 @@ impl Opening {
                                 "account",
                                 Cell::text(row["account_code"].as_str().unwrap_or("")),
                             )
+                            .cell("debits", Cell::text(money(&row["gross_debits"])))
+                            .cell("credits", Cell::text(money(&row["gross_credits"])))
                             .cell("register", Cell::text(money(&row["register_balance"])))
                             .cell("opening", Cell::text(money(&row["opening_balance"])))
                             .cell("difference", Cell::text(money(&row["difference"])))

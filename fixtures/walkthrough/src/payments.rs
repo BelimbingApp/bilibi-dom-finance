@@ -329,6 +329,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
         .ok_or(Error::NotFound)?;
     assert_eq!(party.total, money("60"));
     assert_eq!(party.buckets[1], money("60"));
+    let pinned_pins = pinned.pins();
     let r2 = p
         .submit_payment(
             &manager,
@@ -343,7 +344,9 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
             COMPANY,
             date(2026, 12, 31),
             &AgingQuery {
-                through_entry_number: Some(pinned.through_entry_number),
+                through_entry_number: pinned_pins.through_entry_number,
+                through_opening_batch_id: pinned_pins.through_opening_batch_id,
+                through_settlement_number: pinned_pins.through_settlement_number,
                 ..Default::default()
             },
         )
@@ -929,6 +932,7 @@ pub async fn run(db: &Db, services: &Services) -> Outcome<()> {
             &AgingQuery {
                 bucket_days: vec![60, 30],
                 through_opening_batch_id: None,
+                through_settlement_number: None,
                 through_entry_number: None,
             },
         )

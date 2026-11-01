@@ -1,5 +1,7 @@
 //! Disposable opening-state conversion: browser first on Company 001, MCP on
 //! clean Company 002, then facade controls on Company 003. No product seeds.
+#[path = "../conversion_credits.rs"]
+mod conversion_credits;
 #[path = "../conversion_lifecycle.rs"]
 mod conversion_lifecycle;
 #[path = "../conversion_report.rs"]
@@ -40,11 +42,11 @@ roles!(
 );
 type Outcome<T> = Result<T, Box<dyn std::error::Error>>;
 const SOURCE: &str = "source_id,account_code,debit,credit\nbank,1000,10000,\nreceivables,1100,3000,\nasset-cost,1200,12000,\nytd-cost,5000,2000,\npayables,2000,,1500\naccumulation,1290,,1800\ncapital,3000,,18200\nytd-sales,4000,,5500\n";
-const AR: &str = "source_id,customer_code,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind\ninvoice-17,company_010,OLD-INV-17,2026-05-15,2026-06-30,5000,3000,1100,company\n";
-const AP: &str = "source_id,vendor_code,vendor_name,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind\nbill-29,company_010,Conversion vendor,OLD-BILL-29,2026-05-01,2026-06-15,2500,1500,2000,company\n";
+const AR: &str = "source_id,customer_code,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind,item_kind,source_kind,source_system,currency_code,source_tax_facts\ninvoice-17,company_010,OLD-INV-17,2026-05-15,2026-06-30,5000,3000,1100,company,invoice,invoice,source-system,MYR,unknown\n";
+const AP: &str = "source_id,vendor_code,vendor_name,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind,item_kind,source_kind,source_system,currency_code,source_tax_facts\nbill-29,company_010,Conversion vendor,OLD-BILL-29,2026-05-01,2026-06-15,2500,1500,2000,company,bill,bill,source-system,MYR,unknown\n";
 const MULTI_SOURCE: &str = "source_id,account_code,debit,credit\nbank,1000,10000,\nreceivables,1100,2500,\nhistorical-receivables,1110,500,\nasset-cost,1200,12000,\nytd-cost,5000,2000,\npayables,2000,,1200\nhistorical-payables,2010,,300\naccumulation,1290,,1800\ncapital,3000,,18200\nytd-sales,4000,,5500\n";
-const MULTI_AR: &str = "source_id,customer_code,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind\ninvoice-17,company_010,OLD-INV-17,2026-05-15,2026-06-30,5000,2500,1100,company\ninvoice-18,company_010,OLD-INV-18,2026-04-15,2026-05-31,1000,500,1110,company\n";
-const MULTI_AP: &str = "source_id,vendor_code,vendor_name,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind\nbill-29,company_010,Conversion vendor,OLD-BILL-29,2026-05-01,2026-06-15,2500,1200,2000,company\nbill-30,company_010,Conversion vendor,OLD-BILL-30,2026-04-01,2026-05-15,900,300,2010,company\n";
+const MULTI_AR: &str = "source_id,customer_code,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind,item_kind,source_kind,source_system,currency_code,source_tax_facts\ninvoice-17,company_010,OLD-INV-17,2026-05-15,2026-06-30,5000,2500,1100,company,invoice,invoice,source-system,MYR,unknown\ninvoice-18,company_010,OLD-INV-18,2026-04-15,2026-05-31,1000,500,1110,company,invoice,invoice,source-system,MYR,unknown\n";
+const MULTI_AP: &str = "source_id,vendor_code,vendor_name,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind,item_kind,source_kind,source_system,currency_code,source_tax_facts\nbill-29,company_010,Conversion vendor,OLD-BILL-29,2026-05-01,2026-06-15,2500,1200,2000,company,bill,bill,source-system,MYR,unknown\nbill-30,company_010,Conversion vendor,OLD-BILL-30,2026-04-01,2026-05-15,900,300,2010,company,bill,bill,source-system,MYR,unknown\n";
 async fn in_company(
     db: &Db,
     services: &Services,
@@ -79,7 +81,8 @@ async fn setup(db: &Db, services: &Services, company: i64) -> Outcome<Value> {
     }
     let admin = in_company(db, services, 4, company).await?;
     let manager = in_company(db, services, 1, company).await?;
-    let multiple_controls = company == 4;
+    let credit_controls = matches!(company, 6 | 8 | 9);
+    let multiple_controls = matches!(company, 4 | 6 | 8 | 9);
     let l = services.get::<Ledger>(bilibi_finance_ledger::SERVICE)?;
     let ar = services.get::<Receivables>(bilibi_finance_receivables::SERVICE)?;
     let ap = services.get::<Payables>(bilibi_finance_payables::SERVICE)?;
@@ -124,6 +127,15 @@ async fn setup(db: &Db, services: &Services, company: i64) -> Outcome<Value> {
                 l.create_account(&admin, company, &NewAccount::new(code, name, kind))
                     .await?;
             }
+        }
+    }
+    if credit_controls {
+        for (code, name, kind) in [
+            ("1120", "Zero receivables control", AccountType::Asset),
+            ("2020", "Zero payables control", AccountType::Liability),
+        ] {
+            l.create_account(&admin, company, &NewAccount::new(code, name, kind))
+                .await?;
         }
     }
     if l.list_fiscal_years(&admin, company).await?.is_empty() {
@@ -207,6 +219,30 @@ async fn setup(db: &Db, services: &Services, company: i64) -> Outcome<Value> {
         )
         .await?
     };
+    if credit_controls {
+        ar.create_customer(
+            &admin,
+            company,
+            &json!({"record_kind":"company","record_id":11,"payment_terms_days":30}),
+        )
+        .await?;
+        ap.create_vendor(
+            &admin,
+            company,
+            &VendorInput {
+                record_kind: Some("company".into()),
+                record_id: Some(11),
+                new_company: None,
+                new_person: None,
+                payment_terms_days: 30,
+                payable_account_id: None,
+                expense_account_id: None,
+                tax_code_id: None,
+                active: true,
+            },
+        )
+        .await?;
+    }
     let categories = assets.list_categories(&admin, company).await?;
     let revision = if let Some(c) = categories.iter().find(|c| c.name == "Conversion assets") {
         c.revision.id
@@ -249,7 +285,11 @@ async fn setup(db: &Db, services: &Services, company: i64) -> Outcome<Value> {
                     conversion_date: date(2026, 7, 1),
                     currency_code: "MYR".into(),
                     source_reference: format!("CONVERSION-{company}"),
-                    csv: if multiple_controls {
+                    csv: if credit_controls {
+                        conversion_credits::SOURCE
+                    } else if company == 7 {
+                        conversion_credits::CREDIT_ONLY_SOURCE
+                    } else if multiple_controls {
                         MULTI_SOURCE
                     } else {
                         SOURCE
@@ -289,12 +329,16 @@ async fn setup(db: &Db, services: &Services, company: i64) -> Outcome<Value> {
         classifications.insert(account("1110").to_string(), json!("receivables_control"));
         classifications.insert(account("2010").to_string(), json!("payables_control"));
     }
+    if credit_controls {
+        classifications.insert(account("1120").to_string(), json!("receivables_control"));
+        classifications.insert(account("2020").to_string(), json!("payables_control"));
+    }
     Ok(
-        json!({"company_id":company,"vendor_id":vendor.id,"vendor_key":format!("vendor:{}", vendor.id),"customer_id":customer.id,"invoice_series":invoice.id,"payment_series":payment.id,"bank":account("1000"),"bank_account_id":bank_account.id,"ar":if multiple_controls { MULTI_AR } else { AR },"ap":if multiple_controls { MULTI_AP } else { AP },"expense":account("5000"),"assets":asset_csv,"revision":revision,"opening_account_classifications":classifications,"historical_ar":if multiple_controls { json!(account("1110")) } else { Value::Null },"historical_ap":if multiple_controls { json!(account("2010")) } else { Value::Null }}),
+        json!({"company_id":company,"vendor_id":vendor.id,"vendor_key":format!("vendor:{}", vendor.id),"customer_id":customer.id,"invoice_series":invoice.id,"payment_series":payment.id,"bank":account("1000"),"bank_account_id":bank_account.id,"ar":if credit_controls { conversion_credits::csv(false,false) } else if multiple_controls { MULTI_AR.into() } else { AR.into() },"ap":if credit_controls { conversion_credits::csv(true,false) } else if multiple_controls { MULTI_AP.into() } else { AP.into() },"expense":account("5000"),"assets":asset_csv,"revision":revision,"opening_account_classifications":classifications,"historical_ar":if multiple_controls { json!(account("1110")) } else { Value::Null },"historical_ap":if multiple_controls { json!(account("2010")) } else { Value::Null }}),
     )
 }
 async fn prove_opening_invoice_page_scale(db: &Db, services: &Services) -> Outcome<()> {
-    const HEADER: &str = "source_id,customer_code,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind\n";
+    const HEADER: &str = "source_id,customer_code,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind,item_kind,source_kind,source_system,currency_code,source_tax_facts\n";
     let company = 5;
     let config = setup(db, services, company).await?;
     let admin = in_company(db, services, 4, company).await?;
@@ -302,15 +346,15 @@ async fn prove_opening_invoice_page_scale(db: &Db, services: &Services) -> Outco
     let ar = services.get::<Receivables>(bilibi_finance_receivables::SERVICE)?;
     let registry = services.get::<Registry>("base/agent_api.registry")?;
     let mut rows = vec![
-        "scale-nonmatching,company_010,OUTSIDE-QUERY,2026-05-15,2026-06-30,0.50,0.50,1100,company"
+        "scale-nonmatching,company_010,OUTSIDE-QUERY,2026-05-15,2026-06-30,0.50,0.50,1100,company,invoice,invoice,source-system,MYR,unknown"
             .to_owned(),
     ];
     for n in 1..=2100 {
         let amount = if n == 2100 { "0.50" } else { "1" };
-        rows.push(format!("scale-{n},company_010,SCALE-ROW-{n},2026-05-15,2026-06-30,{amount},{amount},1100,company"));
+        rows.push(format!("scale-{n},company_010,SCALE-ROW-{n},2026-05-15,2026-06-30,{amount},{amount},1100,company,invoice,invoice,source-system,MYR,unknown"));
     }
     rows.push(
-        "scale-0,company_010,SCALE-ROW-0,2026-05-15,2026-06-30,900,900,1100,company".to_owned(),
+        "scale-0,company_010,SCALE-ROW-0,2026-05-15,2026-06-30,900,900,1100,company,invoice,invoice,source-system,MYR,unknown".to_owned(),
     );
     let part_count = rows.len().div_ceil(500);
     for (index, chunk) in rows.chunks(500).enumerate() {
@@ -429,27 +473,13 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
     let trial = l.trial_balance(&s, company, date(2026, 7, 1), None).await?;
     assert_eq!(trial.total_debit.shown(trial.minor_units), "27000.00");
     let before_ar = ar
-        .aged_receivables(
-            &s,
-            company,
-            date(2026, 7, 1),
-            &AgingOptions {
-                through_entry_number: Some(trial.through_entry_number),
-                ..Default::default()
-            },
-        )
+        .aged_receivables(&s, company, date(2026, 7, 1), &Default::default())
         .await?;
     let before_ap = ap
-        .aged_payables(
-            &s,
-            company,
-            date(2026, 7, 1),
-            &bilibi_finance_payables::AgingQuery {
-                through_entry_number: Some(trial.through_entry_number),
-                ..Default::default()
-            },
-        )
+        .aged_payables(&s, company, date(2026, 7, 1), &Default::default())
         .await?;
+    let before_ar_pins = before_ar.pins();
+    let before_ap_pins = before_ap.pins();
     let before_ar_tie = ar
         .tie_out_control_accounts(&s, company, date(2026, 7, 1), &Default::default())
         .await?;
@@ -544,7 +574,7 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
             "customer_code and party_kind",
         ),
         (
-            AR.replace(",company\n", ",person\n"),
+            AR.replace(",company,", ",person,"),
             "customer_code and party_kind",
         ),
     ] {
@@ -560,7 +590,7 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
     }
     for csv in [
         AP.replace("bill-29,company_010", "bill-29,"),
-        AP.replace(",company\n", ",person\n"),
+        AP.replace(",company,", ",person,"),
     ] {
         let mut bad = ap_input.clone();
         bad["csv"] = json!(csv);
@@ -809,8 +839,9 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
             company,
             date(2026, 7, 1),
             &AgingOptions {
-                through_entry_number: Some(before_ar.through_entry_number),
-                through_opening_batch_id: Some(before_ar.through_opening_batch_id),
+                through_entry_number: before_ar_pins.through_entry_number,
+                through_opening_batch_id: before_ar_pins.through_opening_batch_id,
+                through_settlement_number: before_ar_pins.through_settlement_number,
                 ..Default::default()
             },
         )
@@ -825,8 +856,9 @@ async fn prove(db: &Db, services: &Services) -> Outcome<()> {
             company,
             date(2026, 7, 1),
             &bilibi_finance_payables::AgingQuery {
-                through_entry_number: Some(before_ap.through_entry_number),
-                through_opening_batch_id: Some(before_ap.through_opening_batch_id),
+                through_entry_number: before_ap_pins.through_entry_number,
+                through_opening_batch_id: before_ap_pins.through_opening_batch_id,
+                through_settlement_number: before_ap_pins.through_settlement_number,
                 ..Default::default()
             },
         )
@@ -1478,8 +1510,25 @@ async fn main() -> Outcome<()> {
             .await?;
         return Ok(());
     }
+    if std::env::args().any(|s| s == "credits") {
+        conversion_credits::prove(&db, &app.services).await?;
+        return Ok(());
+    }
     if std::env::args().any(|s| s == "opening-list-scale") {
         prove_opening_invoice_page_scale(&db, &app.services).await?;
+        return Ok(());
+    }
+    if std::env::args().any(|s| s == "prepare-credits-launcher") {
+        db.get().await?.execute("UPDATE companies SET name=CASE id WHEN 10 THEN 'Opening credit proof counterparty' ELSE 'Other opening credit counterparty' END WHERE tenant_id=1 AND id IN(10,11) AND name='Company '||lpad(id::text,3,'0')",&[]).await?;
+        let mut sources = Vec::new();
+        for company in [8, 9] {
+            sources.push(setup(&db, &app.services, company).await?);
+        }
+        std::fs::write(
+            std::env::var("BILIBI_OPENING_PROOF_CONFIG")?,
+            serde_json::to_vec_pretty(&sources)?,
+        )?;
+        println!("Credit sources prepared for browser Company 008 and MCP Company 009.");
         return Ok(());
     }
     if std::env::args().any(|s| s == "prepare-launcher") {
@@ -1520,6 +1569,7 @@ async fn main() -> Outcome<()> {
         prove(&db, &app.services).await?;
         if !std::env::args().any(|arg| arg == "assets-evidence") {
             prove_historical_controls(&db, &app.services).await?;
+            conversion_credits::prove(&db, &app.services).await?;
         }
     }
     Ok(())
@@ -1550,6 +1600,29 @@ async fn launcher_credentials(db: &Db, services: &Services) -> Outcome<()> {
     let (tenant, user): (i64, i64) = (row.get(0), row.get(1));
     drop(client);
     let scope = sign_in(db, services, tenant, user).await?;
+    if std::env::var("BILIBI_CREDITS_PROOF").as_deref() == Ok("disposable") {
+        let person = scope
+            .actor()
+            .person()
+            .ok_or("launcher administrator has no Person")?
+            .get();
+        let users = services.get::<bilibi_core::user::UserService>("core/user.accounts")?;
+        for company in [8, 9] {
+            let client = db.get().await?;
+            let assigned = bilibi_tenancy::reaches_work_company(
+                &**client,
+                &scope,
+                bilibi_party_ids::OrganisationId::new(company)?,
+            )
+            .await?;
+            drop(client);
+            if !assigned {
+                users.set_desk(&scope, company, person, true).await?;
+            }
+            services.get::<Ledger>(bilibi_finance_ledger::SERVICE)?
+                .set_duty_separation(&scope,company,false,Some("Disposable single-person browser/MCP parity fixture; retain every same-person approval exception")).await?;
+        }
+    }
     let access = services.get::<AgentAccess>("core/agent_access.grants")?;
     let callback = "https://example.test/opening-list-proof/callback";
     let registration=access.register_client(&serde_json::from_value::<ClientRegistration>(json!({"client_name":"Opening list proof","redirect_uris":[callback],"token_endpoint_auth_method":"none"}))?).await?;

@@ -4,6 +4,7 @@ mod aged;
 mod bill;
 mod bill_form;
 mod bills;
+mod credits;
 mod format;
 mod opening;
 mod payment;
@@ -304,7 +305,7 @@ impl Page<Scope, Error> for Pages {
                     (state.body(scope).await?, None)
                 }
                 "bill" => {
-                    let mut state = bill::Bill::new(self.clone(), r.path)?;
+                    let mut state = bill::Bill::new(self.clone(), r.path, r.query)?;
                     state.reload(scope).await?;
                     (state.body(scope).await?, state.title())
                 }
@@ -354,7 +355,7 @@ impl Page<Scope, Error> for Pages {
             let state: Box<dyn bilibi_ui::page::LiveState<Scope, Error>> = match r.operation {
                 "vendors" => Box::new(vendors::Vendors::new(self.clone(), r.query)?),
                 "bills" => Box::new(bills::Bills::new(self.clone(), r.query, r.framed)?),
-                "bill" => Box::new(bill::Bill::new(self.clone(), r.path)?),
+                "bill" => Box::new(bill::Bill::new(self.clone(), r.path, r.query)?),
                 "bill_new" | "note_new" => Box::new(bill_form::BillForm::new(
                     self.clone(),
                     r.operation == "note_new",
@@ -387,6 +388,13 @@ fn render(fragment: impl Template) -> Result<Html> {
 inventory::submit! { bilibi_module_registry::Contribution::new(bilibi_module_registry::contributions::PAGE_WRITES, PAGES, bilibi_module_registry::Provenance { module: MODULE, source: file!(), line: line!() }, &bilibi_module_registry::contributions::PageWrites {
     service: PAGES,
     contracts: &[
+        ("preview_credit", "finance.payables.credit.apply"),
+        ("preview_credit", "finance.payables.credit.refund"),
+        ("preview_credit", "finance.payables.settlement.reverse"),
+        ("commit_credit", "finance.payables.credit.apply"),
+        ("commit_credit", "finance.payables.credit.refund"),
+        ("commit_credit", "finance.payables.settlement.reverse"),
+
         ("preview_opening", "finance.payables.opening.import"),
         ("import_opening", "finance.payables.opening.import"),
         ("preview_opening", "finance.payables.opening.stage"),
@@ -474,7 +482,7 @@ impl Pages {
                     a["name"].as_str(),
                     a["account_type"].as_str(),
                 ) {
-                    accounts.push((id, format!("{code} {name}"), kind.to_owned()));
+                    accounts.push((id, format!("{name} · {code}"), kind.to_owned()));
                 }
             }
             if let Some(code) = page["result"]["next_after_code"].as_str() {

@@ -3,6 +3,7 @@
 {% call ui::page(id="payables-aged") %}
 {% call ui::header(subtitle="What is owed to suppliers, by how late it is.", title_actions=title_actions) %}Aged payables{% endcall %}
 {{ date|safe }}
+{{ summary|safe }}
 {% if let Some(empty) = empty %}{{ empty|safe }}{% endif %}
 {% if let Some(parties) = parties %}
 {% call ui::section_heading(id="payables-aged-parties-heading", title="By supplier") %}{% endcall %}
@@ -21,5 +22,9 @@
 {% call ui::card(id="payables-aged-credits", inner_class="p-0", role="region", labelledby="payables-aged-credits-heading") %}
 {{ credits|safe }}
 {% endcall %}
+{% endif %}
+{% if let Some(opening_credits) = opening_credits %}
+{% call ui::section_heading(title="Unapplied supplier credits", description="Credits age from their original source dates, separately from unpaid bills.") %}{% endcall %}
+{% call ui::card(id="payables-aged-opening-credits", inner_class="p-0") %}{{ opening_credits|safe }}{% endcall %}
 {% endif %}
 {% endcall %}

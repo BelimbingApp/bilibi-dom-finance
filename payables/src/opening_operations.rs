@@ -227,3 +227,159 @@ inventory::submit! {Contribution::new(DEFINITIONS,"finance/payables.opening",Pro
  Operation{key:"finance.payables.opening.stage",title:"Stage opening source batch",summary:"Retain one immutable source batch for a resumable register. Identical retries are safe. Reconcile only after all batches are committed, with approval independent of every staging preparer.",keywords:&["conversion"],capability:POST_DOCUMENTS,input:stage_schema,output,handler:Handler::SafeWrite(&Stage),channels:Channels::Every,step_up:&[]},
  Operation{key:"finance.payables.opening.import",title:"Opening bills",summary:"Preview a complete opening register and exact reconciliation, then approve once. Retain source evidence without a new acquisition, supply or tax posting. Identical retries return the retained batch. Requires approval independent of the opening source preparer.",keywords:&["conversion"],capability:POST_DOCUMENTS,input:schema,output,handler:Handler::SafeWrite(&Import),channels:Channels::Every,step_up:&[]}
 ],guides:&[bilibi_agent_api::Guide {key:"finance.payables.opening",title:"Opening bills",summary:"Convert source registers without duplicating opening postings.",keywords:&["conversion"],capability:VIEW,body:include_str!("../opening-guide.md")}]})}
+
+// Pages and agent plans use exactly these reviewed, transaction-joining doors.
+struct Credit(&'static str);
+impl WriteHandler for Credit {
+    fn owner(&self) -> &'static str {
+        MODULE
+    }
+    fn preview<'a>(
+        &'a self,
+        c: &'a dyn OperationClient,
+        s: &'a Scope,
+        input: &'a Value,
+    ) -> OperationFuture<'a> {
+        Box::pin(async move {
+            let prepared = owner()
+                .map_err(failure)?
+                .prepare_credit(c, s, company(input).map_err(failure)?, self.0, input)
+                .await
+                .map_err(failure)?;
+            fence(c, &json!({"input":input,"review":prepared.review}), false).await?;
+            Ok(json!({"changes":prepared.review}).into())
+        })
+    }
+    fn commit<'a>(
+        &'a self,
+        tx: &'a mut MutationTransaction<'_>,
+        s: &'a Scope,
+        input: &'a Value,
+    ) -> OperationFuture<'a> {
+        Box::pin(async move {
+            let owner = owner().map_err(failure)?;
+            let company = company(input).map_err(failure)?;
+            let prepared = owner
+                .prepare_credit(tx.sql(), s, company, self.0, input)
+                .await
+                .map_err(failure)?;
+            fence(
+                tx.sql(),
+                &json!({"input":input,"review":prepared.review}),
+                true,
+            )
+            .await?;
+            let record = owner
+                .settle_credit_on(tx, s, company, self.0, input)
+                .await
+                .map_err(failure)?;
+            Ok(json!({"record":record}).into())
+        })
+    }
+}
+fn credit_schema(action: &str) -> Value {
+    let mut required = vec!["company_id", "effective_date", "reference"];
+    if action == "reverse" {
+        required.push("settlement_id");
+    } else {
+        required.extend(["credit_document_id", "amount"]);
+    }
+    if action == "apply" {
+        required.push("target_document_id");
+    }
+    if action == "refund" {
+        required.push("cash_account_id");
+    }
+    json!({"type":"object","required":required,"properties":{
+        "company_id":{"type":"integer","minimum":1},
+        "credit_document_id":{"type":"integer","minimum":1},
+        "target_document_id":{"type":"integer","minimum":1},
+        "settlement_id":{"type":"integer","minimum":1},
+        "cash_account_id":{"type":"integer","minimum":1},
+        "effective_date":{"type":"string","format":"date"},
+        "amount":{"type":"string","description":"Positive amount in book minor units."},
+        "reference":{"type":"string","maxLength":100},
+        "override_reason":{"type":"string","maxLength":500}
+    }})
+}
+inventory::submit! {Contribution::new(DEFINITIONS,"finance/payables.credit",Provenance{module:MODULE,source:file!(),line:line!()},&Definitions{operations:&[
+ Operation{key:"finance.payables.credit.apply",title:"Apply supplier credit",summary:"Apply a retained supplier credit to the same party's invoice or bill. Same-control application posts no entry; different controls transfer the amount between saved controls. Rechecks every dated residual.",keywords:&["credit","conversion"],capability:POST_PAYMENTS,input:||credit_schema("apply"),output,handler:Handler::SafeWrite(&Credit("apply")),channels:Channels::Every,step_up:&[]},
+ Operation{key:"finance.payables.credit.refund",title:"Receive supplier refund",summary:"Record the refund of a retained supplier credit with its owned cash and control entry, approval and source evidence in one transaction.",keywords:&["credit","refund"],capability:POST_PAYMENTS,input:||credit_schema("refund"),output,handler:Handler::SafeWrite(&Credit("refund")),channels:Channels::Every,step_up:&[]},
+ Operation{key:"finance.payables.settlement.reverse",title:"Reverse credit settlement",summary:"Append a dated reversal of an application or refund and reverse its owned entry when present. Keep the original event and restore its item balances.",keywords:&["credit","reversal"],capability:POST_PAYMENTS,input:||credit_schema("reverse"),output,handler:Handler::SafeWrite(&Credit("reverse")),channels:Channels::Every,step_up:&[]}
+],guides:&[]})}
+
+struct CreditContext;
+impl ReadHandler for CreditContext {
+    fn owner(&self) -> &'static str {
+        MODULE
+    }
+    fn call<'a>(
+        &'a self,
+        c: &'a dyn OperationClient,
+        s: &'a Scope,
+        input: &'a Value,
+    ) -> OperationFuture<'a> {
+        Box::pin(async move {
+            Ok(owner()
+                .map_err(failure)?
+                .credit_context(c, s, company(input).map_err(failure)?, input)
+                .await
+                .map_err(failure)?
+                .into())
+        })
+    }
+}
+inventory::submit! {Contribution::new(DEFINITIONS,"finance/payables.credit-context",Provenance{module:MODULE,source:file!(),line:line!()},&Definitions{operations:&[
+ Operation{key:"finance.payables.credit.context",title:"Read credit settlement choices",summary:"Read eligible same-party targets and cash accounts. Search document references and page with next_after_id.",keywords:&["credit"],capability:VIEW,input:||{let mut schema=credit_schema("apply");schema["required"]=json!(["company_id","credit_document_id"]);schema["properties"]["search"]=json!({"type":"string","maxLength":100});schema["properties"]["after_id"]=json!({"type":"integer","minimum":0});schema},output,handler:Handler::Read(&CreditContext),channels:Channels::Every,step_up:&[]}
+],guides:&[]})}
+
+struct ControlTieOut;
+impl ReadHandler for ControlTieOut {
+    fn owner(&self) -> &'static str {
+        MODULE
+    }
+    fn call<'a>(
+        &'a self,
+        _c: &'a dyn OperationClient,
+        s: &'a Scope,
+        input: &'a Value,
+    ) -> OperationFuture<'a> {
+        Box::pin(async move {
+            let date = input["as_of"]
+                .as_str()
+                .and_then(|s| s.parse().ok())
+                .ok_or_else(|| failure(invalid("as_of", "must be YYYY-MM-DD")))?;
+            let pins = crate::BalancePins {
+                through_entry_number: input["through_entry_number"].as_i64(),
+                through_opening_batch_id: input["through_opening_batch_id"].as_i64(),
+                through_settlement_number: input["through_settlement_number"].as_i64(),
+            };
+            let report = owner()
+                .map_err(failure)?
+                .tie_out_control_accounts(s, company(input).map_err(failure)?, date, &pins)
+                .await
+                .map_err(failure)?;
+            Ok(serde_json::to_value(report)
+                .map_err(|_| Error::Internal)?
+                .into())
+        })
+    }
+}
+fn tie_out_schema() -> Value {
+    let mut s = target();
+    s["required"] = json!(["company_id", "as_of"]);
+    s["properties"]["as_of"] = json!({"type":"string","format":"date"});
+    for key in [
+        "through_entry_number",
+        "through_opening_batch_id",
+        "through_settlement_number",
+    ] {
+        s["properties"][key] = json!({"type":"integer","minimum":0});
+    }
+    // The facade enforces the all-or-none tuple because the shared operation
+    // schema dialect deliberately has no cross-field combinators.
+    s
+}
+inventory::submit! {Contribution::new(DEFINITIONS,"finance/payables.control-tie-out",Provenance{module:MODULE,source:file!(),line:line!()},&Definitions{operations:&[
+ Operation{key:"finance.payables.control.tie_out",title:"Read control account tie-out",summary:"Read each saved control's signed subledger balance, actual ledger balance and other owners' differences at one complete accounting tuple.",keywords:&["credit","conversion","tie-out"],capability:VIEW,input:tie_out_schema,output,handler:Handler::Read(&ControlTieOut),channels:Channels::Every,step_up:&[]}
+],guides:&[]})}

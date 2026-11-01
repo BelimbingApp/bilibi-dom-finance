@@ -34,6 +34,7 @@
 {{ events|safe }}
 {% endcall %}
 {% endif %}
+{{ credit_actions|safe }}
 <div id="payables-bill-attachments-slot" data-live-ignore><div id="payables-bill-attachments"></div></div>
 {% if let Some(dialog) = dialog %}{{ dialog|safe }}{% endif %}
 {% endcall %}

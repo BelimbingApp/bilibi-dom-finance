@@ -48,12 +48,12 @@ pub async fn prove(
         .id;
     // 10,000 source rows (the register limit) exceed one direct import. Each
     // chunk is independently retained; none is settleable until reconciliation.
-    let header="source_id,customer_code,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind\n";
+    let header="source_id,customer_code,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind,item_kind,source_kind,source_system,currency_code,source_tax_facts\n";
     let chunk = |start, end| {
         let mut csv = header.to_owned();
         for n in start..end {
             csv.push_str(&format!(
-                "corrected-{n},company_010,CORRECTED-{n},2026-05-15,2026-06-30,0.30,0.30,1100,company\n"
+                "corrected-{n},company_010,CORRECTED-{n},2026-05-15,2026-06-30,0.30,0.30,1100,company,invoice,invoice,source-system,MYR,unknown\n"
             ));
         }
         csv
@@ -100,12 +100,12 @@ pub async fn prove(
         .await
         .is_err());
 
-    let ap_header="source_id,vendor_code,vendor_name,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind\n";
+    let ap_header="source_id,vendor_code,vendor_name,document_reference,document_date,due_date,original_total,outstanding,control_account_code,party_kind,item_kind,source_kind,source_system,currency_code,source_tax_facts\n";
     let ap_chunk = |start, end| {
         let mut csv = ap_header.to_owned();
         for n in start..end {
             csv.push_str(&format!(
-                "corrected-{n},company_010,Conversion vendor,CORRECTED-BILL-{n},2026-05-01,2026-06-15,0.20,0.15,2000,company\n"
+                "corrected-{n},company_010,Conversion vendor,CORRECTED-BILL-{n},2026-05-01,2026-06-15,0.20,0.15,2000,company,bill,bill,source-system,MYR,unknown\n"
             ));
         }
         csv
@@ -329,6 +329,7 @@ pub async fn prove(
     assert_eq!(ar_after.customers[0].documents.len(), 10_000);
     assert_eq!(ar_after.total, ar_before.total);
     let old_ar_pins = ar_before.pins();
+    let old_ap_pins = ap_before.pins();
     // These pins preceded the extra payment/reversal proof too.
     let ar_old = ar
         .aged_receivables(
@@ -338,6 +339,7 @@ pub async fn prove(
             &bilibi_finance_receivables::AgingOptions {
                 through_entry_number: old_ar_pins.through_entry_number,
                 through_opening_batch_id: old_ar_pins.through_opening_batch_id,
+                through_settlement_number: old_ar_pins.through_settlement_number,
                 ..Default::default()
             },
         )
@@ -352,8 +354,9 @@ pub async fn prove(
             company,
             day,
             &bilibi_finance_payables::AgingQuery {
-                through_entry_number: Some(ap_before.through_entry_number),
-                through_opening_batch_id: Some(ap_before.through_opening_batch_id),
+                through_entry_number: old_ap_pins.through_entry_number,
+                through_opening_batch_id: old_ap_pins.through_opening_batch_id,
+                through_settlement_number: old_ap_pins.through_settlement_number,
                 ..Default::default()
             },
         )

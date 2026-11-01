@@ -24,16 +24,18 @@ type TaxShare = (
 type TaxGroupKey = (String, i64, String, Decimal, i64);
 type TaxGroups = BTreeMap<TaxGroupKey, (ReceivedTaxTotal, BTreeSet<i64>)>;
 
-/// Both pins are required to reproduce figures across an entryless import.
+/// All three boundaries are required to replay entryless imports and applications.
 #[derive(Clone, Debug, Default)]
 pub struct BalancePins {
     pub through_entry_number: Option<i64>,
     pub through_opening_batch_id: Option<i64>,
+    pub through_settlement_number: Option<i64>,
 }
 
 #[derive(Clone, Debug)]
 pub struct AgingOptions {
     pub through_opening_batch_id: Option<i64>,
+    pub through_settlement_number: Option<i64>,
     pub bucket_days: Vec<i64>,
     pub through_entry_number: Option<i64>,
 }
@@ -41,6 +43,7 @@ impl Default for AgingOptions {
     fn default() -> Self {
         Self {
             through_opening_batch_id: None,
+            through_settlement_number: None,
             bucket_days: vec![30, 60, 90],
             through_entry_number: None,
         }
@@ -77,6 +80,8 @@ pub struct AgingBucket {
 #[derive(Clone, Debug, Serialize)]
 pub struct AgedDocument {
     pub document_id: i64,
+    pub control_account_id: i64,
+    pub kind: String,
     pub document_reference: String,
     pub party_name: String,
     pub issue_date: String,
@@ -92,12 +97,15 @@ pub struct AgedCustomer {
     pub code: String,
     pub name: String,
     pub documents: Vec<AgedDocument>,
+    pub credits: Vec<AgedDocument>,
+    pub credit_total: Decimal,
     pub bucket_totals: Vec<Decimal>,
     pub total: Decimal,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct AgedReceivables {
     pub through_opening_batch_id: i64,
+    pub through_settlement_number: i64,
     pub company_id: i64,
     pub as_of: String,
     pub through_entry_number: i64,
@@ -105,6 +113,8 @@ pub struct AgedReceivables {
     pub minor_units: MinorUnits,
     pub buckets: Vec<AgingBucket>,
     pub customers: Vec<AgedCustomer>,
+    pub gross_debits: Decimal,
+    pub gross_credits: Decimal,
     pub bucket_totals: Vec<Decimal>,
     pub total: Decimal,
 }
@@ -150,6 +160,7 @@ pub struct ControlAccountTieOut {
 #[derive(Clone, Debug, Serialize)]
 pub struct ControlAccountsTieOut {
     pub through_opening_batch_id: i64,
+    pub through_settlement_number: i64,
     pub company_id: i64,
     pub as_of: String,
     pub through_entry_number: i64,
@@ -171,22 +182,10 @@ fn window(from: Option<Date>, to: Option<Date>, through: Option<i64>) -> Result<
 // Correlated aggregates keep independent credit and allocation children apart.
 // $1 tenant, $2 company, $3 inclusive event date, $4 inclusive posting pin.
 const BALANCES: &str = "SELECT d.*, d.issue_date::text issue_day, d.due_date::text due_day,
- ($3::text::date-d.due_date)::bigint days_overdue,
- d.total-COALESCE((SELECT sum(c.total) FROM finance_receivables_documents c
- WHERE c.tenant_id=$1 AND c.company_id=$2 AND c.credited_document_id=d.id
- AND c.kind='credit_note' AND c.status='issued' AND c.issue_date<=$3::text::date AND c.ledger_entry_number<=$4),0)
- -COALESCE((SELECT sum(a.amount) FROM finance_receivables_allocations a
- JOIN finance_receivables_payments p ON p.id=a.payment_id AND p.tenant_id=$1 AND p.company_id=$2
- WHERE a.tenant_id=$1 AND a.company_id=$2 AND a.document_id=d.id
- AND p.payment_date<=$3::text::date AND p.ledger_entry_number<=$4
- AND NOT EXISTS(SELECT 1 FROM finance_receivables_payment_reversals r
- WHERE r.tenant_id=$1 AND r.company_id=$2 AND r.payment_id=p.id
- AND r.reversal_date<=$3::text::date AND r.ledger_entry_number<=$4)),0) AS outstanding,
- COALESCE((SELECT sum(w.amount) FROM finance_receivables_write_offs w WHERE w.tenant_id=$1 AND w.company_id=$2 AND w.document_id=d.id
- AND EXISTS(SELECT 1 FROM finance_receivables_write_off_events e WHERE e.write_off_id=w.id AND e.event='approved' AND e.effective_date<=$3::text::date AND e.ledger_entry_number<=$4)
- AND NOT EXISTS(SELECT 1 FROM finance_receivables_write_off_events e WHERE e.write_off_id=w.id AND e.event='reversed' AND e.effective_date<=$3::text::date AND e.ledger_entry_number<=$4)),0) AS written_off
+ ($3::text::date-CASE WHEN d.kind='opening_credit' THEN d.issue_date ELSE d.due_date END)::bigint days_overdue,
+ finance_receivables_residual($1,$2,d.id,$3::text::date,$4,$6) AS outstanding, 0::numeric AS written_off
  FROM finance_receivables_documents d WHERE d.tenant_id=$1 AND d.company_id=$2
- AND d.kind='invoice' AND d.status='issued' AND d.issue_date<=$3::text::date AND d.ledger_entry_number<=$4
+ AND d.kind IN ('invoice','opening_credit') AND d.status='issued' AND d.issue_date<=$3::text::date AND d.ledger_entry_number<=$4
  AND NOT EXISTS(SELECT 1 FROM finance_receivables_opening_items i JOIN finance_receivables_opening_batches b ON b.id=i.batch_id AND b.tenant_id=$1 AND b.company_id=$2 WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=d.id AND (b.conversion_date>$3::text::date OR ($5::bigint IS NOT NULL AND b.id>$5) OR EXISTS(SELECT 1 FROM finance_receivables_opening_decisions own WHERE own.tenant_id=$1 AND own.company_id=$2 AND own.batch_id=b.id AND own.effective_date>$3::text::date) OR EXISTS(SELECT 1 FROM finance_receivables_opening_decisions x WHERE x.tenant_id=$1 AND x.company_id=$2 AND x.replaces_batch_id=b.id AND x.effective_date<=$3::text::date AND ($5::bigint IS NULL OR x.batch_id<=$5))))";
 
 async fn balances(
@@ -196,11 +195,19 @@ async fn balances(
     day: &str,
     pin: i64,
     opening_pin: Option<i64>,
+    settlement_pin: i64,
 ) -> Result<Vec<tokio_postgres::Row>> {
     Ok(client
         .query(
             BALANCES,
-            &[&scope.tenant(), &company, &day, &pin, &opening_pin],
+            &[
+                &scope.tenant(),
+                &company,
+                &day,
+                &pin,
+                &opening_pin,
+                &settlement_pin,
+            ],
         )
         .await
         .map_err(Error::from)?)
@@ -214,9 +221,18 @@ impl Receivables {
         as_of: Date,
         options: &AgingOptions,
     ) -> Result<AgedReceivables> {
-        let client = self.db.get().await.map_err(Error::from)?;
-        self.aged_receivables_on(&**client, scope, company, as_of, options)
+        let mut client = self.db.get().await.map_err(Error::from)?;
+        let tx = client
+            .build_transaction()
+            .isolation_level(tokio_postgres::IsolationLevel::RepeatableRead)
+            .start()
             .await
+            .map_err(Error::from)?;
+        let result = self
+            .aged_receivables_on(&*tx, scope, company, as_of, options)
+            .await?;
+        tx.commit().await.map_err(Error::from)?;
+        Ok(result)
     }
 
     /// Authorized figures on the caller's database snapshot.
@@ -229,6 +245,11 @@ impl Receivables {
         options: &AgingOptions,
     ) -> Result<AgedReceivables> {
         authorize(client, scope, company, VIEW).await?;
+        crate::settlements::complete_pins(
+            options.through_entry_number,
+            options.through_opening_batch_id,
+            options.through_settlement_number,
+        )?;
         window(None, None, options.through_entry_number)?;
         if options.bucket_days.is_empty()
             || options.bucket_days.iter().any(|n| *n <= 0 || *n > 36_500)
@@ -237,9 +258,23 @@ impl Receivables {
             return Err(ReceivableError::InvalidOption);
         }
         let book = self.ledger.get_book_on(client, scope, company).await?;
-        let pin=match options.through_entry_number { Some(n)=>n, None=>client.query_one("SELECT COALESCE(max(n),0) FROM (SELECT ledger_entry_number n FROM finance_receivables_documents WHERE tenant_id=$1 AND company_id=$2 UNION ALL SELECT ledger_entry_number FROM finance_receivables_payments WHERE tenant_id=$1 AND company_id=$2 UNION ALL SELECT ledger_entry_number FROM finance_receivables_payment_reversals WHERE tenant_id=$1 AND company_id=$2 UNION ALL SELECT ledger_entry_number FROM finance_receivables_write_off_events WHERE tenant_id=$1 AND company_id=$2) x", &[&scope.tenant(),&company]).await.map_err(Error::from)?.get(0) };
+        let pin = self
+            .ledger
+            .trial_balance_on(client, scope, company, as_of, options.through_entry_number)
+            .await?
+            .through_entry_number;
         let opening_pin =
             crate::opening::pin(client, scope, company, options.through_opening_batch_id).await?;
+        let settlement_pin = crate::settlements::pin(
+            client,
+            scope,
+            company,
+            options.through_settlement_number,
+            pin,
+            opening_pin,
+            as_of,
+        )
+        .await?;
         let mut buckets = vec![AgingBucket {
             from_days: None,
             to_days: Some(0),
@@ -271,6 +306,7 @@ impl Receivables {
             &as_of.to_string(),
             pin,
             Some(opening_pin),
+            settlement_pin,
         )
         .await?
         {
@@ -300,10 +336,14 @@ impl Receivables {
                     code,
                     name,
                     documents: vec![],
+                    credits: vec![],
+                    credit_total: Decimal::ZERO,
                     bucket_totals: vec![Decimal::ZERO; buckets.len()],
                     total: Decimal::ZERO,
                 });
-            customer.documents.push(AgedDocument {
+            let document = AgedDocument {
+                control_account_id: row.get("receivable_account_id"),
+                kind: row.get("kind"),
                 document_id: id,
                 document_reference: row.get("document_reference"),
                 party_name: row.get("party_name"),
@@ -313,7 +353,14 @@ impl Receivables {
                 outstanding,
                 days_overdue: days.max(0),
                 bucket,
-            });
+            };
+            if document.kind == "opening_credit" {
+                customer.credit_total += outstanding;
+                customer.total -= outstanding;
+                customer.credits.push(document);
+                continue;
+            }
+            customer.documents.push(document);
             customer.total += outstanding;
             customer.bucket_totals[bucket] += outstanding;
             totals[bucket] += outstanding;
@@ -326,14 +373,17 @@ impl Receivables {
         customers.sort_by(|a, b| a.code.cmp(&b.code));
         Ok(AgedReceivables {
             through_opening_batch_id: opening_pin,
+            through_settlement_number: settlement_pin,
             company_id: company,
             as_of: as_of.to_string(),
             through_entry_number: pin,
             currency_code: book.currency_code,
             minor_units: book.minor_units,
             buckets,
+            gross_debits: totals.iter().copied().sum(),
+            gross_credits: customers.iter().map(|c| c.credit_total).sum(),
+            total: customers.iter().map(|c| c.total).sum(),
             customers,
-            total: totals.iter().copied().sum(),
             bucket_totals: totals,
         })
     }
@@ -432,7 +482,10 @@ impl Receivables {
             days.entry(r.get(1)).or_default().insert(r.get(0));
         }
         for (day, ids) in days {
-            for d in balances(&**client, scope, company, &day, pin, None).await? {
+            // Source-backed opening credits carry no newly taxable receipt or
+            // inferred tax share. Their settlement stream changes aging only;
+            // retain the native receipt/note basis for current-period tax.
+            for d in balances(&**client, scope, company, &day, pin, None, 0).await? {
                 let id: i64 = d.get("id");
                 let amount: Decimal = d.get("outstanding");
                 if !ids.contains(&id) || amount <= Decimal::ZERO {
@@ -510,9 +563,18 @@ impl Receivables {
         as_of: Date,
         pins: &BalancePins,
     ) -> Result<ControlAccountsTieOut> {
-        let client = self.db.get().await.map_err(Error::from)?;
-        self.tie_out_control_accounts_on(&**client, scope, company, as_of, pins)
+        let mut client = self.db.get().await.map_err(Error::from)?;
+        let tx = client
+            .build_transaction()
+            .isolation_level(tokio_postgres::IsolationLevel::RepeatableRead)
+            .start()
             .await
+            .map_err(Error::from)?;
+        let result = self
+            .tie_out_control_accounts_on(&*tx, scope, company, as_of, pins)
+            .await?;
+        tx.commit().await.map_err(Error::from)?;
+        Ok(result)
     }
 
     /// Authorized control tie-out on the caller's snapshot, including other owners.
@@ -525,6 +587,11 @@ impl Receivables {
         pins: &BalancePins,
     ) -> Result<ControlAccountsTieOut> {
         authorize(client, scope, company, VIEW).await?;
+        crate::settlements::complete_pins(
+            pins.through_entry_number,
+            pins.through_opening_batch_id,
+            pins.through_settlement_number,
+        )?;
         window(None, None, pins.through_entry_number)?;
         let ledger = self
             .ledger
@@ -542,6 +609,16 @@ impl Receivables {
         let chart = self.ledger.list_accounts_on(client, scope, company).await?;
         let opening_pin =
             crate::opening::pin(client, scope, company, pins.through_opening_batch_id).await?;
+        let settlement_pin = crate::settlements::pin(
+            client,
+            scope,
+            company,
+            pins.through_settlement_number,
+            ledger.through_entry_number,
+            opening_pin,
+            as_of,
+        )
+        .await?;
         let mut subledger: BTreeMap<i64, Decimal> = BTreeMap::new();
         for d in balances(
             client,
@@ -550,11 +627,17 @@ impl Receivables {
             &as_of.to_string(),
             ledger.through_entry_number,
             Some(opening_pin),
+            settlement_pin,
         )
         .await?
         {
+            let sign = if d.get::<_, String>("kind") == "opening_credit" {
+                -Decimal::ONE
+            } else {
+                Decimal::ONE
+            };
             *subledger.entry(d.get("receivable_account_id")).or_default() +=
-                d.get::<_, Decimal>("outstanding") - d.get::<_, Decimal>("written_off");
+                sign * (d.get::<_, Decimal>("outstanding") - d.get::<_, Decimal>("written_off"));
         }
         let controls=client.query("SELECT receivable_account_id FROM finance_receivables_documents WHERE tenant_id=$1 AND company_id=$2 AND status='issued' AND receivable_account_id IS NOT NULL UNION SELECT receivable_account_id FROM finance_receivables_setups WHERE tenant_id=$1 AND company_id=$2",&[&scope.tenant(),&company]).await.map_err(Error::from)?;
         let mut ids: BTreeSet<i64> = controls.iter().map(|r| r.get(0)).collect();
@@ -596,6 +679,7 @@ impl Receivables {
         accounts.sort_by(|a, b| a.code.cmp(&b.code));
         Ok(ControlAccountsTieOut {
             through_opening_batch_id: opening_pin,
+            through_settlement_number: settlement_pin,
             company_id: company,
             as_of: as_of.to_string(),
             through_entry_number: ledger.through_entry_number,
@@ -614,6 +698,7 @@ impl ControlAccountsTieOut {
         BalancePins {
             through_entry_number: Some(self.through_entry_number),
             through_opening_batch_id: Some(self.through_opening_batch_id),
+            through_settlement_number: Some(self.through_settlement_number),
         }
     }
 }
@@ -622,6 +707,7 @@ impl AgedReceivables {
         BalancePins {
             through_entry_number: Some(self.through_entry_number),
             through_opening_batch_id: Some(self.through_opening_batch_id),
+            through_settlement_number: Some(self.through_settlement_number),
         }
     }
 }

@@ -8,10 +8,19 @@ use bilibi_ui::{Badge, BadgeKind, Html};
 use rust_decimal::Decimal;
 
 pub(super) fn kind(document_type: &str) -> &'static str {
-    if document_type == "bill" {
+    if document_type == "opening_credit" {
+        "Supplier credit"
+    } else if document_type == "bill" {
         "Bill"
     } else {
         "Debit note"
+    }
+}
+pub(super) fn opening_item_kind(kind: &str) -> &str {
+    match kind {
+        "supplier_credit" => "Supplier credit",
+        "bill" => "Bill",
+        _ => kind,
     }
 }
 pub(super) fn number(number: Option<i64>) -> String {
@@ -224,4 +233,17 @@ pub(super) fn refused(
         return format!("{action} did not go through. Try again.");
     }
     format!("{action} did not go through: {message}")
+}
+
+#[derive(askama::Template)]
+#[template(
+    source = r#"<div class="flex w-full flex-wrap justify-end gap-2">{{ buttons|safe }}</div>"#,
+    ext = "html"
+)]
+struct ActionRow {
+    buttons: Html,
+}
+/// Shared form actions: Cancel followed by the primary action at the row end.
+pub(super) fn actions(buttons: Html) -> Result<Html> {
+    Html::render(&ActionRow { buttons }).map_err(|_| Error::Internal)
 }

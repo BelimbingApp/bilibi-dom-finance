@@ -5,6 +5,7 @@
 //! the facade or a table. Business meaning follows Belimbing's receivables.
 mod aging;
 mod company_pick;
+mod credits;
 mod customer;
 mod customers;
 mod document;
@@ -153,6 +154,13 @@ route!("finance/receivables.settings", SETTINGS, "settings");
 inventory::submit! { Contribution::new(PAGE_WRITES, PAGES, Provenance { module: MODULE, source: file!(), line: line!() }, &PageWrites {
     service: PAGES,
     contracts: &[
+        ("preview_credit", "finance.receivables.credit.apply"),
+        ("preview_credit", "finance.receivables.credit.refund"),
+        ("preview_credit", "finance.receivables.settlement.reverse"),
+        ("commit_credit", "finance.receivables.credit.apply"),
+        ("commit_credit", "finance.receivables.credit.refund"),
+        ("commit_credit", "finance.receivables.settlement.reverse"),
+
         ("preview_opening", "finance.receivables.opening.import"),
         ("import_opening", "finance.receivables.opening.import"),
         ("preview_opening", "finance.receivables.opening.stage"),
@@ -592,7 +600,7 @@ impl Pages {
             "invoices" => State::Invoices(Box::new(documents::Documents::new(
                 pages, r.query, r.framed,
             )?)),
-            "invoice" => State::Invoice(Box::new(document::Document::new(pages, r.path)?)),
+            "invoice" => State::Invoice(Box::new(document::Document::new(pages, r.path, r.query)?)),
             "receipts" => {
                 State::Receipts(Box::new(payments::Payments::new(pages, r.query, r.framed)?))
             }

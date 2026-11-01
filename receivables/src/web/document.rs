@@ -45,6 +45,8 @@ struct Lines {
 pub(super) struct Document {
     pages: Pages,
     id: i64,
+    balance_input: Value,
+    balance_pins: Value,
     record: Option<Record>,
     customer: Option<Customer>,
     series: Option<Series>,
@@ -66,14 +68,22 @@ pub(super) struct Document {
     tax_cols: ListColumns,
     applied_cols: ListColumns,
     write_offs: super::write_offs::Journals,
+    credit_actions: super::credits::Credits,
 }
 
 impl Document {
-    pub(super) fn new(pages: Pages, path: &HashMap<String, String>) -> Result<Self> {
+    pub(super) fn new(
+        pages: Pages,
+        path: &HashMap<String, String>,
+        query: &HashMap<String, String>,
+    ) -> Result<Self> {
         Ok(Self {
             write_offs: super::write_offs::Journals::new()?,
+            credit_actions: super::credits::Credits::new()?,
             pages,
             id: params::positive_id(path.get("id").map(String::as_str)).unwrap_or(0),
+            balance_input: super::credits::balance_query(query)?,
+            balance_pins: Value::Null,
             record: None,
             customer: None,
             series: None,
@@ -139,23 +149,46 @@ impl Document {
     }
 
     async fn load(&mut self, scope: &Scope) -> Result<()> {
+        self.receipts.clear();
+        self.credits.clear();
+        let mut input = self.balance_input.clone();
+        input["document_id"] = json!(self.id);
         self.record = match self
             .pages
-            .read(
-                scope,
-                "finance.receivables.document.get",
-                json!({"document_id": self.id}),
-            )
+            .read(scope, "finance.receivables.document.get", input)
             .await
         {
-            Ok(value) => serde_json::from_value(value).ok(),
+            Ok(mut value) => {
+                self.balance_pins = value["balance_pins"].clone();
+                if self.balance_pins.is_object() {
+                    self.balance_input = self.balance_pins.clone();
+                    self.receipts = serde_json::from_value(value["receipts"].take())
+                        .map_err(|_| Error::Internal)?;
+                    self.credits = serde_json::from_value(value["credits"].take())
+                        .map_err(|_| Error::Internal)?;
+                }
+                serde_json::from_value(value).ok()
+            }
             Err(Error::NotFound) => None,
             Err(error) => return Err(error),
         };
-        self.write_offs.load(&self.pages, scope).await?;
-        self.can_manage = self.pages.allowed(scope, MANAGE_DOCUMENTS).await?;
-        self.can_issue = self.pages.allowed(scope, ISSUE).await?;
+        let historical = self.balance_pins.is_object();
+        if historical {
+            self.write_offs = super::write_offs::Journals::new()?;
+            self.credit_actions = super::credits::Credits::new()?;
+            self.can_manage = false;
+            self.can_issue = false;
+        } else {
+            self.write_offs.load(&self.pages, scope).await?;
+            self.can_manage = self.pages.allowed(scope, MANAGE_DOCUMENTS).await?;
+            self.can_issue = self.pages.allowed(scope, ISSUE).await?;
+        }
         let Some(d) = &self.record else { return Ok(()) };
+        if !historical {
+            self.credit_actions
+                .load(&self.pages, scope, d.id, &d.kind)
+                .await?;
+        }
         let customer_id = d.customer_id;
         let series_id = d.series_id;
         let issued = d.status == "issued";
@@ -192,9 +225,7 @@ impl Document {
             .await?
             .0;
         self.accounts = self.pages.accounts(scope).await;
-        self.receipts.clear();
-        self.credits.clear();
-        if issued {
+        if issued && !historical {
             let id = self.id;
             let payments: Vec<Payment> = self
                 .pages
@@ -362,7 +393,14 @@ impl Document {
         items.push(text_fact(
             "due_date",
             "Due date",
-            d.due_date.as_deref().unwrap_or(""),
+            if d.kind == "opening_credit" {
+                d.opening
+                    .as_ref()
+                    .and_then(|v| v["due_date"].as_str())
+                    .unwrap_or("—")
+            } else {
+                d.due_date.as_deref().unwrap_or("")
+            },
         )?);
         if self.draft() {
             let mut field = f::inline(
@@ -384,15 +422,59 @@ impl Document {
         } else {
             items.push(f::fact("Description", f::optional(&d.description)));
         }
-        if issued && d.kind == "invoice" {
+        if issued && matches!(d.kind.as_str(), "invoice" | "opening_credit") {
             items.push(f::fact(
-                "Outstanding",
+                if d.kind == "opening_credit" {
+                    "Available credit"
+                } else {
+                    "Outstanding"
+                },
                 &self
                     .figures
                     .with_currency_opt(d.outstanding, &d.currency_code),
             ));
         }
+        if let Some(pins) = self.balance_pins.as_object() {
+            for (key, label) in [
+                ("as_of", "Balance as of"),
+                ("through_entry_number", "Read through ledger entry"),
+                ("through_opening_batch_id", "Read through opening batch"),
+                ("through_settlement_number", "Read through settlement"),
+            ] {
+                items.push(f::fact(
+                    label,
+                    &pins
+                        .get(key)
+                        .map(|v| {
+                            v.as_str()
+                                .map(str::to_owned)
+                                .unwrap_or_else(|| v.to_string())
+                        })
+                        .unwrap_or_default(),
+                ));
+            }
+            items.push(f::fact(
+                "Activity shown through",
+                pins.get("as_of").and_then(Value::as_str).unwrap_or(""),
+            ));
+        }
         if let Some(opening) = &d.opening {
+            items.push(f::fact(
+                "Source item kind",
+                f::opening_item_kind_label(opening["item_kind"].as_str().unwrap_or("")),
+            ));
+            items.push(f::fact(
+                "Source kind",
+                opening["source_kind"].as_str().unwrap_or(""),
+            ));
+            items.push(f::fact(
+                "Source system",
+                opening["source_system"].as_str().unwrap_or(""),
+            ));
+            items.push(f::fact(
+                "Source tax facts",
+                &opening["source_tax_facts"].to_string(),
+            ));
             if let Some(batch) = opening["replaced_by_batch_id"].as_i64() {
                 items.push(f::fact(
                     "Opening register",
@@ -423,7 +505,7 @@ impl Document {
             }
             items.push(f::fact(
                 "Opening amounts",
-                "Residual only; source-period tax detail was not migrated.",
+                "Residual only. Supplied source tax facts are retained as evidence and create no current tax lines.",
             ));
         }
         let document = render(Facts {
@@ -766,7 +848,21 @@ impl Document {
                 .write_offs
                 .body(&d, &self.accounts, &self.figures, &display)?,
         );
-        body.push(&attachments_slot()?);
+        body.push(
+            &self
+                .credit_actions
+                .body(
+                    &self.pages,
+                    d.id,
+                    &d.kind,
+                    &d.settlements,
+                    self.figures.units(),
+                )
+                .await?,
+        );
+        if !self.balance_pins.is_object() {
+            body.push(&attachments_slot()?);
+        }
 
         let modal = if let Some(dialog) =
             self.write_offs
@@ -1069,7 +1165,28 @@ impl Document {
     }
 
     async fn event(&mut self, scope: &Scope, credential: &str, v: &Value) -> Result<()> {
-        match v["type"].as_str().ok_or(Error::Invalid)? {
+        let event = v["type"].as_str().ok_or(Error::Invalid)?;
+        if self.balance_pins.is_object()
+            && !matches!(
+                event,
+                "clear-flash"
+                    | "lines_grid"
+                    | "tax_grid"
+                    | "applied_grid"
+                    | "write_off_grid"
+                    | "credit_grid"
+            )
+        {
+            return Err(Error::Invalid);
+        }
+        match event {
+            "ask_credit_apply" | "ask_credit_refund" | "ask_credit_reverse" | "cancel_credit"
+            | "change_credit" | "preview_credit" | "commit_credit" | "credit_grid" => {
+                self.credit_actions
+                    .event(&self.pages, scope, credential, v, self.id)
+                    .await?;
+            }
+
             "ask_submit_write_off"
             | "ask_approve_write_off"
             | "ask_reject_write_off"
@@ -1340,8 +1457,15 @@ fn attachments_slot() -> Result<Html> {
 impl LiveState<Scope, Error> for Document {
     fn update<'a>(&'a mut self, r: LiveRequest<'a, Scope>) -> LiveFuture<'a, Error> {
         Box::pin(async move {
-            if let LiveInput::Event(v) = r.input {
-                self.event(r.scope, r.credential, v).await?;
+            match r.input {
+                LiveInput::Event(v) => {
+                    self.event(r.scope, r.credential, v).await?;
+                }
+                LiveInput::Params(query) => {
+                    self.balance_input = super::credits::balance_query(query)?;
+                    self.balance_pins = Value::Null;
+                }
+                LiveInput::Refresh => {}
             }
             self.load(r.scope).await?;
             if self.record.is_none() {
@@ -1350,13 +1474,14 @@ impl LiveState<Scope, Error> for Document {
             }
             Ok(LiveBody {
                 html: self.body(r.scope).await?,
+                query: super::credits::balance_params(&self.balance_pins),
                 ..LiveBody::default()
             })
         })
     }
 
     fn panels(&self) -> Vec<PanelSpec> {
-        if self.record.is_none() {
+        if self.record.is_none() || self.balance_pins.is_object() {
             return vec![];
         }
         vec![PanelSpec {

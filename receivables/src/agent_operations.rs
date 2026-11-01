@@ -507,7 +507,7 @@ impl ReadHandler for Read {
                     }
                     Self::Aging => {
                         let as_of: jiff::civil::Date = input["as_of"].as_str().ok_or(ReceivableError::InvalidOption)?.parse().map_err(|_| invalid("as_of", "is not a date"))?;
-                        let mut options = AgingOptions {through_entry_number:input["through_entry_number"].as_i64(),through_opening_batch_id:input["through_opening_batch_id"].as_i64(),..Default::default()};
+                        let mut options = AgingOptions {through_entry_number:input["through_entry_number"].as_i64(),through_opening_batch_id:input["through_opening_batch_id"].as_i64(),through_settlement_number:input["through_settlement_number"].as_i64(),..Default::default()};
                         if let Some(days) = input["bucket_days"].as_array() {
                             options.bucket_days = days.iter().filter_map(Value::as_i64).collect();
                         }
@@ -515,7 +515,13 @@ impl ReadHandler for Read {
                         json!(service.aged_receivables(scope, company, as_of, &options).await?)
                     }
                     Self::Customer => json!(service.get_customer(scope, company, id(input,"customer_id")?).await?),
-                    Self::Document => json!(documents::read(client,tenant,company,id(input,"document_id")?).await?),
+                    Self::Document => {
+                        if !input["as_of"].is_null()||["through_entry_number","through_opening_batch_id","through_settlement_number"].iter().any(|key|!input[key].is_null()) {
+                            service.document_at(scope,company,id(input,"document_id")?,input).await?
+                        } else {
+                            json!(documents::read(client,tenant,company,id(input,"document_id")?).await?)
+                        }
+                    },
                     Self::DocumentPage => {
                         let kind = input["kind"].as_str();
                         let status = input["status"].as_str();
@@ -526,7 +532,7 @@ impl ReadHandler for Read {
                         let page_size = input["page_size"].as_i64().unwrap_or(25);
                         let sort = input["sort"].as_str().unwrap_or("number");
                         let direction = input["direction"].as_str().unwrap_or("desc");
-                        if kind.is_some_and(|value| !Receivables::document_kinds().contains(&value))
+                        if kind.is_some_and(|value| !["invoice","credit_note","opening_credit"].contains(&value))
                             || status.is_some_and(|value| {
                                 !matches!(value, "draft" | "issued" | "unpaid" | "discarded")
                             })
@@ -579,7 +585,7 @@ impl ReadHandler for Read {
                             ("number", "asc") => "d.id ASC",
                             _ => "d.id DESC",
                         };
-                        let rows_sql = format!("SELECT jsonb_build_object('opening',EXISTS (SELECT 1 FROM finance_receivables_opening_items i WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=d.id),'id',d.id,'kind',d.kind,'status',d.status,'customer_id',d.customer_id,'issue_date',d.issue_date,'due_date',d.due_date,'description',d.description,'total',d.total,'outstanding',CASE WHEN EXISTS(SELECT 1 FROM finance_receivables_opening_items i JOIN finance_receivables_opening_decisions x ON x.replaces_batch_id=i.batch_id AND x.tenant_id=$1 AND x.company_id=$2 WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=d.id) THEN 0 WHEN d.kind='invoice' AND d.status='issued' THEN finance_receivables_outstanding(d.id) ELSE NULL END,'document_reference',d.document_reference,'party_code',d.party_code,'party_name',d.party_name){where_sql} ORDER BY {order} LIMIT $9 OFFSET $10");
+                        let rows_sql = format!("SELECT jsonb_build_object('opening',EXISTS (SELECT 1 FROM finance_receivables_opening_items i WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=d.id),'id',d.id,'kind',d.kind,'status',d.status,'customer_id',d.customer_id,'issue_date',d.issue_date,'due_date',d.due_date,'description',d.description,'total',d.total,'outstanding',CASE WHEN EXISTS(SELECT 1 FROM finance_receivables_opening_items i JOIN finance_receivables_opening_decisions x ON x.replaces_batch_id=i.batch_id AND x.tenant_id=$1 AND x.company_id=$2 WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=d.id) THEN 0 WHEN d.kind IN ('invoice','opening_credit') AND d.status='issued' THEN finance_receivables_outstanding(d.id) ELSE NULL END,'document_reference',d.document_reference,'party_code',d.party_code,'party_name',d.party_name){where_sql} ORDER BY {order} LIMIT $9 OFFSET $10");
                         let mut row_params = params.to_vec();
                         row_params.push(&page_size);
                         row_params.push(&offset);
@@ -636,6 +642,11 @@ fn schema(required: &[&str], properties: Value) -> Value {
         .chain(required.iter().copied())
         .collect();
     object(&required, Value::Object(properties))
+}
+fn complete_pins(value: Value) -> Value {
+    // The operation schema dialect has no cross-field combinators. The facade
+    // validates that callers supply all three accounting pins or none.
+    value
 }
 fn output() -> Value {
     json!({"type":"object","description":"Receivables record, cursor page, or deterministic review facts. Exact decimals are strings; dates are ISO. Committed path is the page of the record written, or the settings page for setup, series and tax codes."})
@@ -797,7 +808,7 @@ fn history() -> Value {
 fn documents() -> Value {
     let mut p = page_fields();
     p["source"] = choice(&["ordinary", "opening"]);
-    p["kind"] = choice(Receivables::document_kinds());
+    p["kind"] = choice(&["invoice", "credit_note", "opening_credit"]);
     p["status"] = choice(&["draft", "issued", "discarded"]);
     p["customer_id"] = identifier();
     schema(&[], p)
@@ -807,7 +818,7 @@ fn document_page() -> Value {
         &[],
         json!({
             "source":choice(&["ordinary","opening"]),
-            "kind":choice(Receivables::document_kinds()),
+            "kind":choice(&["invoice","credit_note","opening_credit"]),
             "status":choice(&["draft","issued","unpaid","discarded"]),
             "customer_id":identifier(),
             "search":string(255),
@@ -819,10 +830,10 @@ fn document_page() -> Value {
     )
 }
 fn aging() -> Value {
-    schema(
+    complete_pins(schema(
         &["as_of"],
-        json!({"as_of":day(),"through_entry_number":{"type":"integer","minimum":0},"through_opening_batch_id":{"type":"integer","minimum":0},"bucket_days":{"type":"array","items":{"type":"integer","minimum":1,"maximum":36500}}}),
-    )
+        json!({"as_of":day(),"through_entry_number":{"type":"integer","minimum":0},"through_opening_batch_id":{"type":"integer","minimum":0},"through_settlement_number":{"type":"integer","minimum":0},"bucket_days":{"type":"array","items":{"type":"integer","minimum":1,"maximum":36500}}}),
+    ))
 }
 fn payments() -> Value {
     let mut p = page_fields();
@@ -845,10 +856,10 @@ inventory::submit! { Contribution::new(DEFINITIONS,"finance/receivables.operatio
         Operation {key:"finance.receivables.customer.get",title:"Read a customer",summary:"Read one customer with its linked company (name, status, tax ID, registration number, email, phone as you may see them) and its own payment terms and availability.",keywords:&[],capability:VIEW,input:customer,output,handler:Handler::Read(&Read::Customer),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.document.list",title:"List receivables documents",summary:"Read drafts, issued invoices and credit notes, or discarded drafts by identifier with optional filters.",keywords:&[],capability:VIEW,input:documents,output,handler:Handler::Read(&Read::Documents),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.document.page",title:"Read invoices page",summary:"Read a bounded invoices page after applying source, type, status, customer and search filters, stable sorting, count and offset in SQL.",keywords:&["opening"],capability:VIEW,input:document_page,output,handler:Handler::Read(&Read::DocumentPage),channels:Channels::Every,step_up:&[]},
-        Operation {key:"finance.receivables.document.get",title:"Read a receivables document",summary:"Read saved lines, tax and party snapshots, entry identifiers and current outstanding.",keywords:&[],capability:VIEW,input:document,output,handler:Handler::Read(&Read::Document),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.receivables.document.get",title:"Read a receivables document",summary:"Read saved lines, tax and party snapshots, and either current or pinned outstanding and activity.",keywords:&[],capability:VIEW,input:dated_document,output,handler:Handler::Read(&Read::Document),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.payment.list",title:"List receipts",summary:"Read numbered receipts with allocations and reversal, by identifier and optional customer.",keywords:&[],capability:VIEW,input:payments,output,handler:Handler::Read(&Read::Payments),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.payment.get",title:"Read a receipt",summary:"Read the original receipt, its allocations and optional dated reversal.",keywords:&[],capability:VIEW,input:payment,output,handler:Handler::Read(&Read::Payment),channels:Channels::Every,step_up:&[]},
-        Operation {key:"finance.receivables.aging.get",title:"Read receivables aging",summary:"Read who owes what as of a date, by days overdue, per customer and invoice, with the pinned posting number it was read at. Also requires ledger view.",keywords:&[],capability:VIEW,input:aging,output,handler:Handler::Read(&Read::Aging),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.receivables.aging.get",title:"Read receivables aging",summary:"Read customer residuals at a date and posting pin. Invoices age from their due dates; unapplied credits age from their source dates. Also requires ledger view.",keywords:&[],capability:VIEW,input:aging,output,handler:Handler::Read(&Read::Aging),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.setup.configure",title:"Configure receivables",summary:"Choose active asset control and income accounts for future documents. Also requires ledger view.",keywords:&[],capability:MANAGE_SETUP,input:configure,output,handler:Handler::SafeWrite(&Write::Configure),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.series.create",title:"Create a numbering series",summary:"Create an invoice, credit note or payment series with a unique code and prefix.",keywords:&[],capability:MANAGE_SETUP,input:series_create,output,handler:Handler::SafeWrite(&Write::Code(SERIES,None)),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.receivables.series.update",title:"Change a numbering series",summary:"Change name or active flag; never change its code, kind, prefix or width.",keywords:&[],capability:MANAGE_SETUP,input:series_update,output,handler:Handler::SafeWrite(&Write::Code(SERIES,Some("series_id"))),channels:Channels::Every,step_up:&[]},
@@ -865,3 +876,16 @@ inventory::submit! { Contribution::new(DEFINITIONS,"finance/receivables.operatio
     ],
     guides:&[Guide {key:"finance.receivables",title:"Receivables drafts, issuance and receipts",summary:"Configure, draft, review and issue invoices or credit notes; settle and correct receipts without editing posted evidence.",keywords:&[],capability:VIEW,body:include_str!("../guide.md")}],
 }) }
+
+fn dated_document() -> Value {
+    let mut s = document();
+    s["properties"]["as_of"] = json!({"type":"string","format":"date"});
+    for key in [
+        "through_entry_number",
+        "through_opening_batch_id",
+        "through_settlement_number",
+    ] {
+        s["properties"][key] = json!({"type":"integer","minimum":0});
+    }
+    complete_pins(s)
+}

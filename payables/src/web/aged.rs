@@ -23,6 +23,7 @@ pub(super) struct Aged {
     parties: ListColumns,
     bills: ListColumns,
     credits: ListColumns,
+    opening_credits: ListColumns,
     unavailable: bool,
 }
 
@@ -87,13 +88,17 @@ impl Aged {
                             .map(|(i, label)| BuiltinColumn::new(&format!("b{i}"), &label).right()),
                     )
                     .chain(std::iter::once(
-                        BuiltinColumn::new("total", "Total owed").right(),
+                        BuiltinColumn::new("credit", "Unapplied credits").right(),
+                    ))
+                    .chain(std::iter::once(
+                        BuiltinColumn::new("total", "Net owed").right(),
                     ))
                     .collect(),
             )
             .map_err(|_| Error::Internal)?,
             bills: bill_columns("payables-aged-bills-table")?,
             credits: bill_columns("payables-aged-credits-table")?,
+            opening_credits: bill_columns("payables-aged-opening-credits-table")?,
             unavailable: false,
         })
     }
@@ -129,6 +134,8 @@ impl Aged {
                     aged.parties.iter().flat_map(|p| &p.documents).collect();
                 self.bills.load(&docs, |d| d.id.to_string());
                 self.credits.load(&aged.exceptions, |d| d.id.to_string());
+                let credits: Vec<_> = aged.parties.iter().flat_map(|p| &p.credits).collect();
+                self.opening_credits.load(&credits, |d| d.id.to_string());
                 self.parties.load(&aged.parties, |p| p.party_key.clone());
                 self.aged = Some(aged);
             }
@@ -151,7 +158,8 @@ impl Aged {
                     "bill",
                     render(BillLink {
                         id: d.id,
-                        text: format!("Bill #{}", d.document_number),
+                        text: format!("{} #{}", f::kind(&d.kind), d.document_number),
+                        query:self.aged.as_ref().map(|r|format!("?as_of={}&through_entry_number={}&through_opening_batch_id={}&through_settlement_number={}",r.as_of,r.through_entry_number,r.through_opening_batch_id,r.through_settlement_number)).unwrap_or_default(),
                     })?,
                 )
                 .cell(
@@ -218,6 +226,8 @@ impl Aged {
                 bills: None,
                 credits: None,
                 empty: Some(render(empty)?),
+                opening_credits: None,
+                summary: Html::EMPTY,
             }
             .render()
             .map_err(|_| Error::Internal);
@@ -234,7 +244,10 @@ impl Aged {
             for (i, amount) in p.buckets.iter().enumerate() {
                 row = row.cell(&format!("b{i}"), Cell::text(amount.display(self.units)));
             }
-            rows.push(row.cell("total", Cell::text(p.total.display(self.units))));
+            rows.push(
+                row.cell("credit", Cell::text(p.credit_total.display(self.units)))
+                    .cell("total", Cell::text(p.total.display(self.units))),
+            );
         }
         if !aged.parties.is_empty() {
             let mut row = FlexRow::new("all");
@@ -278,6 +291,31 @@ impl Aged {
             bills,
             credits,
             empty: None,
+            summary: render(bilibi_ui::Facts {
+                id: "payables-aged-pins",
+                items: vec![
+                    f::fact(
+                        "Gross debit balances",
+                        &aged.gross_debits.display(self.units),
+                    ),
+                    f::fact(
+                        "Gross credit balances",
+                        &aged.gross_credits.display(self.units),
+                    ),
+                    f::fact("Ledger entry", &aged.through_entry_number.to_string()),
+                    f::fact("Opening batch", &aged.through_opening_batch_id.to_string()),
+                    f::fact("Settlement", &aged.through_settlement_number.to_string()),
+                ],
+            })?,
+            opening_credits: Some(Self::table(
+                &self.opening_credits,
+                "opening_credits_grid",
+                "Unapplied supplier credits",
+                self.bill_rows(
+                    aged.parties.iter().flat_map(|p| &p.credits).collect(),
+                    "payables-aged-opening-credit",
+                )?,
+            )?),
         }
         .render()
         .map_err(|_| Error::Internal)
@@ -293,6 +331,8 @@ struct View {
     bills: Option<Html>,
     credits: Option<Html>,
     empty: Option<Html>,
+    opening_credits: Option<Html>,
+    summary: Html,
 }
 
 #[derive(Template)]
@@ -306,10 +346,11 @@ struct DateForm {
 
 #[derive(Template)]
 #[template(
-    source = r#"<a href="/finance/payables/bills/{{ id }}" class="font-medium text-ink-strong hover:underline">{{ text }}</a>"#,
+    source = r#"<a href="/finance/payables/bills/{{ id }}{{ query }}" class="font-medium text-ink-strong hover:underline">{{ text }}</a>"#,
     ext = "html"
 )]
 struct BillLink {
+    query: String,
     id: i64,
     text: String,
 }
@@ -324,10 +365,16 @@ impl LiveState<Scope, Error> for Aged {
                     true
                 }
                 LiveInput::Event(v) => match v["type"].as_str() {
-                    Some(event @ ("parties_grid" | "bills_grid" | "credits_grid")) => {
+                    Some(
+                        event @ ("parties_grid"
+                        | "bills_grid"
+                        | "credits_grid"
+                        | "opening_credits_grid"),
+                    ) => {
                         let columns = match event {
                             "parties_grid" => &mut self.parties,
                             "bills_grid" => &mut self.bills,
+                            "opening_credits_grid" => &mut self.opening_credits,
                             _ => &mut self.credits,
                         };
                         columns.handle(&params::string_values(v));

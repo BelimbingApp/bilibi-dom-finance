@@ -872,7 +872,7 @@ impl ReadHandler for Read {
                 let result=match self {
                     Self::Aging=>{
                         let as_of=v["as_of"].as_str().ok_or(PayablesError::InvalidOption)?.parse().map_err(|_|invalid("as_of","must be YYYY-MM-DD"))?;
-                        let mut options=AgingQuery{through_entry_number:v["through_entry_number"].as_i64(),through_opening_batch_id:v["through_opening_batch_id"].as_i64(),..Default::default()};
+                        let mut options=AgingQuery{through_entry_number:v["through_entry_number"].as_i64(),through_opening_batch_id:v["through_opening_batch_id"].as_i64(),through_settlement_number:v["through_settlement_number"].as_i64(),..Default::default()};
                         if let Some(days)=v["bucket_days"].as_array(){options.bucket_days=days.iter().map(|n|n.as_i64().and_then(|n|i32::try_from(n).ok()).ok_or(PayablesError::InvalidOption)).collect::<Result<Vec<_>>>()?;}
                         // A read has no company write lock; use the same report facade as the page.
                         json!(owner()?.aged_payables(s,company,as_of,&options).await?)
@@ -891,7 +891,16 @@ impl ReadHandler for Read {
                         search:opt(v,"search").unwrap_or_default(), page:v["page"].as_i64().unwrap_or(1),
                         page_size:v["page_size"].as_i64().unwrap_or(25),
                     }).await?),
-                    Self::Document=>document_value(store::document_record(c,tenant,company,id(v,"document_id")?).await?.ok_or(PayablesError::DocumentNotFound)?),
+                    Self::Document=>{
+                        if !v["as_of"].is_null()||["through_entry_number","through_opening_batch_id","through_settlement_number"].iter().any(|key|!v[key].is_null()) {
+                            let (document,pins)=owner()?.document_at(s,company,id(v,"document_id")?,v).await?;
+                            let mut record=document_value(document);
+                            record["balance_pins"]=pins;
+                            record
+                        } else {
+                            document_value(store::document_record(c,tenant,company,id(v,"document_id")?).await?.ok_or(PayablesError::DocumentNotFound)?)
+                        }
+                    },
                     Self::Request=>json!(payments::request(c,tenant,company,id(v,"request_id")?).await?),
                     Self::Payment=>json!(payments::payment(c,tenant,company,id(v,"payment_id")?).await?),
                     Self::Taxes|Self::Documents|Self::Requests|Self::Payments=>{
@@ -955,6 +964,17 @@ fn schema(required: &[&str], props: Value) -> Value {
         .chain(required.iter().copied())
         .collect();
     object(&required, json!(props))
+}
+fn complete_pins(value: Value) -> Value {
+    // The operation schema dialect has no cross-field combinators. The facade
+    // validates that callers supply all three accounting pins or none.
+    value
+}
+fn aging() -> Value {
+    complete_pins(schema(
+        &["as_of"],
+        json!({"as_of":day(),"through_entry_number":{"type":"integer","minimum":0},"through_opening_batch_id":{"type":"integer","minimum":0},"through_settlement_number":{"type":"integer","minimum":0},"bucket_days":{"type":"array","items":{"type":"integer","minimum":1,"maximum":36500}}}),
+    ))
 }
 fn output() -> Value {
     json!({"type":"object","description":"Payables records or normalized review facts. Amounts and rates are exact decimal strings; dates are ISO dates. Generated IDs, numbers and timestamps exist only after commit. No Payables page is added by these operations; committed path is null."})
@@ -1038,7 +1058,7 @@ fn document_page_schema() -> Value {
         json!({
             "source":{"type":"string","enum":["ordinary","opening"]},
             "status":{"type":"string","enum":["draft","approved","held","posted","voided"]},
-            "document_type":{"type":"string","enum":["bill","debit_note"]},
+            "document_type":{"type":"string","enum":["bill","debit_note","opening_credit"]},
             "search":string(255), "page":{"type":"integer","minimum":1},
             "page_size":{"type":"integer","enum":[25,50,100]}
         }),
@@ -1053,7 +1073,8 @@ fn list_schema(kind: &str) -> Value {
     if kind == "document" {
         props["status"] =
             json!({"type":"string","enum":["draft","approved","held","posted","voided"]});
-        props["document_type"] = json!({"type":"string","enum":["bill","debit_note"]});
+        props["document_type"] =
+            json!({"type":"string","enum":["bill","debit_note","opening_credit"]});
         props["corrects_document_id"] = identifier();
         props["source"] = json!({"type":"string","enum":["ordinary","opening"]});
     }
@@ -1068,7 +1089,7 @@ fn list_schema(kind: &str) -> Value {
 
 inventory::submit! {Contribution::new(DEFINITIONS,"finance/payables.operations",Provenance {module:MODULE,source:file!(),line:line!()},&Definitions {
     operations:&[
-        Operation {key:"finance.payables.aging.get",title:"Read payables aging",summary:"Read supplier residuals at a date and posting pin, aged by their original due dates. Opening bills are excluded before conversion.",keywords:&["conversion"],capability:VIEW,input:||schema(&["as_of"],json!({"as_of":day(),"through_entry_number":{"type":"integer","minimum":0},"through_opening_batch_id":{"type":"integer","minimum":0},"bucket_days":{"type":"array","items":{"type":"integer","minimum":1,"maximum":36500}}})),output,handler:Handler::Read(&Read::Aging),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.payables.aging.get",title:"Read payables aging",summary:"Read supplier residuals at a date and posting pin. Bills age from their due dates; unapplied credits age from their source dates. Opening records are excluded before conversion.",keywords:&["conversion"],capability:VIEW,input:aging,output,handler:Handler::Read(&Read::Aging),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.payables.vendor.get",title:"Read a vendor",summary:"Read Finance settings and the linked Core company.",keywords:&[],capability:VIEW,input:||schema(&["vendor_id"],json!({"vendor_id":identifier()})),output,handler:Handler::Read(&Read::Vendor),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.payables.vendor.list",title:"List vendors",summary:"Read the current company's vendors by ID.",keywords:&[],capability:VIEW,input:||list_schema("vendor"),output,handler:Handler::Read(&Read::Vendors),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.payables.vendor.supplier_keys",title:"Review historical supplier keys",summary:"Read every distinct snapshot, possible collision and confirmed mapping without netting balances.",keywords:&[],capability:VIEW,input:||schema(&[],json!({})),output,handler:Handler::Read(&Read::SupplierHistory),channels:Channels::Every,step_up:&[]},
@@ -1077,7 +1098,7 @@ inventory::submit! {Contribution::new(DEFINITIONS,"finance/payables.operations",
         Operation {key:"finance.payables.vendor.map_supplier_key",title:"Confirm a historical supplier match",summary:"Permanently map one reviewed key with a reason. Original snapshots, allocations and aging groups stay unchanged.",keywords:&[],capability:MANAGE_SETTINGS,input:||schema(&["vendor_id","supplier_key","reason"],json!({"vendor_id":identifier(),"supplier_key":string(100),"reason":string(500)})),output,handler:Handler::SafeWrite(&Write::MapKey),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.payables.settings.get",title:"Read payables settings",summary:"Read the control account and matching tolerances; null before configuration.",keywords:&[],capability:VIEW,input:||schema(&[],json!({})),output,handler:Handler::Read(&Read::Settings),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.payables.tax_code.list",title:"List payables tax codes",summary:"Read configured tax codes by ID with a bounded cursor.",keywords:&[],capability:VIEW,input:||list_schema("tax"),output,handler:Handler::Read(&Read::Taxes),channels:Channels::Every,step_up:&[]},
-        Operation {key:"finance.payables.document.get",title:"Read a payable document",summary:"Read a bill or debit note, immutable line and tax snapshots, status and outstanding.",keywords:&[],capability:VIEW,input:document_id,output,handler:Handler::Read(&Read::Document),channels:Channels::Every,step_up:&[]},
+        Operation {key:"finance.payables.document.get",title:"Read a payable document",summary:"Read a bill or debit note with immutable snapshots and either current or pinned outstanding and activity.",keywords:&[],capability:VIEW,input:dated_document,output,handler:Handler::Read(&Read::Document),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.payables.document.page",title:"Read bills page",summary:"Read bills and debit notes with source and status filters, search, SQL totals and bounded page offsets.",keywords:&["opening"],capability:VIEW,input:document_page_schema,output,handler:Handler::Read(&Read::DocumentPage),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.payables.document.list",title:"List payable documents",summary:"Read bills and debit notes by ID, optionally filtered by source, party, type and status.",keywords:&[],capability:VIEW,input:||list_schema("document"),output,handler:Handler::Read(&Read::Documents),channels:Channels::Every,step_up:&[]},
         Operation {key:"finance.payables.payment_request.get",title:"Read a payment request",summary:"Read retained allocations, submitter, decision and posted payment ID.",keywords:&[],capability:VIEW,input:request_id,output,handler:Handler::Read(&Read::Request),channels:Channels::Every,step_up:&[]},
@@ -1100,3 +1121,16 @@ inventory::submit! {Contribution::new(DEFINITIONS,"finance/payables.operations",
     ],
     guides:&[Guide {key:"finance.payables",title:"Bills, debit notes and payments",summary:"Reviewed drafts, independent approvals, owned posting, payment requests and dated reversals.",keywords:&[],capability:VIEW,body:include_str!("../guide.md")}],
 })}
+
+fn dated_document() -> Value {
+    let mut s = document_id();
+    s["properties"]["as_of"] = json!({"type":"string","format":"date"});
+    for key in [
+        "through_entry_number",
+        "through_opening_batch_id",
+        "through_settlement_number",
+    ] {
+        s["properties"][key] = json!({"type":"integer","minimum":0});
+    }
+    complete_pins(s)
+}

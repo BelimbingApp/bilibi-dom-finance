@@ -17,6 +17,11 @@ pub(super) const HEADER: &[&str] = &[
     "outstanding",
     "control_account_code",
     "party_kind",
+    "item_kind",
+    "source_kind",
+    "source_system",
+    "currency_code",
+    "source_tax_facts",
 ];
 const BATCH: store::Table = store::Table {
     name: "finance_receivables_opening_batches",
@@ -133,10 +138,12 @@ impl Receivables {
         let chart = self.ledger.list_accounts_on(c, s, company).await?;
         let mut expected = BTreeSet::new();
         for account in chart {
-            let Some(balance) = opening.balances.get(&account.id).copied() else {
-                continue;
-            };
-            if balance == Money::ZERO
+            let balance = opening
+                .balances
+                .get(&account.id)
+                .copied()
+                .unwrap_or(Money::ZERO);
+            if (balance == Money::ZERO && !classifications.contains_key(&account.id))
                 || account.is_group
                 || ![AccountType::Asset, AccountType::Liability].contains(&account.account_type)
             {
@@ -170,7 +177,7 @@ impl Receivables {
         if let Some(id) = classifications.keys().find(|id| !expected.contains(id)) {
             return Err(invalid(
                 "opening_account_classifications",
-                format!("account ID {id} has no non-zero asset or liability opening balance"),
+                format!("account ID {id} is not an eligible asset or liability account"),
             ));
         }
         Ok(())
@@ -194,12 +201,9 @@ impl Receivables {
             .filter(|account| {
                 [AccountType::Asset, AccountType::Liability].contains(&account.account_type)
                     && !account.is_group
-                    && opening
-                        .balances
-                        .get(&account.id)
-                        .is_some_and(|balance| *balance != Money::ZERO)
+
             })
-            .map(|account| json!({"id":account.id,"code":account.code,"name":account.name,"account_type":account.account_type,"opening_balance":opening.balances[&account.id]}))
+            .map(|account| json!({"id":account.id,"code":account.code,"name":account.name,"account_type":account.account_type,"opening_balance":opening.balances.get(&account.id).copied().unwrap_or(Money::ZERO)}))
             .collect::<Vec<_>>();
         let after = input["items_after"].as_i64().unwrap_or(0);
         let limit = input["limit"].as_i64().unwrap_or(200).clamp(1, 500);
@@ -328,10 +332,12 @@ impl Receivables {
         let mut control_accounts = BTreeSet::new();
         let mut expected = BTreeSet::new();
         for account in &chart {
-            let Some(balance) = context.balances.get(&account.id).copied() else {
-                continue;
-            };
-            if balance == Money::ZERO
+            let balance = context
+                .balances
+                .get(&account.id)
+                .copied()
+                .unwrap_or(Money::ZERO);
+            if (balance == Money::ZERO && !classifications.contains_key(&account.id))
                 || account.is_group
                 || ![AccountType::Asset, AccountType::Liability].contains(&account.account_type)
             {
@@ -369,7 +375,7 @@ impl Receivables {
         if let Some(id) = classifications.keys().find(|id| !expected.contains(id)) {
             return Err(invalid(
                 "opening_account_classifications",
-                format!("account ID {id} has no non-zero asset or liability opening balance"),
+                format!("account ID {id} is not an eligible asset or liability account"),
             ));
         }
         if context
@@ -428,6 +434,8 @@ impl Receivables {
         let mut documents = BTreeSet::new();
         let mut rows = vec![];
         let mut balances = BTreeMap::<i64, Money>::new();
+        let mut debits = BTreeMap::<i64, Money>::new();
+        let mut credits = BTreeMap::<i64, Money>::new();
         for (index, row) in parsed.into_iter().enumerate().skip(1) {
             let fail = |text: &str| invalid("csv", format!("row {}: {text}", index + 1));
             if row.len() != HEADER.len() {
@@ -460,9 +468,31 @@ impl Receivables {
             let date: jiff::civil::Date = row[3]
                 .parse()
                 .map_err(|_| fail("document_date must be YYYY-MM-DD"))?;
-            let due: jiff::civil::Date = row[4]
-                .parse()
-                .map_err(|_| fail("due_date must be YYYY-MM-DD"))?;
+            let is_credit = row[9] == "customer_credit";
+            if !["invoice", "customer_credit"].contains(&row[9]) {
+                return Err(fail("item_kind must be invoice or customer_credit"));
+            }
+            let source_kind = row[10];
+            if (!is_credit && source_kind != "invoice")
+                || (is_credit && !["credit_note", "receipt"].contains(&source_kind))
+            {
+                return Err(fail("source_kind does not match the item kind"));
+            }
+            if row[11].is_empty() || row[11].chars().count() > 200 {
+                return Err(fail("source_system must contain 1 to 200 characters"));
+            }
+            if row[12] != book.currency_code {
+                return Err(fail(
+                    "currency_code must match the book's currency; translation is not supported",
+                ));
+            }
+            let due: jiff::civil::Date = if is_credit && row[4].is_empty() {
+                date
+            } else {
+                row[4]
+                    .parse()
+                    .map_err(|_| fail("due_date must be YYYY-MM-DD"))?
+            };
             if date.year() < 1 || due.year() < 1 {
                 return Err(fail("document and due dates must be in year 0001 or later"));
             }
@@ -477,9 +507,11 @@ impl Receivables {
                 .map_err(|_| fail("outstanding must be a book-precision amount"))?;
             if !original.is_positive() || !residual.is_positive() || residual > original {
                 return Err(fail(
-                    "outstanding must be positive and no greater than original_total; opening credits are not supported",
+                    "outstanding must be positive and no greater than original_total",
                 ));
             }
+            let tax_facts = source_tax_facts(row[13], original, book.minor_units)
+                .map_err(|message| fail(&message))?;
             let account = chart
                 .iter()
                 .find(|a| a.code == row[7] && control_accounts.contains(&a.id))
@@ -487,24 +519,50 @@ impl Receivables {
                     fail("control_account_code must identify an account classified as a receivables control")
                 })?;
             let balance = balances.entry(account.id).or_insert(Money::ZERO);
-            *balance = Money::new((*balance + residual).amount(), book.minor_units)
+            *balance = Money::new(
+                (*balance + if is_credit { -residual } else { residual }).amount(),
+                book.minor_units,
+            )
+            .map_err(|e| fail(&e.to_string()))?;
+            let gross = if is_credit { &mut credits } else { &mut debits };
+            let value = gross.entry(account.id).or_insert(Money::ZERO);
+            *value = Money::new((*value + residual).amount(), book.minor_units)
                 .map_err(|e| fail(&e.to_string()))?;
-            rows.push(json!({"source_id":row[0],"customer_id":customer_id,"customer_code":row[1],"party_kind":row[8],"customer_name":customer_name,"customer":customer,"document_reference":row[2],"document_date":date.to_string(),"due_date":due.to_string(),"original_total":original,"outstanding":residual,"settled_before_conversion":original-residual,"account_id":account.id,"account_code":account.code}));
+            rows.push(json!({"item_kind":row[9],"source_kind":source_kind,"source_system":row[11],"currency_code":row[12],"source_tax_facts":tax_facts,"source_id":row[0],"customer_id":customer_id,"customer_code":row[1],"party_kind":row[8],"customer_name":customer_name,"customer":customer,"document_reference":row[2],"document_date":date.to_string(),"due_date":if is_credit && row[4].is_empty() { Value::Null } else { json!(due.to_string()) },"original_total":original,"outstanding":residual,"settled_before_conversion":original-residual,"account_id":account.id,"account_code":account.code}));
         }
         let mut reconciliation = Vec::new();
         for &id in &control_accounts {
             let account = chart.iter().find(|a| a.id == id).ok_or(Error::Internal)?;
             let balance = balances.get(&id).copied().unwrap_or(Money::ZERO);
             let expected = context.balances.get(&id).copied().unwrap_or(Money::ZERO);
+            if expected == Money::ZERO && (!debits.contains_key(&id) || !credits.contains_key(&id))
+            {
+                return Err(invalid(
+                    "opening_account_classifications",
+                    format!(
+                        "{} may be classified as a zero-balance receivables control only with offsetting invoice and customer-credit rows",
+                        account.code
+                    ),
+                ));
+            }
             if balance != expected {
                 return Err(invalid("csv", format!("opening invoices on {} total {} but the approved opening balance is {} (difference {})", account.code, balance.display(book.minor_units), expected.display(book.minor_units), (balance - expected).display(book.minor_units))));
             }
-            reconciliation.push(json!({"account_id":id,"account_code":account.code,"register_balance":balance,"opening_balance":expected,"difference":Money::ZERO}));
+            reconciliation.push(json!({"gross_debits":debits.get(&id).copied().unwrap_or(Money::ZERO),"gross_credits":credits.get(&id).copied().unwrap_or(Money::ZERO),"account_id":id,"account_code":account.code,"register_balance":balance,"opening_balance":expected,"difference":Money::ZERO}));
         }
         let account_ids: Vec<i64> = control_accounts.iter().copied().collect();
         if c.query_opt("SELECT id FROM finance_receivables_payments WHERE tenant_id=$1 AND company_id=$2 AND deposit_account_id=ANY($3::bigint[]) LIMIT 1", &[&s.tenant(), &company, &account_ids]).await?.is_some() {
             return Err(invalid("csv", "an account used for receipt deposits cannot be a receivables control"));
         }
+        let parties: Vec<i64> = rows
+            .iter()
+            .filter_map(|r| r["customer_id"].as_i64())
+            .collect();
+        let references: Vec<&str> = rows
+            .iter()
+            .filter_map(|r| r["document_reference"].as_str())
+            .collect();
+        if c.query_opt("SELECT d.id FROM unnest($3::bigint[],$4::text[]) u(party,reference) JOIN finance_receivables_documents d ON d.tenant_id=$1 AND d.company_id=$2 AND d.customer_id=u.party AND d.status='issued' LEFT JOIN finance_receivables_opening_items i ON i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=d.id WHERE (d.document_reference=u.reference OR i.source_facts->>'document_reference'=u.reference) AND (i.id IS NULL OR (i.batch_id<>COALESCE($5::bigint,0) AND NOT EXISTS(SELECT 1 FROM finance_receivables_opening_decisions x WHERE x.tenant_id=$1 AND x.company_id=$2 AND x.replaces_batch_id=i.batch_id))) LIMIT 1",&[&s.tenant(),&company,&parties,&references,&input["replaces_batch_id"].as_i64()]).await?.is_some() {return Err(invalid("csv","a customer source document is already recorded"));}
         let source_ids: Vec<&str> = rows
             .iter()
             .filter_map(|r| r["source_id"].as_str())
@@ -516,7 +574,7 @@ impl Receivables {
         let mut replaced_accounts = BTreeSet::new();
         if let Some(old) = &replacement {
             let old_id = old["id"].as_i64().ok_or(Error::Invalid)?;
-            let accounts=c.query("SELECT DISTINCT (source_facts->>'account_id')::bigint FROM finance_receivables_opening_items WHERE tenant_id=$1 AND company_id=$2 AND batch_id=$3",&[&s.tenant(),&company,&old_id]).await?;
+            let accounts=c.query("SELECT (r->>'account_id')::bigint FROM finance_receivables_opening_decisions d CROSS JOIN LATERAL jsonb_array_elements(d.review->'reconciliation') r WHERE d.tenant_id=$1 AND d.company_id=$2 AND d.batch_id=$3",&[&s.tenant(),&company,&old_id]).await?;
             for row in accounts {
                 let id: i64 = row.get(0);
                 if !balances.contains_key(&id) {
@@ -612,7 +670,12 @@ impl Receivables {
             for facts in rows {
                 let control = facts["account_id"].as_i64().ok_or(Error::Invalid)?;
                 let total=&facts["outstanding"];
-                let old=store::save(sql,store::DOCUMENTS,tenant,company,None,json!({"kind":"invoice","status":"draft","series_id":series["id"],"customer_id":facts["customer_id"],"currency_code":entry.currency_code,"issue_date":facts["document_date"],"due_date":facts["due_date"],"description":format!("Opening invoice {}",facts["document_reference"].as_str().unwrap_or("")),"subtotal":total,"tax_total":"0","total":total}),&mut changes).await?;
+                let description = format!(
+                    "Opening {} {}",
+                    if facts["item_kind"] == "customer_credit" { "customer credit" } else { "invoice" },
+                    facts["document_reference"].as_str().unwrap_or("")
+                );
+                let old=store::save(sql,store::DOCUMENTS,tenant,company,None,json!({"kind":if facts["item_kind"]=="customer_credit" {"opening_credit"} else {"invoice"},"status":"draft","series_id":series["id"],"customer_id":facts["customer_id"],"currency_code":entry.currency_code,"issue_date":facts["document_date"],"due_date":if facts["due_date"].is_null() { &facts["document_date"] } else { &facts["due_date"] },"description":description,"subtotal":total,"tax_total":"0","total":total}),&mut changes).await?;
                 let id=old["id"].as_i64().ok_or(Error::Invalid)?;
                 store::save(sql,store::LINES,tenant,company,None,json!({"document_id":id,"line_number":1,"description":"Opening outstanding balance; no new supply","quantity":"1","unit_price":total,"amount":total,"account_id":control,"tax_amount":"0"}),&mut changes).await?;
                 let number:i64=sql.query_one("SELECT COALESCE(max(document_number),0)+1 FROM finance_receivables_documents WHERE tenant_id=$1 AND company_id=$2 AND series_id=$3",&[&tenant,&company,&series["id"].as_i64().ok_or(Error::Invalid)?]).await?.get(0);
@@ -680,5 +743,190 @@ pub(crate) async fn pin(
     if through.is_some_and(|id| id < 0) {
         return Err(ReceivableError::InvalidOption);
     }
-    match through {Some(id)=>Ok(id),None=>Ok(c.query_opt("SELECT COALESCE(max(id),0) FROM finance_receivables_opening_batches WHERE tenant_id=$1 AND company_id=$2",&[&s.tenant(),&company]).await?.ok_or(Error::Internal)?.get(0))}
+    let maximum:i64=c.query_opt("SELECT COALESCE(max(id),0) FROM finance_receivables_opening_batches WHERE tenant_id=$1 AND company_id=$2",&[&s.tenant(),&company]).await?.ok_or(Error::Internal)?.get(0);
+    let pin = through.unwrap_or(maximum);
+    if pin > maximum {
+        return Err(ReceivableError::InvalidOption);
+    }
+    Ok(pin)
+}
+
+// Source facts are evidence, never tax lines or a tax calculation on a residual.
+fn source_tax_facts(
+    text: &str,
+    gross: Money,
+    units: bilibi_finance_ledger::MinorUnits,
+) -> std::result::Result<Value, String> {
+    let facts: Value = if ["unknown", "not_applicable"].contains(&text) {
+        json!({"status":text})
+    } else {
+        serde_json::from_str(text)
+            .map_err(|_| "source_tax_facts must be a JSON object".to_owned())?
+    };
+    let object = facts
+        .as_object()
+        .ok_or("source_tax_facts must be a JSON object")?;
+    let status = facts["status"].as_str().unwrap_or("");
+    if ["unknown", "not_applicable"].contains(&status) {
+        if object.len() != 1 {
+            return Err(
+                "unknown or not_applicable tax facts cannot contain supplied amounts".into(),
+            );
+        }
+        return Ok(facts);
+    }
+    if status != "supplied" {
+        return Err("source_tax_facts status must be unknown, not_applicable or supplied".into());
+    }
+    let amount = |value: &Value| -> std::result::Result<Money, String> {
+        let value = value
+            .as_str()
+            .ok_or("source tax amounts must be decimal strings")?;
+        let money =
+            Money::parse(value, units).map_err(|_| "source tax amounts must use book precision")?;
+        if money < Money::ZERO {
+            return Err("source tax amounts cannot be negative".into());
+        }
+        Ok(money)
+    };
+    let tax = facts
+        .get("tax_total")
+        .filter(|v| !v.is_null())
+        .map(amount)
+        .transpose()?;
+    let net = facts
+        .get("net")
+        .filter(|v| !v.is_null())
+        .map(amount)
+        .transpose()?;
+    if tax.zip(net).is_some_and(|(tax, net)| tax + net != gross) {
+        return Err("source net plus tax_total must equal original_total".into());
+    }
+    let mut line_net = Money::ZERO;
+    let mut line_tax = Money::ZERO;
+    let mut line_total = Money::ZERO;
+    let mut complete_net = true;
+    let mut complete_tax = true;
+    if let Some(lines) = facts.get("lines") {
+        let lines = lines
+            .as_array()
+            .filter(|l| !l.is_empty() && l.len() <= 500)
+            .ok_or("source tax lines must contain 1 to 500 lines")?;
+        for (index, line) in lines.iter().enumerate() {
+            let number = index + 1;
+            if !line.is_object() {
+                return Err(format!("source tax line {number} must be an object"));
+            }
+            let line_amount = |key: &str| -> std::result::Result<Option<Money>, String> {
+                line.get(key)
+                    .filter(|value| !value.is_null())
+                    .map(|value| {
+                        amount(value)
+                            .map_err(|message| format!("source tax line {number} {key}: {message}"))
+                    })
+                    .transpose()
+            };
+            let taxable = line_amount("taxable_amount")?;
+            let net = line_amount("net")?;
+            let tax_amount = line_amount("tax_amount")?;
+            let gross = line_amount("gross")?;
+            let add = |total: Money, value: Money| {
+                Money::new((total + value).amount(), units)
+                    .map_err(|error| format!("source tax line {number}: {error}"))
+            };
+            if let Some(value) = net {
+                line_net = add(line_net, value)?;
+            } else {
+                complete_net = false;
+            }
+            if let Some(value) = tax_amount {
+                line_tax = add(line_tax, value)?;
+            } else {
+                complete_tax = false;
+            }
+            if let (Some(net), Some(tax_amount), Some(gross)) = (net, tax_amount, gross) {
+                if net + tax_amount != gross {
+                    return Err(format!(
+                        "source tax line {number}: net plus tax_amount must equal gross"
+                    ));
+                }
+            }
+            let total = match (gross, net, tax_amount) {
+                (Some(gross), _, _) => gross,
+                (None, Some(net), Some(tax_amount)) => add(net, tax_amount)?,
+                _ => {
+                    return Err(format!(
+                        "source tax line {number}: gross or both net and tax_amount are required to reconcile with original_total"
+                    ));
+                }
+            };
+            line_total = add(line_total, total)?;
+            let rate = line
+                .get("rate")
+                .filter(|value| !value.is_null())
+                .map(|rate| {
+                    let rate = rate
+                        .as_str()
+                        .ok_or_else(|| {
+                            format!("source tax line {number} rate must be a decimal string")
+                        })?
+                        .parse::<rust_decimal::Decimal>()
+                        .map_err(|_| {
+                            format!("source tax line {number} rate must be a decimal string")
+                        })?;
+                    if rate < rust_decimal::Decimal::ZERO {
+                        return Err(format!("source tax line {number} rate cannot be negative"));
+                    }
+                    Ok(rate)
+                })
+                .transpose()?;
+            if let (Some(taxable), Some(rate), Some(tax_amount)) = (taxable, rate, tax_amount) {
+                let calculated = taxable
+                    .amount()
+                    .checked_mul(rate)
+                    .and_then(|value| value.checked_div(rust_decimal::Decimal::from(100)))
+                    .ok_or_else(|| {
+                        format!("source tax line {number} rate calculation is too large")
+                    })?
+                    .round_dp_with_strategy(
+                        u32::from(units.get()),
+                        rust_decimal::RoundingStrategy::MidpointAwayFromZero,
+                    );
+                if calculated != tax_amount.amount() {
+                    return Err(format!(
+                        "source tax line {number}: taxable_amount multiplied by rate must round to tax_amount"
+                    ));
+                }
+            }
+        }
+        let line_subject = if lines.len() == 1 {
+            "source tax line 1".to_owned()
+        } else {
+            format!("source tax lines 1 to {}", lines.len())
+        };
+        if net.is_some() && !complete_net {
+            return Err(format!(
+                "{line_subject}: every net amount is required to agree with net"
+            ));
+        }
+        if net.is_some_and(|total| total != line_net) {
+            return Err(format!("{line_subject}: net amounts must equal net"));
+        }
+        if tax.is_some() && !complete_tax {
+            return Err(format!(
+                "{line_subject}: every tax_amount is required to agree with tax_total"
+            ));
+        }
+        if tax.is_some_and(|total| total != line_tax) {
+            return Err(format!("{line_subject}: tax amounts must equal tax_total"));
+        }
+        if line_total != gross {
+            return Err(format!(
+                "{line_subject}: line totals must equal original_total"
+            ));
+        }
+    } else if tax.is_none() && net.is_none() {
+        return Err("supplied tax facts require a net, tax_total or source lines".into());
+    }
+    Ok(facts)
 }

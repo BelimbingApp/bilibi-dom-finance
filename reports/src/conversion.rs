@@ -15,6 +15,17 @@ use sha2::{Digest, Sha256};
 use std::io::{self, Write};
 use tokio_postgres::{GenericClient, Transaction};
 
+/// Accounting boundaries for both subledgers in a conversion snapshot.
+/// Supply every field to replay a snapshot, or leave every field unset.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct ConversionPins {
+    pub through_entry_number: Option<i64>,
+    pub receivables_opening_batch_id: Option<i64>,
+    pub receivables_settlement_number: Option<i64>,
+    pub payables_opening_batch_id: Option<i64>,
+    pub payables_settlement_number: Option<i64>,
+}
+
 pub(crate) const KIND: &str = "conversion";
 const MAX_BYTES: usize = 64 * 1024 * 1024;
 
@@ -32,6 +43,7 @@ impl Reports {
         scope: &Scope,
         company: i64,
         as_of: Date,
+        pins: &ConversionPins,
     ) -> Result<Value> {
         let mut client = self.db.get().await.map_err(Error::from)?;
         let tx = client
@@ -40,7 +52,7 @@ impl Reports {
             .start()
             .await
             .map_err(Error::from)?;
-        let report = self.conversion_on(&tx, scope, company, as_of).await?;
+        let report = self.conversion_on(&tx, scope, company, as_of, pins).await?;
         tx.commit().await.map_err(Error::from)?;
         Ok(report)
     }
@@ -68,8 +80,22 @@ impl Reports {
         s: &Scope,
         company: i64,
         as_of: Date,
+        pins: &ConversionPins,
     ) -> Result<Value> {
         self.conversion_access(c, s, company, VIEW).await?;
+        let supplied = [
+            pins.through_entry_number,
+            pins.receivables_opening_batch_id,
+            pins.receivables_settlement_number,
+            pins.payables_opening_batch_id,
+            pins.payables_settlement_number,
+        ]
+        .into_iter()
+        .filter(Option::is_some)
+        .count();
+        if supplied != 0 && supplied != 5 {
+            return Err(ReportsError::InvalidOption);
+        }
         let opening = self.ledger.opening_context_on(c, s, company).await?;
         if as_of < opening.entry.entry_date {
             return Err(ReportsError::Ledger(
@@ -83,7 +109,7 @@ impl Reports {
         }
         let target = self
             .ledger
-            .trial_balance_on(c, s, company, as_of, None)
+            .trial_balance_on(c, s, company, as_of, pins.through_entry_number)
             .await?;
         let through = target.through_entry_number;
 
@@ -97,36 +123,38 @@ impl Reports {
             .ledger
             .account_totals_by_owner_on(c, s, company, &query)
             .await?;
+        let ar_pins = if pins.through_entry_number.is_some() {
+            bilibi_finance_receivables::BalancePins {
+                through_entry_number: Some(through),
+                through_opening_batch_id: pins.receivables_opening_batch_id,
+                through_settlement_number: pins.receivables_settlement_number,
+            }
+        } else {
+            Default::default()
+        };
+        let ap_pins = if pins.through_entry_number.is_some() {
+            bilibi_finance_payables::BalancePins {
+                through_entry_number: Some(through),
+                through_opening_batch_id: pins.payables_opening_batch_id,
+                through_settlement_number: pins.payables_settlement_number,
+            }
+        } else {
+            Default::default()
+        };
         let ar = self
             .sources
             .receivables
-            .tie_out_control_accounts_on(
-                c,
-                s,
-                company,
-                as_of,
-                &bilibi_finance_receivables::BalancePins {
-                    through_entry_number: Some(through),
-                    ..Default::default()
-                },
-            )
+            .tie_out_control_accounts_on(c, s, company, as_of, &ar_pins)
             .await
             .map_err(source_error)?;
         let ap = self
             .sources
             .payables
-            .tie_out_control_accounts_on(
-                c,
-                s,
-                company,
-                as_of,
-                &bilibi_finance_payables::BalancePins {
-                    through_entry_number: Some(through),
-                    ..Default::default()
-                },
-            )
+            .tie_out_control_accounts_on(c, s, company, as_of, &ap_pins)
             .await
             .map_err(source_error)?;
+        let captured_ar_pins = ar.pins();
+        let captured_ap_pins = ap.pins();
         let ar_detail = self
             .sources
             .receivables
@@ -136,8 +164,9 @@ impl Reports {
                 company,
                 as_of,
                 &bilibi_finance_receivables::AgingOptions {
-                    through_entry_number: Some(through),
-                    through_opening_batch_id: Some(ar.through_opening_batch_id),
+                    through_entry_number: captured_ar_pins.through_entry_number,
+                    through_opening_batch_id: captured_ar_pins.through_opening_batch_id,
+                    through_settlement_number: captured_ar_pins.through_settlement_number,
                     ..Default::default()
                 },
             )
@@ -152,8 +181,9 @@ impl Reports {
                 company,
                 as_of,
                 &bilibi_finance_payables::AgingQuery {
-                    through_entry_number: Some(through),
-                    through_opening_batch_id: Some(ap.through_opening_batch_id),
+                    through_entry_number: captured_ap_pins.through_entry_number,
+                    through_opening_batch_id: captured_ap_pins.through_opening_batch_id,
+                    through_settlement_number: captured_ap_pins.through_settlement_number,
                     ..Default::default()
                 },
             )
@@ -453,7 +483,7 @@ impl Reports {
         for area in ["bank", "tax", "payroll"] {
             differences.push(json!({"area":area,"kind":"schedule_assessment","reason":"The accountant has not assessed this schedule's applicability or completeness."}));
         }
-        let report = json!({"version":2,"company_id":company,"as_of":as_of.to_string(),"conversion_date":opening.entry.entry_date.to_string(),"currency_code":target.currency_code,"minor_units":target.minor_units,"through_entry_number":through,
+        let report = json!({"pins":ConversionPins{through_entry_number:Some(through),receivables_opening_batch_id:Some(ar.through_opening_batch_id),receivables_settlement_number:Some(ar.through_settlement_number),payables_opening_batch_id:Some(ap.through_opening_batch_id),payables_settlement_number:Some(ap.through_settlement_number)},"version":3,"company_id":company,"as_of":as_of.to_string(),"conversion_date":opening.entry.entry_date.to_string(),"currency_code":target.currency_code,"minor_units":target.minor_units,"through_entry_number":through,
             "opening":opening,"source_trial_balance":{"rows":comparisons,"basis":"Approved source opening journal only; signed debit less credit balances."},"target_trial_balance":target,"postings_by_owner":owners,
             "receivables":{"detail":ar_detail,"control":ar},"payables":{"detail":ap_detail,"control":ap},"assets":asset_snapshot,"bank_bridges":bank_bridges,"sources":evidence,
             "unresolved_differences":differences,"register_coverage":register_coverage,
@@ -486,7 +516,7 @@ impl Reports {
             tenant_id: s.tenant(),
             company_id: company,
             kind: KIND,
-            implementation_version: "conversion-2",
+            implementation_version: "conversion-3",
             through_entry_number: content["through_entry_number"]
                 .as_i64()
                 .ok_or(Error::Internal)?,

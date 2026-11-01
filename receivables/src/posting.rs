@@ -207,7 +207,9 @@ impl Receivables {
                 "issue_date",
             )
             .await?;
-            if invoice.outstanding.is_none_or(|owed| draft.total > owed) {
+            if crate::settlements::lowest(client, scope.tenant(), company, invoice.id, date).await?
+                < draft.total
+            {
                 return Err(invalid(
                     "total",
                     "exceeds what the credited invoice still owes",
@@ -489,7 +491,9 @@ impl Receivables {
                 }
                 crate::write_offs::settlement_date(client, scope, company, id, date, "document_id")
                     .await?;
-                if invoice.outstanding.is_none_or(|owed| allocated > owed) {
+                if crate::settlements::lowest(client, scope.tenant(), company, id, date).await?
+                    < allocated
+                {
                     return Err(invalid(
                         "document_id",
                         "owes less than the allocated amount",
@@ -769,7 +773,7 @@ impl Receivables {
         if !(1..=500).contains(&limit) || after < 0 {
             return Err(R::InvalidOption);
         }
-        client.query(&format!("{} AND d.status='issued' AND d.ledger_entry_number>$3 ORDER BY d.ledger_entry_number LIMIT $4", documents::READ), &[&scope.tenant(), &company, &after, &limit]).await.map_err(Error::from)?.into_iter().map(|r| store::decode(r.get(0)).map_err(R::from)).collect()
+        client.query(&format!("{} AND d.status='issued' AND NOT EXISTS(SELECT 1 FROM finance_receivables_opening_items i WHERE i.tenant_id=$1 AND i.company_id=$2 AND i.document_id=d.id) AND d.ledger_entry_number>$3 ORDER BY d.ledger_entry_number LIMIT $4", documents::READ), &[&scope.tenant(), &company, &after, &limit]).await.map_err(Error::from)?.into_iter().map(|r| store::decode(r.get(0)).map_err(R::from)).collect()
     }
 }
 

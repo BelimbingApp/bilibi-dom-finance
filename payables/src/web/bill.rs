@@ -25,10 +25,13 @@ enum Dialog {
 pub(super) struct Bill {
     pages: Pages,
     id: i64,
+    balance_input: Value,
+    balance_pins: Value,
     document: Option<Document>,
     units: Option<MinorUnits>,
     accounts: Vec<(i64, String, String)>,
     dialog: Option<Dialog>,
+    credit_actions: super::credits::Credits,
     reason: String,
     flash: Option<(StatusKind, String)>,
     lines: ListColumns,
@@ -37,14 +40,21 @@ pub(super) struct Bill {
 }
 
 impl Bill {
-    pub(super) fn new(pages: Pages, path: &HashMap<String, String>) -> Result<Self> {
+    pub(super) fn new(
+        pages: Pages,
+        path: &HashMap<String, String>,
+        query: &HashMap<String, String>,
+    ) -> Result<Self> {
         Ok(Self {
             pages,
             id: params::positive_id(path.get("id").map(String::as_str)).unwrap_or(0),
+            balance_input: super::credits::balance_query(query)?,
+            balance_pins: Value::Null,
             document: None,
             units: None,
             accounts: vec![],
             dialog: None,
+            credit_actions: super::credits::Credits::new()?,
             reason: String::new(),
             flash: None,
             lines: columns(
@@ -88,17 +98,45 @@ impl Bill {
     }
 
     pub(super) async fn reload(&mut self, scope: &Scope) -> Result<()> {
-        self.document = match company(scope) {
-            Some(c) => self
-                .pages
-                .payables
-                .get_document(scope, c, self.id)
-                .await
-                .ok(),
-            None => None,
-        };
+        let historical = !self.balance_input["as_of"].is_null();
+        self.document = None;
         (self.units, self.accounts) = self.pages.account_context(scope).await?;
+        if historical {
+            let mut input = self.balance_input.clone();
+            input["company_id"] = json!(company(scope).ok_or(Error::Unauthorized)?);
+            input["document_id"] = json!(self.id);
+            let answer = self
+                .pages
+                .contracts
+                .read(scope, "finance.payables.document.get", &input)
+                .await
+                .map_err(|_| Error::Invalid)?;
+            let mut result = answer["result"].clone();
+            self.balance_pins = result["balance_pins"].clone();
+            self.balance_input = self.balance_pins.clone();
+            result["match_events"] = result["match_context"].take();
+            self.document = Some(serde_json::from_value(result).map_err(|_| Error::Internal)?);
+            self.credit_actions = super::credits::Credits::new()?;
+            self.dialog = None;
+        } else {
+            self.balance_pins = Value::Null;
+            self.document = match company(scope) {
+                Some(c) => self
+                    .pages
+                    .payables
+                    .get_document(scope, c, self.id)
+                    .await
+                    .ok(),
+                None => None,
+            };
+        }
+
         if let Some(d) = &self.document {
+            if !historical {
+                self.credit_actions
+                    .load(&self.pages, scope, d.id, &d.document_type)
+                    .await?;
+            }
             self.lines.load(&d.lines, |l| l.id.to_string());
             self.events.load(&d.match_events, |e| e.id.to_string());
             if let Some(e) = f::last_match(d) {
@@ -147,11 +185,12 @@ impl Bill {
             .render()
             .map_err(|_| Error::Internal);
         };
-        let can_approve = self.pages.allowed(scope, APPROVE_DOCUMENTS).await?;
-        let can_post = self.pages.allowed(scope, POST_DOCUMENTS).await?;
-        let can_match = self.pages.allowed(scope, APPROVE_MATCH).await?;
-        let can_create = self.pages.allowed(scope, CREATE_DOCUMENTS).await?;
-        let can_pay = self.pages.allowed(scope, SUBMIT_PAYMENTS).await?;
+        let historical = self.balance_pins.is_object();
+        let can_approve = !historical && self.pages.allowed(scope, APPROVE_DOCUMENTS).await?;
+        let can_post = !historical && self.pages.allowed(scope, POST_DOCUMENTS).await?;
+        let can_match = !historical && self.pages.allowed(scope, APPROVE_MATCH).await?;
+        let can_create = !historical && self.pages.allowed(scope, CREATE_DOCUMENTS).await?;
+        let can_pay = !historical && self.pages.allowed(scope, SUBMIT_PAYMENTS).await?;
         let display = self.pages.display(scope).await?;
         let (units, accounts) = (self.units, &self.accounts);
         let party = render(Facts {
@@ -167,7 +206,14 @@ impl Bill {
         let mut items = vec![
             f::fact("Party's number", f::optional(&d.party_document_number)),
             f::fact("Date", &d.document_date.to_string()),
-            f::fact("Due", &d.due_date.to_string()),
+            f::fact(
+                "Due",
+                &if d.document_type == "opening_credit" {
+                    "—".into()
+                } else {
+                    d.due_date.to_string()
+                },
+            ),
             f::fact("Description", f::optional(&d.description)),
             Fact {
                 title: "Corrects",
@@ -238,7 +284,47 @@ impl Bill {
                 ..Fact::default()
             });
         }
+        if let Some(pins) = self.balance_pins.as_object() {
+            for (key, label) in [
+                ("as_of", "Balance as of"),
+                ("through_entry_number", "Read through ledger entry"),
+                ("through_opening_batch_id", "Read through opening batch"),
+                ("through_settlement_number", "Read through settlement"),
+            ] {
+                items.push(f::fact(
+                    label,
+                    &pins
+                        .get(key)
+                        .map(|v| {
+                            v.as_str()
+                                .map(str::to_owned)
+                                .unwrap_or_else(|| v.to_string())
+                        })
+                        .unwrap_or_default(),
+                ));
+            }
+            items.push(f::fact(
+                "Activity shown through",
+                pins.get("as_of").and_then(Value::as_str).unwrap_or(""),
+            ));
+        }
         if let Some(opening) = &d.opening {
+            items.push(f::fact(
+                "Source item kind",
+                f::opening_item_kind(opening["item_kind"].as_str().unwrap_or("")),
+            ));
+            items.push(f::fact(
+                "Source kind",
+                opening["source_kind"].as_str().unwrap_or(""),
+            ));
+            items.push(f::fact(
+                "Source system",
+                opening["source_system"].as_str().unwrap_or(""),
+            ));
+            items.push(f::fact(
+                "Source tax facts",
+                &opening["source_tax_facts"].to_string(),
+            ));
             if let Some(batch) = opening["replaced_by_batch_id"].as_i64() {
                 items.push(f::fact(
                     "Opening register",
@@ -265,7 +351,7 @@ impl Bill {
             }
             items.push(f::fact(
                 "Opening amounts",
-                "Residual only; source-period tax detail was not migrated.",
+                "Residual only. Supplied source tax facts are retained as evidence and create no current tax lines.",
             ));
         }
         let facts = render(Facts {
@@ -471,6 +557,10 @@ impl Bill {
             events: (!d.match_events.is_empty())
                 .then(|| table(&self.events, "events_grid", "Match events", event_rows))
                 .transpose()?,
+            credit_actions: self
+                .credit_actions
+                .body(&self.pages, d.id, &d.document_type, &d.settlements, units)
+                .await?,
             dialog,
         }
         .render()
@@ -479,7 +569,23 @@ impl Bill {
 
     async fn event(&mut self, scope: &Scope, credential: &str, v: &Value) -> Result<bool> {
         let event = v["type"].as_str().ok_or(Error::Invalid)?;
+        if self.balance_pins.is_object()
+            && !matches!(
+                event,
+                "clear-flash" | "lines_grid" | "matches_grid" | "events_grid" | "credit_grid"
+            )
+        {
+            return Err(Error::Invalid);
+        }
         match event {
+            "ask_credit_apply" | "ask_credit_refund" | "ask_credit_reverse" | "cancel_credit"
+            | "change_credit" | "preview_credit" | "commit_credit" | "credit_grid" => {
+                self.credit_actions
+                    .event(&self.pages, scope, credential, v, self.id)
+                    .await?;
+                return Ok(true);
+            }
+
             "clear-flash" => {
                 if self
                     .flash
@@ -661,7 +767,12 @@ impl LiveState<Scope, Error> for Bill {
     fn update<'a>(&'a mut self, r: LiveRequest<'a, Scope>) -> LiveFuture<'a, Error> {
         Box::pin(async move {
             let reload = match r.input {
-                LiveInput::Refresh | LiveInput::Params(_) => true,
+                LiveInput::Refresh => true,
+                LiveInput::Params(query) => {
+                    self.balance_input = super::credits::balance_query(query)?;
+                    self.balance_pins = Value::Null;
+                    true
+                }
                 LiveInput::Event(v) => self.event(r.scope, r.credential, v).await?,
             };
             if reload {
@@ -669,12 +780,13 @@ impl LiveState<Scope, Error> for Bill {
             }
             Ok(LiveBody {
                 html: self.body(r.scope).await?,
+                query: super::credits::balance_params(&self.balance_pins),
                 ..LiveBody::default()
             })
         })
     }
     fn panels(&self) -> Vec<PanelSpec> {
-        if self.document.is_none() {
+        if self.document.is_none() || self.balance_pins.is_object() {
             return vec![];
         }
         vec![PanelSpec {
@@ -741,6 +853,7 @@ struct View<'a> {
     matches: Option<Html>,
     events: Option<Html>,
     dialog: Option<Html>,
+    credit_actions: Html,
 }
 impl View<'_> {
     fn subtitle(&self) -> askama::Result<Html> {
