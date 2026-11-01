@@ -4,6 +4,8 @@
 
 ## Vendors
 
+**Drop target (issue 265).** Companies and Contacts dragged from another tile onto Vendors, or chosen with "Add to…" on their own list, open the Add suppliers dialog with them already chosen (`payables.vendor`, up to 20 at a time, `bilibi_records::drop_target!` in `src/web/mod.rs`). Confirming calls `vendor.create` as "Add vendor" does; a party that is already a supplier, or that the person may not see, is left out with a notice.
+
 Add suppliers by picking Companies or People in the shared Add suppliers dialog, or creating either kind there. Each selected party shows its fixed Core code; payment terms apply to every selected row. Each row uses `vendor.create`, so a refusal keeps that row and its message. Core creation, the permanent Base Records reference, the vendor relationship and Finance settings commit together. Finance owns no vendor code: the party's Core code is used in lists, search, bills, reports and evidence. Finance keeps terms, account and tax defaults, and availability. Core owns identity, contact details and status. A Company or Person can be both customer and supplier. Already linked parties are disabled and link to their Finance record.
 
 New bills take `vendor_id`, including replacement drafts. Both Finance availability and an active company are required. Pending, suspended and archived companies are refused by name. Due date defaults to the document date plus the vendor's payment terms; the form offers its expense and tax defaults. Posting uses the vendor's payable account when configured, otherwise the company default. Posted bills retain their original control account for payments and debit notes.

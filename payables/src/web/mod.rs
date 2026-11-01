@@ -36,6 +36,26 @@ use serde_json::Value;
 use std::{collections::BTreeMap, sync::Arc};
 
 pub(crate) const PAGES: &str = "finance/payables.pages";
+/// The drop target of the Add vendor dialog (`bilibi_records::drop_target!`).
+pub(crate) const VENDOR_TARGET: &str = "payables.vendor";
+
+// Companies and contacts dropped on Vendors, or carried by "Add to…", open the
+// Add vendor dialog with them chosen; the dialog commits `vendor.create` as it
+// does for "Add vendor". The chooser lists many parties at once, so the page
+// takes several records per drop.
+bilibi_records::drop_target!(
+    "finance/payables",
+    bilibi_records::DropTarget {
+        id: VENDOR_TARGET,
+        service: PAGES,
+        contract: "finance.payables.vendor.create",
+        capability: crate::MANAGE_SETTINGS,
+        path: "/finance/payables/vendors",
+        label: "Add as supplier",
+        accepts: &["company", "person"],
+        max: 20,
+    }
+);
 const INDEX: &str = "/finance/payables/bills";
 const NEW_BILL: &str = "/finance/payables/bills/new";
 const NEW_NOTE: &str = "/finance/payables/debit-notes/new";
@@ -297,6 +317,7 @@ impl Page<Scope, Error> for Pages {
                 "vendors" => {
                     let mut state = vendors::Vendors::new(self.clone(), r.query)?;
                     state.reload(scope).await?;
+                    state.open_dropped(scope).await?;
                     (state.body(scope).await?, None)
                 }
                 "bills" => {
@@ -353,7 +374,13 @@ impl Page<Scope, Error> for Pages {
     fn mount<'a>(&'a self, r: PageRequest<'a, Scope>) -> MountFuture<'a, Scope, Error> {
         Box::pin(async move {
             let state: Box<dyn bilibi_ui::page::LiveState<Scope, Error>> = match r.operation {
-                "vendors" => Box::new(vendors::Vendors::new(self.clone(), r.query)?),
+                "vendors" => {
+                    let mut state = vendors::Vendors::new(self.clone(), r.query)?;
+                    state
+                        .open_dropped(r.scope.ok_or(Error::Unauthorized)?)
+                        .await?;
+                    Box::new(state)
+                }
                 "bills" => Box::new(bills::Bills::new(self.clone(), r.query, r.framed)?),
                 "bill" => Box::new(bill::Bill::new(self.clone(), r.path, r.query)?),
                 "bill_new" | "note_new" => Box::new(bill_form::BillForm::new(
