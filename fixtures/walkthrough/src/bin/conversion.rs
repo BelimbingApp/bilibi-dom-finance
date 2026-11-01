@@ -1585,7 +1585,6 @@ async fn launcher_credentials(db: &Db, services: &Services) -> Outcome<()> {
         fs::OpenOptions,
         io::Write,
         os::unix::fs::OpenOptionsExt,
-        time::{Duration, SystemTime},
     };
     if std::env::var("BILIBI_AGENT_PROOF").as_deref() != Ok("disposable") {
         return Err("disposable proof required".into());
@@ -1648,7 +1647,6 @@ async fn launcher_credentials(db: &Db, services: &Services) -> Outcome<()> {
             &scope,
             &params,
             &resource,
-            SystemTime::now() + Duration::from_secs(3600),
         )
         .await?;
     let token = access

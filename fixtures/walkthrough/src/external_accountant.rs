@@ -274,7 +274,6 @@ async fn credentials(db: &Db, services: &Services, root: &str) -> Outcome<()> {
         fs::OpenOptions,
         io::Write,
         os::unix::fs::OpenOptionsExt,
-        time::{Duration, SystemTime},
     };
     let access = services.get::<AgentAccess>("core/agent_access.grants")?;
     let callback = "https://example.test/accountant/callback";
@@ -305,7 +304,6 @@ async fn credentials(db: &Db, services: &Services, root: &str) -> Outcome<()> {
                 &scope,
                 &params,
                 &resource,
-                SystemTime::now() + Duration::from_secs(3600),
             )
             .await?;
         let token = access

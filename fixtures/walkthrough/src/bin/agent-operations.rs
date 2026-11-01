@@ -15,7 +15,6 @@ use std::{
     fs::OpenOptions,
     io::Write,
     os::unix::fs::OpenOptionsExt,
-    time::{Duration, SystemTime},
 };
 
 bilibi_walkthrough_fixture::walkthrough_vocabulary!();
@@ -142,10 +141,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("approver", sign_in(&db, &services, 1, reviewer).await?),
         ("other", sign_in(&db, &services, 2, 5).await?),
     ] {
-        let expiry = SystemTime::now() + Duration::from_secs(3600);
         let device = access.start_device(CLIENT_ID, "ledger-walkthrough").await?;
         access
-            .decide(&scope, &device.user_code, Decision::Approve, expiry)
+            .decide(&scope, &device.user_code, Decision::Approve)
             .await?;
         let api = access.exchange(CLIENT_ID, &device.device_code).await?;
         let verifier = "ledger-walkthrough-verifier-with-at-least-forty-three-characters";
@@ -159,7 +157,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             code_challenge_method: "S256".into(),
             state: Some("ledger-walkthrough".into()),
         };
-        let code = access.authorize(&scope, &params, &resource, expiry).await?;
+        let code = access.authorize(&scope, &params, &resource).await?;
         let mcp = access
             .exchange_code(
                 &CodeExchange {

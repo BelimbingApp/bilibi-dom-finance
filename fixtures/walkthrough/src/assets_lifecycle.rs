@@ -8,7 +8,6 @@ use std::{
     fs::OpenOptions,
     io::Write,
     os::unix::fs::OpenOptionsExt,
-    time::{Duration, SystemTime},
 };
 pub async fn credentials(db: &Db, services: &Services) -> Result<(), Box<dyn std::error::Error>> {
     use bilibi_core::agent_access::{
@@ -75,7 +74,6 @@ pub async fn credentials(db: &Db, services: &Services) -> Result<(), Box<dyn std
                 &scope,
                 &params,
                 &resource,
-                SystemTime::now() + Duration::from_secs(3600),
             )
             .await?;
         let token = access
