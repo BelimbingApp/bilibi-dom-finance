@@ -270,11 +270,7 @@ async fn credentials(db: &Db, services: &Services, root: &str) -> Outcome<()> {
     use bilibi_core::agent_access::{
         code_challenge, AgentAccess, AuthorizeParams, ClientRegistration, CodeExchange,
     };
-    use std::{
-        fs::OpenOptions,
-        io::Write,
-        os::unix::fs::OpenOptionsExt,
-    };
+    use std::{fs::OpenOptions, io::Write, os::unix::fs::OpenOptionsExt};
     let access = services.get::<AgentAccess>("core/agent_access.grants")?;
     let callback = "https://example.test/accountant/callback";
     let registration=access.register_client(&serde_json::from_value::<ClientRegistration>(json!({"client_name":"External accountant proof","redirect_uris":[callback],"token_endpoint_auth_method":"none"}))?).await?;
@@ -299,13 +295,7 @@ async fn credentials(db: &Db, services: &Services, root: &str) -> Outcome<()> {
             code_challenge_method: "S256".into(),
             state: None,
         };
-        let code = access
-            .authorize(
-                &scope,
-                &params,
-                &resource,
-            )
-            .await?;
+        let code = access.authorize(&scope, &params, &resource).await?;
         let token = access
             .exchange_code(
                 &CodeExchange {
