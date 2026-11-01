@@ -498,7 +498,7 @@ struct AccountLabel<'a> {
 }
 
 /// An account as a read value: its name, then its code in muted italics
-/// (BelimbingApp/bilibi-dom-finance#63), or a neutral label when unreadable.
+/// (BelimbingProject/bilibi-dom-finance#63), or a neutral label when unreadable.
 pub(super) fn account_html(accounts: &[Account], id: i64) -> Result<Html> {
     match accounts.iter().find(|a| a.id == id) {
         Some(a) => render(AccountLabel {
