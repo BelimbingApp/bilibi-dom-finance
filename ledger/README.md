@@ -778,6 +778,8 @@ The bounded imports still have explicit follow-ups for [broader asset estimates 
 
 Use `PartyLinks` (`src/party_links.rs`) to read Core Company and Person codes and permitted facts on the caller's connection, validate Base Records references, and compose creation with a customer or supplier relationship. Finance owns terms, accounts and availability; Core owns the immutable code and identity. A Finance party is always linked at creation and that link cannot change.
 
+Masked Core Person contacts are withheld in Finance summaries and marked restricted. A document that requires contacts refuses to freeze either a masked or withheld value; a partial display value is never an authentic document fact. The disposable `party-code` walkthrough covers masked email and phone independently, then issuing the same draft with both visible.
+
 Use `MultiPartyChooser` and `PartyPickerContext` (`src/party_picker.rs`) for both Add customers and Add suppliers. One searchable multi-select finds Companies and People by name or Core code. It displays the fixed code, disables already linked parties, and offers creation of either kind. `PartyChooser::submit_composed` calls the owning Finance operation, which accepts `record_kind` with `record_id`, `new_company`, or `new_person`. Core creation, duplicate review for Companies, the relationship and Finance record share one transaction. Each selected row commits through that contract and retains its own refusal. No page creates a Core party first and links it in a second write.
 
 ### Shared journal approval proof
