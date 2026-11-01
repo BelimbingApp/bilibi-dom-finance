@@ -207,6 +207,7 @@ async fn main() -> Outcome<()> {
     std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))?;
     let storage = format!("{root}/artifacts");
     std::fs::create_dir_all(&storage)?;
+    std::fs::set_permissions(&storage, std::fs::Permissions::from_mode(0o700))?;
     bilibi_finance_walkthrough_fixture::attachments::configure_storage(&db, services, &admin, &storage)
         .await?;
     let assigner = Assigner {
