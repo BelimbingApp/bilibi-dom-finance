@@ -107,7 +107,7 @@ fn company_fields(fields: Vec<bilibi_company::FieldError>) -> LedgerError {
     LedgerError::Invalid(
         fields
             .into_iter()
-            .map(|f| FieldError::new(prefixed("new_company", f.field), f.message))
+            .map(|f| FieldError::new(prefixed("new_company", &f.field), f.message))
             .collect(),
     )
 }
