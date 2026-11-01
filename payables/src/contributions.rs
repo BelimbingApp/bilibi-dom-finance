@@ -22,6 +22,7 @@ pub const CAPABILITIES: [&str; 8] = [
 ];
 inventory::submit! { Contribution::new(VOCABULARY,MODULE,Provenance {module:MODULE,source:file!(),line:line!()},&VocabularyContribution {
     domains:&[],verbs:&[],
-    capabilities:&[C::tenant(VIEW),C::tenant(MANAGE_SETTINGS),C::tenant(CREATE_DOCUMENTS),C::tenant(APPROVE_DOCUMENTS),C::tenant(POST_DOCUMENTS),C::tenant("finance.payables.payments.submit"),C::tenant("finance.payables.payments.post"),C::tenant(APPROVE_MATCH)],
-    roles:&[RoleDefinition {code:"tenant_owner",name:"Tenant Owner",description:"Contributed system role; reconciled explicitly",grant_all:false,capabilities:&CAPABILITIES}],system_principals:&[],
+    capabilities:&[C::company(VIEW),C::tenant(MANAGE_SETTINGS),C::tenant(CREATE_DOCUMENTS),C::tenant(APPROVE_DOCUMENTS),C::tenant(POST_DOCUMENTS),C::tenant("finance.payables.payments.submit"),C::tenant("finance.payables.payments.post"),C::tenant(APPROVE_MATCH)],
+    roles:&[RoleDefinition {code:"tenant_owner",name:"Tenant Owner",description:"Contributed system role; reconciled explicitly",grant_all:false,capabilities:&CAPABILITIES},
+        RoleDefinition { code: "appointed_auditor", name: "Appointed auditor", description: "Read-only access to one company's ledger, reports and source evidence for a named audit engagement.", grant_all: false, capabilities: &[VIEW] }],system_principals:&[],
 }) }

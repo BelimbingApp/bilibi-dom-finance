@@ -293,7 +293,10 @@ impl Pages {
 
     /// How the company's book writes an amount.
     pub(super) async fn figures(&self, scope: &Scope) -> format::Figures {
-        match self.read(scope, "finance.ledger.book.get", json!({})).await {
+        match self
+            .read(scope, "finance.receivables.book_figures.get", json!({}))
+            .await
+        {
             Ok(answer) => match (
                 answer["book"]["currency_code"].as_str(),
                 answer["book"]["minor_units"].as_u64(),

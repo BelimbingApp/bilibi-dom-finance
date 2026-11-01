@@ -12,6 +12,7 @@ pub const VOID: &str = "finance.fixed-assets.finance-asset-void";
 pub const CAPABILITIES: [&str; 7] = [VIEW, CONFIGURE, ACQUIRE, DEPRECIATE, REVERSE, DISPOSE, VOID];
 inventory::submit! { Contribution::new(VOCABULARY,MODULE,Provenance {module:MODULE,source:file!(),line:line!()},&VocabularyContribution {
     domains:&[],verbs:&["finance-asset-configure", "finance-asset-acquire", "finance-asset-depreciate", "finance-asset-reverse", "finance-asset-dispose", "finance-asset-void"],
-    capabilities:&[C::tenant(VIEW),C::tenant(CONFIGURE),C::tenant(ACQUIRE),C::tenant(CAPABILITIES[3]),C::tenant(CAPABILITIES[4]),C::tenant(CAPABILITIES[5]),C::tenant(CAPABILITIES[6])],
-    roles:&[RoleDefinition {code:"tenant_owner",name:"Tenant Owner",description:"Contributed system role; reconciled explicitly",grant_all:false,capabilities:&CAPABILITIES}],system_principals:&[],
+    capabilities:&[C::company(VIEW),C::tenant(CONFIGURE),C::tenant(ACQUIRE),C::tenant(CAPABILITIES[3]),C::tenant(CAPABILITIES[4]),C::tenant(CAPABILITIES[5]),C::tenant(CAPABILITIES[6])],
+    roles:&[RoleDefinition {code:"tenant_owner",name:"Tenant Owner",description:"Contributed system role; reconciled explicitly",grant_all:false,capabilities:&CAPABILITIES},
+        RoleDefinition { code: "appointed_auditor", name: "Appointed auditor", description: "Read-only access to one company's ledger, reports and source evidence for a named audit engagement.", grant_all: false, capabilities: &[VIEW] }],system_principals:&[],
 }) }

@@ -50,13 +50,17 @@ inventory::submit! { Contribution::new(VOCABULARY, "finance/reconciliation", pro
     domains: &[],
     verbs: &["import", "finalise"],
     capabilities: &[
-        C::tenant(VIEW), C::tenant(MANAGE_BANK_ACCOUNTS), C::tenant(IMPORT_STATEMENTS), C::tenant(MANAGE_MATCHES),
+        C::company(VIEW), C::tenant(MANAGE_BANK_ACCOUNTS), C::tenant(IMPORT_STATEMENTS), C::tenant(MANAGE_MATCHES),
         C::tenant(MANAGE_RECONCILIATIONS), C::tenant(FINALISE_RECONCILIATIONS), C::tenant(POST_STATEMENT_LINES),
         C::tenant(MANAGE_STATEMENT_LINES),
     ],
     roles: &[RoleDefinition {
         code: "tenant_owner", name: "Tenant Owner", description: "Contributed system role; reconciled explicitly",
         grant_all: false, capabilities: &CAPABILITIES,
+    }, RoleDefinition {
+        code: "appointed_auditor", name: "Appointed auditor",
+        description: "Read-only access to one company's ledger, reports and source evidence for a named audit engagement.",
+        grant_all: false, capabilities: &[VIEW],
     }],
     system_principals: &[],
 }) }
