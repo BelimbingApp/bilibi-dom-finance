@@ -593,8 +593,8 @@ async fn main() -> Outcome<()> {
     let sales_keys: BTreeSet<&str> = SALES_KEYS.into_iter().collect();
     decide_all(&db, &sales, COMPANY, &sales_keys, "sales workflow").await?;
     decide_all(&db, &sales, OTHER_COMPANY, &none, "sales workflow").await?;
-    ar.list_customers(&sales, COMPANY).await?;
-    ar.get_document(&sales, COMPANY, draft.id).await?;
+    ar.list_customers(&sales, COMPANY).await.map_err(|e| format!("sales list_customers: {e:?}"))?;
+    ar.get_document(&sales, COMPANY, draft.id).await.map_err(|e| format!("sales get_document: {e:?}"))?;
     let mine = ar
         .create_draft(
             &sales,
@@ -602,7 +602,7 @@ async fn main() -> Outcome<()> {
             &json!({"kind":"invoice","series_id":series.id,"customer_id":customer.id,
                     "lines":[{"description":"Consulting","quantity":"2","unit_price":"150.00"}]}),
         )
-        .await?;
+        .await.map_err(|e| format!("sales create_draft: {e:?}"))?;
     ar.update_draft(&sales, COMPANY, mine.id, &json!({"description":"Updated by sales"}))
         .await?;
     ar.discard_draft(&sales, COMPANY, mine.id).await?;
