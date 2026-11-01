@@ -7,7 +7,7 @@
 //! Every answer here comes from a real facade, contract or authorization
 //! decision; nothing reads a Finance table.
 use bilibi_authz::grants::{Assignment, Grants};
-use bilibi_database::{pool, Db, MutationBoundary};
+use bilibi_database::{pool, Db, Error, MutationBoundary};
 use bilibi_finance_ledger::{
     EntryQuery, Ledger, LedgerError, Money, NewAccount, NewEntry, NewLine, PostOptions,
 };
@@ -191,6 +191,27 @@ async fn main() -> Outcome<()> {
     let app = bilibi_web::App::new(db.clone(), &origin)?;
     bilibi_finance_walkthrough_fixture::without_step_up(&app.services)?;
     let services: &Services = &app.services;
+    // Steering for the HTTP MCP proof: change an assignment through the same Authz
+    // facade between a plan and its commit. Never reinstalls the fixture.
+    if let Some(mode) = std::env::args().nth(1).filter(|m| {
+        ["revoke-sales", "restore-sales", "revoke-auditor", "restore-auditor"].contains(&m.as_str())
+    }) {
+        let admin = sign_in(&db, services, 1, 4).await?;
+        let assigner = Assigner {
+            db: &db,
+            grants: services.get::<Grants>("base/authz.grants")?,
+            boundary: services.get::<MutationBoundary>("base/database.mutations")?,
+            admin,
+        };
+        let (user, role, bounds) = if mode.ends_with("sales") {
+            (SALES, role_id(&db, "sales_workflow").await?, Assignment { company_id: Some(COMPANY), purpose: "Sales team".into(), ..Assignment::default() })
+        } else {
+            (AUDITOR, role_id(&db, "appointed_auditor").await?, engagement(COMPANY, None, Some("2099-12-31")))
+        };
+        assigner.set(user, role, mode.starts_with("restore"), &bounds).await?;
+        println!("Steering applied: {mode}");
+        return Ok(());
+    }
     install(&db, services).await?;
     let manager = sign_in(&db, services, 1, 1).await?;
     let admin = sign_in(&db, services, 1, 4).await?;
@@ -711,6 +732,7 @@ async fn main() -> Outcome<()> {
         "Appointed auditor and sales workflow: company/date-bound, read-only auditor, every Finance capability decided, facade doors refused, exports, dates and revocation proved."
     );
     if std::env::args().any(|v| v == "serve") {
+        credentials(&db, services, &root).await?;
         println!("Serving {origin}: viewer@example.test (appointed auditor, Company 001 only), staff@example.test (sales workflow, Company 001 only), manager@example.test (every company); password bilibi-dev");
         axum::serve(
             tokio::net::TcpListener::bind(
@@ -736,5 +758,71 @@ async fn payables_read(
     payables
         .evidence_page(scope, company, dataset, Some(1), None)
         .await?;
+    Ok(())
+}
+
+async fn credentials(db: &Db, services: &Services, root: &str) -> Outcome<()> {
+    use bilibi_core::agent_access::{
+        code_challenge, AgentAccess, AuthorizeParams, ClientRegistration, CodeExchange,
+    };
+    use std::{
+        fs::OpenOptions,
+        io::Write,
+        os::unix::fs::OpenOptionsExt,
+        time::{Duration, SystemTime},
+    };
+    let access = services.get::<AgentAccess>("core/agent_access.grants")?;
+    let callback = "https://example.test/engagement/callback";
+    let registration=access.register_client(&serde_json::from_value::<ClientRegistration>(json!({"client_name":"Engagement access proof","redirect_uris":[callback],"token_endpoint_auth_method":"none"}))?).await?;
+    let client_id = registration["client_id"].as_str().ok_or(Error::Invalid)?;
+    let resource = format!(
+        "{}/mcp",
+        std::env::var("APP_ORIGIN")
+            .unwrap_or_else(|_| "http://127.0.0.1:4324".into())
+            .trim_end_matches('/')
+    );
+    let mut saved = serde_json::Map::new();
+    for (name, user) in [("auditor", AUDITOR), ("sales", SALES), ("manager", 1)] {
+        let scope = sign_in(db, services, 1, user).await?;
+        let verifier = "engagement-proof-verifier-with-at-least-forty-three-characters";
+        let params = AuthorizeParams {
+            client_id: client_id.into(),
+            redirect_uri: callback.into(),
+            response_type: "code".into(),
+            resource: resource.clone(),
+            scope: Some("bilibi".into()),
+            code_challenge: code_challenge(verifier),
+            code_challenge_method: "S256".into(),
+            state: None,
+        };
+        let code = access
+            .authorize(
+                &scope,
+                &params,
+                &resource,
+                SystemTime::now() + Duration::from_secs(3600),
+            )
+            .await?;
+        let token = access
+            .exchange_code(
+                &CodeExchange {
+                    code,
+                    client_id: params.client_id,
+                    redirect_uri: params.redirect_uri,
+                    code_verifier: verifier.into(),
+                    resource: resource.clone(),
+                },
+                &resource,
+            )
+            .await?;
+        saved.insert(name.into(), json!(token.access_token));
+    }
+    let mut file = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .mode(0o600)
+        .open(format!("{root}/mcp-credentials.json"))?;
+    file.write_all(serde_json::to_string(&saved)?.as_bytes())?;
     Ok(())
 }
