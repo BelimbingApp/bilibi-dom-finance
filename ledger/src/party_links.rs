@@ -192,6 +192,16 @@ impl<'a> PartyLinks<'a> {
                     facts.email = person.email;
                     facts.phone = person.phone;
                     facts.restricted = person.restricted;
+                    // A partial personal value is not an authentic document
+                    // fact. Finance treats it as withheld, including in summaries.
+                    for field in person.masked {
+                        match field.as_str() {
+                            "email" => facts.email = None,
+                            "phone" => facts.phone = None,
+                            _ => {}
+                        }
+                        facts.restricted.push(field);
+                    }
                 }
                 Err(Error::Forbidden | Error::NotFound) => {
                     facts.restricted = ["email", "phone"].map(String::from).into();

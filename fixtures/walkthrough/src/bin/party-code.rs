@@ -29,7 +29,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Identity-fixture SQL only, guarded by this proof's issued invoice.
         // The launcher retires known demo users; no business rows are changed.
         let client = db.get().await?;
-        let proof:bool=client.query_one("SELECT EXISTS(SELECT 1 FROM finance_receivables_documents WHERE tenant_id=1 AND company_id=1 AND party_code='jamie_tv_consumer' AND status='issued')",&[]).await?.get(0);
+        let proof:bool=client.query_one("SELECT EXISTS(SELECT 1 FROM finance_receivables_documents WHERE tenant_id=1 AND company_id=1 AND party_code='jamie_tv' AND status='issued')",&[]).await?.get(0);
         if !proof {
             return Err(
                 "restore identities requires the completed disposable party-code proof".into(),
@@ -78,10 +78,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         for name in ["receivables-customer.csv", "payables-vendor.csv"] {
             let mut csv = String::new();
             zip.by_name(name)?.read_to_string(&mut csv)?;
-            assert!(
-                csv.contains("jamie_tv_consumer"),
-                "Core code missing from {name}"
-            );
+            assert!(csv.contains("jamie_tv"), "Core code missing from {name}");
         }
         println!(
             "PASS: every Receivables/Payables dataset and complete auditor pack carry Core codes"
@@ -128,7 +125,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     else {
         panic!("customer create must be reviewed")
     };
-    let input = json!({"company_id":1,"new_person":{"name":"Jamie TV Consumer","kind":"human","email":"jamie@example.test"},"payment_terms_days":30});
+    let input = json!({"company_id":1,"new_person":{"name":"Jamie TV Consumer","kind":"human","email":"jamie@example.test","phone":"+60123456789"},"payment_terms_days":30});
     let boundary = app
         .services
         .get::<bilibi_database::MutationBoundary>("base/database.mutations")?;
@@ -145,7 +142,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .envelope(key);
     assert_eq!(
         review["result"]["changes"]["target"]["creation"]["code"],
-        "jamie_tv_consumer"
+        "jamie_tv"
     );
     let answer = create.commit(&mut tx, &scope, &input).await?.envelope(key);
     let consumer_id = answer["result"]["record"]["id"]
@@ -232,6 +229,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .any(|r| r["code"] == consumer.code));
     println!("PASS: company customer {} code {}; person customer {} code {}; company supplier {} code {}; person supplier shares {}; TV invoice {} posted and aging carries {}",company.id,company.code,consumer.id,consumer.code,supplier.id,supplier.code,person_supplier.code,issued.id,aged.code);
+    // Privacy companion: a partial Core contact is not an authentic Finance
+    // fact. Summaries withhold it, and issuing refuses to freeze it. Exercise
+    // email and phone independently, then the same draft with both visible.
+    let admin = sign_in(&db, &app.services, 1, 4).await?;
+    let restrictions = app
+        .services
+        .get::<bilibi_authz::restrictions::FieldRestrictions>("base/authz.field_restrictions")?;
+    for field in ["email", "phone"] {
+        restrictions
+            .put_mode(
+                &admin,
+                "persons",
+                field,
+                &[1],
+                bilibi_authz::restrictions::Mode::Mask,
+            )
+            .await?;
+    }
+    let masked = ar.get_customer(&scope, 1, consumer.id).await?;
+    assert!(masked.party.email.is_none() && masked.party.phone.is_none());
+    assert!(
+        masked.party.restricted.contains(&"email".into())
+            && masked.party.restricted.contains(&"phone".into())
+    );
+    let masked_draft = ar.create_draft(&scope,1,&json!({"kind":"invoice","series_id":series.id,"customer_id":consumer.id,"issue_date":"2026-10-30","lines":[{"description":"Contact privacy control","quantity":"1","unit_price":"17"}]})).await?;
+    let email_error = ar
+        .issue_document(&scope, 1, masked_draft.id)
+        .await
+        .expect_err("masked email must not freeze");
+    assert!(format!("{email_error:?}").contains("email is restricted"));
+    restrictions.remove(&admin, "persons", "email").await?;
+    let phone_error = ar
+        .issue_document(&scope, 1, masked_draft.id)
+        .await
+        .expect_err("masked phone must not freeze");
+    assert!(format!("{phone_error:?}").contains("phone is restricted"));
+    restrictions.remove(&admin, "persons", "phone").await?;
+    let visible = ar.issue_document(&scope, 1, masked_draft.id).await?;
+    assert!(visible.ledger_entry_id.is_some());
+    println!("PASS: masked email and phone withheld in PartyLinks; each refuses document freeze; unmasked control issued");
     if std::env::var("PARTY_CODE_BROWSER").as_deref() == Ok("1") {
         let listener = tokio::net::TcpListener::bind(
             std::env::var("BIND_ADDR").unwrap_or("127.0.0.1:45479".into()),
